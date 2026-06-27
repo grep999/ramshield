@@ -33,9 +33,13 @@ clap              = { version = "4", features = ["derive"] }
 toml              = "0.8"
 num_cpus          = "1"
 axum              = "0.7"
+tower             = { version = "0.5", features = ["util"] }
 tower-http        = { version = "0.5", features = ["cors"] }
 futures-util      = "0.3"
 tokio-stream      = "0.1"
 ctrlc             = "3"
 sysinfo           = "0.29"
 shlex = "2.0.1"
+
+[dev-dependencies]
+serial_test = "3"

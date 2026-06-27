@@ -6,18 +6,19 @@ use crate::forecasting::Forecaster;
 use crate::storage::wal::WalEntry;
 use crate::learning::PatternLearner;
 use crate::ipc::{IpDetail, Request, Response, Stats};
-use crate::metrics::Metrics;
+use crate::metrics::{DashboardSnapshot, Metrics, now_ms, get_system_usage};
 use crate::storage::{BlockReason, BlockState, IpRecord, Store, Value};
 use crate::util::BoundedVecDeque;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc,
+    Arc, RwLock,
 };
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, Semaphore};
 use tracing::{info, warn};
+use num_cpus;
 
 pub struct Engine {
     pub store:         Arc<Store>,
@@ -33,6 +34,7 @@ pub struct Engine {
     /// DNS monitor for traffic prediction
     pub dns_monitor:       Option<Arc<DnsMonitor>>,
     pub pattern_learner:    Arc<PatternLearner>,
+    pub snapshot_cache:    Arc<RwLock<DashboardSnapshot>>,
 }
 
 impl Engine {
@@ -97,7 +99,8 @@ impl Engine {
         }
 
         let dns_monitor = Arc::new(DnsMonitor::new());
-
+        let initial_snap = DashboardSnapshot::default();
+        
         Self {
             store, config: cfg, metrics, block_tx: btx, detection,
             pattern_learner,
@@ -105,10 +108,28 @@ impl Engine {
             blocked_count: Arc::new(AtomicU64::new(0)),
             shutdown,
             dns_monitor:   Some(dns_monitor),
+            snapshot_cache: Arc::new(RwLock::new(initial_snap)),
         }
     }
 
     pub fn start(self: &Arc<Self>) {
+        // Snapshot cache refresher: refresh every 2s from dedicated OS thread
+        // Uses blocking RwLock (std::sync), not tokio::sync
+        {
+            let eng_cache = self.clone();
+            std::thread::Builder::new()
+                .name("rs-snapcache".into())
+                .spawn(move || {
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        let snap = eng_cache.compute_full_snapshot();
+                        if let Ok(mut cache) = eng_cache.snapshot_cache.write() {
+                            *cache = snap;
+                        }
+                    }
+                })
+                .expect("spawn snapshot cache thread");
+        }
         let cfg = self.config.load();
         let n = if cfg.engine.worker_threads == 0 { num_cpus::get() } else { cfg.engine.worker_threads };
 
@@ -169,31 +190,108 @@ impl Engine {
         self.shutdown.load(Ordering::SeqCst)
     }
 
-    pub fn dashboard_snapshot(&self) -> crate::metrics::DashboardSnapshot {
-        use crate::metrics::{build_snapshot, SubnetRow};
+    pub fn dashboard_snapshot(&self) -> DashboardSnapshot {
+        // Read from cache without blocking; fallback to direct computation on lock contention
+        if let Ok(g) = self.snapshot_cache.try_read() {
+            return g.clone();
+        }
+        self.compute_full_snapshot()
+    }
+
+    pub fn compute_full_snapshot(&self) -> DashboardSnapshot {
         let cfg = self.config.load();
-        let hot: Vec<SubnetRow> = self
+        
+        let channel_depth = self.detection.queue_depth();
+        let uptime_secs = self.start_time.elapsed().as_secs();
+        let ips_tracked = self.store.len();
+        let blocked_total = self.blocked_count.load(Ordering::Relaxed);
+        let ram_bytes = self.store.ram_bytes();
+        let ram_limit_mb = cfg.engine.ram_limit_mb;
+        
+        let (cpu_usage, total_memory_mb) = get_system_usage();
+        
+        let is_healthy = channel_depth < 1_000_000; 
+        let health_reason = if is_healthy {
+            "ok".to_string()
+        } else {
+            "channel saturated".to_string()
+        };
+
+        DashboardSnapshot {
+            ts_ms: now_ms(),
+            uptime_secs,
+            ips_tracked,
+            blocked_total,
+            ram_bytes,
+            ram_limit_mb,
+            ram_pct: if ram_limit_mb > 0 {
+                100.0 * ram_bytes as f64 / (ram_limit_mb as f64 * 1024.0 * 1024.0)
+            } else {
+                0.0
+            },
+            cpu_usage,
+            memory_usage_mb: total_memory_mb,
+            ipc_requests: self.metrics.requests_total.load(Ordering::Relaxed),
+            events_ingested: self.metrics.events_ingested.load(Ordering::Relaxed),
+            events_rejected: self.metrics.events_rejected.load(Ordering::Relaxed),
+            channel_depth,
+            batches_total: self.metrics.batches_total.load(Ordering::Relaxed),
+            promotions: self.metrics.promotions_total.load(Ordering::Relaxed),
+            cold_skipped: self.metrics.cold_skipped_total.load(Ordering::Relaxed),
+            blocks_applied: self.metrics.blocks_total.load(Ordering::Relaxed),
+            pipeline: crate::metrics::PipelineFlow {
+                ingest:   self.metrics.events_ingested.load(Ordering::Relaxed),
+                queued:   channel_depth as u64,
+                batched:  self.metrics.last_batch_events.load(Ordering::Relaxed),
+                promoted: self.metrics.last_batch_promoted.load(Ordering::Relaxed),
+                merged:   self.metrics.last_batch_promoted.load(Ordering::Relaxed), // Assuming merged = promoted for now
+                blocked:  self.metrics.last_batch_blocks.load(Ordering::Relaxed),
+            },
+            is_healthy,
+            health_reason,
+        }
+    }
+
+    pub fn get_batch_history(&self) -> Vec<crate::metrics::BatchRecord> {
+        self.metrics.get_batch_history()
+    }
+
+    pub fn get_block_log(&self) -> Vec<crate::metrics::BlockRecord> {
+        self.metrics.get_block_log()
+    }
+
+    pub fn get_hot_subnets(&self) -> Vec<crate::metrics::SubnetRow> {
+        let hot: Vec<crate::metrics::SubnetRow> = self
             .store
             .subnet_table()
             .iter()
             .map(|e| {
                 let p = e.value().prefix;
-                SubnetRow {
+                crate::metrics::SubnetRow {
                     prefix: format!("{}.{}.{}", p[0], p[1], p[2]),
                     events: e.value().total_rps,
                 }
             })
             .filter(|r| r.events > 0)
             .collect();
-        build_snapshot(
-            &self.metrics,
-            self.start_time.elapsed().as_secs(),
-            self.store.len(),
-            self.blocked_count.load(Ordering::Relaxed),
-            self.store.ram_bytes(),
-            cfg.engine.ram_limit_mb,
-            self.detection.queue_depth(),
-            hot,
+        hot
+    }
+
+    pub fn get_module_stats(&self) -> Vec<crate::metrics::ModuleStats> {
+        let cfg = self.config.load();
+        let uptime_secs = self.start_time.elapsed().as_secs();
+        let ingested = self.metrics.events_ingested.load(Ordering::Relaxed);
+        let channel_depth = self.detection.queue_depth();
+        let ips_tracked = self.store.len();
+        let ram_bytes = self.store.ram_bytes();
+        let ram_limit_mb = cfg.engine.ram_limit_mb;
+        self.metrics.get_module_stats_data(
+            uptime_secs,
+            ingested,
+            channel_depth,
+            ips_tracked,
+            ram_bytes,
+            ram_limit_mb,
         )
     }
 
