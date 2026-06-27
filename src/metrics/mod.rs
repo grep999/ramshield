@@ -1,5 +1,5 @@
 use sysinfo::{CpuExt, System, SystemExt};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -8,22 +8,35 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const HISTORY: usize = 80;
 const BLOCK_LOG: usize = 40;
 
-fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
 }
 
-pub fn get_system_usage() -> (f32, usize) {
-    let mut sys = System::new_all();
-    sys.refresh_all();
-    let cpu_usage = sys.global_cpu_info().cpu_usage();
-    let total_memory_mb = (sys.total_memory() as f64 / 1024.0 / 1024.0) as usize;
-    (cpu_usage, total_memory_mb)
+fn with_system<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut System) -> R,
+{
+    static SYS: Mutex<Option<System>> = Mutex::new(None);
+    let mut guard = SYS.lock().unwrap();
+    if guard.is_none() {
+        *guard = Some(System::new_all());
+    }
+    f(guard.as_mut().unwrap())
 }
 
-#[derive(Debug, Clone, Serialize)]
+pub fn get_system_usage() -> (f32, usize) {
+    with_system(|sys| {
+        sys.refresh_all();
+        let cpu_usage = sys.global_cpu_info().cpu_usage();
+        let total_memory_mb = (sys.total_memory() as f64 / 1024.0 / 1024.0) as usize;
+        (cpu_usage, total_memory_mb)
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchRecord {
     pub ts_ms:              u64,
     pub events:             u32,
@@ -40,7 +53,7 @@ pub struct BatchRecord {
     pub hot_subnets:        u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockRecord {
     pub ts_ms:  u64,
     pub ip:     String,
@@ -48,7 +61,7 @@ pub struct BlockRecord {
     pub module: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModuleStats {
     pub label:    String,
     pub events:   u64,
@@ -57,7 +70,7 @@ pub struct ModuleStats {
     pub detail:   serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardSnapshot {
     pub ts_ms:            u64,
     pub uptime_secs:      u64,
@@ -66,8 +79,8 @@ pub struct DashboardSnapshot {
     pub ram_bytes:        usize,
     pub ram_limit_mb:     usize,
     pub ram_pct:          f64,
-    pub cpu_usage:        f32, // New field for CPU usage
-    pub memory_usage_mb:  usize, // New field for total system memory usage in MB
+    pub cpu_usage:        f32,
+    pub memory_usage_mb:  usize,
     pub ipc_requests:     u64,
     pub events_ingested:  u64,
     pub events_rejected:  u64,
@@ -76,21 +89,32 @@ pub struct DashboardSnapshot {
     pub promotions:       u64,
     pub cold_skipped:     u64,
     pub blocks_applied:   u64,
-    pub last_batch:       Option<BatchRecord>,
-    pub batch_history:    Vec<BatchRecord>,
-    pub recent_blocks:    Vec<BlockRecord>,
-    pub hot_subnets:      Vec<SubnetRow>,
     pub pipeline:         PipelineFlow,
-    pub modules:          Vec<ModuleStats>,
+    pub is_healthy:       bool,
+    pub health_reason:    String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+impl Default for DashboardSnapshot {
+    fn default() -> Self {
+        Self {
+            ts_ms: 0, uptime_secs: 0, ips_tracked: 0, blocked_total: 0,
+            ram_bytes: 0, ram_limit_mb: 0, ram_pct: 0.0, cpu_usage: 0.0,
+            memory_usage_mb: 0, ipc_requests: 0, events_ingested: 0,
+            events_rejected: 0, channel_depth: 0, batches_total: 0,
+            promotions: 0, cold_skipped: 0, blocks_applied: 0,
+            pipeline: PipelineFlow { ingest:0, queued:0, batched:0, promoted:0, merged:0, blocked:0 },
+            is_healthy: true, health_reason: "initializing".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubnetRow {
     pub prefix:  String,
     pub events:  u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineFlow {
     pub ingest:   u64,
     pub queued:   u64,
@@ -212,104 +236,53 @@ impl Metrics {
     fn f64(bits: &AtomicU64) -> f64 {
         f64::from_bits(bits.load(Ordering::Relaxed))
     }
-}
 
-impl Default for Metrics {
-    fn default() -> Self { Self::new() }
-}
+    pub fn get_batch_history(&self) -> Vec<BatchRecord> {
+        self.batch_history
+            .lock()
+            .map(|h| h.iter().cloned().collect())
+            .unwrap_or_default()
+    }
 
-pub fn build_snapshot(
-    m: &Metrics,
-    uptime_secs: u64,
-    ips_tracked: usize,
-    blocked_total: u64,
-    ram_bytes: usize,
-    ram_limit_mb: usize,
-    channel_depth: usize,
-    hot_subnets: Vec<SubnetRow>,
-) -> DashboardSnapshot {
-    let elapsed = ((now_ms().saturating_sub(m.started_ms)) as f64 / 1000.0).max(0.001);
-    let ingested = m.events_ingested.load(Ordering::Relaxed);
-    let batches = m.batches_total.load(Ordering::Relaxed);
-    let blocks = m.blocks_total.load(Ordering::Relaxed);
+    pub fn get_block_log(&self) -> Vec<BlockRecord> {
+        self.block_log
+            .lock()
+            .map(|h| h.iter().cloned().collect())
+            .unwrap_or_default()
+    }
 
-    let batch_history: Vec<BatchRecord> = m
-        .batch_history
-        .lock()
-        .map(|h| h.iter().cloned().collect())
-        .unwrap_or_default();
+    pub fn get_module_stats_data(
+        &self,
+        _uptime_secs: u64,
+        ingested: u64,
+        _channel_depth: usize,
+        ips_tracked: usize,
+        ram_bytes: usize,
+        ram_limit_mb: usize,
+    ) -> Vec<ModuleStats> {
+        let elapsed = ((now_ms().saturating_sub(self.started_ms)) as f64 / 1000.0).max(0.001);
+        let batches = self.batches_total.load(Ordering::Relaxed);
 
-    let recent_blocks = m
-        .block_log
-        .lock()
-        .map(|h| h.iter().cloned().collect())
-        .unwrap_or_default();
+        let hw_rps = Metrics::f64(&self.hw_rps_bits);
+        let hw_z = Metrics::f64(&self.hw_z_bits);
+        let hw_f = Metrics::f64(&self.hw_forecast_bits);
+        let entropy = Metrics::f64(&self.entropy_bits);
+        
+        let last_ev = self.last_batch_events.load(Ordering::Relaxed);
+        let _last_pr = self.last_batch_promoted.load(Ordering::Relaxed);
+        let _last_bl = self.last_batch_blocks.load(Ordering::Relaxed);
+        
+        let (_cpu_usage, total_system_memory_mb) = get_system_usage();
 
-    let last_batch = m
-        .last_batch
-        .lock()
-        .ok()
-        .and_then(|lb| lb.clone())
-        .or_else(|| batch_history.last().cloned());
-
-    let hw_rps = Metrics::f64(&m.hw_rps_bits);
-    let hw_z = Metrics::f64(&m.hw_z_bits);
-    let hw_f = Metrics::f64(&m.hw_forecast_bits);
-    let entropy = Metrics::f64(&m.entropy_bits);
-
-    let (last_ev, last_pr, last_bl) = last_batch.as_ref().map(|b| {
-        (b.events as u64, b.promoted as u64, b.blocks as u64)
-    }).unwrap_or((
-        m.last_batch_events.load(Ordering::Relaxed),
-        m.last_batch_promoted.load(Ordering::Relaxed),
-        m.last_batch_blocks.load(Ordering::Relaxed),
-    ));
-
-    let (cpu_usage, total_memory_mb) = get_system_usage();
-
-    DashboardSnapshot {
-        ts_ms: now_ms(),
-        uptime_secs,
-        ips_tracked,
-        blocked_total,
-        ram_bytes,
-        ram_limit_mb,
-        ram_pct: if ram_limit_mb > 0 {
-            100.0 * ram_bytes as f64 / (ram_limit_mb as f64 * 1024.0 * 1024.0)
-        } else {
-            0.0
-        },
-        cpu_usage,
-        memory_usage_mb: total_memory_mb,
-        ipc_requests: m.requests_total.load(Ordering::Relaxed),
-        events_ingested: ingested,
-        events_rejected: m.events_rejected.load(Ordering::Relaxed),
-        channel_depth,
-        batches_total: batches,
-        promotions: m.promotions_total.load(Ordering::Relaxed),
-        cold_skipped: m.cold_skipped_total.load(Ordering::Relaxed),
-        blocks_applied: blocks,
-        last_batch,
-        batch_history,
-        recent_blocks,
-        hot_subnets,
-        pipeline: PipelineFlow {
-            ingest:   ingested,
-            queued:   channel_depth as u64,
-            batched:  last_ev,
-            promoted: last_pr,
-            merged:   last_pr,
-            blocked:  last_bl,
-        },
-        modules: vec![
+        vec![
             ModuleStats {
                 label: "IPC".into(),
-                events: m.requests_total.load(Ordering::Relaxed),
-                errors: m.events_rejected.load(Ordering::Relaxed),
-                rate_per_sec: m.requests_total.load(Ordering::Relaxed) as f64 / elapsed,
+                events: self.requests_total.load(Ordering::Relaxed),
+                errors: self.events_rejected.load(Ordering::Relaxed),
+                rate_per_sec: self.requests_total.load(Ordering::Relaxed) as f64 / elapsed,
                 detail: serde_json::json!({
                     "ingested": ingested,
-                    "rejected": m.events_rejected.load(Ordering::Relaxed),
+                    "rejected": self.events_rejected.load(Ordering::Relaxed),
                 }),
             },
             ModuleStats {
@@ -319,24 +292,24 @@ pub fn build_snapshot(
                 rate_per_sec: ingested as f64 / elapsed,
                 detail: serde_json::json!({
                     "batches": batches,
-                    "promotions": m.promotions_total.load(Ordering::Relaxed),
-                    "cold_skipped": m.cold_skipped_total.load(Ordering::Relaxed),
-                    "blocks": m.blocks_detection.load(Ordering::Relaxed),
-                    "subnet_blocks": m.blocks_subnet.load(Ordering::Relaxed),
+                    "promotions": self.promotions_total.load(Ordering::Relaxed),
+                    "cold_skipped": self.cold_skipped_total.load(Ordering::Relaxed),
+                    "blocks": self.blocks_detection.load(Ordering::Relaxed),
+                    "subnet_blocks": self.blocks_subnet.load(Ordering::Relaxed),
                     "last_batch_events": last_ev,
                 }),
             },
             ModuleStats {
                 label: "Forecasting".into(),
-                events: m.forecast_ticks.load(Ordering::Relaxed) + m.entropy_ticks.load(Ordering::Relaxed),
+                events: self.forecast_ticks.load(Ordering::Relaxed) + self.entropy_ticks.load(Ordering::Relaxed),
                 errors: 0,
-                rate_per_sec: m.forecast_ticks.load(Ordering::Relaxed) as f64 / elapsed,
+                rate_per_sec: self.forecast_ticks.load(Ordering::Relaxed) as f64 / elapsed,
                 detail: serde_json::json!({
                     "hw_rps": hw_rps,
                     "hw_forecast": hw_f,
                     "hw_zscore": hw_z,
                     "entropy": entropy,
-                    "forecast_blocks": m.blocks_forecast.load(Ordering::Relaxed),
+                    "forecast_blocks": self.blocks_forecast.load(Ordering::Relaxed),
                 }),
             },
             ModuleStats {
@@ -348,9 +321,14 @@ pub fn build_snapshot(
                     "ram_mb": ram_bytes as f64 / (1024.0 * 1024.0),
                     "limit_mb": ram_limit_mb,
                     "ips_tracked": ips_tracked,
-                    "total_system_memory_mb": total_memory_mb,
+                    "total_system_memory_mb": total_system_memory_mb,
                 }),
             },
-        ],
+        ]
     }
+}
+
+
+impl Default for Metrics {
+    fn default() -> Self { Self::new() }
 }

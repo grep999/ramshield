@@ -323,6 +323,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[cfg(test)]
     fn clear_env_vars() {
@@ -357,6 +358,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn env_var_override_ram_limit() {
         clear_env_vars();
         std::env::set_var("RAMSHIELD_ENGINE__RAM_LIMIT_MB", "1024");
@@ -368,6 +370,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn env_override_detection_rps() {
         clear_env_vars();
         std::env::set_var("RAMSHIELD_DETECTION__RPS_THRESHOLD", "500");
@@ -379,13 +382,20 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn env_override_invalid_ignored() {
+        use std::panic;
         clear_env_vars();
         std::env::set_var("RAMSHIELD_ENGINE__RAM_LIMIT_MB", "not_a_number");
         let tmpfile = "/tmp/ramshield_test_config.toml";
         std::fs::write(tmpfile, "").unwrap();
-        let cfg = Config::load(tmpfile).unwrap();
-        assert_eq!(cfg.engine.ram_limit_mb, 512); // default preserved
+        
+        // Should not panic; invalid env var is silently ignored
+        let result = panic::catch_unwind(|| {
+            Config::load(tmpfile).unwrap()
+        });
+        assert!(result.is_ok(), "Config::load should not panic on invalid env var");
+        assert_eq!(result.unwrap().engine.ram_limit_mb, 512); // default preserved
         clear_env_vars();
     }
 }

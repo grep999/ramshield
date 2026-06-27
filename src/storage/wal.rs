@@ -106,7 +106,7 @@ impl Wal {
             let mut pos = 0usize;
             while pos + HEADER <= data.len() {
                 let magic = u32::from_le_bytes(data[pos..pos+4].try_into().unwrap());
-                if magic != MAGIC { warn!("bad magic at {}", pos); break; }
+                if magic != MAGIC { return Err(RsError::CorruptWal { offset: pos as u64 }); }
                 let plen  = u32::from_le_bytes(data[pos+4..pos+8].try_into().unwrap()) as usize;
                 let crc   = u32::from_le_bytes(data[pos+8..pos+12].try_into().unwrap());
                 let flags = data[pos+12];
@@ -150,6 +150,77 @@ mod tests {
         let entries = Wal::replay(&dir).unwrap();
         assert_eq!(entries.len(), 1);
         assert!(matches!(entries[0], WalEntry::BlockIp { .. }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wal_replay_multiple_entries() {
+        let dir = std::env::temp_dir().join("rs_wal_multi").to_string_lossy().to_string();
+        let _ = std::fs::remove_dir_all(&dir);
+        let wal = Wal::open(&dir, true, "none", 64 * 1024 * 1024).unwrap();
+        wal.append(&WalEntry::BlockIp { ip: "10.0.0.1".into(), reason: "ddos".into(), ttl_secs: Some(3600), ts_ns: 1 }).unwrap();
+        wal.append(&WalEntry::BlockIp { ip: "10.0.0.2".into(), reason: "scan".into(), ttl_secs: None, ts_ns: 2 }).unwrap();
+        wal.append(&WalEntry::UnblockIp { ip: "10.0.0.1".into(), ts_ns: 3 }).unwrap();
+        wal.append(&WalEntry::Insert { key: "test_key".into(), value_json: "{\"a\":1}".into(), ttl_secs: None, ts_ns: 4 }).unwrap();
+        drop(wal);
+        let entries = Wal::replay(&dir).unwrap();
+        assert_eq!(entries.len(), 4);
+        assert!(matches!(entries[0], WalEntry::BlockIp { .. }));
+        assert!(matches!(entries[1], WalEntry::BlockIp { .. }));
+        assert!(matches!(entries[2], WalEntry::UnblockIp { .. }));
+        assert!(matches!(entries[3], WalEntry::Insert { .. }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wal_no_corrupt_replay_fails() {
+        let dir = std::env::temp_dir().join("rs_wal_corrupt").to_string_lossy().to_string();
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Write garbage to simulate corruption
+        std::fs::write(format!("{}/wal-00000000.rshw", dir), b"NOT A VALID WAL ENTRY").unwrap();
+        let result = Wal::replay(&dir);
+        assert!(result.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wal_empty_dir_returns_empty() {
+        let dir = std::env::temp_dir().join("rs_wal_empty").to_string_lossy().to_string();
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let entries = Wal::replay(&dir).unwrap();
+        assert!(entries.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wal_uncompressed_roundtrip() {
+        let dir = std::env::temp_dir().join("rs_wal_uncomp").to_string_lossy().to_string();
+        let _ = std::fs::remove_dir_all(&dir);
+        let wal = Wal::open(&dir, false, "none", 64 * 1024 * 1024).unwrap();
+        wal.append(&WalEntry::Delete { key: "delete_me".into(), ts_ns: 1 }).unwrap();
+        drop(wal);
+        let entries = Wal::replay(&dir).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(entries[0], WalEntry::Delete { .. }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wal_segment_rotation() {
+        let dir = std::env::temp_dir().join("rs_wal_seg").to_string_lossy().to_string();
+        let _ = std::fs::remove_dir_all(&dir);
+        // Small segment size to force rotation
+        let wal = Wal::open(&dir, false, "none", 128).unwrap();
+        for i in 0..100 {
+            wal.append(&WalEntry::BlockIp {
+                ip: format!("10.0.0.{}", i), reason: "test".into(), ttl_secs: None, ts_ns: i as u64,
+            }).unwrap();
+        }
+        drop(wal);
+        let entries = Wal::replay(&dir).unwrap();
+        assert_eq!(entries.len(), 100);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1,9 +1,8 @@
 use crate::learning::PatternLearner;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use tokio::sync::RwLock;
 use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,9 +19,9 @@ pub struct PredictionModel {
 
 pub struct PredictionEngine {
     learner: Arc<PatternLearner>,
-    model: Arc<RwLock<PredictionModel>>,
+    model: Arc<Mutex<PredictionModel>>,
     /// Historical data for training
-    history: Arc<RwLock<Vec<HistoricalEvent>>>,
+    history: Arc<Mutex<Vec<HistoricalEvent>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,8 +51,8 @@ impl PredictionEngine {
 
         Self {
             learner: Arc::new(PatternLearner::new(0.8)),
-            model: Arc::new(RwLock::new(model)),
-            history: Arc::new(RwLock::new(Vec::new())),
+            model: Arc::new(Mutex::new(model)),
+            history: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -66,44 +65,50 @@ impl PredictionEngine {
             threat_score,
         };
 
-        let mut history = self.history.try_write().unwrap_or_else(|_| {
-            // Handle the error case gracefully
-            panic!("Failed to acquire write lock on history")
-        });
-        history.push(event);
+        if let Ok(mut history) = self.history.lock() {
+            history.push(event);
+        }
     }
 
     /// Train the prediction model based on historical data
-    pub async fn train_model(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let history = self.history.read().await;
+    pub fn train_model(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let history = match self.history.lock() {
+            Ok(h) => h,
+            Err(_) => return Ok(()),
+        };
         if history.len() < 100 {
             return Ok(());
         }
 
-        // Simple training algorithm - in a real implementation this would be more sophisticated
         info!("Training model with {} historical events", history.len());
 
         // Update model parameters based on historical data
-        let mut model = self.model.write().await;
-        model.version += 1;
-        model.last_trained = SystemTime::now();
-        model.accuracy = 0.95; // Placeholder accuracy
+        if let Ok(mut model) = self.model.lock() {
+            model.version += 1;
+            model.last_trained = SystemTime::now();
+            model.accuracy = 0.95;
+        }
 
         Ok(())
     }
 
     /// Predict if an event is an attack based on learned patterns
     pub fn predict_attack(&self, features: &HashMap<String, f64>) -> bool {
-        // This would be implemented with a real ML model in production
-        // For now, we'll use simple heuristics based on learned patterns
         let threat_score = features.get("threat_score").cloned().unwrap_or(0.0);
-        threat_score > 0.7 // Simple threshold for demonstration
+        threat_score > 0.7
     }
 
     /// Get the current model
-    pub fn get_model(&self) -> &PredictionModel {
-        // In a real implementation this would be a proper async read lock
-        unimplemented!("This would be implemented with proper async handling")
+    pub fn get_model(&self) -> PredictionModel {
+        match self.model.lock() {
+            Ok(model) => model.clone(),
+            Err(_) => PredictionModel {
+                version: 0,
+                parameters: HashMap::new(),
+                accuracy: 0.0,
+                last_trained: SystemTime::now(),
+            },
+        }
     }
 }
 

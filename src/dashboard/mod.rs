@@ -1,32 +1,34 @@
 use crate::config::Config;
 use crate::engine::Engine;
 use axum::{
+    body::Body,
     extract::State,
-    http::StatusCode,
-    response::{
-        sse::{Event, KeepAlive, Sse},
-        Html, Json,
-    },
+    http::{Request, StatusCode},
+    response::{Html, Json},
     routing::get,
     Router,
 };
-use futures_util::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
-use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
+use tower::ServiceExt;
 use tower_http::cors::CorsLayer;
 use tracing::info;
+
+use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, SubnetRow};
 
 pub async fn serve(engine: Arc<Engine>, addr: &str) -> Result<(), String> {
     let app = Router::new()
         .route("/", get(index))
         .route("/healthz", get(api_healthz))
         .route("/api/snapshot", get(api_snapshot))
+        .route("/api/history/batches", get(api_history_batches))
+        .route("/api/history/blocks", get(api_history_blocks))
+        .route("/api/traffic/subnets", get(api_traffic_subnets))
+        .route("/api/status/modules", get(api_status_modules))
         .route("/api/config", get(api_get_config).post(api_set_config))
-        .route("/api/stream", get(api_stream))
         .with_state(engine)
         .layer(CorsLayer::permissive());
+
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -41,23 +43,35 @@ async fn index() -> Html<&'static str> {
 
 async fn api_healthz(State(eng): State<Arc<Engine>>) -> (StatusCode, Json<serde_json::Value>) {
     let snapshot = eng.dashboard_snapshot();
-    let healthy = snapshot.channel_depth < 1_000_000;
-    let status = if healthy { "ok" } else { "degraded" };
+    let status = if snapshot.is_healthy { "ok" } else { "degraded" };
     (
-        if healthy { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE },
+        if snapshot.is_healthy { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE },
         Json(serde_json::json!({
             "status": status,
+            "reason": snapshot.health_reason,
             "uptime_secs": snapshot.uptime_secs,
-            "ips_tracked": snapshot.ips_tracked,
-            "blocked_total": snapshot.blocked_total,
-            "channel_depth": snapshot.channel_depth,
-            "ram_pct": snapshot.ram_pct,
         })),
     )
 }
 
-async fn api_snapshot(State(eng): State<Arc<Engine>>) -> Json<serde_json::Value> {
-    Json(serde_json::to_value(eng.dashboard_snapshot()).unwrap_or_default())
+async fn api_snapshot(State(eng): State<Arc<Engine>>) -> Json<DashboardSnapshot> {
+    Json(eng.dashboard_snapshot())
+}
+
+async fn api_history_batches(State(eng): State<Arc<Engine>>) -> Json<Vec<BatchRecord>> {
+    Json(eng.get_batch_history())
+}
+
+async fn api_history_blocks(State(eng): State<Arc<Engine>>) -> Json<Vec<BlockRecord>> {
+    Json(eng.get_block_log())
+}
+
+async fn api_traffic_subnets(State(eng): State<Arc<Engine>>) -> Json<Vec<SubnetRow>> {
+    Json(eng.get_hot_subnets())
+}
+
+async fn api_status_modules(State(eng): State<Arc<Engine>>) -> Json<Vec<ModuleStats>> {
+    Json(eng.get_module_stats())
 }
 
 async fn api_get_config(State(eng): State<Arc<Engine>>) -> Json<Config> {
@@ -101,15 +115,133 @@ async fn api_set_config(
     )
 }
 
-async fn api_stream(
-    State(eng): State<Arc<Engine>>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = stream::unfold(eng, |eng| async move {
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        let snap = eng.dashboard_snapshot();
-        let json = serde_json::to_string(&snap).unwrap_or_else(|_| "{}".into());
-        let ev = Event::default().data(json);
-        Some((Ok(ev), eng))
-    });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Config;
+    use axum::{
+        body::Body,
+        http::Request,
+        routing::get,
+        Router,
+    };
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    fn test_engine() -> Arc<Engine> {
+        Arc::new(Engine::new(Config::default()))
+    }
+
+    #[tokio::test]
+    async fn healthz_returns_ok() {
+        let eng = test_engine();
+        let app = Router::new()
+            .route("/healthz", get(api_healthz))
+            .with_state(eng);
+
+        let response = app
+            .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), 10_000).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn snapshot_returns_valid_json() {
+        let eng = test_engine();
+        let app = Router::new()
+            .route("/api/snapshot", get(api_snapshot))
+            .with_state(eng);
+
+        let response = app
+            .oneshot(Request::get("/api/snapshot").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
+        let json: DashboardSnapshot = serde_json::from_slice(&body).unwrap();
+        // Uptime can be 0 for a freshly created engine with cached snapshot
+        assert!(json.events_ingested == 0);
+    }
+
+    #[tokio::test]
+    async fn config_get_returns_default() {
+        let eng = test_engine();
+        let app = Router::new()
+            .route("/api/config", get(api_get_config))
+            .with_state(eng);
+
+        let response = app
+            .oneshot(Request::get("/api/config").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
+        let json: Config = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.engine.ram_limit_mb, 512);
+        assert_eq!(json.engine.shard_count, 256);
+    }
+
+    #[tokio::test]
+    async fn history_batches_returns_ok() {
+        let eng = test_engine();
+        let app = Router::new()
+            .route("/api/history/batches", get(api_history_batches))
+            .with_state(eng);
+        let response = app.oneshot(Request::get("/api/history/batches").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 10_000).await.unwrap();
+        let batches: Vec<BatchRecord> = serde_json::from_slice(&body).unwrap();
+        assert!(batches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn history_blocks_returns_ok() {
+        let eng = test_engine();
+        let app = Router::new()
+            .route("/api/history/blocks", get(api_history_blocks))
+            .with_state(eng);
+        let response = app.oneshot(Request::get("/api/history/blocks").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 10_000).await.unwrap();
+        let blocks: Vec<BlockRecord> = serde_json::from_slice(&body).unwrap();
+        assert!(blocks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn traffic_subnets_returns_ok() {
+        let eng = test_engine();
+        let app = Router::new()
+            .route("/api/traffic/subnets", get(api_traffic_subnets))
+            .with_state(eng);
+        let response = app.oneshot(Request::get("/api/traffic/subnets").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 10_000).await.unwrap();
+        let subnets: Vec<SubnetRow> = serde_json::from_slice(&body).unwrap();
+        assert!(subnets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn status_modules_returns_ok() {
+        let eng = test_engine();
+        let app = Router::new()
+            .route("/api/status/modules", get(api_status_modules))
+            .with_state(eng);
+        let response = app.oneshot(Request::get("/api/status/modules").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 10_000).await.unwrap();
+        let modules: Vec<ModuleStats> = serde_json::from_slice(&body).unwrap();
+        assert!(!modules.is_empty()); // Should have at least default modules
+        assert_eq!(modules.len(), 4);
+    }
 }
