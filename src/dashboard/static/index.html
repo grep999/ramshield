@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RamShield Dashboard</title>
+<style>
+:root{--bg:#fff;--fg:#000;--muted:#666;--line:#000;--soft:#eee}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--bg);color:var(--fg);font-size:13px;line-height:1.4}
+header{border-bottom:2px solid var(--line);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:var(--bg);z-index:10}
+h1{font-size:16px;font-weight:700;letter-spacing:.05em}
+.status{display:flex;gap:16px;align-items:center;font-size:11px}
+.dot{width:8px;height:8px;border:1px solid var(--line);background:var(--bg)}
+.dot.live{background:var(--fg);animation:pulse 1s infinite alternate}
+@keyframes pulse{from{opacity:.4}to{opacity:1}}
+nav{display:flex;border-bottom:1px solid var(--line);padding:0 20px;gap:0}
+nav button{background:none;border:none;border-bottom:2px solid transparent;padding:10px 16px;cursor:pointer;font:inherit;color:var(--muted)}
+nav button.active{color:var(--fg);border-bottom-color:var(--fg);font-weight:700}
+main{padding:16px 20px 40px;max-width:1400px;margin:0 auto}
+.panel{display:none}
+.panel.active{display:block}
+.grid{display:grid;gap:12px}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:900px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.card{border:1px solid var(--line);padding:12px}
+.card h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;color:var(--muted)}
+.metric{font-size:28px;font-weight:700;line-height:1}
+.metric small{font-size:11px;font-weight:400;color:var(--muted)}
+.bar-wrap{height:8px;border:1px solid var(--line);margin-top:6px;background:var(--bg)}
+.bar-fill{height:100%;background:var(--fg);transition:width .3s}
+.stat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:10px;font-size:11px}
+.stat-grid div{border:1px solid var(--line);padding:6px}
+.stat-grid strong{display:block;font-size:16px;font-weight:700}
+.stat-grid span{color:var(--muted);font-size:9px;text-transform:uppercase}
+.empty-msg{color:var(--muted);font-size:11px;padding:8px 0}
+canvas{display:block;width:100%;border:1px solid var(--line);background:var(--bg)}
+.pipeline{display:flex;align-items:stretch;gap:4px;margin:12px 0;flex-wrap:wrap}
+.stage{flex:1;min-width:100px;border:1px solid var(--line);padding:10px;text-align:center;position:relative}
+.stage .num{font-size:22px;font-weight:700}
+.stage .lbl{font-size:10px;color:var(--muted);margin-top:4px}
+.arrow{align-self:center;font-size:18px;color:var(--muted)}
+.stage.hot{border-width:2px;background:var(--soft)}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{border:1px solid var(--line);padding:6px 8px;text-align:left}
+th{background:var(--soft);font-size:10px;text-transform:uppercase}
+.module{border:1px solid var(--line);padding:10px;margin-bottom:8px}
+.module h3{font-size:12px;margin-bottom:6px;display:flex;justify-content:space-between}
+.module pre{font-size:10px;color:var(--muted);white-space:pre-wrap;word-break:break-all}
+form label{display:block;margin:8px 0 2px;font-size:10px;text-transform:uppercase;color:var(--muted)}
+form input,form select{width:100%;padding:6px 8px;border:1px solid var(--line);font:inherit;background:var(--bg)}
+form fieldset{border:1px solid var(--line);padding:12px;margin-bottom:12px}
+form legend{font-size:11px;font-weight:700;padding:0 4px}
+.btn{margin-top:12px;padding:8px 16px;border:2px solid var(--line);background:var(--fg);color:var(--bg);cursor:pointer;font:inherit;font-weight:700}
+.btn.outline{background:var(--bg);color:var(--fg)}
+.msg{margin-top:8px;font-size:11px;min-height:16px}
+</style>
+</head>
+<body>
+<header>
+  <h1>RAMSHIELD // OPS</h1>
+  <div class="status">
+    <span><span class="dot" id="connDot"></span> <span id="connLabel">connecting</span></span>
+    <span id="clock">--</span>
+    <span>uptime <strong id="uptime">0</strong>s</span>
+  </div>
+</header>
+<nav>
+  <button class="active" data-tab="overview">Overview</button>
+  <button data-tab="pipeline">Batch Pipeline</button>
+  <button data-tab="modules">Modules</button>
+  <button data-tab="blocks">Blocks</button>
+  <button data-tab="config">Config</button>
+</nav>
+<main>
+  <section id="overview" class="panel active">
+    <div class="grid g4" style="margin-bottom:12px">
+      <div class="card"><h2>Events ingested</h2><div class="metric" id="mIngest">0</div></div>
+      <div class="card"><h2>Batches flushed</h2><div class="metric" id="mBatches">0</div></div>
+      <div class="card"><h2>IPs tracked</h2><div class="metric" id="mIps">0</div></div>
+      <div class="card"><h2>Blocks applied</h2><div class="metric" id="mBlocks">0</div></div>
+    </div>
+    <div class="grid g2">
+      <div class="card">
+        <h2>Queue depth</h2>
+        <div class="metric" id="mQueue">0</div>
+        <div class="bar-wrap"><div class="bar-fill" id="queueBar" style="width:0%"></div></div>
+      </div>
+      <div class="card">
+        <h2>RAM usage</h2>
+        <div class="metric" id="mRam">0 <small>MB</small></div>
+        <div class="bar-wrap"><div class="bar-fill" id="ramBar" style="width:0%"></div></div>
+      </div>
+      <div class="card">
+        <h2>CPU Usage</h2>
+        <div class="metric" id="mCpu">0.0 <small>%</small></div>
+        <div class="bar-wrap"><div class="bar-fill" id="cpuBar" style="width:0%"></div></div>
+      </div>
+      <div class="card">
+        <h2>Total Memory</h2>
+        <div class="metric" id="mTotalMem">0 <small>MB</small></div>
+        <div class="bar-wrap"><div class="bar-fill" id="totalMemBar" style="width:0%"></div></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h2>Batch size history (last 80 flushes)</h2>
+      <canvas id="batchChart" height="140"></canvas>
+    </div>
+  </section>
+
+  <section id="pipeline" class="panel">
+    <div class="card">
+      <h2>Live batch detection flow</h2>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:8px">Current window throughput through each stage. Width = relative volume.</p>
+      <div class="pipeline" id="pipelineFlow"></div>
+    </div>
+    <div class="grid g2" style="margin-top:12px">
+      <div class="card">
+        <h2>Last batch breakdown</h2>
+        <div id="batchStats" class="stat-grid"></div>
+        <canvas id="batchBar" height="160"></canvas>
+      </div>
+      <div class="card">
+        <h2>Promotion vs cold skip (events)</h2>
+        <div id="promoStats" class="stat-grid"></div>
+        <canvas id="promoBar" height="160"></canvas>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h2>Hot /24 subnets</h2>
+      <table><thead><tr><th>Prefix</th><th>Events/window</th></tr></thead><tbody id="subnetTable"></tbody></table>
+    </div>
+  </section>
+
+  <section id="modules" class="panel">
+    <div id="moduleList"></div>
+  </section>
+
+  <section id="blocks" class="panel">
+    <div class="card">
+      <h2>Recent block decisions</h2>
+      <table><thead><tr><th>Time</th><th>IP</th><th>Reason</th><th>Module</th></tr></thead><tbody id="blockTable"></tbody></table>
+    </div>
+  </section>
+
+  <section id="config" class="panel">
+    <div class="card">
+      <h2>Runtime configuration</h2>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:12px">Changes apply immediately via API. IPC address changes require restart.</p>
+      <form id="cfgForm">
+        <fieldset><legend>Engine</legend>
+          <label>RAM limit (MB)</label><input name="engine.ram_limit_mb" type="number">
+          <label>Shard count</label><input name="engine.shard_count" type="number">
+        </fieldset>
+        <fieldset><legend>Detection</legend>
+          <label>RPS threshold</label><input name="detection.rps_threshold" type="number">
+          <label>Batch max events</label><input name="detection.batch_max_events" type="number">
+          <label>Batch window (ms)</label><input name="detection.batch_window_ms" type="number">
+          <label>Promote min events</label><input name="detection.promote_min_events" type="number">
+          <label>Subnet window threshold</label><input name="detection.subnet_window_threshold" type="number">
+          <label>Block TTL (sec)</label><input name="detection.block_ttl_secs" type="number">
+        </fieldset>
+        <fieldset><legend>Forecasting</legend>
+          <label>Anomaly z-score</label><input name="forecasting.anomaly_zscore" type="number" step="0.1">
+          <label>Min entropy</label><input name="forecasting.min_entropy" type="number" step="0.1">
+        </fieldset>
+        <button type="submit" class="btn">Apply config</button>
+        <button type="button" class="btn outline" id="reloadCfg">Reload from server</button>
+      </form>
+      <div class="msg" id="cfgMsg"></div>
+    </div>
+  </section>
+</main>
+<script>
+const STAGES = [
+  {key:'ingest', label:'IPC Ingest'},
+  {key:'queued', label:'Channel Queue'},
+  {key:'batched', label:'Batch Window'},
+  {key:'promoted', label:'Promoted IPs'},
+  {key:'merged', label:'Record Merge'},
+  {key:'blocked', label:'Blocked'},
+];
+
+let lastSnap = null;
+let es = null;
+
+document.querySelectorAll('nav button').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.tab).classList.add('active');
+    if (lastSnap) requestAnimationFrame(() => render(lastSnap));
+  };
+});
+
+function fmt(n){ return Number(n||0).toLocaleString(); }
+
+function renderPipeline(p){
+  const el = document.getElementById('pipelineFlow');
+  const vals = STAGES.map(s => p[s.key]||0);
+  const max = Math.max(...vals, 1);
+  el.innerHTML = STAGES.map((s,i) => {
+    const v = vals[i];
+    const hot = i > 0 && v > vals[i-1] * 0.5 && v > 100;
+    return (i ? '<span class="arrow">→</span>' : '') +
+      `<div class="stage${hot?' hot':''}"><div class="num">${fmt(v)}</div><div class="lbl">${s.label}</div></div>`;
+  }).join('');
+}
+
+function canvasSize(c, h){
+  const parent = c.parentElement;
+  const w = Math.max(parent ? parent.clientWidth : 300, 200);
+  c.width = w * devicePixelRatio;
+  c.height = h * devicePixelRatio;
+  c.style.width = w + 'px';
+  c.style.height = h + 'px';
+  return { w: c.width, h: c.height, dpr: devicePixelRatio };
+}
+
+function drawBatchChart(history){
+  const c = document.getElementById('batchChart');
+  if (!c) return;
+  const { w, h } = canvasSize(c, 140);
+  const ctx = c.getContext('2d');
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle = '#fff'; ctx.fillRect(0,0,w,h);
+  if (!history.length) {
+    ctx.fillStyle = '#666'; ctx.font = `${11*devicePixelRatio}px monospace`;
+    ctx.fillText('waiting for batch flushes…', 20*devicePixelRatio, h/2);
+    return;
+  }
+  const pad = 20 * devicePixelRatio;
+  const max = Math.max(...history.map(b=>b.events), 1);
+  const bw = (w - pad*2) / history.length;
+  history.forEach((b,i) => {
+    const bh = (b.events/max) * (h - pad*2);
+    const x = pad + i*bw;
+    ctx.fillStyle = b.blocks > 0 ? '#000' : '#888';
+    ctx.fillRect(x, h-pad-bh, Math.max(1,bw-2*devicePixelRatio), bh);
+  });
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
+  ctx.strokeRect(pad, pad, w-pad*2, h-pad*2);
+}
+
+function drawStackedBar(canvasId, segments, title){
+  const c = document.getElementById(canvasId);
+  if (!c) return;
+  const { w, h, dpr } = canvasSize(c, 160);
+  const ctx = c.getContext('2d');
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle = '#fff'; ctx.fillRect(0,0,w,h);
+
+  const total = segments.reduce((a,s)=>a+s.v,0);
+  if (total === 0) {
+    ctx.fillStyle = '#666'; ctx.font = `${11*dpr}px monospace`; ctx.textAlign='center';
+    ctx.fillText('no batch data yet — send traffic via IPC', w/2, h/2);
+    return;
+  }
+
+  const pad = 16*dpr;
+  const barH = 28*dpr;
+  const y = h/2 - barH/2;
+  const barW = w - pad*2;
+  let x = pad;
+  segments.forEach((s,i) => {
+    const segW = (s.v/total)*barW;
+    if (segW < 1) return;
+    ctx.fillStyle = i % 2 === 0 ? '#000' : '#888';
+    ctx.fillRect(x, y, segW, barH);
+    if (segW > 40*dpr) {
+      ctx.fillStyle = i % 2 === 0 ? '#fff' : '#000';
+      ctx.font = `${10*dpr}px monospace`; ctx.textAlign='center';
+      ctx.fillText(String(s.v), x + segW/2, y + barH/2 + 4*dpr);
+    }
+    x += segW;
+  });
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 2*dpr;
+  ctx.strokeRect(pad, y, barW, barH);
+  ctx.fillStyle = '#000'; ctx.font = `${10*dpr}px monospace`; ctx.textAlign='left';
+  ctx.fillText(title + ' (total ' + total + ')', pad, y - 8*dpr);
+}
+
+function renderStatGrid(elId, rows){
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (!rows.length) { el.innerHTML = '<div class="empty-msg">No batch flushed yet</div>'; return; }
+  el.innerHTML = rows.map(r =>
+    `<div><span>${r.label}</span><strong>${fmt(r.v)}</strong></div>`
+  ).join('');
+}
+
+function renderModules(mods){
+  document.getElementById('moduleList').innerHTML = mods.map(m =>
+    `<div class="module"><h3><span>${m.label}</span><span>${m.rate_per_sec.toFixed(1)}/s</span></h3>
+     <pre>${JSON.stringify(m.detail,null,2)}</pre></div>`).join('');
+}
+
+function renderBlocks(blocks){
+  document.getElementById('blockTable').innerHTML = blocks.slice().reverse().map(b =>
+    `<tr><td>${new Date(b.ts_ms).toLocaleTimeString()}</td><td>${b.ip}</td><td>${b.reason}</td><td>${b.module}</td></tr>`
+  ).join('') || '<tr><td colspan="4">no blocks yet</td></tr>';
+}
+
+function renderPipelineCharts(s){
+  const b = s.last_batch || (s.batch_history||[]).slice(-1)[0] || null;
+  if (!b) {
+    renderStatGrid('batchStats', []);
+    renderStatGrid('promoStats', []);
+    drawStackedBar('batchBar', [], 'events');
+    drawStackedBar('promoBar', [], 'events');
+    return;
+  }
+  renderStatGrid('batchStats', [
+    {label:'total events', v:b.events},
+    {label:'unique IPs', v:b.unique_ips},
+    {label:'IPs promoted', v:b.promoted},
+    {label:'IPs cold-skip', v:b.cold_skipped},
+    {label:'blocks', v:b.blocks},
+    {label:'hot /24s', v:b.hot_subnets},
+  ]);
+  const promEv = b.promoted_events ?? b.promoted ?? 0;
+  const coldEv = b.cold_skipped_events ?? b.cold_skipped ?? 0;
+  const otherEv = Math.max(0, (b.events||0) - promEv - coldEv);
+  renderStatGrid('promoStats', [
+    {label:'promoted events', v:promEv},
+    {label:'cold-skip events', v:coldEv},
+    {label:'promoted IPs', v:b.promoted},
+    {label:'cold-skip IPs', v:b.cold_skipped},
+  ]);
+  drawStackedBar('batchBar', [
+    {label:'promoted', v:promEv},
+    {label:'cold', v:coldEv},
+    {label:'other', v:otherEv},
+    {label:'blocks', v:b.blocks},
+  ], 'event disposition');
+  drawStackedBar('promoBar', [
+    {label:'promoted', v:promEv},
+    {label:'cold skip', v:coldEv},
+  ], 'promotion split');
+}
+
+function renderSubnets(rows){
+  document.getElementById('subnetTable').innerHTML = rows.sort((a,b)=>b.events-a.events).map(r =>
+    `<tr><td>${r.prefix}.0/24</td><td>${fmt(r.events)}</td></tr>`
+  ).join('') || '<tr><td colspan="2">none</td></tr>';
+}
+
+// Debounced render to prevent UI freezing
+let pendingRender = null;
+let lastRenderData = null;
+const MIN_RENDER_INTERVAL = 50; // Max 20 FPS
+
+function render(s){
+  lastRenderData = s;
+  if (pendingRender) return;
+  
+  pendingRender = true;
+  requestAnimationFrame(() => {
+    if (lastRenderData) {
+      lastSnap = lastRenderData;
+      const snap = lastRenderData;
+      document.getElementById('clock').textContent = new Date(snap.ts_ms).toLocaleTimeString();
+      document.getElementById('uptime').textContent = fmt(snap.uptime_secs);
+      document.getElementById('mIngest').textContent = fmt(snap.events_ingested);
+      document.getElementById('mBatches').textContent = fmt(snap.batches_total);
+      document.getElementById('mIps').textContent = fmt(snap.ips_tracked);
+      document.getElementById('mBlocks').textContent = fmt(snap.blocks_applied);
+      document.getElementById('mQueue').textContent = fmt(snap.channel_depth);
+      if (snap.ram_bytes !== undefined) {
+        document.getElementById('mRam').innerHTML = (snap.ram_bytes/1048576).toFixed(1)+' <small>/ '+snap.ram_limit_mb+' MB</small>';
+        document.getElementById('queueBar').style.width = Math.min(100,snap.channel_depth/20000*100)+'%';
+        document.getElementById('ramBar').style.width = Math.min(100,snap.ram_pct)+'%';
+      }
+      if (snap.cpu_usage !== undefined) {
+        document.getElementById('mCpu').innerHTML = snap.cpu_usage.toFixed(1)+' <small>%</small>';
+        document.getElementById('cpuBar').style.width = Math.min(100,snap.cpu_usage)+'%';
+        document.getElementById('mTotalMem').innerHTML = fmt(snap.memory_usage_mb)+' <small>MB</small>';
+        document.getElementById('totalMemBar').style.width = Math.min(100,(snap.ram_bytes||0) / ((snap.memory_usage_mb||1) * 1024 * 1024) * 100)+'%';
+      }
+      
+      if (document.getElementById('overview').classList.contains('active'))
+        drawBatchChart(snap.batch_history||[]);
+      if (document.getElementById('pipeline').classList.contains('active')) {
+        renderPipeline(snap.pipeline||{});
+        renderPipelineCharts(snap);
+        renderSubnets(snap.hot_subnets||[]);
+      }
+      if (document.getElementById('modules').classList.contains('active'))
+        renderModules(snap.modules||[]);
+      if (document.getElementById('blocks').classList.contains('active'))
+        renderBlocks(snap.recent_blocks||[]);
+    }
+    pendingRender = false;
+  });
+}
+}
+
+function connect(){
+  if (es) es.close();
+  es = new EventSource('/api/stream');
+  es.onopen = () => {
+    document.getElementById('connDot').classList.add('live');
+    document.getElementById('connLabel').textContent = 'live';
+  };
+  es.onmessage = e => {
+    try {
+      const data = JSON.parse(e.data);
+      // Skip if data is stale (older than 1 second)
+      if (data.ts_ms && lastSnap && data.ts_ms <= lastSnap.ts_ms) return;
+      render(data);
+    } catch (_) {}
+  };
+  es.onerror = () => {
+    document.getElementById('connDot').classList.remove('live');
+    document.getElementById('connLabel').textContent = 'reconnecting';
+    es.close();
+    setTimeout(connect, 2000);
+  };
+}
+
+function flattenCfg(cfg, prefix=''){
+  const out = {};
+  for (const [k,v] of Object.entries(cfg)) {
+    const key = prefix ? prefix+'.'+k : k;
+    if (v && typeof v === 'object' && !Array.isArray(v)) Object.assign(out, flattenCfg(v, key));
+    else out[key] = v;
+  }
+  return out;
+}
+
+async function loadCfg(){
+  const r = await fetch('/api/config');
+  const cfg = await r.json();
+  const flat = flattenCfg(cfg);
+  document.querySelectorAll('#cfgForm [name]').forEach(inp => {
+    if (flat[inp.name] !== undefined) inp.value = flat[inp.name];
+  });
+}
+
+function unflatten(flat){
+  const out = {};
+  for (const [key,val] of Object.entries(flat)) {
+    const parts = key.split('.');
+    let cur = out;
+    parts.forEach((p,i) => {
+      if (i === parts.length-1) cur[p] = typeof val === 'string' && !isNaN(val) && val !== '' ? Number(val) : val;
+      else cur = cur[p] = cur[p] || {};
+    });
+  }
+  return out;
+}
+
+document.getElementById('cfgForm').onsubmit = async e => {
+  e.preventDefault();
+  const flat = {};
+  new FormData(e.target).forEach((v,k) => { flat[k]=v; });
+  const patch = unflatten(flat);
+  const r = await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(patch)});
+  const j = await r.json();
+  document.getElementById('cfgMsg').textContent = j.ok ? 'Config applied.' : 'Failed.';
+};
+document.getElementById('reloadCfg').onclick = loadCfg;
+
+connect();
+loadCfg();
+window.addEventListener('resize', () => { if(lastSnap) render(lastSnap); });
+</script>
+</body>
+</html>

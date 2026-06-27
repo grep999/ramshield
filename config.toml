@@ -1,0 +1,22 @@
+# config.toml
+[engine]
+shard_count = 256
+worker_threads = 0
+ram_limit_mb = 14512
+
+[ipc]
+tcp_addr = "127.0.0.1:7890"  # Set to the port you want
+max_connections = 1000000
+
+[dashboard]
+enabled = true
+http_addr = "127.0.0.1:7891"
+
+[forecasting]
+enabled = true
+ewma_alpha = 0.3
+hw_beta = 0.1
+hw_gamma = 0.1
+seasonality_period = 60
+anomaly_zscore = 3.0
+min_entropy = 4.5
