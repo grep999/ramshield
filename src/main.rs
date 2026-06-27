@@ -25,7 +25,7 @@ struct ApiCheck {
     condition: String,
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 0)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
