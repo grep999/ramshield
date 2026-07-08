@@ -1,0 +1,73 @@
+{
+  "_comment": "RamShield IPC traffic profiles — maps L3/L4/L7 attack classes to connection-report fields (authorized testing only)",
+  "l7_http_flood": {
+    "description": "Layer-7 GET flood — high RPS, mostly 200, browser-like sizes (OWASP/Wiz L7)",
+    "mode": "pareto_hot",
+    "status_weights": {"200": 85, "304": 5, "404": 4, "403": 3, "500": 3},
+    "bytes_pareto": [256, 4096, 1.8],
+    "proto_cluster": "http",
+    "hot_ip_ratio": 0.05,
+    "subnet_concentration": 0.2
+  },
+  "l7_post_rudy": {
+    "description": "RUDY-style large POST bodies — drains app memory (slow POST class)",
+    "mode": "volumetric",
+    "status_weights": {"200": 40, "201": 30, "413": 10, "500": 20},
+    "bytes_pareto": [8192, 65536, 2.5],
+    "proto_cluster": "http_post",
+    "hot_ip_ratio": 0.9
+  },
+  "l7_slowloris": {
+    "description": "Slow/low — few bytes, same IP, connection hold simulation",
+    "mode": "volumetric",
+    "status_weights": {"200": 100},
+    "bytes_range": [1, 64],
+    "proto_cluster": "slow",
+    "jitter_ms": [200, 800],
+    "batch_size": 8
+  },
+  "l4_syn_wave": {
+    "description": "Protocol SYN-wave — subnet bursts, small packets, state-table stress",
+    "mode": "synwave",
+    "status_weights": {"200": 70, "503": 30},
+    "bytes_range": [40, 128],
+    "proto_cluster": "tcp_syn",
+    "subnet_concentration": 0.6
+  },
+  "volumetric_udp_sim": {
+    "description": "Volumetric L3/4 — tiny packets, extreme volume, many sources",
+    "mode": "botnet",
+    "status_weights": {"200": 100},
+    "bytes_range": [32, 512],
+    "proto_cluster": "udp",
+    "entropy": "high"
+  },
+  "botnet_distributed": {
+    "description": "High-entropy botnet — max IP spread, low per-source rate (Shannon test)",
+    "mode": "botnet",
+    "status_weights": {"200": 92, "404": 3, "500": 5},
+    "bytes_pareto": [128, 2048, 1.5],
+    "proto_cluster": "mixed_malware",
+    "entropy": "max"
+  },
+  "dns_amp_sim": {
+    "description": "Amplification pattern — many /24s spike together briefly",
+    "mode": "multi_subnet",
+    "status_weights": {"200": 100},
+    "bytes_range": [512, 1400],
+    "proto_cluster": "dns",
+    "burst_multiplier": 3.0
+  },
+  "credential_stuff": {
+    "description": "App-layer credential spray — 401/403 heavy, rotating IPs",
+    "mode": "scan_rotation",
+    "status_weights": {"401": 35, "403": 25, "200": 20, "429": 15, "404": 5},
+    "bytes_pareto": [200, 1024, 1.2],
+    "proto_cluster": "api"
+  },
+  "red_team_full": {
+    "description": "Multi-vector chain: volumetric → subnet → botnet → errors (DigiCert sim guide)",
+    "chain": ["l7_http_flood", "l4_syn_wave", "botnet_distributed", "credential_stuff"],
+    "chain_duration_sec": 25
+  }
+}

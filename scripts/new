@@ -1,0 +1,43 @@
+{
+  "host": "127.0.0.1",
+  "port": 7890,
+  "workers": 9,
+  "batch_size": 9999,
+  "batch_variance": 0.35,
+  "target_ip": "10.255.0.99",
+  "profile": "l7_http_flood",
+  "mode": "pareto_hot",
+  "read_response": false,
+  "reconnect": true,
+  "socket_buffer": 1048576,
+  "seed": null,
+  "jitter_ms": [
+    0,
+    5
+  ],
+  "ramp_start_eps": 0.0,
+  "ramp_end_eps": 0.0,
+  "ramp_seconds": 0.0,
+  "status_weights": {
+    "200": 85,
+    "304": 5,
+    "404": 4,
+    "403": 3,
+    "500": 3
+  },
+  "bytes_range": [
+    256,
+    4096
+  ],
+  "bytes_pareto": [
+    256.0,
+    4096.0,
+    1.8
+  ],
+  "proto_cluster": "http",
+  "hot_ip_ratio": 0.05,
+  "subnet_concentration": 0.2,
+  "entropy": "medium",
+  "burst_multiplier": 1.0,
+  "ipv4_private_bias": 0.4
+}

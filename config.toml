@@ -1,0 +1,42 @@
+# config.toml — RamShield Enterprise Configuration
+
+[engine]
+shard_count = 256
+worker_threads = 4
+ram_limit_mb = 1512
+
+[ipc]
+enabled = true
+tcp_addr = "127.0.0.1:7890"
+max_connections = 1000000
+idle_timeout_secs = 30
+
+[dashboard]
+enabled = true
+http_addr = "127.0.0.1:9999"
+
+[detection]
+rps_threshold = 1000
+batch_max_events = 4096
+block_duration_ms = 60000
+ewma_alpha = 0.3
+threat_threshold = 0.7
+
+[storage]
+wal_enabled = false
+wal_path = "./wal"
+
+[forecasting]
+enabled = true
+interval_secs = 5
+hw_alpha = 0.3
+hw_beta = 0.1
+entropy_threshold = 0.7
+
+[alerting]
+enabled = true
+rps_alert_threshold = 5000
+entropy_alert_threshold = 0.8
+alert_cooldown_secs = 60
+audit_log_enabled = true
+audit_log_path = "./audit.log"

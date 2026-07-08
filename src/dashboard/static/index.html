@@ -1,0 +1,1591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RamShield — Advanced Dashboard</title>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <style>
+        /* === Dynatrace-Inspired Design System === */
+        :root {
+            --bg-primary: #0a0e14;
+            --bg-secondary: #11161f;
+            --bg-card: #161b28;
+            --bg-card-hover: #1c2230;
+            --border: #2a3040;
+            --border-light: #3a4050;
+            --text-primary: #e1e8f0;
+            --text-secondary: #8892a8;
+            --text-muted: #5a6478;
+            --accent-cyan: #00b4d8;
+            --accent-purple: #9d4edd;
+            --accent-orange: #ff9e00;
+            --accent-green: #00d084;
+            --accent-red: #ff4757;
+            --accent-blue: #4361ee;
+            --gradient-1: linear-gradient(135deg, #00b4d8 0%, #4361ee 100%);
+            --gradient-2: linear-gradient(135deg, #9d4edd 0%, #ff4757 100%);
+            --gradient-3: linear-gradient(135deg, #00d084 0%, #00b4d8 100%);
+            --glow-cyan: 0 0 20px rgba(0, 180, 216, 0.4);
+            --glow-purple: 0 0 20px rgba(157, 78, 221, 0.4);
+            --glow-green: 0 0 20px rgba(0, 208, 132, 0.4);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            padding: 0;
+            min-height: 100vh;
+        }
+
+        /* === Header === */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo {
+            font-size: 32px;
+            filter: drop-shadow(0 0 10px rgba(0, 180, 216, 0.5));
+            animation: pulse-logo 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse-logo {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .brand h1 {
+            font-size: 22px;
+            font-weight: 700;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .status-pill:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .status-pill.connected {
+            background: rgba(0, 208, 132, 0.15);
+            color: var(--accent-green);
+            border: 1px solid var(--accent-green);
+            box-shadow: var(--glow-green);
+        }
+
+        .status-pill.disconnected {
+            background: rgba(255, 71, 87, 0.15);
+            color: var(--accent-red);
+            border: 1px solid var(--accent-red);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: blink 1.5s ease-in-out infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* === Main Layout === */
+        .dashboard {
+            padding: 24px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        /* === KPI Cards === */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .kpi-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .kpi-card:hover {
+            border-color: var(--border-light);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        }
+
+        .kpi-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--gradient-1);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .kpi-card:hover::before {
+            opacity: 1;
+        }
+
+        .kpi-card h3 {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+        }
+
+        .kpi-value {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--accent-cyan);
+            transition: all 0.3s ease;
+        }
+
+        .kpi-card:nth-child(2) .kpi-value { color: var(--accent-purple); }
+        .kpi-card:nth-child(3) .kpi-value { color: var(--accent-green); }
+        .kpi-card:nth-child(4) .kpi-value { color: var(--accent-red); }
+        .kpi-card:nth-child(5) .kpi-value { color: var(--accent-orange); }
+        .kpi-card:nth-child(6) .kpi-value { color: var(--accent-blue); }
+
+        .kpi-sub {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 8px;
+        }
+
+        .kpi-sparkline {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 80px;
+            height: 40px;
+            opacity: 0.3;
+        }
+
+        /* === Chart Section === */
+        .chart-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .chart-title {
+            font-size: 16px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .chart-legend {
+            display: flex;
+            gap: 20px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+        }
+
+        .legend-dot.events { background: var(--accent-cyan); box-shadow: var(--glow-cyan); }
+        .legend-dot.blocks { background: var(--accent-red); box-shadow: 0 0 10px rgba(255, 71, 87, 0.5); }
+
+        .chart-container {
+            position: relative;
+            height: 280px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 20px;
+            overflow: hidden;
+        }
+
+        svg.chart {
+            width: 100%;
+            height: 100%;
+        }
+
+        .chart-grid {
+            stroke: var(--border);
+            stroke-dasharray: 3, 3;
+            opacity: 0.5;
+        }
+
+        .chart-area {
+            opacity: 0.3;
+        }
+
+        .chart-line {
+            fill: none;
+            stroke-width: 2.5;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+        }
+
+        .chart-line-events {
+            stroke: var(--accent-cyan);
+            filter: drop-shadow(0 0 8px rgba(0, 180, 216, 0.6));
+        }
+
+        .chart-line-blocks {
+            stroke: var(--accent-red);
+            filter: drop-shadow(0 0 8px rgba(255, 71, 87, 0.6));
+        }
+
+        .chart-point {
+            fill: var(--bg-primary);
+            stroke-width: 2;
+            transition: all 0.2s ease;
+        }
+
+        .chart-point:hover {
+            r: 6;
+            filter: drop-shadow(0 0 10px currentColor);
+        }
+
+        /* === Modules Grid === */
+        .modules-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .module-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.3s ease;
+        }
+
+        .module-card:hover {
+            border-color: var(--accent-cyan);
+            box-shadow: var(--glow-cyan);
+        }
+
+        .module-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .module-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--accent-cyan);
+        }
+
+        .module-rate {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .module-stat {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            font-size: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .module-stat:last-child {
+            border-bottom: none;
+        }
+
+        .module-stat-label {
+            color: var(--text-secondary);
+        }
+
+        .module-stat-value {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+
+        /* === Blocks Table === */
+        .table-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+        }
+
+        .table-header {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .blocks-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .blocks-table th {
+            text-align: left;
+            padding: 12px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .blocks-table td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-primary);
+        }
+
+        .blocks-table tr:hover td {
+            background: var(--bg-card-hover);
+        }
+
+        .block-ip {
+            font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+            color: var(--accent-cyan);
+        }
+
+        .block-reason {
+            color: var(--accent-red);
+        }
+
+        .block-module {
+            color: var(--accent-purple);
+        }
+
+        .block-time {
+            color: var(--text-muted);
+        }
+
+        /* === Animations === */
+        @keyframes gradient-shift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        @keyframes number-count {
+            from { opacity: 0.5; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .animate-number {
+            animation: number-count 0.3s ease-out;
+        }
+
+        /* === Tooltip === */
+        .tooltip {
+            position: absolute;
+            background: var(--bg-primary);
+            border: 1px solid var(--border-light);
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 11px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        }
+
+        .tooltip.visible {
+            opacity: 1;
+        }
+
+        /* === Footer === */
+        .footer {
+            text-align: center;
+            padding: 24px;
+            color: var(--text-muted);
+            font-size: 11px;
+            border-top: 1px solid var(--border);
+            margin-top: 24px;
+        }
+
+        /* === Settings Modal === */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            backdrop-filter: blur(4px);
+        }
+
+        .modal-content {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 500px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .modal-header h2 {
+            font-size: 18px;
+            color: var(--text-primary);
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 28px;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+
+        .modal-close:hover {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+        }
+
+        .modal-body {
+            padding: 24px;
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+            padding: 20px 24px;
+            border-top: 1px solid var(--border);
+        }
+
+        .setting-group {
+            margin-bottom: 24px;
+        }
+
+        .setting-group h3 {
+            font-size: 14px;
+            color: var(--accent-cyan);
+            margin-bottom: 16px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .setting-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .setting-item:last-child {
+            border-bottom: none;
+        }
+
+        .setting-item label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .setting-item input {
+            width: 100px;
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 13px;
+            text-align: right;
+        }
+
+        .setting-item input:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 0 2px rgba(0, 180, 216, 0.2);
+        }
+
+        .btn-primary, .btn-secondary {
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+        }
+
+        .btn-primary {
+            background: var(--gradient-1);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 180, 216, 0.4);
+        }
+
+        .btn-secondary {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-card-hover);
+        }
+
+        /* === Animations === */
+        .last-update {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-align: right;
+            margin-top: 8px;
+        }
+
+        /* === Export Button === */
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .btn-export {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--accent-cyan);
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-export:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--accent-cyan);
+            box-shadow: var(--glow-cyan);
+            transform: translateY(-1px);
+        }
+
+        /* === Threat Level Panel === */
+        .threat-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .threat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .threat-title {
+            font-size: 16px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .threat-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            transition: all 0.3s ease;
+        }
+
+        .threat-badge.low {
+            background: rgba(0, 208, 132, 0.15);
+            color: var(--accent-green);
+            border: 1px solid var(--accent-green);
+        }
+
+        .threat-badge.medium {
+            background: rgba(255, 158, 0, 0.15);
+            color: var(--accent-orange);
+            border: 1px solid var(--accent-orange);
+        }
+
+        .threat-badge.high {
+            background: rgba(255, 71, 87, 0.15);
+            color: var(--accent-red);
+            border: 1px solid var(--accent-red);
+            box-shadow: 0 0 10px rgba(255, 71, 87, 0.4);
+        }
+
+        .threat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .threat-metric {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .threat-metric-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+        }
+
+        .threat-metric-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--accent-cyan);
+        }
+
+        .threat-metric-sub {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .threat-bar-container {
+            width: 100%;
+            height: 8px;
+            background: var(--bg-secondary);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+
+        .threat-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.5s ease, background 0.3s ease;
+        }
+
+        .threat-bar-fill.low { background: var(--accent-green); }
+        .threat-bar-fill.medium { background: var(--accent-orange); }
+        .threat-bar-fill.high { background: var(--accent-red); }
+
+        /* === Audit Log === */
+        .audit-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .audit-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .audit-title {
+            font-size: 16px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .audit-count {
+            font-size: 12px;
+            color: var(--text-secondary);
+            padding: 4px 10px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+        }
+
+        .audit-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        .audit-table th {
+            text-align: left;
+            padding: 12px;
+            color: var(--text-secondary);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .audit-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-primary);
+        }
+
+        .audit-table tr:hover td {
+            background: var(--bg-card-hover);
+        }
+
+        .audit-time { color: var(--text-muted); font-family: 'SF Mono', 'Consolas', monospace; }
+        .audit-ip { font-family: 'SF Mono', 'Consolas', monospace; color: var(--accent-cyan); }
+        .audit-reason { color: var(--accent-red); }
+        .audit-module { color: var(--accent-purple); }
+
+        /* === Settings: Checkbox & Alerting === */
+        .setting-item input[type="checkbox"] {
+            width: auto;
+            accent-color: var(--accent-cyan);
+            transform: scale(1.3);
+            cursor: pointer;
+        }
+
+        .setting-item input[type="text"] {
+            width: 180px;
+            text-align: left;
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 13px;
+        }
+
+        .setting-item input[type="text"]:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 0 2px rgba(0, 180, 216, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="brand">
+            <span class="logo">🛡️</span>
+            <h1>RamShield</h1>
+        </div>
+        <div class="header-actions">
+            <button id="export-btn" class="btn-export" title="Export current stats as JSON">
+                <span>⬇</span>
+                <span>Export</span>
+            </button>
+            <div id="status" class="status-pill disconnected">
+                <span class="status-dot"></span>
+                <span id="status-text">Disconnected</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="dashboard">
+        <!-- Settings Modal -->
+        <div id="settings-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>⚙️ Dashboard Settings</h2>
+                    <button id="close-settings" class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="setting-group">
+                        <h3>Detection</h3>
+                        <div class="setting-item">
+                            <label for="rps-threshold">RPS Threshold</label>
+                            <input type="number" id="rps-threshold" min="1" max="10000" step="1">
+                        </div>
+                        <div class="setting-item">
+                            <label for="ewma-alpha">EWMA Alpha</label>
+                            <input type="number" id="ewma-alpha" min="0.01" max="1" step="0.01">
+                        </div>
+                        <div class="setting-item">
+                            <label for="batch-interval">Batch Interval (ms)</label>
+                            <input type="number" id="batch-interval" min="100" max="5000" step="100">
+                        </div>
+                    </div>
+                    <div class="setting-group">
+                        <h3>Storage</h3>
+                        <div class="setting-item">
+                            <label for="ram-limit">RAM Limit (MB)</label>
+                            <input type="number" id="ram-limit" min="64" max="8192" step="64">
+                        </div>
+                        <div class="setting-item">
+                            <label for="shards">Shards</label>
+                            <input type="number" id="shards" min="16" max="2048" step="16">
+                        </div>
+                    </div>
+                    <div class="setting-group">
+                        <h3>Dashboard</h3>
+                        <div class="setting-item">
+                            <label for="sse-interval">SSE Interval (s)</label>
+                            <input type="number" id="sse-interval" min="1" max="60" step="1">
+                        </div>
+                    </div>
+                    <div class="setting-group">
+                        <h3>Alerting</h3>
+                        <div class="setting-item">
+                            <label for="rps-alert-threshold">RPS Alert Threshold</label>
+                            <input type="number" id="rps-alert-threshold" min="1" max="100000" step="1" value="1000">
+                        </div>
+                        <div class="setting-item">
+                            <label for="entropy-alert-threshold">Entropy Alert Threshold</label>
+                            <input type="number" id="entropy-alert-threshold" min="0" max="10" step="0.01" value="4.0">
+                        </div>
+                        <div class="setting-item">
+                            <label for="alert-cooldown-secs">Alert Cooldown (secs)</label>
+                            <input type="number" id="alert-cooldown-secs" min="1" max="3600" step="1" value="60">
+                        </div>
+                        <div class="setting-item">
+                            <label for="audit-log-enabled">Audit Log Enabled</label>
+                            <input type="checkbox" id="audit-log-enabled">
+                        </div>
+                        <div class="setting-item">
+                            <label for="audit-log-path">Audit Log Path</label>
+                            <input type="text" id="audit-log-path" placeholder="/var/log/ramshield/audit.log" value="/var/log/ramshield/audit.log">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="save-settings" class="btn-primary">Save Changes</button>
+                    <button id="reset-settings" class="btn-secondary">Reset</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- KPI Cards -->
+        <section class="kpi-grid">
+            <div class="kpi-card">
+                <h3>Uptime</h3>
+                <div id="m_uptime" class="kpi-value">0s</div>
+                <div class="kpi-sub">Process active</div>
+                <svg class="kpi-sparkline" viewBox="0 0 80 40"></svg>
+            </div>
+            <div class="kpi-card">
+                <h3>IPs Tracked</h3>
+                <div id="m_ips" class="kpi-value">0</div>
+                <div class="kpi-sub">Active IPs in store</div>
+            </div>
+            <div class="kpi-card">
+                <h3>Events Ingested</h3>
+                <div id="m_events" class="kpi-value">0</div>
+                <div class="kpi-sub">Total events processed</div>
+            </div>
+            <div class="kpi-card">
+                <h3>Blocked Total</h3>
+                <div id="m_blocked" class="kpi-value">0</div>
+                <div class="kpi-sub">Lifetime blocks</div>
+            </div>
+            <div class="kpi-card">
+                <h3>RAM Usage</h3>
+                <div id="m_ram" class="kpi-value">0 MB</div>
+                <div id="m_ram_pct" class="kpi-sub"></div>
+            </div>
+            <div class="kpi-card">
+                <h3>CPU Usage</h3>
+                <div id="m_cpu" class="kpi-value">0%</div>
+                <div class="kpi-sub">System-wide</div>
+            </div>
+        </section>
+        <div class="last-update" id="last-update">Last update: --</div>
+
+        <!-- Threat Level Panel -->
+        <section class="threat-panel" id="threat-panel">
+            <div class="threat-header">
+                <div class="threat-title">
+                    <span>⚠</span>
+                    <span>Threat Level Assessment</span>
+                </div>
+                <div id="threat-badge" class="threat-badge low">LOW</div>
+            </div>
+            <div class="threat-grid">
+                <div class="threat-metric">
+                    <span class="threat-metric-label">Threat Score</span>
+                    <span class="threat-metric-value" id="m-threat-score">0.00</span>
+                    <span class="threat-metric-sub">0.0 = safe · 1.0 = critical</span>
+                    <div class="threat-bar-container">
+                        <div class="threat-bar-fill low" id="threat-bar-score" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="threat-metric">
+                    <span class="threat-metric-label">Anomaly Score (Holt-Winter z)</span>
+                    <span class="threat-metric-value" id="m-anomaly-score">0.00</span>
+                    <span class="threat-metric-sub">Deviation from forecast baseline</span>
+                    <div class="threat-bar-container">
+                        <div class="threat-bar-fill low" id="threat-bar-anomaly" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="threat-metric">
+                    <span class="threat-metric-label">Entropy</span>
+                    <span class="threat-metric-value" id="m-entropy">0.00</span>
+                    <span class="threat-metric-sub">Distribution randomness (bits)</span>
+                    <div class="threat-bar-container">
+                        <div class="threat-bar-fill low" id="threat-bar-entropy" style="width: 0%"></div>
+                    </div>
+                </div>
+                <div class="threat-metric">
+                    <span class="threat-metric-label">Forecast RPS</span>
+                    <span class="threat-metric-value" id="m-forecast-rps">0.0</span>
+                    <span class="threat-metric-sub">Predicted requests / second</span>
+                    <div class="threat-bar-container">
+                        <div class="threat-bar-fill low" id="threat-bar-forecast" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Chart -->
+        <section class="chart-section">
+            <div class="chart-header">
+                <div class="chart-title">
+                    <span>📊</span>
+                    <span>Real-Time Traffic Analysis</span>
+                </div>
+                <div class="chart-legend">
+                    <div class="legend-item">
+                        <div class="legend-dot events"></div>
+                        <span>Events / Batch</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-dot blocks"></div>
+                        <span>Blocks / Batch</span>
+                    </div>
+                </div>
+            </div>
+            <div class="chart-container">
+                <svg id="main-chart" class="chart" viewBox="0 0 1200 400" preserveAspectRatio="xMidYMid meet"></svg>
+                <div id="tooltip" class="tooltip"></div>
+            </div>
+        </section>
+
+        <!-- Module Stats -->
+        <section class="modules-grid" id="modules">
+            <!-- Dynamically populated -->
+        </section>
+
+        <!-- Recent Blocks -->
+        <section class="table-section">
+            <div class="table-header">
+                <span>🚫</span>
+                <span>Recent Block Events</span>
+            </div>
+            <table class="blocks-table">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>IP Address</th>
+                        <th>Reason</th>
+                        <th>Module</th>
+                    </tr>
+                </thead>
+                <tbody id="blocks-table-body">
+                    <!-- Dynamically populated -->
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Audit Log -->
+        <section class="audit-section" id="audit-section">
+            <div class="audit-header">
+                <div class="audit-title">
+                    <span>📜</span>
+                    <span>Audit Log</span>
+                </div>
+                <span class="audit-count" id="audit-count">0 events</span>
+            </div>
+            <div style="overflow-x: auto;">
+                <table class="audit-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>IP</th>
+                            <th>Reason</th>
+                            <th>Module</th>
+                        </tr>
+                    </thead>
+                    <tbody id="audit-table-body">
+                        <tr><td colspan="4" style="text-align:center;color:#5a6478;">Waiting for audit data...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        RamShield Dashboard • Real-time traffic analysis and threat detection
+    </footer>
+
+    <script>
+        const $ = id => document.getElementById(id);
+        let connected = false;
+        let history = { events: [], blocks: [] };
+        const MAX_HISTORY = 60;
+        let lastUpdate = null;
+        let updateCount = 0;
+        let currentConfig = null;
+
+        // Settings modal functions
+        function openSettings() {
+            fetch('/api/config')
+                .then(r => r.json())
+                .then(cfg => {
+                    currentConfig = cfg;
+                    $('rps-threshold').value = cfg.detection.rps_threshold || 1000;
+                    $('ewma-alpha').value = cfg.detection.ewma_alpha || 0.3;
+                    $('batch-interval').value = cfg.detection.batch_interval_ms || 1000;
+                    $('ram-limit').value = cfg.engine.ram_limit_mb || 512;
+                    $('shards').value = cfg.engine.shard_count || 256;
+                    $('sse-interval').value = 5;
+                     // Alerting section
+                     $('rps-alert-threshold').value = cfg.alerting?.rps_alert_threshold ?? 5000;
+                     $('entropy-alert-threshold').value = cfg.alerting?.entropy_alert_threshold ?? 4.0;
+                     $('alert-cooldown-secs').value = cfg.alerting?.alert_cooldown_secs ?? 60;
+                     $('audit-log-enabled').checked = cfg.alerting?.audit_log_enabled ?? false;
+                     $('audit-log-path').value = cfg.alerting?.audit_log_path || '/var/log/ramshield/audit.log';
+                    $('settings-modal').style.display = 'flex';
+                })
+                .catch(err => console.error('Failed to load config:', err));
+        }
+
+        function closeSettings() {
+            $('settings-modal').style.display = 'none';
+        }
+
+        function saveSettings() {
+            const patch = {
+                detection: {
+                    rps_threshold: parseInt($('rps-threshold').value),
+                    ewma_alpha: parseFloat($('ewma-alpha').value) || 0.3,
+                    batch_interval_ms: parseInt($('batch-interval').value) || 1000,
+                    batch_max_events: currentConfig?.detection?.batch_max_events || 4096
+                },
+                engine: {
+                    ram_limit_mb: parseInt($('ram-limit').value),
+                    shard_count: parseInt($('shards').value),
+                    worker_threads: currentConfig?.engine?.worker_threads || 4
+                 },
+                 alerting: {
+                     rps_alert_threshold: parseInt($('rps-alert-threshold').value) || 5000,
+                     entropy_alert_threshold: parseFloat($('entropy-alert-threshold').value) || 4.0,
+                     alert_cooldown_secs: parseInt($('alert-cooldown-secs').value) || 60,
+                     audit_log_enabled: $('audit-log-enabled').checked,
+                     audit_log_path: $('audit-log-path').value || '/var/log/ramshield/audit.log'
+                 }
+                };
+
+            fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch)
+            })
+            .then(r => r.json())
+            .then(cfg => {
+                currentConfig = cfg;
+                alert('✅ Settings saved! Some changes may require restart.');
+                closeSettings();
+            })
+            .catch(err => {
+                console.error('Failed to save:', err);
+                alert('❌ Failed to save settings');
+            });
+        }
+
+        function resetSettings() {
+            if (!currentConfig) return;
+            $('rps-threshold').value = currentConfig.detection.rps_threshold || 1000;
+            $('ewma-alpha').value = currentConfig.detection.ewma_alpha || 0.3;
+            $('batch-interval').value = currentConfig.detection.batch_interval_ms || 1000;
+            $('ram-limit').value = currentConfig.engine.ram_limit_mb || 512;
+            $('shards').value = currentConfig.engine.shard_count || 256;
+            $('sse-interval').value = 5;
+             // Alerting section
+             $('rps-alert-threshold').value = currentConfig.alerting?.rps_alert_threshold ?? 5000;
+             $('entropy-alert-threshold').value = currentConfig.alerting?.entropy_alert_threshold ?? 4.0;
+             $('alert-cooldown-secs').value = currentConfig.alerting?.alert_cooldown_secs ?? 60;
+             $('audit-log-enabled').checked = currentConfig.alerting?.audit_log_enabled ?? false;
+             $('audit-log-path').value = currentConfig.alerting?.audit_log_path || '/var/log/ramshield/audit.log';
+            }
+
+        // Event listeners for settings modal
+        document.addEventListener('DOMContentLoaded', () => {
+            $('status').addEventListener('click', openSettings);
+            $('close-settings').addEventListener('click', closeSettings);
+            $('save-settings').addEventListener('click', saveSettings);
+            $('reset-settings').addEventListener('click', resetSettings);
+             $('export-btn').addEventListener('click', exportStats);
+
+            // Close on backdrop click
+            $('settings-modal').addEventListener('click', (e) => {
+                if (e.target === $('settings-modal')) closeSettings();
+            });
+            
+            // Close on Escape
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && $('settings-modal').style.display === 'flex') {
+                    closeSettings();
+                }
+            });
+        });
+
+        function fmtNum(n) {
+            return n.toLocaleString();
+        }
+
+         // === Export stats as JSON download ===
+         function exportStats() {
+             fetch('/api/export/stats')
+                 .then(r => r.json())
+                 .then(d => {
+                     const blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' });
+                     const url = URL.createObjectURL(blob);
+                     const a = document.createElement('a');
+                     a.href = url;
+                     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+                     a.download = `ramshield-stats-${ts}.json`;
+                     document.body.appendChild(a);
+                     a.click();
+                     document.body.removeChild(a);
+                     URL.revokeObjectURL(url);
+                 })
+                 .catch(err => {
+                     console.error('Export failed:', err);
+                     alert('❌ Failed to export stats');
+                 });
+         }
+
+         // === Threat Level panel rendering ===
+         function threatLevel(score) {
+             if (score < 0.33) return 'low';
+             if (score < 0.66) return 'medium';
+             return 'high';
+         }
+
+         function setBar(barEl, pct, level) {
+             barEl.style.width = Math.min(100, Math.max(0, pct)) + '%';
+             barEl.className = 'threat-bar-fill ' + level;
+         }
+
+         function renderThreatPanel(modules) {
+             if (!modules || !modules.length) return;
+             // Find the Forecasting module
+             let forecast = modules.find(m => m.label === 'Forecasting');
+             if (!forecast) {
+                 // Fallback: use first module with forecast-style details
+                 forecast = modules.find(m => m.detail && (m.detail.hw_rps !== undefined || m.detail.entropy !== undefined));
+             }
+             const detail = forecast?.detail || {};
+             const hwRps = detail.hw_rps ?? 0;
+             const hwForecast = detail.hw_forecast ?? 0;
+             const hwZscore = Math.abs(detail.hw_zscore ?? 0);
+             const entropy = detail.entropy ?? 0;
+
+             // Derive threat score (0-1) from z-score and entropy
+             // z-score > 3 is significant anomaly; entropy > 5 is high randomness
+             const anomalyScore = Math.min(1, hwZscore / 5);
+             const entropyScore = Math.min(1, entropy / 8);
+             const threatScore = Math.min(1, (anomalyScore * 0.6 + entropyScore * 0.4));
+
+             const threatLevelVal = threatLevel(threatScore);
+             const anomalyLevel = threatLevel(anomalyScore);
+             const entropyLevel = threatLevel(entropyScore);
+             const forecastLevel = threatLevel(Math.min(1, hwForecast / 10000));
+
+             // Update badge
+             const badge = $('threat-badge');
+             badge.textContent = threatLevelVal.toUpperCase();
+             badge.className = 'threat-badge ' + threatLevelVal;
+
+             // Update values
+             $('m-threat-score').textContent = threatScore.toFixed(2);
+             $('m-anomaly-score').textContent = hwZscore.toFixed(2);
+             $('m-entropy').textContent = entropy.toFixed(2);
+             $('m-forecast-rps').textContent = hwForecast.toFixed(1);
+
+             // Update bars
+             setBar($('threat-bar-score'), threatScore * 100, threatLevelVal);
+             setBar($('threat-bar-anomaly'), anomalyScore * 100, anomalyLevel);
+             setBar($('threat-bar-entropy'), entropyScore * 100, entropyLevel);
+             setBar($('threat-bar-forecast'), Math.min(100, hwForecast / 100), forecastLevel);
+         }
+
+         // === Audit Log rendering ===
+         function renderAuditLog(blocks) {
+             const tbody = $('audit-table-body');
+             const countEl = $('audit-count');
+             if (!blocks || !blocks.length) {
+                 tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#5a6478;">No audit events</td></tr>';
+                 countEl.textContent = '0 events';
+                 return;
+             }
+             countEl.textContent = blocks.length + ' event' + (blocks.length === 1 ? '' : 's');
+             tbody.innerHTML = blocks.map(b => `
+                 <tr>
+                     <td class="audit-time">${fmtTime(b.ts_ms)}</td>
+                     <td class="audit-ip">${b.ip}</td>
+                     <td class="audit-reason">${b.reason}</td>
+                     <td class="audit-module">${b.module}</td>
+                 </tr>
+             `).join('');
+         }
+
+        function fmtUptime(secs) {
+            if (secs < 60) return secs + 's';
+            if (secs < 3600) return Math.floor(secs/60) + 'm ' + (secs%60) + 's';
+            const h = Math.floor(secs/3600), m = Math.floor((secs%3600)/60);
+            return h + 'h ' + m + 'm';
+        }
+
+        function fmtTime(ts) {
+            return new Date(ts * 1000).toLocaleTimeString();
+        }
+
+        function animateValue(el, newValue, suffix = '') {
+            const oldVal = el.dataset.value || '';
+            if (String(newValue) === oldVal) return;
+            el.classList.remove('animate-number');
+            void el.offsetWidth; // trigger reflow
+            el.textContent = typeof newValue === 'number' ? fmtNum(newValue) + suffix : newValue + suffix;
+            el.dataset.value = String(newValue);
+            el.classList.add('animate-number');
+        }
+
+        function smoothUpdate(el, targetValue, duration = 300) {
+            const current = parseInt(el.dataset.value || '0') || 0;
+            const steps = 10;
+            const increment = (targetValue - current) / steps;
+            let step = 0;
+            const timer = setInterval(() => {
+                step++;
+                const val = Math.round(current + increment * step);
+                el.textContent = fmtNum(val);
+                if (step >= steps) {
+                    clearInterval(timer);
+                    el.textContent = fmtNum(targetValue);
+                }
+            }, duration / steps);
+        }
+
+        function renderChart() {
+            const svg = $('main-chart');
+            const w = 1200, h = 400, pad = { top: 20, right: 30, bottom: 30, left: 50 };
+            const chartW = w - pad.left - pad.right;
+            const chartH = h - pad.top - pad.bottom;
+
+            if (history.events.length < 2) {
+                svg.innerHTML = `
+                    <defs>
+                        <linearGradient id="grad-events" x1="0%" y1="0%" x2="0%" y2="100%">
+                            <stop offset="0%" style="stop-color:#00b4d8;stop-opacity:0.4" />
+                            <stop offset="100%" style="stop-color:#00b4d8;stop-opacity:0" />
+                        </linearGradient>
+                    </defs>
+                    <text x="${w/2}" y="${h/2}" text-anchor="middle" fill="#5a6478" font-size="14">
+                        Waiting for batch data...
+                    </text>
+                `;
+                return;
+            }
+
+            const maxEvents = Math.max(...history.events, 1);
+            const maxBlocks = Math.max(...history.blocks, 1);
+            const xStep = chartW / (MAX_HISTORY - 1);
+
+            // Build path strings
+            let eventsPath = `M ${pad.left} ${pad.top + chartH - (history.events[0]/maxEvents)*chartH}`;
+            let blocksPath = `M ${pad.left} ${pad.top + chartH - (history.blocks[0]/maxBlocks)*chartH}`;
+            let eventsArea = `M ${pad.left} ${pad.top + chartH}`;
+            let blocksArea = `M ${pad.left} ${pad.top + chartH}`;
+
+            for (let i = 0; i < history.events.length; i++) {
+                const x = pad.left + i * xStep;
+                const ey = pad.top + chartH - (history.events[i]/maxEvents)*chartH;
+                const by = pad.top + chartH - (history.blocks[i]/maxBlocks)*chartH;
+                eventsPath += (i === 0 ? ' M ' : ' L ') + x + ' ' + ey;
+                blocksPath += (i === 0 ? ' M ' : ' L ') + x + ' ' + by;
+                eventsArea += ` L ${x} ${ey}`;
+                blocksArea += ` L ${x} ${by}`;
+            }
+
+            eventsArea += ` L ${pad.left + (history.events.length-1)*xStep} ${pad.top + chartH} Z`;
+            blocksArea += ` L ${pad.left + (history.blocks.length-1)*xStep} ${pad.top + chartH} Z`;
+
+            // Grid lines
+            let gridLines = '';
+            for (let i = 0; i <= 4; i++) {
+                const y = pad.top + (chartH * i / 4);
+                gridLines += `<line class="chart-grid" x1="${pad.left}" y1="${y}" x2="${w-pad.right}" y2="${y}"/>`;
+            }
+
+            // Y-axis labels
+            let yLabels = '';
+            for (let i = 0; i <= 4; i++) {
+                const y = pad.top + (chartH * i / 4);
+                const val = Math.round(maxEvents - (maxEvents * i / 4));
+                yLabels += `<text x="${pad.left - 10}" y="${y + 4}" text-anchor="end" fill="#5a6478" font-size="10">${val}</text>`;
+            }
+
+            // Render SVG
+            svg.innerHTML = `
+                <defs>
+                    <linearGradient id="grad-events" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" style="stop-color:#00b4d8;stop-opacity:0.5" />
+                        <stop offset="100%" style="stop-color:#00b4d8;stop-opacity:0.05" />
+                    </linearGradient>
+                    <linearGradient id="grad-blocks" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" style="stop-color:#ff4757;stop-opacity:0.5" />
+                        <stop offset="100%" style="stop-color:#ff4757;stop-opacity:0.05" />
+                    </linearGradient>
+                    <filter id="glow-events">
+                        <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                        <feMerge>
+                            <feMergeNode in="coloredBlur"/>
+                            <feMergeNode in="SourceGraphic"/>
+                        </feMerge>
+                    </filter>
+                    <filter id="glow-blocks">
+                        <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                        <feMerge>
+                            <feMergeNode in="coloredBlur"/>
+                            <feMergeNode in="SourceGraphic"/>
+                        </feMerge>
+                    </filter>
+                </defs>
+                ${gridLines}
+                ${yLabels}
+                <path class="chart-area" d="${eventsArea}" fill="url(#grad-events)" />
+                <path class="chart-area" d="${blocksArea}" fill="url(#grad-blocks)" />
+                <path class="chart-line chart-line-events" d="${eventsPath}" filter="url(#glow-events)" />
+                <path class="chart-line chart-line-blocks" d="${blocksPath}" filter="url(#glow-blocks)" />
+            `;
+        }
+
+        function renderModules(modules) {
+            if (!modules || !modules.length) return;
+            $('modules').innerHTML = modules.map(m => {
+                const detail = m.detail || {};
+                return `
+                    <div class="module-card">
+                        <div class="module-header">
+                            <span class="module-name">${m.label}</span>
+                            <span class="module-rate">${m.rate_per_sec.toFixed(1)}/s</span>
+                        </div>
+                        <div class="module-stat">
+                            <span class="module-stat-label">Events</span>
+                            <span class="module-stat-value">${fmtNum(m.events)}</span>
+                        </div>
+                        <div class="module-stat">
+                            <span class="module-stat-label">Errors</span>
+                            <span class="module-stat-value">${fmtNum(m.errors)}</span>
+                        </div>
+                        ${detail.ingested !== undefined ? `
+                        <div class="module-stat">
+                            <span class="module-stat-label">Ingested</span>
+                            <span class="module-stat-value">${fmtNum(detail.ingested)}</span>
+                        </div>
+                        ` : ''}
+                        ${detail.rejected !== undefined ? `
+                        <div class="module-stat">
+                            <span class="module-stat-label">Rejected</span>
+                            <span class="module-stat-value">${fmtNum(detail.rejected)}</span>
+                        </div>
+                        ` : ''}
+                        ${detail.blocks !== undefined ? `
+                        <div class="module-stat">
+                            <span class="module-stat-label">Blocks</span>
+                            <span class="module-stat-value">${fmtNum(detail.blocks)}</span>
+                        </div>
+                        ` : ''}
+                        ${detail.ram_mb !== undefined ? `
+                        <div class="module-stat">
+                            <span class="module-stat-label">RAM</span>
+                            <span class="module-stat-value">${detail.ram_mb.toFixed(1)} / ${detail.limit_mb} MB</span>
+                        </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderBlocks(blocks) {
+            const tbody = $('blocks-table-body');
+            if (!blocks || !blocks.length) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#5a6478;">No recent blocks</td></tr>';
+                return;
+            }
+            tbody.innerHTML = blocks.map(b => `
+                <tr>
+                    <td class="block-time">${fmtTime(b.ts_ms)}</td>
+                    <td class="block-ip">${b.ip}</td>
+                    <td class="block-reason">${b.reason}</td>
+                    <td class="block-module">${b.module}</td>
+                </tr>
+            `).join('');
+        }
+
+        function updateLastUpdate() {
+            const now = new Date();
+            $('last-update').textContent = `Last update: ${now.toLocaleTimeString()}`;
+        }
+
+        function update(data) {
+            updateCount++;
+            updateLastUpdate();
+
+            // Animate KPI values
+            animateValue($('m_uptime'), fmtUptime(data.uptime_secs));
+            animateValue($('m_ips'), data.ips_tracked);
+            animateValue($('m_events'), data.events_ingested);
+            animateValue($('m_blocked'), data.blocked_total);
+            animateValue($('m_ram'), Math.round(data.ram_bytes / 1024 / 1024), ' MB');
+            $('m_ram_pct').textContent = `(${data.ram_pct.toFixed(1)}% of ${data.ram_limit_mb} MB)`;
+            animateValue($('m_cpu'), data.cpu_usage.toFixed(1), '%');
+
+            // Update chart history from pipeline flow (batched data)
+            const pipeline = data.pipeline || {};
+            if (pipeline.batched > 0 || pipeline.blocked > 0) {
+                history.events.push(pipeline.batched || 0);
+                history.blocks.push(pipeline.blocked || 0);
+                if (history.events.length > MAX_HISTORY) {
+                    history.events.shift();
+                    history.blocks.shift();
+                }
+                renderChart();
+            }
+
+            // Update modules
+            renderModules(data.modules);
+
+            // Update blocks table
+            renderBlocks(data.recent_blocks);
+
+            // Update connection status
+            if (!connected) {
+                connected = true;
+                $('status').classList.replace('disconnected', 'connected');
+                $('status-text').textContent = 'Connected';
+            }
+        }
+
+        function connect() {
+            const es = new EventSource('/sse');
+            es.onmessage = e => {
+                try {
+                    const data = JSON.parse(e.data);
+                    update(data);
+                } catch (err) {
+                    console.error('SSE parse error:', err);
+                }
+            };
+            es.onerror = () => {
+                if (connected) {
+                    connected = false;
+                    $('status').classList.replace('connected', 'disconnected');
+                    $('status-text').textContent = 'Disconnected';
+                }
+                es.close();
+                setTimeout(connect, 3000);
+            };
+        }
+
+        // Initialize
+        connect();
+
+        // Initial empty chart render
+        renderChart();
+
+        console.log('🛡️ RamShield Dashboard initialized');
+    </script>
+</body>
+</html>
