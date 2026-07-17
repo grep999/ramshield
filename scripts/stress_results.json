@@ -1,0 +1,56 @@
+{
+  "target": "127.0.0.1:7890",
+  "workers": 99,
+  "batch_size": 2000,
+  "total_events": 8960000,
+  "total_batches": 4480,
+  "total_errors": 0,
+  "total_duration_s": 162.91,
+  "peak_eps": 114238,
+  "avg_eps": 55000,
+  "error_rate_pct": 0.0,
+  "phase_results": [
+    {
+      "name": "warmup",
+      "eps": 9969,
+      "events": 198000,
+      "errors": 0,
+      "duration_s": 19.86
+    },
+    {
+      "name": "ramp-up",
+      "eps": 42543,
+      "events": 612000,
+      "errors": 0,
+      "duration_s": 14.39
+    },
+    {
+      "name": "steady",
+      "eps": 69468,
+      "events": 2254000,
+      "errors": 0,
+      "duration_s": 32.45
+    },
+    {
+      "name": "burst",
+      "eps": 114238,
+      "events": 1448000,
+      "errors": 0,
+      "duration_s": 12.68
+    },
+    {
+      "name": "sustained",
+      "eps": 64092,
+      "events": 4052000,
+      "errors": 0,
+      "duration_s": 63.22
+    },
+    {
+      "name": "cooldown",
+      "eps": 19488,
+      "events": 396000,
+      "errors": 0,
+      "duration_s": 20.32
+    }
+  ]
+}
