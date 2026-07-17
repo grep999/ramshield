@@ -1,0 +1,52 @@
+name: Bug Report
+description: File a report to help us improve RamShield
+title: "[BUG] <title>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the details below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Also tell us, what did you expect to happen?
+      placeholder: Tell us what you see!
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How can we reproduce it?
+      description: Providing a minimal reproduction script or steps is extremely helpful.
+      placeholder: |
+        1. Start ramshield with config...
+        2. Send traffic...
+        3. See crash/error...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: RamShield Version
+      description: Output of `ramshield --version` or commit SHA.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Please provide relevant log output (using `tracing` level `debug` if possible).
+      render: shell
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Linux (Debian/Ubuntu)
+        - Linux (Other)
+        - macOS
+        - Windows
+    validations:
+      required: true
