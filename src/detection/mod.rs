@@ -245,6 +245,7 @@ impl DetectionEngine {
             }
         }
 
+<<<<<<< HEAD
         threat_sample.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         threat_sample.truncate(128);
         self.store.traffic.set_threat_sample(threat_sample);
@@ -271,6 +272,18 @@ impl DetectionEngine {
             cold_skipped_events,
             blocks: block_count,
             hot_subnets: hot_subnets as u32,
+=======
+        metrics.record_batch(crate::metrics::BatchRecord {
+            ts_ms: crate::metrics::now_ms(),
+            events: event_count as u32,
+            unique_ips: unique_ips.len() as u32,
+            promoted: 0,
+            cold_skipped: 0,
+            promoted_events: 0,
+            cold_skipped_events: 0,
+            blocks: batch_blocks,
+            hot_subnets: 0,
+>>>>>>> 5b4bb0e (Refactor: metrics to ms, detection timing; config tuning)
         });
 
         debug!(
