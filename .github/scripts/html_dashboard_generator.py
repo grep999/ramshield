@@ -16,11 +16,14 @@ def md_to_html_section(md_content, title):
     """Converts a Markdown string to an HTML section with basic formatting."""
     html_content = f"<h2>{title}</h2>\n"
     html_content += "<div class=\"markdown-body\">\n"
-    # Basic Markdown to HTML conversion (can be expanded)
-    html_content += md_content.replace('\n\n', '</p><p>')
-    html_content += md_content.replace('\n', '<br>')
-    html_content = html_content.replace('# ', '<h3>').replace('\n---\n', '<hr>')
-    html_content = html_content.replace('**', '<strong>').replace('|', '<td>') # Simplified for table
+    # Single pass: paragraphs first, then line breaks in remaining lines
+    content = md_content
+    content = content.replace('\n---\n', '\n<hr>\n')
+    content = content.replace('# ', '<h3>')
+    content = content.replace('**', '<strong>')
+    paragraphs = content.split('\n\n')
+    content = '</p><p>'.join(p.replace('\n', '<br>') for p in paragraphs)
+    html_content += content
     html_content += "</div>\n"
     return html_content
 
