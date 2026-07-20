@@ -30,8 +30,8 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 20. [x] Self-test script: `scripts/selftest.sh`
 
 ## P2 — Interface & UX
-21. [ ] Add `status` subcommand to CLI
-22. [ ] Render engine stats as JSON via `status --json`
+21. [x] Add `status` subcommand to CLI
+22. [x] Render engine stats as JSON via `status --json`
 23. [ ] Add `config validate` subcommand
 24. [ ] Tab-completion script for bash/zsh
 25. [ ] Man page stub in `docs/ramshield.1`
