@@ -19,3 +19,4 @@ Mon 20 Jul 14:20:46 CEST 2026: Executed P0 task: Fix dead link in DOCUMENTATION.
 Mon 20 Jul 14:26:50 CEST 2026: Executed P0 task: Fix dead link in  (empty target)
 Mon 20 Jul 14:26:57 CEST 2026: Executed P0 task: Fix dead link in DOCUMENTATION.md (empty target)
 Mon 20 Jul 14:27:30 CEST 2026: Executed P0 task: Fix dead link in DOCUMENTATION.md (empty target) — changed #ipc-protocol to #7-ipc-protocol to match actual heading anchor
+Mon 20 Jul 14:32:48 CEST 2026: Executed P0 task: Pin tflite-rust version in Cargo.toml (added =0.3.0 exact pin)
