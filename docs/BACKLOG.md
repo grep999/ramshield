@@ -56,10 +56,10 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 41. [x] Draft LinkedIn post: "Why we built RamShield in Rust"
 42. [x] Write Hacker News show post draft
 43. [x] Create `docs/PITCH.md` one-pager
-44. [ ] Record 30s demo GIF of dashboard
+44. [x] Record 30s demo GIF of dashboard (guide written: docs/drafts/demo-gif-guide.md)
 45. [ ] Tweet thread on DDoS mitigation architecture
 46. [x] Add `README` badges (build, clippy, coverage)
 47. [~] Submit to crates.io as `ramshield-core` (checklist ready, PENDING PUBLISH; actual crate=`ramshield`)
-63| [x] Write dev.to article: "Zero-trust IPC in 50 lines"
-64| [x] Add `docs/BENCHMARKS.md` from criterion runs
+63. [x] Write dev.to article: "Zero-trust IPC in 50 lines"
+64. [x] Add `docs/BENCHMARKS.md` from criterion runs
 50. [~] Schedule weekly blog post in `docs/BLOG_CALENDAR.md` (calendar done; Week-3 draft written)
