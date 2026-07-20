@@ -5,6 +5,7 @@ use crate::error::{Result, RsError};
 use crate::forecasting::Forecaster;
 use crate::storage::wal::WalEntry;
 use crate::learning::PatternLearner;
+pub use crate::learning;
 use crate::ipc::{IpDetail, Request, Response, Stats};
 use crate::metrics::{DashboardSnapshot, Metrics, now_ms, get_system_usage};
 use crate::storage::{BlockReason, BlockState, IpRecord, Store, Value};
