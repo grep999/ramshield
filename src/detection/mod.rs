@@ -5,7 +5,7 @@ use crate::config::{ConfigHandle, DetectionConfig};
 use crate::detection::batch::{aggregate, ip_in_subnet, subnet_key, subnet_prefix, IpAgg};
 use crate::util::BoundedVecDeque;
 use crate::detection::rate_tracker::{ewma, is_exceeded};
-use crate::metrics::{BatchRecord, Metrics};
+use crate::metrics::Metrics;
 use crate::storage::{ip_key, BlockReason, BlockState, IpRecord, Store, Value};
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use std::collections::hash_map::DefaultHasher;
