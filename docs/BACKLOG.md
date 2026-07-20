@@ -12,7 +12,7 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 5. [ ] Write `src/engine/mod.rs` re-export for learning submodule
 6. [ ] Add unit test skeleton for `xgboost::score`
 7. [ ] Pin `tflite-rust` version in Cargo.toml
-8. [ ] Add `--version` flag to main binary
+8. [x] Add `--version` flag to main binary
 9. [ ] Document IPC protocol in `docs/IPC.md`
 10. [ ] Add `make bench` target to Makefile
 

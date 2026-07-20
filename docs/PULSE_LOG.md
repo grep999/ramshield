@@ -11,3 +11,4 @@ Mon 20 Jul 10:31:49 CEST 2026: Executed P0 task: Add cargo clippy CI gate to .gi
 Mon 20 Jul 10:53:04 CEST 2026: Executed P0 task: Write src/engine/mod.rs re-export for learning submodule
 2026-07-20 10:58:14: Executed P0 task: Fix dead link in  (empty target)
 2026-07-20 10:58:18: Executed P0 task: Fix dead link in `DOCUMENTATION.md` (empty target)
+Mon 20 Jul 11:27:46 CEST 2026: Executed P0 task: Add --version flag to main binary
