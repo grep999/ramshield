@@ -11,7 +11,7 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 4. [x] Fix dead link in `DOCUMENTATION.md` (empty target)
 5. [ ] Write `src/engine/mod.rs` re-export for learning submodule
 6. [ ] Add unit test skeleton for `xgboost::score`
-7. [ ] Pin `tflite-rust` version in Cargo.toml
+7. [x] Pin `tflite-rust` version in Cargo.toml
 8. [x] Add `--version` flag to main binary
 9. [ ] Document IPC protocol in `docs/IPC.md`
 10. [ ] Add `make bench` target to Makefile
@@ -59,7 +59,7 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 44. [ ] Record 30s demo GIF of dashboard
 45. [ ] Tweet thread on DDoS mitigation architecture
 46. [x] Add `README` badges (build, clippy, coverage)
-47. [ ] Submit to crates.io as `ramshield-core`
+47. [~] Submit to crates.io as `ramshield-core` (checklist ready, PENDING PUBLISH; actual crate=`ramshield`)
 63| [x] Write dev.to article: "Zero-trust IPC in 50 lines"
 64| [x] Add `docs/BENCHMARKS.md` from criterion runs
-50. [ ] Schedule weekly blog post in `docs/BLOG_CALENDAR.md`
+50. [~] Schedule weekly blog post in `docs/BLOG_CALENDAR.md` (calendar done; Week-3 draft written)

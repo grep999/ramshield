@@ -1,2 +1,4 @@
 - 2026-07-20T14:05Z | #45 Tweet thread: DDoS mitigation architecture | docs/drafts/tweet-ddos-mitigation.md | DONE (local draft)
 - 2026-07-20T14:05Z | #50 Create blog calendar | docs/BLOG_CALENDAR.md | DONE
+- 2026-07-20T14:31Z | #50 Blog cadence: Week-3 draft | docs/drafts/blog-ddos-arch.md | DONE (local draft) [PENDING PUBLISH]
+- 2026-07-20T14:31Z | #47 crates.io publish checklist | docs/CRATES_IO_CHECKLIST.md | DONE (local doc) [PENDING PUBLISH]
