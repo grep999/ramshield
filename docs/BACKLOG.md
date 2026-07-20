@@ -14,7 +14,7 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 7. [x] Pin `tflite-rust` version in Cargo.toml
 8. [x] Add `--version` flag to main binary
 9. [x] Document IPC protocol in `docs/IPC.md`
-10. [ ] Add `make bench` target to Makefile
+10. [x] Add `make bench` target to Makefile
 
 ## P1 — Hardening & Observability
 11. [ ] Add structured logging via `tracing` crate

@@ -24,3 +24,5 @@ Executed P0 task: Document IPC protocol in docs/IPC.md
 Mon 20 Jul 14:51:19 CEST 2026: Executed P0 task: Document IPC protocol in docs/IPC.md
 Mon 20 Jul 16:30:32 CEST 2026: Executed P0 task: [Write src/engine/mod.rs re-export for learning submodule]
 Mon 20 Jul 17:05:30 CEST 2026: Executed P0 task: Add unit test skeleton for xgboost::score
+Mon 20 Jul 17:11:00 CEST 2026: Executed P0 task: Add unit test skeleton for xgboost::score
+Mon 20 Jul 17:16:49 CEST 2026: Executed P0 task: Add make bench target to Makefile
