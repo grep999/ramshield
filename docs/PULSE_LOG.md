@@ -46,3 +46,6 @@ Mon 20 Jul 22:45:36 CEST 2026: Executed P0 task: Re-created a.txt, b.txt, c.txt 
 Mon 20 Jul 22:50:57 CEST 2026: Executed P0 task: Create a.txt, b.txt, c.txt
 Mon 20 Jul 22:55:38 CEST 2026: Executed P0 task: Create a.txt, b.txt, c.txt
 Mon 20 Jul 23:15:57 CEST 2026: Executed P0 task: Benchmark score() with criterion (P1 #18 promoted; all P0 complete). Bench runs: xgboost::score ~1.05ns. Added criterion dev-dep, [[bench]] entry, benches/score_bench.rs (pre-existing). Refactored Cargo.toml features to unblock bench compilation w/o main.rs.
+Mon 20 Jul 23:22:21 CEST 2026: Executed P1 task: [Add OpenTelemetry trace spans (no-op default)]
+Mon 20 Jul 23:33:21 CEST 2026: Executed P0 task: Wire OpenTelemetry trace spans (no-op default) — P1 #19; otel feature branch in main.rs init + log fix
+Mon 20 Jul 23:42:43 CEST 2026: VERIFIED — make test 46/46 PASS; cargo check --features otel --lib clean; main.rs bin blocked by 7 pre-existing errors (TestScenario import, Command::output missing .await, Engine::shutdown not on Arc) pre-dating this cycle

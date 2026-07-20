@@ -22,6 +22,7 @@ enum Cmd {
     },
     Unblock { ip: String },
     Stats,
+    Status,
     Info    { ip: String },
 }
 
@@ -33,9 +34,10 @@ fn main() -> Result<()> {
             Some(t) => format!(r#"{{"type":"block_ip","ip":"{}","reason":"{}","ttl_secs":{}}}"#, ip, reason, t),
             None    => format!(r#"{{"type":"block_ip","ip":"{}","reason":"{}","ttl_secs":null}}"#, ip, reason),
         },
-        Cmd::Unblock { ip }              => format!(r#"{{"type":"unblock_ip","ip":"{}"}}"#, ip),
-        Cmd::Stats                       => r#"{"type":"get_stats"}"#.into(),
-        Cmd::Info    { ip }              => format!(r#"{{"type":"get_ip_stats","ip":"{}"}}"#, ip),
+        Cmd::Unblock { ip } => format!(r#"{{"type":"unblock_ip","ip":"{}"}}"#, ip),
+        Cmd::Stats => r#"{"type":"get_stats"}"#.into(),
+        Cmd::Status => r#"{"type":"get_status"}"#.into(),
+        Cmd::Info { ip } => format!(r#"{{"type":"get_ip_stats","ip":"{}"}}"#, ip),
     };
 
     let mut stream = TcpStream::connect(&cli.addr)
