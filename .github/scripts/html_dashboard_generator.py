@@ -362,6 +362,7 @@ def generate_html_dashboard(workspace_root: str):
         'research': read_report('docs/RESEARCH.md'),
         'pulse': read_report('docs/PULSE_LOG.md'),
         'health_loop': read_report('docs/HEALTH_LOOP.md'),
+        'errors': read_report('docs/ERRORS.md'),
     }
 
     # Parse structured data
@@ -691,6 +692,17 @@ def generate_html_dashboard(workspace_root: str):
       </div>
     </section>
   </div>
+
+  <!-- ERRORS & ERROR-HANDLING -->
+  <section class="panel" style="margin-top:20px;border-left:3px solid var(--danger);">
+    <div class="panel-header">
+      <h2>🚨 Errors &amp; Error-Handling</h2>
+      <span class="badge badge-{'ok' if not reports['errors'].startswith('_') and '0 active' in reports['errors'] else 'danger'}">{('no active errors' if not reports['errors'].startswith('_') and '0 active' in reports['errors'] else 'review')}</span>
+    </div>
+    <div class="panel-body">
+      {md_to_html(reports['errors']) if not reports['errors'].startswith('_') else md_to_html('_No active errors tracked. Health-repair job monitoring all sections._')}
+    </div>
+  </section>
 
   <!-- DEAD LINKS REPORT -->
   <section class="panel" style="margin-top:20px;">
