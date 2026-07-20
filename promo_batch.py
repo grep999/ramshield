@@ -12,8 +12,7 @@ import json
 import os
 import sys
 import subprocess
-import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 CONTENT_DIR = Path.home() / "promotion_content"
@@ -38,7 +37,7 @@ def run_campaign(campaign_id):
     assets_dir = CONTENT_DIR / campaign["assets_dir"]
     assets_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     output_file = assets_dir / f"{campaign_id}_{timestamp}.md"
 
     content = f"""# {campaign['name']}
@@ -47,7 +46,7 @@ def run_campaign(campaign_id):
 **Type:** {campaign['type']}
 **Priority:** {campaign['priority']}
 **Frequency:** {campaign['frequency']}
-**Generated:** {datetime.utcnow().isoformat()}Z
+**Generated:** {datetime.now(timezone.utc).isoformat()}Z
 
 ## Description
 {campaign['description']}
