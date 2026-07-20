@@ -38,3 +38,4 @@ Mon 20 Jul 20:12:35 CEST 2026: Executed P0 task: Engine startup integration test
 Mon 20 Jul 20:15:15 CEST 2026: VERIFIED P1 #14 — cargo test --lib 46/46 pass (3 new startup integration tests in src/engine/mod.rs)
 Mon 20 Jul 21:21:25 CEST 2026: Executed P0 task: Create a.txt, b.txt, c.txt
 Mon 20 Jul 21:26:01 CEST 2026: Executed P0 task: Create a.txt, b.txt, c.txt
+Mon 20 Jul 21:47:30 CEST 2026: Executed P1 task: Cover preprocess::normalize with property test
