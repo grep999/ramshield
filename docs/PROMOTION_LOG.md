@@ -20,3 +20,5 @@ Latest promotion-agent output. Appended by the RamShield Promotion Agent cronjob
 - 2026-07-20T08:14Z | #48 dev.to article | docs/promotion/articles/promo-std-devto-ipc.md | DONE (local draft)
 - 2026-07-20T08:14Z | #49 Benchmarks doc | docs/BENCHMARKS.md | DONE
 - 2026-07-20T08:23Z | Re-create files a.txt, b.txt, c.txt | a.txt, b.txt, c.txt | DONE
+- 2026-07-20T13:46Z | #45 Tweet thread: DDoS mitigation architecture | docs/drafts/tweet-ddos-mitigation.md | DONE (local draft)
+- 2026-07-20T13:46Z | #50 Create blog calendar | docs/BLOG_CALENDAR.md | DONE
