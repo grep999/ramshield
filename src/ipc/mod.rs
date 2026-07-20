@@ -16,6 +16,7 @@ pub enum Request {
     UnblockIp        { ip: String },
     GetIpStats       { ip: String },
     GetStats,
+    GetStatus,
     /// Single event — fully compatible with existing integrations.
     ReportConnection { ip: String, bytes: u64, status_code: u16, proto_fp: u32 },
     /// High-throughput path: many events per IPC round-trip.
