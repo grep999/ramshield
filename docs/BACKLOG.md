@@ -25,7 +25,7 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 15. [x] Add panic hook that logs to `stderr` with timestamp
 16. [x] Cover `preprocess::normalize` with property test
 17. [x] Add `RUST_LOG` env support
-18. [ ] Benchmark `score()` with criterion
+18. [x] Benchmark `score()` with criterion
 19. [ ] Add OpenTelemetry trace spans (no-op default)
 20. [x] Self-test script: `scripts/selftest.sh`
 

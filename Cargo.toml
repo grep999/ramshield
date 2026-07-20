@@ -6,6 +6,7 @@ edition = "2021"
 [[bin]]
 name = "ramshield"
 path = "src/main.rs"
+required-features = ["full"]
 
 [[bin]]
 name = "ramshield-cli"
@@ -14,6 +15,9 @@ path = "src/cli.rs"
 [lib]
 name = "ramshield"
 path = "src/lib.rs"
+
+[features]
+full = ["tokio/full", "tracing-subscriber/env-filter", "tracing-subscriber/fmt", "tower-http/cors", "clap/derive"]
 
 [dependencies]
 tokio             = { version = "1", features = ["full"] }
@@ -28,8 +32,8 @@ lz4_flex          = "0.11"
 thiserror         = "1"
 anyhow            = "1"
 tracing           = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-clap              = { version = "4", features = ["derive"] }
+tracing-subscriber = { version = "0.3", default-features = false }
+clap              = { version = "4", default-features = false, features = ["std", "derive"] }
 toml              = "0.8"
 num_cpus          = "1"
 axum              = "0.7"
@@ -42,8 +46,14 @@ sysinfo           = "0.29"
 shlex = "2.0.1"
 chrono = "0.4"
 
+[[bench]]
+name = "score_bench"
+path = "benches/score_bench.rs"
+harness = false
+
 
 
 [dev-dependencies]
 serial_test = "3"
 proptest = "1"
+criterion = "0.5"
