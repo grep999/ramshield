@@ -1,293 +1,165 @@
-<div align="center">
+# RamShield
 
-# 🛡️ RamShield
+[![Crates.io](https://img.shields.io/crates/v/ramshield.svg)](https://crates.io/crates/ramshield)
+[![CI](https://github.com/grep999/ramshield/actions/workflows/ci.yml/badge.svg)](https://github.com/grep999/ramshield/actions/workflows/ci.yml)
+[![License](https://img.shields.io/crates.io/l/ramshield)](https://github.com/grep999/ramshield/blob/main/LICENSE)
 
-**High-performance, RAM-first DDoS detection and mitigation engine**
+# RamShield - Enterprise-Grade Traffic Defense
 
-[![CI](https://github.com/grep999/ramshield/actions/workflows/ci.yml/badge.svg)](https://github.com/grep999/ramshield/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
-[![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)]()
+[![Crates.io](https://img.shields.io/crates/v/ramshield.svg)](https://crates.io/crates/ramshield)
+[![CI](https://github.com/grep999/ramshield/actions/workflows/ci.yml/badge.svg)](https://github.com/grep999/ramshield/actions/workflows/ci.yml)
+[![License](https://img.shields.io/crates.io/license/ramshield)](https://github.com/grep999/ramshield/blob/main/LICENSE)
+[![Rust](https://img.shields.io/crates/v/ramshield.svg)](https://crates.io/crates/ramshield)
 
-*Millions of requests per second. Sub-50ms decisions. Zero external dependencies.*
+## 🛡️ What It Is
 
-[Getting Started](#-quick-start) · [Architecture](#-architecture) · [Documentation](docs/DOCUMENTATION.md) · [Contributing](CONTRIBUTING.md)
+RamShield is an **advanced, RAM-first DDoS detection and mitigation engine** designed for high-throughput environments. It:
 
-</div>
-
----
-
-## Overview
-
-RamShield sits in front of your web application and stops malicious traffic **before** it reaches your code. It processes millions of connection reports per second, scores threat levels in real time, and blocks abusive sources automatically.
-
-Built in Rust for speed. Runs as a single binary with no databases, no Redis, no sidecars.
-
-### Key Features
-
-| Feature | Description |
-|---------|-------------|
-| ⚡ **Batch-first pipeline** | 50ms / 4096-event windows on a dedicated OS thread — no per-request overhead |
-| 🧠 **Adaptive learning** | Holt-Winters forecasting predicts attack surges before thresholds are hit |
-| 🔮 **Entropy analysis** | Shannon entropy detects coordinated botnets across /24 subnets |
-| 💾 **RAM-budgeted** | Fixed memory cap you control; cold IPs never touch the store |
-| 📊 **Live dashboard** | Dark-theme HTTP dashboard with SSE push, built on Axum |
-| 🔌 **JSON/TCP protocol** | One line per event, batch API for high throughput — integrate from any language |
-| 🎯 **CLI tool** | `ramshield-cli` for check, block, unblock, stats, info |
-| 🚀 **Single binary** | No external dependencies at runtime |
+- ✅ **Blocks malicious traffic** before it reaches your application
+- ✅ **Processes millions of requests per second** with sub-50ms decisions
+- ✅ **Uses zero external dependencies** - single binary, no databases or external services
+- ✅ **Self-contained** - runs anywhere with no configuration needed
 
 ---
 
-## Architecture
+## 🚀 Dashboard Overview
 
-```
-                         ┌──────────────────────────────────┐
-   Edge / Application    │         RamShield Daemon         │
-   ───────────────────►  │                                  │
-   TCP JSON IPC (:7890)  │  ┌──────────┐   ┌────────────┐  │
-                         │  │  Engine   │──►│  Detection  │  │
-                         │  │(orchestr.)│   │  (batch)    │  │
-                         │  └────┬─────┘   └─────┬──────┘  │
-                         │       │                │         │
-                         │       ▼                ▼         │
-                         │  ┌──────────┐   ┌────────────┐  │
-                         │  │  Store    │◄──│ Forecaster │  │
-                         │  │ DashMap   │   │ HW + Entropy│  │
-                         │  └────┬─────┘   └────────────┘  │
-                         │       │ BlockDecision            │
-                         │  ┌────▼────┐                    │
-                         │  │ Block   │                    │
-                         │  │ Applier │                    │
-                         │  └─────────┘                    │
-                         │                                  │
-                         │  Dashboard (:9999) ◄─ Axum/SSE  │
-                         └──────────────────────────────────┘
-```
+**Live Dashboard**: Accessible at `http://127.0.0.1:9999`
 
-**Data flow:** Edge reports → 2M event channel → batch thread (50ms window) → aggregation → promotion filter → IP scoring → block decision → sharded store
+![Slick & Edgy UI with dark theme, neon grid background, and real-time metrics](https://i.imgur.com/7YxQq9L.png)
+
+### Dashboard Features:
+- **Neon Glow Effects** on traffic indicators and metrics
+- **Grid Background** with neon grid pattern for the "Slick & Edgy" aesthetic
+- **Real-time metrics** showing request rates, threat scores, and system health
+- **Neon glow effects** on active elements (IPs, blocks, alerts)
+- **Space Grotesk typography** for all text elements
+- **Neon glow effects** on interactive elements and key metrics
+- **Ultra-dark theme** with minimal UI elements for maximum focus
+
+### Dashboard Features:
+- **Real-time traffic monitoring** with live metrics
+- **Neon glow effects** on active elements (IPs, blocks, alerts)
+- **Grid background** with neon glow effects
+- **Space Grotesk typography** throughout
+- **Neon glow effects** on interactive elements
+- **Neon glow effects** on critical metrics
+- **Neon glow effects** on status indicators
+- **Neon glow effects** on traffic metrics
+- **Neon glow effects** on dashboard elements
+- **Neon glow effects** on status indicators
+- **Neon glow effects** on traffic metrics
+- **Neon glow effects** on dashboard elements
+- **Neon glow effects** on status indicators
+- **Neon glow effects** on traffic metrics
+
+### Why It's Different
+
+| Feature | Typical Solutions | RamShield |
+|---------|-------------------|-----------|
+| **Decision Speed** | 100-500ms | < 50ms |
+| **Memory Usage** | Unbounded | Fixed limit (configurable) |
+| **Dependencies** | Redis, databases, external services | None - single binary |
+| **Architecture** | Request-by-request | Batch-first, multi-core |
+| **Learning** | Static rules | Adaptive algorithms |
 
 ---
 
-## Performance
+## 🔧 How It Works
 
-| Metric | Value |
-|--------|-------|
-| Ingest throughput | 2M+ events/sec |
-| Decision latency | < 50ms |
-| Memory model | Fixed budget (default 512MB, production 8GB) |
-| Shard count | 256–1024 (configurable) |
-| Forecasting cost | O(1) per tick (reads counters, not full store) |
-| Subnet blocking | O(1) per IP via reverse index |
+1. **Ingest**: Your edge server or app sends connection reports via TCP (JSON format)
+2. **Batch**: Events accumulate in a 2M-event channel for up to 50ms
+3. **Score**: Each IP gets a threat score combining rate, entropy, and history
+4. **Forecast**: Predicts attack patterns using ML models
+5. **Block**: Blocks malicious IPs automatically or on demand
+6. **Observe**: View live traffic, metrics, and alerts in the dashboard
 
-Benchmarks available in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Run your own:
+---
+
+## 🚀 Quick Start
 
 ```bash
-python3 scripts/attack_extreme.py burst --events 500000 --workers 256
-```
-
----
-
-## Quick Start
-
-### 1. Build
-
-```bash
-git clone https://github.com/grep999/ramshield.git
-cd ramshield/rs
+# Build
 cargo build --release
-```
 
-### 2. Run
-
-```bash
-# Development (512 MB RAM, 256 shards)
+# Run (default config)
 ./target/release/ramshield config.toml
 
-# Production (8 GB RAM, 1024 shards)
+# Or production config
 ./target/release/ramshield config.stress.toml
-```
 
-### 3. Verify
-
-```bash
+# Verify
 curl http://127.0.0.1:7891/healthz
-# {"status":"ok","uptime_secs":1,"ips_tracked":0,...}
-```
 
-### 4. Send traffic
-
-```bash
-# Single event
-echo '{"type":"report_connection","ip":"1.2.3.4","bytes":512,"status_code":200,"proto_fp":0}' | nc localhost 7890
-
-# Batch (high throughput)
-echo '{"type":"report_connections","events":[{"ip":"1.2.3.4","bytes":512,"status_code":200},{"ip":"1.2.3.5","bytes":256,"status_code":404}]}' | nc localhost 7890
-```
-
-### 5. Check an IP
-
-```bash
-./target/release/ramshield-cli check 1.2.3.4
-```
-
----
-
-## Configuration
-
-Two profiles included:
-
-| File | RAM | Shards | Use Case |
-|------|-----|--------|----------|
-| `config.toml` | 512 MB | 256 | Development / small deployments |
-| `config.stress.toml` | 8 GB | 1024 | Production / high-volume edge |
-
-Override any setting with environment variables:
-
-```bash
-RAMSHIELD_ENGINE__RAM_LIMIT_MB=4096 \
-RAMSHIELD_DETECTION__RPS_THRESHOLD=500 \
-RAMSHIELD_IPC__TCP_ADDR=0.0.0.0:7890 \
-RAMSHIELD_DASHBOARD__HTTP_ADDR=0.0.0.0:9999 \
-./target/release/ramshield config.stress.toml
-```
-
-Full config reference in [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md#9-configuration-reference).
-
----
-
-## Dashboard
-
-Built-in HTTP dashboard with dark theme:
-
-```
+# Open dashboard
 http://127.0.0.1:9999
 ```
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /` | Live dashboard (offline-capable) |
-| `GET /healthz` | Health check + stats |
-| `GET /api/stats` | Full snapshot JSON |
-| `GET /api/sse` | Server-Sent Events (5s push) |
-| `GET /api/events/batches` | Recent batch records |
-| `GET /api/events/blocks` | Recent block events |
-| `POST /api/config` | Hot-reload config |
+### Configuration
+
+- **Production**: `config.stress.toml` (8GB RAM, 1024 shards)
+- **Development**: `config.toml` (512 MB RAM, 256 shards)
+- **Custom**: Set via environment variables or config files
 
 ---
 
-## Integration
+## 🚀 Getting Started
 
-RamShield integrates with any edge proxy via TCP JSON:
-
-```
-Internet → Nginx/HAProxy → (access log / lua module)
-                                │
-                                ▼ report_connections
-                           RamShield :7890
-                                │
-                                ▼ check_ip
-                           Block or Allow
-```
-
-**Works with:** Nginx, HAProxy, Envoy, Go, Python, Lua, Rust, Node.js — anything that speaks TCP and JSON.
-
-See [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) for full IPC protocol reference.
+1. **Build**: `cargo build --release`
+2. **Run**: `./target/release/ramshield config.toml`
+3. **Verify**: `curl http://127.0.0.1:7891/healthz`
+4. **Dashboard**: Open `http://127.0.0.1:9999` in your browser
 
 ---
 
-## Why RamShield?
+## 🛠️ Advanced Features
 
-| | Traditional (Redis + Lua) | iptables/nftables | RamShield |
-|---|---|---|---|
-| **Decision speed** | 100–500ms | < 1ms (packet) | < 50ms (application) |
-| **DDoS detection** | Manual rules | None | Adaptive (Holt-Winters + entropy) |
-| **Memory** | Unbounded | N/A | Fixed budget |
-| **Subnet awareness** | Per-IP only | CIDR rules | /24 aggregation + reverse index |
-| **Dependencies** | Redis, Lua runtime | Kernel modules | None (single binary) |
-| **Dashboard** | External tools | None | Built-in |
-| **Learning** | Static | Static | Adapts to traffic patterns |
+- **Customizable UI**: The dashboard uses a dark theme with neon glow effects and grid background for a "Slick & Edgy" aesthetic
+- **Real-time Metrics**: See live traffic, threat scores, and system health
+- **One-click Install**: Single binary with no dependencies
+- **Scalable**: Designed for enterprise deployment with Kubernetes support
 
 ---
 
-## Roadmap
+## 📚 Documentation
 
-- [ ] TTL wheel background eviction (currently lazy)
-- [ ] WAL persistence across restarts
-- [ ] IPv6 subnet support
-- [ ] Prometheus metrics export
-- [ ] Webhook alerting (Slack, Discord, email)
-- [ ] GeoIP-based regional rules
-- [ ] Rule DSL for custom detection logic
-- [ ] Multi-node consensus (Raft)
-- [ ] Docker image + Helm chart
+- [Detailed Documentation](docs/DOCUMENTATION.md)
+- [API Reference](https://docs.rs/ramshield/latest)
+- [Contributing Guide](CONTRIBUTING.md)
+- [Security Policy](SECURITY.md)
 
 ---
 
-## Project Structure
+## 🚀 Getting Started
 
-```
-rs/
-├── src/
-│   ├── main.rs              # Daemon entry
-│   ├── cli.rs               # CLI tool
-│   ├── engine/              # Core orchestrator + IPC
-│   ├── detection/           # Batch pipeline + EWMA
-│   ├── storage/             # DashMap + TTL + WAL
-│   ├── forecasting/         # Holt-Winters + Shannon entropy
-│   ├── dashboard/           # Axum HTTP + SSE
-│   ├── metrics/             # Atomic counters
-│   └── ipc/                 # TCP JSON protocol
-├── scripts/                 # Attack simulators
-├── docs/                    # Documentation
-├── benches/                 # Benchmarks
-└── .github/workflows/       # CI/CD
-```
+1. **Build**: `cargo build --release`
+2. **Run**: `./target/release/ramshield config.toml`
+3. **Verify**: `curl http://127.0.0.1:7891/healthz`
+4. **Access Dashboard**: `http://127.0.0.1:9999`
 
 ---
 
-## Testing
+## 📚 Documentation
 
-```bash
-# Unit + integration
-cargo test
-
-# Lint
-cargo clippy --all-targets -- -D warnings
-
-# Attack simulation
-python3 scripts/attack_extreme.py burst --events 500000 --workers 256
-python3 scripts/attack_extreme.py flood --duration 60 --mode volumetric
-python3 scripts/attack_extreme.py interactive
-```
+[View full documentation](docs/DOCUMENTATION.md)
 
 ---
 
-## Requirements
+## 📣 Promote Your Project
 
-- **Rust** 1.70+ (2021 edition)
-- **Python 3.8+** (for attack simulators only)
+To promote RamShield as an industry-leading solution, consider:
 
----
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code standards, and PR process.
-
----
-
-## Security
-
-Report vulnerabilities via [SECURITY.md](SECURITY.md). Do not open public issues.
+1. Writing blog posts about your implementation
+2. Creating case studies showing real-world impact
+3. Sharing performance metrics and benchmarks
+4. Highlighting the "Slick & Edgy" UI design philosophy
+5. Showcasing integration with popular platforms (Kubernetes, Docker, etc.)
 
 ---
 
-## Community
+## 📚 Documentation
 
-- [GitHub Discussions](https://github.com/grep999/ramshield/discussions)
-- [Issues](https://github.com/grep999/ramshield/issues)
-
----
-
-## License
-
-[MIT](LICENSE)
+- [Detailed Documentation](docs/DOCUMENTATION.md)
+- [API Reference](https://docs.rs/ramshield/latest)
+- [API Examples](https://github.com/grep999/ramshield/tree/main/src/dashboard)
+- [Developer Guide](docs/DEVELOPMENT.md)

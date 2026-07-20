@@ -15,7 +15,6 @@ pub fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-<<<<<<< HEAD
 fn with_system<F, R>(f: F) -> R
 where
     F: FnOnce(&mut System) -> R,
@@ -26,24 +25,6 @@ where
         *guard = Some(System::new_all());
     }
     f(guard.as_mut().unwrap())
-=======
-pub fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-static mut SYSTEM_PTR: *mut System = std::ptr::null_mut();
-static SYSTEM: Once = Once::new();
-
-fn get_system() -> &'static mut System {
-    SYSTEM.call_once(|| {
-        let sys = Box::new(System::new_all());
-        unsafe { SYSTEM_PTR = Box::into_raw(sys); }
-    });
-    unsafe { &mut *SYSTEM_PTR }
->>>>>>> 5b4bb0e (Refactor: metrics to ms, detection timing; config tuning)
 }
 
 pub fn get_system_usage() -> (f32, usize) {
@@ -228,7 +209,6 @@ impl Metrics {
 
     pub fn record_block(&self, ip: &str, reason: &str, module: &str) {
         if let Ok(mut log) = self.block_log.lock() {
-<<<<<<< HEAD
             if log.len() >= BLOCK_LOG {
                 log.pop_front();
             }
@@ -238,10 +218,6 @@ impl Metrics {
                 reason: reason.to_string(),
                 module: module.to_string(),
             });
-=======
-            if log.len() >= BLOCK_LOG { log.pop_front(); }
-            log.push_back(BlockRecord { ts_ms: now_ms(), ip: ip.to_string(), reason: reason.to_string(), module: module.to_string() });
->>>>>>> 5b4bb0e (Refactor: metrics to ms, detection timing; config tuning)
         }
     }
 
@@ -293,8 +269,6 @@ impl Metrics {
         let entropy = Metrics::f64(&self.entropy_bits);
         
         let last_ev = self.last_batch_events.load(Ordering::Relaxed);
-        let _last_pr = self.last_batch_promoted.load(Ordering::Relaxed);
-        let _last_bl = self.last_batch_blocks.load(Ordering::Relaxed);
         
         let (_cpu_usage, total_system_memory_mb) = get_system_usage();
 
