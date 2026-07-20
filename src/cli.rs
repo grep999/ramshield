@@ -22,7 +22,7 @@ enum Cmd {
     },
     Unblock { ip: String },
     Stats,
-    Status,
+    Status  { #[arg(long)] json: bool },
     Info    { ip: String },
 }
 
@@ -36,9 +36,11 @@ fn main() -> Result<()> {
         },
         Cmd::Unblock { ip } => format!(r#"{{"type":"unblock_ip","ip":"{}"}}"#, ip),
         Cmd::Stats => r#"{"type":"get_stats"}"#.into(),
-        Cmd::Status => r#"{"type":"get_status"}"#.into(),
+        Cmd::Status { .. } => r#"{"type":"get_status"}"#.into(),
         Cmd::Info { ip } => format!(r#"{{"type":"get_ip_stats","ip":"{}"}}"#, ip),
     };
+
+    let compact = matches!(&cli.cmd, Cmd::Status { json: true });
 
     let mut stream = TcpStream::connect(&cli.addr)
         .map_err(|e| anyhow::anyhow!("cannot connect to {}: {}", cli.addr, e))?;
@@ -48,6 +50,10 @@ fn main() -> Result<()> {
     BufReader::new(&stream).read_line(&mut resp)?;
     let v: serde_json::Value = serde_json::from_str(&resp)
         .unwrap_or(serde_json::Value::String(resp.trim().into()));
-    println!("{}", serde_json::to_string_pretty(&v)?);
+    if compact {
+        println!("{}", serde_json::to_string(&v)?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&v)?);
+    }
     Ok(())
 }
