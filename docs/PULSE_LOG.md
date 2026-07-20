@@ -26,3 +26,5 @@ Mon 20 Jul 16:30:32 CEST 2026: Executed P0 task: [Write src/engine/mod.rs re-exp
 Mon 20 Jul 17:05:30 CEST 2026: Executed P0 task: Add unit test skeleton for xgboost::score
 Mon 20 Jul 17:11:00 CEST 2026: Executed P0 task: Add unit test skeleton for xgboost::score
 Mon 20 Jul 17:16:49 CEST 2026: Executed P0 task: Add make bench target to Makefile
+Executed P0 task: Add panic hook that logs to stderr with timestamp
+Mon 20 Jul 17:26:03 CEST 2026: Executed P0 task: Add unit test skeleton for xgboost::score (already present; marked complete in BACKLOG.md)
