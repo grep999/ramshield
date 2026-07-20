@@ -32,7 +32,7 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 ## P2 — Interface & UX
 21. [x] Add `status` subcommand to CLI
 22. [x] Render engine stats as JSON via `status --json`
-23. [ ] Add `config validate` subcommand
+23. [x] Add `config validate` subcommand
 24. [ ] Tab-completion script for bash/zsh
 25. [ ] Man page stub in `docs/ramshield.1`
 26. [ ] Colorized terminal output behind `--color=auto`
