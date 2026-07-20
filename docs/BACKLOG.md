@@ -53,8 +53,8 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 40. [ ] Add `examples/minimal.toml` config
 
 ## P0-cross — Promotion & Growth (promo agent queue)
-41. [ ] Draft LinkedIn post: "Why we built RamShield in Rust"
-42. [ ] Write Hacker News show post draft
+41. [x] Draft LinkedIn post: "Why we built RamShield in Rust"
+42. [x] Write Hacker News show post draft
 43. [x] Create `docs/PITCH.md` one-pager
 44. [ ] Record 30s demo GIF of dashboard
 45. [ ] Tweet thread on DDoS mitigation architecture
