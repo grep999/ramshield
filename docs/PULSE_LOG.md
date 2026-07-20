@@ -29,3 +29,5 @@ Mon 20 Jul 17:16:49 CEST 2026: Executed P0 task: Add make bench target to Makefi
 Executed P0 task: Add panic hook that logs to stderr with timestamp
 Mon 20 Jul 17:26:03 CEST 2026: Executed P0 task: Add unit test skeleton for xgboost::score (already present; marked complete in BACKLOG.md)
 Mon 20 Jul 17:46:00 CEST 2026: Executed P0 task: Add unit test skeleton for xgboost::score
+Mon 20 Jul 18:52:23 CEST 2026: Executed P1 task: Add structured logging via tracing crate (already wired; marked complete in BACKLOG.md)
+Mon 20 Jul 19:00:08 CEST 2026: Executed P1 task: Add emit_prometheus() method to Metrics for Prometheus exposition output to stdout
