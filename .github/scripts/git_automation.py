@@ -30,10 +30,9 @@ def run_cmd(cmd, cwd=None, check=True):
 def log_event(level, msg):
     """Append to git log file."""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    (LOG_DIR / "git_automation.log").write_text(
-        (LOG_DIR / "git_automation.log").read_text() + f"\n[{ts}] {level}: {msg}",
-        encoding="utf-8"
-    )
+    log_file = LOG_DIR / "git_automation.log"
+    existing = log_file.read_text(encoding="utf-8") if log_file.exists() else ""
+    log_file.write_text(existing + f"\n[{ts}] {level}: {msg}", encoding="utf-8")
 
 def git_status():
     """Check if there are uncommitted changes."""
