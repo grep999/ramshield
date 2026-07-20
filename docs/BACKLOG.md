@@ -26,7 +26,7 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 16. [x] Cover `preprocess::normalize` with property test
 17. [x] Add `RUST_LOG` env support
 18. [x] Benchmark `score()` with criterion
-19. [ ] Add OpenTelemetry trace spans (no-op default)
+19. [x] Add OpenTelemetry trace spans (no-op default)
 20. [x] Self-test script: `scripts/selftest.sh`
 
 ## P2 — Interface & UX

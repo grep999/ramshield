@@ -1,6 +1,19 @@
-use ramshield::install_panic_hook;
+use std::fs;
+use std::sync::Arc;
+use std::collections::HashMap;
+use std::process::Command;
+use anyhow::{Result, anyhow};
+use ramshield::{install_panic_hook, Config, Engine, TestScenario, dashboard};
+use tracing::{info, error};
+use tracing_subscriber::EnvFilter;
 
-fn main() -> Result<()> {
+#[cfg(feature = "otel")]
+fn init_otel() -> opentelemetry_sdk::trace::TracerProvider {
+    opentelemetry_sdk::trace::TracerProvider::default()
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
     // Atomic P0: --version flag (BACKLOG #8) — checked before tracing init
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
@@ -8,12 +21,25 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("ramshield=info")),
-        )
-        .init();
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("ramshield=info"));
+
+    #[cfg(feature = "otel")]
+    {
+        use opentelemetry::trace::TracerProvider;
+        let provider = init_otel();
+        let _tracer = provider.tracer("ramshield");
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .init();
+        let _ = (_tracer, provider);
+    }
+    #[cfg(not(feature = "otel"))]
+    {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .init();
+    }
 
     let mut config_path: Option<String> = None;
     let mut test_scenario_name: Option<String> = None;

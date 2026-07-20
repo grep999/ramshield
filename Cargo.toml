@@ -17,7 +17,9 @@ name = "ramshield"
 path = "src/lib.rs"
 
 [features]
-full = ["tokio/full", "tracing-subscriber/env-filter", "tracing-subscriber/fmt", "tower-http/cors", "clap/derive"]
+default = []
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
+full = ["tokio/full", "tracing-subscriber/env-filter", "tracing-subscriber/fmt", "tower-http/cors", "clap/derive", "otel"]
 
 [dependencies]
 tokio             = { version = "1", features = ["full"] }
@@ -45,6 +47,9 @@ ctrlc             = "3"
 sysinfo           = "0.29"
 shlex = "2.0.1"
 chrono = "0.4"
+opentelemetry = { version = "0.21", optional = true }
+opentelemetry_sdk = { version = "0.21", optional = true, features = ["rt-tokio"] }
+tracing-opentelemetry = { version = "0.22", optional = true }
 
 [[bench]]
 name = "score_bench"
