@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
+pub mod xgboost;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttackPattern {
     pub id: String,

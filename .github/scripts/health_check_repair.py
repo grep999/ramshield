@@ -140,7 +140,12 @@ def check_dead_links():
                 if link.startswith("#"):
                     continue  # anchor-only, skip (false positive)
                 # Resolve relative to docs/
-                abs_target = (d.parent / link.split("#")[0]).resolve()
+                # Handle both "docs/X" and plain "X" paths
+                link_clean = link.split("#")[0]
+                if link_clean.startswith("docs/"):
+                    abs_target = (WORKSPACE / link_clean).resolve()
+                else:
+                    abs_target = (d.parent / link_clean).resolve()
                 if not abs_target.exists():
                     key = f"{d.name}:{link}"
                     if key not in seen:
