@@ -132,17 +132,17 @@ This section highlights potential new features, research directions, or areas fo
 - Explore rust in depth from research/README.md
 - Explore performance in depth from research/README.md
 
----
+|-
 
 ## 📈 Dependency Audit Status
 
-[See full report here](docs/DEPENDENCY_AUDIT.md)
+[Dependency audit report](docs/CRON_STATUS.md) *(placeholder — DEPENDENCY_AUDIT.md not yet generated)*
 
 ---
 
 ## 🗺️ Roadmap Progress Overview
 
-[See full roadmap here](docs/ROADMAP.md)
+[See full roadmap](docs/PLAN.md) *(placeholder — ROADMAP.md not yet generated)*
 
 ---
 
