@@ -20,7 +20,7 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 11. [x] Add structured logging via `tracing` crate
 12. [x] Emit metrics to stdout in Prometheus format
 13. [x] Add `healthcheck` HTTP endpoint stub
-14. [ ] Write integration test for engine startup
+14. [x] Write integration test for engine startup
 15. [x] Add panic hook that logs to `stderr` with timestamp
 16. [ ] Cover `preprocess::normalize` with property test
 17. [ ] Add `RUST_LOG` env support
