@@ -1,47 +1,929 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RamShield Automation Dashboard</title>
-    <style>
-        body { font-family: sans-serif; margin: 20px; background-color: #1e1e1e; color: #d4d4d4; }
-        h1, h2, h3 { color: #569cd6; border-bottom: 1px solid #333; padding-bottom: 5px; margin-top: 20px; }
-        .container { max-width: 1200px; margin: auto; background-color: #252526; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.5); }
-        .markdown-body { background-color: #1e1e1e; padding: 15px; border-radius: 4px; margin-bottom: 15px; border: 1px solid #333; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th, td { border: 1px solid #444; padding: 8px; text-align: left; }
-        th { background-color: #333; color: #fff; }
-        code { background-color: #333; padding: 2px 4px; border-radius: 3px; font-family: monospace; color: #ce9178; }
-        pre { background-color: #000; padding: 10px; border-radius: 4px; overflow-x: auto; color: #dcdcdc; }
-        strong { color: #9cdcfe; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RamShield Automation Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400,500,600,700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#0a0a0f; --panel:#11111a; --panel-border:#1f1f2e;
+  --text:#e8e8f0; --muted:#7a7a9a; --accent:#00f5d4; --accent-dim:#00c9a8;
+  --warn:#ffb800; --danger:#ff3d5a; --ok:#00d47e; --info:#4da6ff;
+  --grid:#0d0d14;
+}
+*, *::before, *::after { box-sizing:border-box; }
+html { font-size:16px; }
+body {
+  margin:0; min-height:100vh;
+  font-family:'Space Grotesk',system-ui,sans-serif;
+  background:var(--bg); color:var(--text);
+  background-image:
+    linear-gradient(rgba(0,245,212,.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,245,212,.03) 1px, transparent 1px);
+  background-size:40px 40px;
+}
+a { color:var(--accent); text-decoration:none; }
+a:hover { text-shadow:0 0 8px var(--accent); }
+.container { max-width:1400px; margin:0 auto; padding:24px; }
+
+/* Header */
+header { margin-bottom:32px; }
+h1 {
+  font-size:clamp(1.6rem,3vw,2.2rem); font-weight:700; letter-spacing:-.02em;
+  background:linear-gradient(90deg,var(--accent),var(--info));
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+  margin:0 0 8px;
+}
+.subtitle { color:var(--muted); font-size:.95rem; }
+.badge-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+.badge {
+  font-size:.7rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em;
+  padding:4px 10px; border-radius:999px; border:1px solid transparent;
+}
+.badge-ok { background:rgba(0,212,126,.12); border-color:var(--ok); color:var(--ok); }
+.badge-warn { background:rgba(255,184,0,.12); border-color:var(--warn); color:var(--warn); }
+.badge-danger { background:rgba(255,61,90,.12); border-color:var(--danger); color:var(--danger); }
+.badge-info { background:rgba(77,166,255,.12); border-color:var(--info); color:var(--info); }
+.badge-neutral { background:rgba(122,122,154,.12); border-color:var(--muted); color:var(--muted); }
+
+/* Layout grid */
+.grid { display:grid; gap:20px; }
+@media (min-width: 1000px) {
+  .grid-2 { grid-template-columns:1fr 1fr; }
+  .grid-3 { grid-template-columns:1fr 1fr 1fr; }
+  .grid-main { grid-template-columns:2fr 1fr; }
+}
+
+/* Cards / Panels */
+.panel {
+  background:var(--panel); border:1px solid var(--panel-border);
+  border-radius:12px; overflow:hidden;
+  transition:border-color .2s, box-shadow .2s;
+}
+.panel:hover { border-color:rgba(0,245,212,.18); box-shadow:0 0 0 1px rgba(0,245,212,.08); }
+.panel-header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px 18px; border-bottom:1px solid var(--panel-border);
+  background:rgba(0,0,0,.15);
+}
+.panel-header h2 { margin:0; font-size:.95rem; font-weight:600; letter-spacing:.01em; }
+.panel-body { padding:16px 18px 18px; }
+
+/* Timeline */
+.timeline { position:relative; padding-left:24px; }
+.timeline::before {
+  content:''; position:absolute; left:6px; top:0; bottom:0; width:2px;
+  background:linear-gradient(180deg,var(--accent),transparent);
+}
+.timeline-item {
+  position:relative; padding:12px 0 12px 24px; border-radius:8px;
+  background:rgba(255,255,255,.02); margin-bottom:10px;
+  transition:background .2s;
+}
+.timeline-item:hover { background:rgba(0,245,212,.04); }
+.timeline-item::before {
+  content:''; position:absolute; left:-17px; top:18px; width:10px; height:10px;
+  border-radius:50%; border:2px solid var(--panel-border); background:var(--panel);
+  box-shadow:0 0 0 3px var(--bg); z-index:1;
+}
+.timeline-item.milestone::before { background:var(--accent); border-color:var(--accent); box-shadow:0 0 0 3px var(--bg), 0 0 12px var(--accent); }
+.timeline-item.current::before { background:var(--info); border-color:var(--info); box-shadow:0 0 0 3px var(--bg), 0 0 12px var(--info); }
+.timeline-item.completed::before { background:var(--ok); border-color:var(--ok); }
+.timeline-item.pending::before { background:transparent; border-color:var(--muted); }
+.timeline-meta { display:flex; gap:8px; align-items:center; margin-bottom:6px; font-size:.75rem; }
+.timeline-title { font-weight:600; font-size:.9rem; }
+.timeline-desc { color:var(--muted); font-size:.8rem; margin-top:2px; }
+
+/* Progress Ring */
+.progress-ring { width:48px; height:48px; transform:rotate(-90deg); }
+.progress-ring-bg { fill:none; stroke:var(--panel-border); stroke-width:3.5; }
+.progress-ring-fg {
+  fill:none; stroke:var(--accent); stroke-width:3.5; stroke-linecap:round;
+  stroke-dasharray:138; stroke-dashoffset:138; transition:stroke-dashoffset .6s ease;
+}
+.progress-ring-text { fill:var(--text); font-size:8px; dominant-baseline:middle; text-anchor:middle; }
+
+/* Priority Alignment */
+.priority-grid { display:grid; gap:10px; }
+@media (min-width:600px) { .priority-grid { grid-template-columns:1fr 1fr; } }
+.priority-card { background:rgba(255,255,255,.02); border:1px solid var(--panel-border); border-radius:8px; padding:12px; }
+.priority-card.aligned { border-color:rgba(0,212,126,.4); background:rgba(0,212,126,.05); }
+.priority-card.mismatch { border-color:rgba(255,184,0,.4); background:rgba(255,184,0,.05); }
+.priority-label { font-size:.7rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin-bottom:6px; }
+.priority-value { font-weight:600; font-size:.85rem; }
+.priority-value.ok { color:var(--ok); }
+.priority-value.warn { color:var(--warn); }
+.priority-value.miss { color:var(--danger); }
+
+/* Status indicators */
+.status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
+.status-ok { background:var(--ok); box-shadow:0 0 8px var(--ok); }
+.status-warn { background:var(--warn); box-shadow:0 0 8px var(--warn); }
+.status-danger { background:var(--danger); box-shadow:0 0 8px var(--danger); }
+.status-info { background:var(--info); box-shadow:0 0 8px var(--info); }
+.status-pending { background:transparent; border:1px solid var(--muted); }
+
+/* Tables */
+table { width:100%; border-collapse:collapse; font-size:.8rem; }
+th, td { padding:8px 10px; text-align:left; border-bottom:1px solid var(--panel-border); }
+th { color:var(--muted); font-weight:600; font-size:.7rem; text-transform:uppercase; letter-spacing:.05em; }
+tr:hover td { background:rgba(0,245,212,.04); transition:background .15s; }
+td code { background:rgba(0,245,212,.1); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:.75rem; }
+
+/* Divider between major sections */
+.section-divider {
+  height:1px; margin:32px 0 20px;
+  background:linear-gradient(90deg,transparent,var(--accent-dim),transparent);
+  position:relative;
+}
+.section-divider::after {
+  content:''; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  width:8px; height:8px; border-radius:50%; background:var(--accent);
+  box-shadow:0 0 12px var(--accent);
+}
+
+/* Sticky section labels */
+.section-label {
+  font-size:.65rem; color:var(--muted); letter-spacing:.18em;
+  font-weight:600; text-transform:uppercase;
+  margin-bottom:8px; padding-left:6px; border-left:2px solid var(--accent-dim);
+}
+
+/* Glow pulse on key panels */
+@keyframes pulse-glow {
+  0%,100% { box-shadow:0 0 0 0 rgba(0,245,212,.0); }
+  50% { box-shadow:0 0 0 4px rgba(0,245,212,.08); }
+}
+.panel.glow { animation:pulse-glow 3s ease-in-out infinite; }
+
+/* Make table within .panel not double up borders */
+.panel-body table { border:1px solid var(--panel-border); border-radius:6px; overflow:hidden; }
+.panel-body table th:first-child { border-top-left-radius:6px; }
+.panel-body table th:last-child { border-top-right-radius:6px; }
+
+/* Markdown rendering helpers */
+.markdown-body { line-height:1.6; }
+.markdown-body h3 { font-size:1rem; margin:16px 0 8px; color:var(--accent); }
+.markdown-body p { margin:8px 0; }
+.markdown-body ul, .markdown-body ol { margin:8px 0 8px 20px; }
+.markdown-body li { margin:4px 0; }
+.markdown-body code { background:rgba(0,245,212,.1); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:.85em; }
+.markdown-body pre { background:#050508; border:1px solid var(--panel-border); border-radius:8px; padding:12px; overflow-x:auto; }
+.markdown-body pre code { background:none; color:inherit; padding:0; }
+.markdown-body hr { border:none; border-top:1px solid var(--panel-border); margin:16px 0; }
+.markdown-body strong { color:var(--accent); }
+.markdown-body blockquote { border-left:3px solid var(--accent); padding-left:12px; color:var(--muted); margin:12px 0; font-style:italic; }
+
+/* Collapsible */
+.collapsible { border:none; background:none; color:var(--muted); font-size:.75rem; cursor:pointer; padding:4px 0; display:flex; align-items:center; gap:6px; }
+.collapsible:hover { color:var(--accent); }
+.collapsible svg { transition:transform .2s; width:14px; height:14px; }
+.collapsible[aria-expanded="true"] svg { transform:rotate(90deg); }
+.collapsible-content { overflow:hidden; max-height:0; transition:max-height .3s ease; }
+.collapsible-content.open { max-height:5000px; }
+
+/* Footer */
+footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; }
+</style>
 </head>
 <body>
-    <div class="container">
-        <h1>RamShield Automation Control Center & Dashboard</h1>
-        <p><em>Generated: 2026-07-19 20:43 UTC</em></p>
-        <hr>
-
-        <h2>Agent Control Center</h2>
-<div class="markdown-body">
-<h3>RamShield Autonomous Helper Control Center</p><p><strong>Status:<strong> Operational<br><strong>Agent Cycle:<strong> 15m / 60m / Cron-local<br><strong>Branch:<strong> `feature/ramshield-advanced`</p><p><hr></p><p>#<h3>🤖 Helper Agent Status</p><p>| Agent | Last Execution | Health | Next Run |<br>| :--- | :--- | :--- | :--- |<br>| <strong>Helper Agent<strong> | [2026-07-19 22:30] | ✅ OK | 22:45 |<br>| <strong>Dependency Audit<strong> | [2026-07-19 22:00] | ✅ OK | 23:00 |<br>| <strong>Health Dashboard<strong> | [2026-07-19 22:15] | ✅ OK | 22:30 |</p><p><hr></p><p>#<h3>🛠 Directives & Expansion Panel</p><p>To modify agent behavior, update the `AGENT_CONFIG` in `health_dashboard.py` or provide instructions in this chat.</p><p>##<h3>Current Agent Directives:<br>1. <strong>[Active]<strong> Aggressively scan `src` and `docs` for TODO/FIXME markers.<br>2. <strong>[Active]<strong> Track roadmap progress in `docs/ROADMAP.md`.<br>3. <strong>[Active]<strong> Audit `Cargo.toml` dependencies hourly against crates.io.<br>4. <strong>[Experimental]<strong> Scan `research/` directory for emerging ML/Rust patterns.</p><p>##<h3>Expansion Ideas (Pending Implementation):<br>- [ ] <strong>Adaptive Learning<strong>: Integrate LLM to process TODOs into actionable tasks.<br>- [ ] <strong>Multi-Branch Watch<strong>: Monitor `main` vs `feature` branches for drift.<br>- [ ] <strong>Interactive Command Interface<strong>: Allow user to inject commands via GitHub Issues.</p><p><hr></p><p>#<h3>💡 Exploration & Research Insights (Organic Growth)</p><p>*Insights gathered by the agent through recursive exploration:*</p><p>- <strong>Performance<strong>: High potential for AVX2 optimization in `detection/batch.rs`.<br>- <strong>Architecture<strong>: `IPC` via JSON is bottlenecking at 5M events/s. Explore Protobuf/gRPC for internal protocol.<br>- <strong>Community<strong>: The current README structure is solid, but the `research/` directory needs more automated exploration tools.</p><p><hr></p><p>#<h3>⚙️ Direct Input / Feedback</p><p><strong>Modify Agent Behavior:<strong><br>- *Increase scan frequency* -> Edit `.github/scripts/health_dashboard.py` -> `scan_frequency_minutes`<br>- *Add research path* -> Edit `.github/scripts/health_dashboard.py` -> `research_scan_keywords`</p><p>*Paste your instructions below to direct the Helper Agent.*<br></div>
-
-        <h2>Project Health Overview</h2>
-<div class="markdown-body">
-<h3>RamShield Project Health Dashboard</p><p><strong>Generated:<strong> 2026-07-19 20:36 UTC</p><p><hr></p><p>#<h3>⚙️ Agent Configuration</p><p>This section displays the current operational parameters for the Helper Agent. These settings can be modified to direct the agent's focus and behavior.</p><p>```json<br>{<br>  "scan_frequency_minutes": 5,<br>  "todo_scan_paths": [<br>    "src",<br>    "docs",<br>    ".github"<br>  ],<br>  "research_scan_keywords": [<br>    "ml",<br>    "ai",<br>    "rust",<br>    "security",<br>    "ddos",<br>    "performance",<br>    "async",<br>    "tokio",<br>    "axum",<br>    "observability",<br>    "metrics"<br>  ],<br>  "new_ideas_output_file": "docs/NEW_IDEAS.md",<br>  "report_output_file": "docs/HEALTH_DASHBOARD.md",<br>  "helper_agent_log_file": ".github/logs/helper_agent.log",<br>  "dependency_audit_report": "docs/DEPENDENCY_AUDIT.md",<br>  "roadmap_file": "docs/ROADMAP.md"<br>}<br>```</p><p><hr></p><p>#<h3>🏃‍♀️ Helper Agent Activity Log</p><p>This log captures recent actions and observations from the Helper Agent's last runs.</p><p>```<br>No recent activity log found.<br>```</p><p><hr></p><p>#<h3>📝 Outstanding Tasks & Directives</p><p>Prioritized list of known tasks, TODOs, FIXMEs, and uncompleted roadmap items.</p><p>- [ROADMAP] Implement XGBoost threat scoring model<br>- [ROADMAP] Add scikit-learn preprocessing pipeline<br>- [ROADMAP] Integrate model versioning with Git LFS<br>- [ROADMAP] Implement Rust-based ML inference (tflite-rust)<br>- [ROADMAP] Add AVX2/AVX2 optimization flags<br>- [ROADMAP] Benchmark against Go implementation<br>- [ROADMAP] TLS 1.3 support for encrypted IPC<br>- [ROADMAP] iptables rate limiting integration<br>- [ROADMAP] Cryptographic audit logging (SHA-256 signed)<br>- [ROADMAP] Launch RamShield Blog (weekly posts)<br>- [ROADMAP] Create GitHub Discussions for community feedback<br>- [ROADMAP] Launch "RamShield Champions" program<br>- [ROADMAP] Kubernetes Operator for auto-scaling<br>- [ROADMAP] Heroku buildpack for one-click deploy<br>- [ROADMAP] Cloudflare Workers integration for edge detection</p><p><hr></p><p>#<h3>🌱 New Ideas & Research Insights</p><p>This section highlights potential new features, research directions, or areas for improvement identified by the Helper Agent through its codebase and documentation scans.</p><p>- Potential for ml integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for tokio integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for axum integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for ml integration based on discussions in docs/CHANGES.md<br>- Potential for ai integration based on discussions in docs/CHANGES.md<br>- Potential for rust integration based on discussions in docs/CHANGES.md<br>- Potential for ddos integration based on discussions in docs/CHANGES.md<br>- Potential for performance integration based on discussions in docs/CHANGES.md<br>- Potential for tokio integration based on discussions in docs/CHANGES.md<br>- Potential for ml integration based on discussions in docs/BENCHMARKS.md<br>- Potential for ai integration based on discussions in docs/BENCHMARKS.md<br>- Potential for rust integration based on discussions in docs/BENCHMARKS.md<br>- Potential for performance integration based on discussions in docs/BENCHMARKS.md<br>- Potential for async integration based on discussions in docs/BENCHMARKS.md<br>- Potential for rust integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for security integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for performance integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for async integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for tokio integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for axum integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for metrics integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for ml integration based on discussions in docs/ROADMAP.md<br>- Potential for ai integration based on discussions in docs/ROADMAP.md<br>- Potential for rust integration based on discussions in docs/ROADMAP.md<br>- Potential for security integration based on discussions in docs/ROADMAP.md<br>- Potential for performance integration based on discussions in docs/ROADMAP.md<br>- Potential for ml integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for ai integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for rust integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for performance integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for ml integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for ai integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for rust integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for ddos integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for performance integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for tokio integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for observability integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for metrics integration based on discussions in docs/DOCUMENTATION.md<br>- Explore ml in depth from research/README.md<br>- Explore ai in depth from research/README.md<br>- Explore rust in depth from research/README.md<br>- Explore performance in depth from research/README.md</p><p><hr></p><p>#<h3>📈 Dependency Audit Status</p><p>[See full report here](docs/DEPENDENCY_AUDIT.md)</p><p><hr></p><p>#<h3>🗺️ Roadmap Progress Overview</p><p>[See full roadmap here](docs/ROADMAP.md)</p><p><hr></p><p>*Generated by RamShield Project Health Dashboard Agent v0.3.0*<br></div>
-
-        <h2>Helper Agent Latest Report</h2>
-<div class="markdown-body">
-<h3>RamShield Helper Agent Report</p><p><strong>Generated:<strong> 2026-07-19 20:43 UTC<br><strong>Branch:<strong> `feature/ramshield-advanced`<br><strong>Commit:<strong> `72088d6`<br><strong>Commits (24h):<strong> 5</p><p><hr></p><p>#<h3>Codebase Metrics</p><p>| Metric | Value |<br>|--------|-------|<br>| Rust files | 24 |<br>| Total lines | 4,882 |<br>| Comment lines | 256 |<br>| Unsafe blocks | 2 |</p><p><hr></p><p>#<h3>Research Audit Tree</p><p>| Domain | Innovation |<br>|--------|-----------|<br>| <strong>Deep Learning for Packet Inspection<strong> | LSTM/GRU for sequence-based anomaly detection. |<br>| <strong>Reinforcement Learning (RL)<strong> | Adaptive rate-limiting policies that evolve with attacker behavior. |<br>| <strong>Federated Learning<strong> | Collaborative defense across distributed RamShield nodes without sharing raw traffic. |<br>| <strong>Zero-Knowledge Proofs (ZKP)<strong> | For privacy-preserving threat intelligence sharing. |<br>| <strong>Homomorphic Encryption<strong> | Analyzing encrypted traffic without decryption overhead. |<br>| <strong>Post-Quantum Cryptography (PQC)<strong> | Preparing IPC and storage encryption for the quantum era. |<br>| <strong>eBPF/XDP Integration<strong> | Kernel-level packet filtering bypassing userspace overhead. |<br>| <strong>Memory-Mapped I/O (mmap)<strong> | High-speed shared memory for multi-node RamShield clusters. |<br>| <strong>Data-Oriented Design (DOD)<strong> | Restructuring core data layouts for SIMD-heavy pipelines. |</p><p><hr></p><p>#<h3>Expansion Tree</p><p>- [ ] <strong>WebAssembly (WASM) Module Support<strong>: Allow users to write custom detection logic in WASM.<br>- [ ] <strong>IoT Gateway Shielding<strong>: Optimized build for ARM/RISC-V edge devices.<br>- [ ] <strong>Time-Series Database Integration<strong>: Sync with InfluxDB/Prometheus for long-term analytics.<br>- [ ] <strong>Kafka/Pulsar Streaming<strong>: Real-time threat event streaming for enterprise logs.</p><p><hr></p><p>#<h3>Roadmap Milestones</p><p><br><hr></p><p>#<h3>Technical Debt</p><p>- Open TODOs: <strong>0<strong><br>- Open FIXMEs: <strong>0<strong></p><p><hr></p><p>*Generated by RamShield Helper Agent v0.3.0*<br></div>
-
-        <h2>Dependency Audit Summary</h2>
-<div class="markdown-body">
-<h3>Dependency Audit Report</p><p><strong>Generated:<strong> 2026-07-19 20:36 UTC<br><strong>Total dependencies:<strong> 18</p><p><hr></p><p>#<h3>Crates</p><p>| Crate | Current | Latest | Status |<br>|-------|---------|--------|--------|<br>| serde_json | 1 | 1.0.150 | OUTDATED |<br>| dashmap | 5 | 7.0.0-rc2 | OUTDATED |<br>| ahash | 0.8 | 0.8.12 | OUTDATED |<br>| arc-swap | 1 | 1.9.2 | OUTDATED |<br>| crossbeam-channel | 0.5 | 0.5.16 | OUTDATED |<br>| crc32fast | 1 | 1.5.0 | OUTDATED |<br>| lz4_flex | 0.11 | 0.14.0 | OUTDATED |<br>| thiserror | 1 | 2.0.19 | OUTDATED |<br>| anyhow | 1 | 1.0.104 | OUTDATED |<br>| tracing | 0.1 | 0.1.44 | OUTDATED |<br>| toml | 0.8 | 1.1.3+spec-1.1.0 | OUTDATED |<br>| num_cpus | 1 | 1.17.0 | OUTDATED |<br>| axum | 0.7 | 0.8.9 | OUTDATED |<br>| futures-util | 0.3 | 0.3.33 | OUTDATED |<br>| tokio-stream | 0.1 | 0.1.18 | OUTDATED |<br>| ctrlc | 3 | 3.5.2 | OUTDATED |<br>| sysinfo | 0.29 | 0.39.6 | OUTDATED |<br>| shlex | 2.0.1 | 2.0.1 | current |</p><p><strong>Outdated crates:<strong> 17</p><p><hr></p><p>*Generated by RamShield Helper Agent - Dependency Audit*</div>
-
-
-        <p style="text-align: center; margin-top: 30px; font-size: 0.8em; color: #888;"><em>Generated by RamShield HTML Dashboard Agent v0.4.0</em></p>
+<div class="container">
+  <header>
+    <h1>RamShield Automation Control Center</h1>
+    <p class="subtitle">Generated 2026-07-20 00:23 UTC  •  Branch: <code>feature/ramshield-advanced</code>  •  Commit: <code>1d9b8e2</code></p>
+    <div class="badge-row">
+      <span class="badge badge-ok">Rust Files: 24</span>
+      <span class="badge badge-info">LOC: 4,826</span>
+      <span class="badge badge-warn">Clippy: -1</span>
+      <span class="badge badge-neutral">TODOs: 0</span>
+      <span class="badge badge-info">Roadmap: 22</span>
+      <span class="badge badge-neutral">Deps: 18</span>
+      <span class="badge badge-danger">Dead Links: 1</span>
+      <span class="badge badge-info">Cron: 0/14</span>
+      <span class="badge badge-neutral">Backlog: 50/50</span>
+      <span class="badge badge-info">Workers: 0% (0/3)</span>
     </div>
+  </header>
+
+  <!-- MAIN TIMELINE -->
+  <section class="panel glow" style="margin-bottom:24px;">
+    <div class="panel-header">
+      <h2>📅 Main Timeline — Roadmap → Sprint → Today</h2>
+      <span class="badge badge-info">Auto-synced from ROADMAP.md + PLAN.md</span>
+    </div>
+    <div class="panel-body">
+      <div class="timeline">
+
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q1:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Implement XGBoost threat scoring model</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q1:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Add scikit-learn preprocessing pipeline</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q1:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Integrate model versioning with Git LFS</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item milestone">
+          <div class="timeline-meta">
+            <span>Q1:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">95% accuracy on test dataset</div>
+          <div class="timeline-desc">Milestone</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q2:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Implement Rust-based ML inference (tflite-rust)</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q2:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Add AVX2/AVX2 optimization flags</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q2:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Benchmark against Go implementation</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item milestone">
+          <div class="timeline-meta">
+            <span>Q2:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">2x faster inference than Python baseline</div>
+          <div class="timeline-desc">Milestone</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q3:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">TLS 1.3 support for encrypted IPC</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q3:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">iptables rate limiting integration</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q3:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Cryptographic audit logging (SHA-256 signed)</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item milestone">
+          <div class="timeline-meta">
+            <span>Q3:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Zero-trust IPC communication</div>
+          <div class="timeline-desc">Milestone</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q4:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Launch RamShield Blog (weekly posts)</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q4:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Create GitHub Discussions for community feedback</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q4:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Launch "RamShield Champions" program</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q5:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Kubernetes Operator for auto-scaling</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q5:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Heroku buildpack for one-click deploy</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q5:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">Cloudflare Workers integration for edge detection</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q5:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">**WebAssembly (WASM) Module Support**: Allow users to write custom detection logic in WASM.</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q5:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">**IoT Gateway Shielding**: Optimized build for ARM/RISC-V edge devices.</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q5:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">**Time-Series Database Integration**: Sync with InfluxDB/Prometheus for long-term analytics.</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item pending">
+          <div class="timeline-meta">
+            <span>Q5:</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">**Kafka/Pulsar Streaming**: Real-time threat event streaming for enterprise logs.</div>
+          <div class="timeline-desc">Task</div>
+        </div>
+        <div class="timeline-item current">
+          <div class="timeline-meta">
+            <span>Today</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">T1: XGBoost Model Stub</div>
+          <div class="timeline-desc">Create a basic Rust module structure for XGBoost threat scoring integration.</div>
+        </div>
+        <div class="timeline-item current">
+          <div class="timeline-meta">
+            <span>Today</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">T2: Preprocessing Module</div>
+          <div class="timeline-desc">Implement a stub for scikit-learn style data preprocessing in Rust.</div>
+        </div>
+        <div class="timeline-item current">
+          <div class="timeline-meta">
+            <span>Today</span>
+            <span style="color:var(--muted);"></span>
+          </div>
+          <div class="timeline-title">T3: Dashboard Style Enhancement</div>
+          <div class="timeline-desc">Add "Slick & Edgy" CSS variables for neon-cyan accents to match branding.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- GRID: Priority Alignment + Progress + Quick Stats -->
+  <div class="grid grid-main">
+    <!-- Priority Alignment -->
+    <section class="panel">
+      <div class="panel-header">
+        <h2>🎯 Priority Alignment</h2>
+        <span class="badge badge-warn">Roadmap ↔ Daily Plan</span>
+      </div>
+      <div class="panel-body">
+        <div class="priority-grid">
+
+        <div class="priority-card mismatch">
+          <div class="priority-label">Roadmap → Today</div>
+          <div class="priority-value warn">Implement XGBoost threat scoring model</div>
+          <span class="badge badge-warn" style="margin-top:6px;display:inline-block;font-size:.6rem;">Mismatch</span>
+        </div>
+        <div class="priority-card mismatch">
+          <div class="priority-label">Roadmap → Today</div>
+          <div class="priority-value warn">Add scikit-learn preprocessing pipeline</div>
+          <span class="badge badge-warn" style="margin-top:6px;display:inline-block;font-size:.6rem;">Mismatch</span>
+        </div>
+        <div class="priority-card mismatch">
+          <div class="priority-label">Roadmap → Today</div>
+          <div class="priority-value warn">Integrate model versioning with Git LFS</div>
+          <span class="badge badge-warn" style="margin-top:6px;display:inline-block;font-size:.6rem;">Mismatch</span>
+        </div>
+        <div class="priority-card ">
+          <div class="priority-label">Extra in Today</div>
+          <div class="priority-value info">XGBoost Model Stub</div>
+          <span class="badge badge-info" style="margin-top:6px;display:inline-block;font-size:.6rem;">Only in Plan</span>
+        </div>
+        <div class="priority-card ">
+          <div class="priority-label">Extra in Today</div>
+          <div class="priority-value info">Preprocessing Module</div>
+          <span class="badge badge-info" style="margin-top:6px;display:inline-block;font-size:.6rem;">Only in Plan</span>
+        </div>
+        <div class="priority-card ">
+          <div class="priority-label">Extra in Today</div>
+          <div class="priority-value info">Dashboard Style Enhancement</div>
+          <span class="badge badge-info" style="margin-top:6px;display:inline-block;font-size:.6rem;">Only in Plan</span>
+        </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Progress & Quick Stats -->
+    <section class="panel">
+      <div class="panel-header"><h2>📊 Cycle Progress</h2></div>
+      <div class="panel-body" style="display:flex;flex-direction:column;gap:16px;align-items:center;">
+        <div style="text-align:center;">
+          <div style="font-size:.75rem;color:var(--muted);margin-bottom:8px;">Worker Completion</div>
+          
+    <svg class="progress-ring" viewBox="0 0 52 52" aria-label="Progress 0%">
+      <circle class="progress-ring-bg" cx="26" cy="26" r="22"/>
+      <circle class="progress-ring-fg" cx="26" cy="26" r="22"
+              style="stroke-dashoffset:138.0"/>
+      <text class="progress-ring-text" x="26" y="27">0%</text>
+    </svg>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:320px;">
+          <div class="badge badge-ok" style="justify-content:center;font-size:.8rem;">✅ 0 Done</div>
+          <div class="badge badge-info" style="justify-content:center;font-size:.8rem;">⏳ 3 Pending</div>
+          <div class="badge badge-neutral" style="justify-content:center;font-size:.8rem;">📝 3 Planned</div>
+          <div class="badge badge-info" style="justify-content:center;font-size:.8rem;">🗺️ 22 Roadmap</div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 3-COLUMN OPS GRID: Cron | Backlog | Pulse -->
+  <div class="section-divider"></div>
+  <div class="section-label">Operations</div>
+  <div class="grid grid-3" style="margin-top:20px;">
+    <!-- Cron Jobs -->
+    <section class="panel">
+      <div class="panel-header">
+        <h2>⏰ Cron Jobs</h2>
+        <span class="badge badge-info">14 active</span>
+      </div>
+      <div class="panel-body">
+        <table>
+          <thead><tr><th>Job</th><th>Sched</th><th>Status</th></tr></thead>
+          <tbody>
+
+            <tr>
+              <td>ramshield-backup</td>
+              <td><code>0 2 * * *</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+            <tr>
+              <td>RamShield Promotion Agent</td>
+              <td><code>0 9 * * *</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+            <tr>
+              <td>ramshield-helper-agent</td>
+              <td><code>*/10 * * * *</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+            <tr>
+              <td>ramshield-facts-collector</td>
+              <td><code>*/30 * * * *</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+            <tr>
+              <td>ramshield-daily-planner</td>
+              <td><code>0 1 * * *</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+            <tr>
+              <td>ramshield-reviewer</td>
+              <td><code>0 3 * * *</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+            <tr>
+              <td>ramshield-worker-T1</td>
+              <td><code>once in 30m</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+            <tr>
+              <td>ramshield-worker-T2</td>
+              <td><code>once in 45m</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+            <tr>
+              <td>ramshield-worker-T3</td>
+              <td><code>once in 60m</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+            <tr>
+              <td>ramshield-cron-status</td>
+              <td><code>*/5 * * * *</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+            <tr>
+              <td>ramshield-pulse</td>
+              <td><code>*/5 * * * *</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+            <tr>
+              <td>ramshield-promotion-agent</td>
+              <td><code>*/30 * * * *</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+            <tr>
+              <td>ramshield-research-agent</td>
+              <td><code>0 * * * *</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+            <tr>
+              <td>ramshield-health-loop</td>
+              <td><code>*/15 * * * *</code></td>
+              <td><span class="badge badge-warn">never</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Backlog -->
+    <section class="panel">
+      <div class="panel-header">
+        <h2>📦 Atomic Backlog</h2>
+        <span class="badge badge-neutral">50/50 left</span>
+      </div>
+      <div class="panel-body">
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;">
+          <div style="position:relative;width:54px;height:54px;">
+            
+    <svg class="progress-ring" viewBox="0 0 52 52" aria-label="Progress 0%">
+      <circle class="progress-ring-bg" cx="26" cy="26" r="22"/>
+      <circle class="progress-ring-fg" cx="26" cy="26" r="22"
+              style="stroke-dashoffset:138.0"/>
+      <text class="progress-ring-text" x="26" y="27">0%</text>
+    </svg>
+          </div>
+          <div>
+            <div style="font-weight:600;font-size:1.1rem;">0 / 50</div>
+            <div style="color:var(--muted);font-size:.8rem;">atomic jobs picked up</div>
+          </div>
+        </div>
+        <div style="font-size:.8rem;color:var(--muted);">P0 → P3 priority queue. Pulse agent picks top unfinished item every 5 min.</div>
+        <details style="margin-top:8px;">
+          <summary style="cursor:pointer;color:var(--accent);font-size:.75rem;">View top 10</summary>
+<div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Implement `src/learning/xgboost</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Implement `src/learning/preprocess</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Add `cargo clippy` CI gate to `</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Fix dead link in `DOCUMENTATION</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Write `src/engine/mod</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Add unit test skeleton for `xgboost::score`</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Pin `tflite-rust` version in Cargo</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Add `--version` flag to main binary</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Document IPC protocol in `docs/IPC</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Add `make bench` target to Makefile</div>
+        </details>
+      </div>
+    </section>
+
+    <!-- Pulse -->
+    <section class="panel">
+      <div class="panel-header">
+        <h2>💓 Pulse (5m)</h2>
+        <span class="badge badge-info">every 5m</span>
+      </div>
+      <div class="panel-body">
+        <div style="font-size:.8rem;color:var(--muted);margin-bottom:10px;">High-frequency pickup from backlog. Last entry:</div>
+<div style="background:rgba(0,245,212,.05);border-left:3px solid var(--accent);padding:10px 12px;border-radius:4px;font-family:monospace;font-size:.85rem;">Last 5 minutes of pulse activity. Empty = no-op tick.</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 2-COLUMN OPS GRID: Promotion | Research -->
+  <div class="section-divider"></div>
+  <div class="section-label">Growth & Discovery</div>
+  <div class="grid grid-2" style="margin-top:20px;">
+    <!-- Promotion -->
+    <section class="panel">
+      <div class="panel-header">
+        <h2>📣 Promotion</h2>
+        <span class="badge badge-info">30m cadence</span>
+      </div>
+      <div class="panel-body">
+        <p># Promotion Activity Log</p>
+<p>Latest promotion-agent output. Appended by the RamShield Promotion Agent cronjob.</p>
+<p>_No promotion activity yet. Agent will populate this on next run._</p>
+      </div>
+    </section>
+
+    <!-- Research -->
+    <section class="panel">
+      <div class="panel-header">
+        <h2>🔬 Research</h2>
+        <span class="badge badge-info">hourly</span>
+      </div>
+      <div class="panel-body">
+        <p># Research Flow</p>
+<p>Automated research findings feeding the pipeline. Populated by the research agent.<br>Each entry links to a backlog item or roadmap task it informs.</p>
+<p>_No research entries yet. Agent will populate this on next run._</p>
+      </div>
+    </section>
+  </div>
+
+  <!-- 2-COLUMN OPS GRID: Health Loop | Backlog full -->
+  <div class="section-divider"></div>
+  <div class="section-label">Health & Backlog Detail</div>
+  <div class="grid grid-2" style="margin-top:20px;">
+    <section class="panel">
+      <div class="panel-header">
+        <h2>🏥 Health Loop (15m)</h2>
+        <span class="badge badge-info">read-only</span>
+      </div>
+      <div class="panel-body">
+        <p># Health Loop</p>
+<p>Time-series health checks. Read-only fast sanity. Newest row at top.</p>
+<p>| Timestamp | Facts Age (min) | Backlog Remaining | Active Cron | Notes |<br>| :--- | :--- | :--- | :--- | :--- |<br>| — | — | — | — | (awaiting first health-loop run) |</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>📦 Backlog (full)</h2>
+        <span class="badge badge-neutral">50/50</span>
+      </div>
+      <div class="panel-body">
+        <p># Atomic Backlog — Pickup Queue</p>
+<p>Small, independently-executable tasks. Each is atomic: one file, one clear outcome.<br>Picked by the Daily Planner or Pulse agent into the daily plan when capacity allows.<br>Priority order: P0 (critical path) → P3 (nice-to-have).</p>
+<h3>P0 — Critical Path (core functionality)</h3>
+1. [ ] Implement <code>src/learning/xgboost.rs</code> module stub with public <code>score()</code> fn
+2. [ ] Implement <code>src/learning/preprocess.rs</code> with <code>normalize()</code> stub
+3. [ ] Add <code>cargo clippy</code> CI gate to <code>.github/workflows/</code>
+4. [ ] Fix dead link in <code>DOCUMENTATION.md</code> (empty target)
+5. [ ] Write <code>src/engine/mod.rs</code> re-export for learning submodule
+6. [ ] Add unit test skeleton for <code>xgboost::score</code>
+7. [ ] Pin <code>tflite-rust</code> version in Cargo.toml
+8. [ ] Add <code>--version</code> flag to main binary
+9. [ ] Document IPC protocol in <code>docs/IPC.md</code>
+10. [ ] Add <code>make bench</code> target to Makefile
+<h3>P1 — Hardening & Observability</h3>
+11. [ ] Add structured logging via <code>tracing</code> crate
+12. [ ] Emit metrics to stdout in Prometheus format
+13. [ ] Add <code>healthcheck</code> HTTP endpoint stub
+14. [ ] Write integration test for engine startup
+15. [ ] Add panic hook that logs to <code>stderr</code> with timestamp
+16. [ ] Cover <code>preprocess::normalize</code> with property test
+17. [ ] Add <code>RUST_LOG</code> env support
+18. [ ] Benchmark <code>score()</code> with criterion
+19. [ ] Add OpenTelemetry trace spans (no-op default)
+20. [ ] Self-test script: <code>scripts/selftest.sh</code>
+<h3>P2 — Interface & UX</h3>
+21. [ ] Add <code>status</code> subcommand to CLI
+22. [ ] Render engine stats as JSON via <code>status --json</code>
+23. [ ] Add <code>config validate</code> subcommand
+24. [ ] Tab-completion script for bash/zsh
+25. [ ] Man page stub in <code>docs/ramshield.1</code>
+26. [ ] Colorized terminal output behind <code>--color=auto</code>
+27. [ ] Add <code>interactive</code> REPL mode stub
+28. [ ] Config file watcher (reload on change)
+29. [ ] Add <code>explain</code> command for rule dump
+30. [ ] History file for REPL (<code>~/.ramshield_history</code>)
+<h3>P3 — Outreach & Ecosystem</h3>
+31. [ ] Write <code>CONTRIBUTING.md</code>
+32. [ ] Add <code>CODE_OF_CONDUCT.md</code>
+33. [ ] Security policy <code>SECURITY.md</code>
+34. [ ] <code>CHANGELOG.md</code> initialized with v0.1.0
+35. [ ] GitHub issue template (bug)
+36. [ ] GitHub issue template (feature)
+37. [ ] PR template with checklist
+38. [ ] Add <code>FUNDING.yml</code> for sponsors
+39. [ ] Write <code>docs/QUICKSTART.md</code>
+40. [ ] Add <code>examples/minimal.toml</code> config
+<h3>P0-cross — Promotion & Growth (promo agent queue)</h3>
+41. [ ] Draft LinkedIn post: "Why we built RamShield in Rust"
+42. [ ] Write Hacker News show post draft
+43. [ ] Create <code>docs/PITCH.md</code> one-pager
+44. [ ] Record 30s demo GIF of dashboard
+45. [ ] Tweet thread on DDoS mitigation architecture
+46. [ ] Add <code>README</code> badges (build, clippy, coverage)
+47. [ ] Submit to crates.io as <code>ramshield-core</code>
+48. [ ] Write dev.to article: "Zero-trust IPC in 50 lines"
+49. [ ] Add <code>docs/BENCHMARKS.md</code> from criterion runs
+50. [ ] Schedule weekly blog post in <code>docs/BLOG_CALENDAR.md</code>
+      </div>
+    </section>
+  </div>
+
+  <!-- DEAD LINKS REPORT -->
+  <section class="panel" style="margin-top:20px;">
+    <div class="panel-header">
+      <h2>🔗 Dead Links Report</h2>
+      <span class="badge badge-danger">1 Dead Links</span>
+    </div>
+    <div class="panel-body">
+      <p>DOCUMENTATION.md: Broken link to ''</p>
+    </div>
+  </section>
+
+  <!-- DETAIL PANELS -->
+  <div class="grid grid-2" style="margin-top:20px;">
+    <section class="panel">
+      <div class="panel-header"><h2>📋 Daily Work Plan</h2></div>
+      <div class="panel-body"><p># Daily Plan — 2026-07-20</p>
+<h3>State Assessment</h3>
+FACTS.json shows 22 open roadmap tasks. Codebase is 4.8k lines of Rust. No TODOs found in src. Need to start on Q1 Advanced Analytics tasks.
+<h3>Prioritized Tasks</h3>
+<h3>T1: XGBoost Model Stub</h3>
+- Target: src/learning/xgboost.rs
+- Action: Create a basic Rust module structure for XGBoost threat scoring integration.
+- Verify: cargo check passes.
+<h3>T2: Preprocessing Module</h3>
+- Target: src/learning/preprocess.rs
+- Action: Implement a stub for scikit-learn style data preprocessing in Rust.
+- Verify: cargo check passes.
+<h3>T3: Dashboard Style Enhancement</h3>
+- Target: .github/scripts/html_dashboard_generator.py
+- Action: Add "Slick & Edgy" CSS variables for neon-cyan accents to match branding.
+- Verify: Run generator, check HTML colors.</div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><h2>👷 Worker Status</h2></div>
+      <div class="panel-body"><p># Worker Status — 2026-07-20</p>
+<h3>Task Execution</h3>
+| Task ID | Title | Status | Completion Time |
+| :--- | :--- | :--- | :--- |
+| T1 | XGBoost Model Stub | Pending | - |
+| T2 | Preprocessing Module | Pending | - |
+| T3 | Dashboard Style Enhancement | Pending | - |
+<p>---<br>*No workers have reported completion yet for today's cycle.*</p></div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><h2>🔍 Review & Assessment</h2></div>
+      <div class="panel-body"><p class="muted">_Report not found or unreadable: docs/REVIEW.md_</p></div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><h2>📤 Task Dispatch Log</h2></div>
+      <div class="panel-body"><p># Dispatch Log<br><h3>Timestamp</h3><br>2026-07-19T21:52:49Z</p>
+<h3>Dispatched Tasks</h3>
+- T1 (XGBoost Model Stub): ramshield-worker-T1 (ID: d59bf66d1d5c)
+- T2 (Preprocessing Module): ramshield-worker-T2 (ID: 81dc975889ad)
+- T3 (Dashboard Style Enhancement): ramshield-worker-T3 (ID: 57b89ea7a125)
+<h3>Expected Completion Window</h3>
+30-60 minutes from timestamp.</div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><h2>🏥 Project Health Overview</h2></div>
+      <div class="panel-body"><p># RamShield Project Health Dashboard</p>
+<strong>Generated:</strong> 2026-07-19 20:54 UTC
+<p>---</p>
+<h3>⚙️ Agent Configuration</h3>
+<p>This section displays the current operational parameters for the Helper Agent. These settings can be modified to direct the agent's focus and behavior.</p>
+<pre><code>{
+  "scan_frequency_minutes": 5,
+  "todo_scan_paths": [
+    "src",
+    "docs",
+    ".github"
+  ],
+  "research_scan_keywords": [
+    "ml",
+    "ai",
+    "rust",
+    "security",
+    "ddos",
+    "performance",
+    "async",
+    "tokio",
+    "axum",
+    "observability",
+    "metrics"
+  ],
+  "new_ideas_output_file": "docs/NEW_IDEAS.md",
+  "report_output_file": "docs/HEALTH_DASHBOARD.md",
+  "helper_agent_log_file": ".github/logs/helper_agent.log",
+  "dependency_audit_report": "docs/DEPENDENCY_AUDIT.md",
+  "roadmap_file": "docs/ROADMAP.md"
+}
+</code></pre>
+<p>---</p>
+<h3>🏃‍♀️ Helper Agent Activity Log</h3>
+<p>This log captures recent actions and observations from the Helper Agent's last runs.</p>
+<pre><code>No recent activity log found.
+</code></pre>
+<p>---</p>
+<h3>📝 Outstanding Tasks & Directives</h3>
+<p>Prioritized list of known tasks, TODOs, FIXMEs, and uncompleted roadmap items.</p>
+<p>- [ROADMAP] Implement XGBoost threat scoring model<br>- [ROADMAP] Add scikit-learn preprocessing pipeline<br>- [ROADMAP] Integrate model versioning with Git LFS<br>- [ROADMAP] *Milestone:* 95% accuracy on test dataset<br>- [ROADMAP] Implement Rust-based ML inference (tflite-rust)<br>- [ROADMAP] Add AVX2/AVX2 optimization flags<br>- [ROADMAP] Benchmark against Go implementation<br>- [ROADMAP] *Milestone:* 2x faster inference than Python baseline<br>- [ROADMAP] TLS 1.3 support for encrypted IPC<br>- [ROADMAP] iptables rate limiting integration<br>- [ROADMAP] Cryptographic audit logging (SHA-256 signed)<br>- [ROADMAP] *Milestone:* Zero-trust IPC communication<br>- [ROADMAP] Launch RamShield Blog (weekly posts)<br>- [ROADMAP] Create GitHub Discussions for community feedback<br>- [ROADMAP] Launch "RamShield Champions" program<br>- [ROADMAP] Kubernetes Operator for auto-scaling<br>- [ROADMAP] Heroku buildpack for one-click deploy<br>- [ROADMAP] Cloudflare Workers integration for edge detection<br>- [ROADMAP] <strong>WebAssembly (WASM) Module Support</strong>: Allow users to write custom detection logic in WASM.<br>- [ROADMAP] <strong>IoT Gateway Shielding</strong>: Optimized build for ARM/RISC-V edge devices.<br>- [ROADMAP] <strong>Time-Series Database Integration</strong>: Sync with InfluxDB/Prometheus for long-term analytics.<br>- [ROADMAP] <strong>Kafka/Pulsar Streaming</strong>: Real-time threat event streaming for enterprise logs.</p>
+<p>---</p>
+<h3>🌱 New Ideas & Research Insights</h3>
+<p>This section highlights potential new features, research directions, or areas for improvement identified by the Helper Agent through its codebase and documentation scans.</p>
+<p>- Potential for ml integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for tokio integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for axum integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for ml integration based on discussions in docs/CHANGES.md<br>- Potential for ai integration based on discussions in docs/CHANGES.md<br>- Potential for rust integration based on discussions in docs/CHANGES.md<br>- Potential for ddos integration based on discussions in docs/CHANGES.md<br>- Potential for performance integration based on discussions in docs/CHANGES.md<br>- Potential for tokio integration based on discussions in docs/CHANGES.md<br>- Potential for ml integration based on discussions in docs/BENCHMARKS.md<br>- Potential for ai integration based on discussions in docs/BENCHMARKS.md<br>- Potential for rust integration based on discussions in docs/BENCHMARKS.md<br>- Potential for performance integration based on discussions in docs/BENCHMARKS.md<br>- Potential for async integration based on discussions in docs/BENCHMARKS.md<br>- Potential for ai integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for rust integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for metrics integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for ml integration based on discussions in docs/ROADMAP.md<br>- Potential for ai integration based on discussions in docs/ROADMAP.md<br>- Potential for rust integration based on discussions in docs/ROADMAP.md<br>- Potential for security integration based on discussions in docs/ROADMAP.md<br>- Potential for performance integration based on discussions in docs/ROADMAP.md<br>- Potential for ml integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for ai integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for rust integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for security integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for ddos integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for performance integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for async integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for tokio integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for axum integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for observability integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for metrics integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for ml integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for ai integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for rust integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for performance integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for ml integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for ai integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for rust integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for ddos integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for performance integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for tokio integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for observability integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for metrics integration based on discussions in docs/DOCUMENTATION.md<br>- Explore ml in depth from research/README.md<br>- Explore ai in depth from research/README.md<br>- Explore rust in depth from research/README.md<br>- Explore performance in depth from research/README.md</p>
+<p>---</p>
+<h3>📈 Dependency Audit Status</h3>
+<p>[See full report here](docs/DEPENDENCY_AUDIT.md)</p>
+<p>---</p>
+<h3>🗺️ Roadmap Progress Overview</h3>
+<p>[See full roadmap here](docs/ROADMAP.md)</p>
+<p>---</p>
+<p>*Generated by RamShield Project Health Dashboard Agent v0.3.0*</p></div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><h2>🤖 Agent Control Center</h2></div>
+      <div class="panel-body"><p># RamShield Autonomous Helper Control Center</p>
+<strong>Status:</strong> Operational
+<strong>Agent Cycle:</strong> 15m / 60m / Cron-local
+<strong>Branch:</strong> <code>feature/ramshield-advanced</code>
+<p>---</p>
+<h3>🤖 Helper Agent Status</h3>
+<p>| Agent | Last Execution | Health | Next Run |<br>| :--- | :--- | :--- | :--- |<br>| <strong>Helper Agent</strong> | [2026-07-19 22:30] | ✅ OK | 22:45 |<br>| <strong>Dependency Audit</strong> | [2026-07-19 22:00] | ✅ OK | 23:00 |<br>| <strong>Health Dashboard</strong> | [2026-07-19 22:15] | ✅ OK | 22:30 |</p>
+<p>---</p>
+<h3>🛠 Directives & Expansion Panel</h3>
+<p>To modify agent behavior, update the <code>AGENT_CONFIG</code> in <code>health_dashboard.py</code> or provide instructions in this chat.</p>
+<h3>Current Agent Directives:</h3>
+1. <strong>[Active]</strong> Aggressively scan <code>src</code> and <code>docs</code> for TODO/FIXME markers.
+2. <strong>[Active]</strong> Track roadmap progress in <code>docs/ROADMAP.md</code>.
+3. <strong>[Active]</strong> Audit <code>Cargo.toml</code> dependencies hourly against crates.io.
+4. <strong>[Experimental]</strong> Scan <code>research/</code> directory for emerging ML/Rust patterns.
+<h3>Expansion Ideas (Pending Implementation):</h3>
+- [ ] <strong>Adaptive Learning</strong>: Integrate LLM to process TODOs into actionable tasks.
+- [ ] <strong>Multi-Branch Watch</strong>: Monitor <code>main</code> vs <code>feature</code> branches for drift.
+- [ ] <strong>Interactive Command Interface</strong>: Allow user to inject commands via GitHub Issues.
+<p>---</p>
+<h3>💡 Exploration & Research Insights (Organic Growth)</h3>
+<p>*Insights gathered by the agent through recursive exploration:*</p>
+<p>- <strong>Performance</strong>: High potential for AVX2 optimization in <code>detection/batch.rs</code>.<br>- <strong>Architecture</strong>: <code>IPC</code> via JSON is bottlenecking at 5M events/s. Explore Protobuf/gRPC for internal protocol.<br>- <strong>Community</strong>: The current README structure is solid, but the <code>research/</code> directory needs more automated exploration tools.</p>
+<p>---</p>
+<h3>⚙️ Direct Input / Feedback</h3>
+<strong>Modify Agent Behavior:</strong>
+- *Increase scan frequency* -> Edit <code>.github/scripts/health_dashboard.py</code> -> <code>scan_frequency_minutes</code>
+- *Add research path* -> Edit <code>.github/scripts/health_dashboard.py</code> -> <code>research_scan_keywords</code>
+<p>*Paste your instructions below to direct the Helper Agent.*</p></div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><h2>📦 Dependency Audit</h2></div>
+      <div class="panel-body"><p># Dependency Audit Report</p>
+<strong>Generated:</strong> 2026-07-19 20:36 UTC
+<strong>Total dependencies:</strong> 18
+<p>---</p>
+<h3>Crates</h3>
+<p>| Crate | Current | Latest | Status |<br>|-------|---------|--------|--------|<br>| serde_json | 1 | 1.0.150 | OUTDATED |<br>| dashmap | 5 | 7.0.0-rc2 | OUTDATED |<br>| ahash | 0.8 | 0.8.12 | OUTDATED |<br>| arc-swap | 1 | 1.9.2 | OUTDATED |<br>| crossbeam-channel | 0.5 | 0.5.16 | OUTDATED |<br>| crc32fast | 1 | 1.5.0 | OUTDATED |<br>| lz4_flex | 0.11 | 0.14.0 | OUTDATED |<br>| thiserror | 1 | 2.0.19 | OUTDATED |<br>| anyhow | 1 | 1.0.104 | OUTDATED |<br>| tracing | 0.1 | 0.1.44 | OUTDATED |<br>| toml | 0.8 | 1.1.3+spec-1.1.0 | OUTDATED |<br>| num_cpus | 1 | 1.17.0 | OUTDATED |<br>| axum | 0.7 | 0.8.9 | OUTDATED |<br>| futures-util | 0.3 | 0.3.33 | OUTDATED |<br>| tokio-stream | 0.1 | 0.1.18 | OUTDATED |<br>| ctrlc | 3 | 3.5.2 | OUTDATED |<br>| sysinfo | 0.29 | 0.39.6 | OUTDATED |<br>| shlex | 2.0.1 | 2.0.1 | current |</p>
+<strong>Outdated crates:</strong> 17
+<p>---</p>
+<p>*Generated by RamShield Helper Agent - Dependency Audit*</p></div>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><h2>🤖 Helper Agent Latest Report</h2></div>
+      <div class="panel-body"><p># RamShield Helper Agent Report</p>
+<strong>Generated:</strong> 2026-07-19 20:43 UTC
+<strong>Branch:</strong> <code>feature/ramshield-advanced</code>
+<strong>Commit:</strong> <code>72088d6</code>
+<strong>Commits (24h):</strong> 5
+<p>---</p>
+<h3>Codebase Metrics</h3>
+<p>| Metric | Value |<br>|--------|-------|<br>| Rust files | 24 |<br>| Total lines | 4,882 |<br>| Comment lines | 256 |<br>| Unsafe blocks | 2 |</p>
+<p>---</p>
+<h3>Research Audit Tree</h3>
+<p>| Domain | Innovation |<br>|--------|-----------|<br>| <strong>Deep Learning for Packet Inspection</strong> | LSTM/GRU for sequence-based anomaly detection. |<br>| <strong>Reinforcement Learning (RL)</strong> | Adaptive rate-limiting policies that evolve with attacker behavior. |<br>| <strong>Federated Learning</strong> | Collaborative defense across distributed RamShield nodes without sharing raw traffic. |<br>| <strong>Zero-Knowledge Proofs (ZKP)</strong> | For privacy-preserving threat intelligence sharing. |<br>| <strong>Homomorphic Encryption</strong> | Analyzing encrypted traffic without decryption overhead. |<br>| <strong>Post-Quantum Cryptography (PQC)</strong> | Preparing IPC and storage encryption for the quantum era. |<br>| <strong>eBPF/XDP Integration</strong> | Kernel-level packet filtering bypassing userspace overhead. |<br>| <strong>Memory-Mapped I/O (mmap)</strong> | High-speed shared memory for multi-node RamShield clusters. |<br>| <strong>Data-Oriented Design (DOD)</strong> | Restructuring core data layouts for SIMD-heavy pipelines. |</p>
+<p>---</p>
+<h3>Expansion Tree</h3>
+<p>- [ ] <strong>WebAssembly (WASM) Module Support</strong>: Allow users to write custom detection logic in WASM.<br>- [ ] <strong>IoT Gateway Shielding</strong>: Optimized build for ARM/RISC-V edge devices.<br>- [ ] <strong>Time-Series Database Integration</strong>: Sync with InfluxDB/Prometheus for long-term analytics.<br>- [ ] <strong>Kafka/Pulsar Streaming</strong>: Real-time threat event streaming for enterprise logs.</p>
+<p>---</p>
+<h3>Roadmap Milestones</h3>
+<p>---</p>
+<h3>Technical Debt</h3>
+<p>- Open TODOs: <strong>0</strong><br>- Open FIXMEs: <strong>0</strong></p>
+<p>---</p>
+<p>*Generated by RamShield Helper Agent v0.3.0*</p></div>
+    </section>
+  </div>
+
+  <footer>
+    Generated by RamShield Automation Dashboard Generator v0.6.0  •  Slick & Edgy Theme
+    •  Docs: <a href="https://hermes-agent.nousresearch.com/docs">https://hermes-agent.nousresearch.com/docs</a>
+  </footer>
+</div>
 </body>
 </html>
