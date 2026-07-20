@@ -4,6 +4,7 @@ use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
 pub mod xgboost;
+pub mod preprocess;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttackPattern {
