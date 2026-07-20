@@ -12,3 +12,5 @@ Mon 20 Jul 10:53:04 CEST 2026: Executed P0 task: Write src/engine/mod.rs re-expo
 2026-07-20 10:58:14: Executed P0 task: Fix dead link in  (empty target)
 2026-07-20 10:58:18: Executed P0 task: Fix dead link in `DOCUMENTATION.md` (empty target)
 Mon 20 Jul 11:27:46 CEST 2026: Executed P0 task: Add --version flag to main binary
+Mon 20 Jul 13:34:22 CEST 2026: Executed P0 task: Pin tflite-rust version in Cargo.toml
+Mon 20 Jul 13:37:38 CEST 2026: Rolled back failed P0 task: Pin tflite-rust (build error)
