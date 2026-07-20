@@ -1,16 +1,14 @@
 use crate::config::Config;
 use crate::engine::Engine;
 use axum::{
-    body::Body,
     extract::State,
-    http::{Request, StatusCode},
+    http::StatusCode,
     response::{Html, Json},
     routing::get,
     Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tower::ServiceExt;
 use tower_http::cors::CorsLayer;
 use tracing::info;
 

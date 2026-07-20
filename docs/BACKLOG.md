@@ -7,7 +7,7 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 ## P0 — Critical Path (core functionality)
 1. [x] Implement `src/learning/xgboost.rs` module stub with public `score()` fn
 2. [x] Implement `src/learning/preprocess.rs` with `normalize()` stub
-3. [ ] Add `cargo clippy` CI gate to `.github/workflows/`
+3. [x] Add `cargo clippy` CI gate to `.github/workflows/`
 4. [ ] Fix dead link in `DOCUMENTATION.md` (empty target)
 5. [ ] Write `src/engine/mod.rs` re-export for learning submodule
 6. [ ] Add unit test skeleton for `xgboost::score`
