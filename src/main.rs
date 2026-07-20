@@ -1,32 +1,6 @@
-use anyhow::Result;
-use ramshield::{Config, Engine, dashboard};
-use std::sync::Arc;
-use tracing::info;
-use tracing_subscriber::EnvFilter;
-use serde::Deserialize;
-use std::fs;
-use tokio::process::Command;
-use std::collections::HashMap;
-use shlex;
+use ramshield::install_panic_hook;
 
-// Define structs for test scenario
-#[derive(Debug, Deserialize)]
-struct TestScenario {
-    name: String,
-    script: String,
-    command: String,
-    monitor_api: Vec<ApiCheck>,
-    expected_logs: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiCheck {
-    field: String,
-    condition: String,
-}
-
-#[tokio::main(flavor = "multi_thread", worker_threads = 1)]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Atomic P0: --version flag (BACKLOG #8) — checked before tracing init
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
