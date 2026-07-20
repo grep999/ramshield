@@ -27,6 +27,13 @@ struct ApiCheck {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 async fn main() -> Result<()> {
+    // Atomic P0: --version flag (BACKLOG #8) — checked before tracing init
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("ramshield {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -34,7 +41,6 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let args: Vec<String> = std::env::args().collect();
     let mut config_path: Option<String> = None;
     let mut test_scenario_name: Option<String> = None;
 
