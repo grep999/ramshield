@@ -31,3 +31,5 @@ Mon 20 Jul 17:26:03 CEST 2026: Executed P0 task: Add unit test skeleton for xgbo
 Mon 20 Jul 17:46:00 CEST 2026: Executed P0 task: Add unit test skeleton for xgboost::score
 Mon 20 Jul 18:52:23 CEST 2026: Executed P1 task: Add structured logging via tracing crate (already wired; marked complete in BACKLOG.md)
 Mon 20 Jul 19:00:08 CEST 2026: Executed P1 task: Add emit_prometheus() method to Metrics for Prometheus exposition output to stdout
+Mon 20 Jul 19:36:56 CEST 2026: Executed P0 task: Mark P1 items 11,12 as complete (already implemented)
+Mon 20 Jul 19:38:06 CEST 2026: Executed P1 task: Mark P1 items 13,15 as complete (already implemented healthcheck endpoint and panic hook)
