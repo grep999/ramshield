@@ -9,7 +9,7 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 2. [x] Implement `src/learning/preprocess.rs` with `normalize()` stub
 3. [x] Add `cargo clippy` CI gate to `.github/workflows/`
 4. [x] Fix dead link in `DOCUMENTATION.md` (empty target)
-5. [ ] Write `src/engine/mod.rs` re-export for learning submodule
+12|5. [x] Write `src/engine/mod.rs` re-export for learning submodule
 6. [ ] Add unit test skeleton for `xgboost::score`
 7. [x] Pin `tflite-rust` version in Cargo.toml
 8. [x] Add `--version` flag to main binary
