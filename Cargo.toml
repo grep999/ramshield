@@ -40,7 +40,9 @@ tokio-stream      = "0.1"
 ctrlc             = "3"
 sysinfo           = "0.29"
 shlex = "2.0.1"
-tflite-rust = "=0.3.0"  # ponytail: pinned exact; unpin to "^0.3" after xgboost backend wired
+chrono = "0.4"
+
+
 
 [dev-dependencies]
 serial_test = "3"
