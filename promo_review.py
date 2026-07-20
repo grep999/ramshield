@@ -4,7 +4,7 @@
 Runs every 30 minutes to review staged promotion content.
 """
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 CONTENT_DIR = Path.home() / "promotion_content"
@@ -18,7 +18,7 @@ def review_assets():
     """Review all staged assets in promotion_content."""
     campaigns = load_campaigns()["campaigns"]
     report = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
         "reviewed": [],
         "ready_to_publish": [],
         "needs_revision": [],
@@ -57,7 +57,7 @@ def review_assets():
         "needs_revision": len(report["needs_revision"])
     }
 
-    report_file = CONTENT_DIR / f"review_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+    report_file = CONTENT_DIR / f"review_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
     report_file.write_text(json.dumps(report, indent=2))
     print(f"Review complete: {report['summary']}")
     print(f"Report saved: {report_file}")

@@ -23,10 +23,10 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 14. [x] Write integration test for engine startup
 15. [x] Add panic hook that logs to `stderr` with timestamp
 16. [x] Cover `preprocess::normalize` with property test
-17. [ ] Add `RUST_LOG` env support
+17. [x] Add `RUST_LOG` env support
 18. [ ] Benchmark `score()` with criterion
 19. [ ] Add OpenTelemetry trace spans (no-op default)
-20. [ ] Self-test script: `scripts/selftest.sh`
+20. [x] Self-test script: `scripts/selftest.sh`
 
 ## P2 — Interface & UX
 21. [ ] Add `status` subcommand to CLI
