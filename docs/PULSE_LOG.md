@@ -8,3 +8,6 @@ Mon 20 Jul 07:57:26 CEST 2026: Executed P0 task: Implement 'src/learning/preproc
 Mon 20 Jul 10:24:03 CEST 2026: Executed P0 task: Implement src/learning/xgboost.rs module stub with public score() fn
 Mon 20 Jul 10:25:55 CEST 2026: Executed P0 task: Implement src/learning/preprocess.rs with normalize() stub
 Mon 20 Jul 10:31:49 CEST 2026: Executed P0 task: Add cargo clippy CI gate to .github/workflows/
+Mon 20 Jul 10:53:04 CEST 2026: Executed P0 task: Write src/engine/mod.rs re-export for learning submodule
+2026-07-20 10:58:14: Executed P0 task: Fix dead link in  (empty target)
+2026-07-20 10:58:18: Executed P0 task: Fix dead link in `DOCUMENTATION.md` (empty target)
