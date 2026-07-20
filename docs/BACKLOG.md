@@ -60,6 +60,6 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 45. [ ] Tweet thread on DDoS mitigation architecture
 46. [x] Add `README` badges (build, clippy, coverage)
 47. [ ] Submit to crates.io as `ramshield-core`
-48. [ ] Write dev.to article: "Zero-trust IPC in 50 lines"
-49. [ ] Add `docs/BENCHMARKS.md` from criterion runs
+63| [x] Write dev.to article: "Zero-trust IPC in 50 lines"
+64| [x] Add `docs/BENCHMARKS.md` from criterion runs
 50. [ ] Schedule weekly blog post in `docs/BLOG_CALENDAR.md`
