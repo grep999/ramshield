@@ -55,10 +55,10 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 ## P0-cross — Promotion & Growth (promo agent queue)
 41. [ ] Draft LinkedIn post: "Why we built RamShield in Rust"
 42. [ ] Write Hacker News show post draft
-43. [ ] Create `docs/PITCH.md` one-pager
+43. [x] Create `docs/PITCH.md` one-pager
 44. [ ] Record 30s demo GIF of dashboard
 45. [ ] Tweet thread on DDoS mitigation architecture
-46. [ ] Add `README` badges (build, clippy, coverage)
+46. [x] Add `README` badges (build, clippy, coverage)
 47. [ ] Submit to crates.io as `ramshield-core`
 48. [ ] Write dev.to article: "Zero-trust IPC in 50 lines"
 49. [ ] Add `docs/BENCHMARKS.md` from criterion runs
