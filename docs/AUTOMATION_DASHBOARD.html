@@ -193,18 +193,18 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
 <div class="container">
   <header>
     <h1>RamShield Automation Control Center</h1>
-    <p class="subtitle">Generated 2026-07-20 00:23 UTC  •  Branch: <code>feature/ramshield-advanced</code>  •  Commit: <code>1d9b8e2</code></p>
+    <p class="subtitle">Generated 2026-07-20 05:54 UTC  •  Branch: <code>feature/ramshield-advanced</code>  •  Commit: <code>bc77286</code></p>
     <div class="badge-row">
-      <span class="badge badge-ok">Rust Files: 24</span>
-      <span class="badge badge-info">LOC: 4,826</span>
+      <span class="badge badge-ok">Rust Files: 25</span>
+      <span class="badge badge-info">LOC: 4,956</span>
       <span class="badge badge-warn">Clippy: -1</span>
       <span class="badge badge-neutral">TODOs: 0</span>
       <span class="badge badge-info">Roadmap: 22</span>
       <span class="badge badge-neutral">Deps: 18</span>
       <span class="badge badge-danger">Dead Links: 1</span>
       <span class="badge badge-info">Cron: 0/14</span>
-      <span class="badge badge-neutral">Backlog: 50/50</span>
-      <span class="badge badge-info">Workers: 0% (0/3)</span>
+      <span class="badge badge-neutral">Backlog: 48/50</span>
+      <span class="badge badge-info">Workers: 0% (0/2)</span>
     </div>
   </header>
 
@@ -398,24 +398,16 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
             <span>Today</span>
             <span style="color:var(--muted);"></span>
           </div>
-          <div class="timeline-title">T1: XGBoost Model Stub</div>
-          <div class="timeline-desc">Create a basic Rust module structure for XGBoost threat scoring integration.</div>
+          <div class="timeline-title">T1: Fix Facts Collector Cron Job</div>
+          <div class="timeline-desc">Update the script path for `ramshield-facts-collector` to be relative to its workdir: `.github/scripts/facts_collector.py`.</div>
         </div>
         <div class="timeline-item current">
           <div class="timeline-meta">
             <span>Today</span>
             <span style="color:var(--muted);"></span>
           </div>
-          <div class="timeline-title">T2: Preprocessing Module</div>
-          <div class="timeline-desc">Implement a stub for scikit-learn style data preprocessing in Rust.</div>
-        </div>
-        <div class="timeline-item current">
-          <div class="timeline-meta">
-            <span>Today</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">T3: Dashboard Style Enhancement</div>
-          <div class="timeline-desc">Add "Slick & Edgy" CSS variables for neon-cyan accents to match branding.</div>
+          <div class="timeline-title">T2: Create FACTS.json Placeholder</div>
+          <div class="timeline-desc">Create an empty `docs/FACTS.json` file as a placeholder to prevent downstream agents from failing on missing input.</div>
         </div>
       </div>
     </div>
@@ -449,17 +441,12 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
         </div>
         <div class="priority-card ">
           <div class="priority-label">Extra in Today</div>
-          <div class="priority-value info">XGBoost Model Stub</div>
+          <div class="priority-value info">Fix Facts Collector Cron Job</div>
           <span class="badge badge-info" style="margin-top:6px;display:inline-block;font-size:.6rem;">Only in Plan</span>
         </div>
         <div class="priority-card ">
           <div class="priority-label">Extra in Today</div>
-          <div class="priority-value info">Preprocessing Module</div>
-          <span class="badge badge-info" style="margin-top:6px;display:inline-block;font-size:.6rem;">Only in Plan</span>
-        </div>
-        <div class="priority-card ">
-          <div class="priority-label">Extra in Today</div>
-          <div class="priority-value info">Dashboard Style Enhancement</div>
+          <div class="priority-value info">Create FACTS.json Placeholder</div>
           <span class="badge badge-info" style="margin-top:6px;display:inline-block;font-size:.6rem;">Only in Plan</span>
         </div>
         </div>
@@ -482,8 +469,8 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:320px;">
           <div class="badge badge-ok" style="justify-content:center;font-size:.8rem;">✅ 0 Done</div>
-          <div class="badge badge-info" style="justify-content:center;font-size:.8rem;">⏳ 3 Pending</div>
-          <div class="badge badge-neutral" style="justify-content:center;font-size:.8rem;">📝 3 Planned</div>
+          <div class="badge badge-info" style="justify-content:center;font-size:.8rem;">⏳ 2 Pending</div>
+          <div class="badge badge-neutral" style="justify-content:center;font-size:.8rem;">📝 2 Planned</div>
           <div class="badge badge-info" style="justify-content:center;font-size:.8rem;">🗺️ 22 Roadmap</div>
         </div>
       </div>
@@ -584,21 +571,21 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
     <section class="panel">
       <div class="panel-header">
         <h2>📦 Atomic Backlog</h2>
-        <span class="badge badge-neutral">50/50 left</span>
+        <span class="badge badge-neutral">48/50 left</span>
       </div>
       <div class="panel-body">
         <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;">
           <div style="position:relative;width:54px;height:54px;">
             
-    <svg class="progress-ring" viewBox="0 0 52 52" aria-label="Progress 0%">
+    <svg class="progress-ring" viewBox="0 0 52 52" aria-label="Progress 4%">
       <circle class="progress-ring-bg" cx="26" cy="26" r="22"/>
       <circle class="progress-ring-fg" cx="26" cy="26" r="22"
-              style="stroke-dashoffset:138.0"/>
-      <text class="progress-ring-text" x="26" y="27">0%</text>
+              style="stroke-dashoffset:132.5"/>
+      <text class="progress-ring-text" x="26" y="27">4%</text>
     </svg>
           </div>
           <div>
-            <div style="font-weight:600;font-size:1.1rem;">0 / 50</div>
+            <div style="font-weight:600;font-size:1.1rem;">2 / 50</div>
             <div style="color:var(--muted);font-size:.8rem;">atomic jobs picked up</div>
           </div>
         </div>
@@ -618,7 +605,7 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
       </div>
       <div class="panel-body">
         <div style="font-size:.8rem;color:var(--muted);margin-bottom:10px;">High-frequency pickup from backlog. Last entry:</div>
-<div style="background:rgba(0,245,212,.05);border-left:3px solid var(--accent);padding:10px 12px;border-radius:4px;font-family:monospace;font-size:.85rem;">Last 5 minutes of pulse activity. Empty = no-op tick.</div>
+<div style="background:rgba(0,245,212,.05);border-left:3px solid var(--accent);padding:10px 12px;border-radius:4px;font-family:monospace;font-size:.85rem;">Mon 20 Jul 07:01:32 CEST 2026: Executed P0 task: Implement src/learning/preprocess.rs with normalize() stub (sandbox write to .hermes mirror; real repo path read-only here)</div>
       </div>
     </section>
   </div>
@@ -636,7 +623,7 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
       <div class="panel-body">
         <p># Promotion Activity Log</p>
 <p>Latest promotion-agent output. Appended by the RamShield Promotion Agent cronjob.</p>
-<p>_No promotion activity yet. Agent will populate this on next run._</p>
+<p>- 2026-07-20T07:03Z | #43 PITCH.md one-pager | docs/PITCH.md | DONE<br>- 2026-07-20T07:03Z | #46 README badges (clippy, coverage) | README.md | DONE</p>
       </div>
     </section>
 
@@ -649,7 +636,7 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
       <div class="panel-body">
         <p># Research Flow</p>
 <p>Automated research findings feeding the pipeline. Populated by the research agent.<br>Each entry links to a backlog item or roadmap task it informs.</p>
-<p>_No research entries yet. Agent will populate this on next run._</p>
+<p>- task_id: roadmap/Q1-eBPF, summary: eBPF/XDP Integration, links: https://github.com/aya-rs/aya, suggested_implementation: Use aya-rs for safe kernel-level packet filtering.<br>- task_id: roadmap/Q1-eBPF, summary: XDP drop path + aya perf-array → Ramshield batch channel, links: https://aya-rs.github.io/book/, https://docs.rs/aya/latest/aya/, https://github.com/libbpf/libbpf, suggested_implementation: Attach XDP drop program via aya::programs::xdp; forward per-CPU counters through BPF_MAP_TYPE_PERF_EVENT_ARRAY into dedicated tokio task and route into the existing 2M-event batch channel.</p>
       </div>
     </section>
   </div>
@@ -666,14 +653,14 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
       <div class="panel-body">
         <p># Health Loop</p>
 <p>Time-series health checks. Read-only fast sanity. Newest row at top.</p>
-<p>| Timestamp | Facts Age (min) | Backlog Remaining | Active Cron | Notes |<br>| :--- | :--- | :--- | :--- | :--- |<br>| — | — | — | — | (awaiting first health-loop run) |</p>
+<p>| Timestamp | Facts Age (min) | Backlog Remaining | Active Cron | Notes |<br>| :--- | :--- | :--- | :--- | :--- |<br>|2026-07-20 04:48:01 | 0 | 50 | 0 | Initial check</p>
       </div>
     </section>
 
     <section class="panel">
       <div class="panel-header">
         <h2>📦 Backlog (full)</h2>
-        <span class="badge badge-neutral">50/50</span>
+        <span class="badge badge-neutral">48/50</span>
       </div>
       <div class="panel-body">
         <p># Atomic Backlog — Pickup Queue</p>
@@ -725,10 +712,10 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
 <h3>P0-cross — Promotion & Growth (promo agent queue)</h3>
 41. [ ] Draft LinkedIn post: "Why we built RamShield in Rust"
 42. [ ] Write Hacker News show post draft
-43. [ ] Create <code>docs/PITCH.md</code> one-pager
+43. [x] Create <code>docs/PITCH.md</code> one-pager
 44. [ ] Record 30s demo GIF of dashboard
 45. [ ] Tweet thread on DDoS mitigation architecture
-46. [ ] Add <code>README</code> badges (build, clippy, coverage)
+46. [x] Add <code>README</code> badges (build, clippy, coverage)
 47. [ ] Submit to crates.io as <code>ramshield-core</code>
 48. [ ] Write dev.to article: "Zero-trust IPC in 50 lines"
 49. [ ] Add <code>docs/BENCHMARKS.md</code> from criterion runs
@@ -754,20 +741,16 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
       <div class="panel-header"><h2>📋 Daily Work Plan</h2></div>
       <div class="panel-body"><p># Daily Plan — 2026-07-20</p>
 <h3>State Assessment</h3>
-FACTS.json shows 22 open roadmap tasks. Codebase is 4.8k lines of Rust. No TODOs found in src. Need to start on Q1 Advanced Analytics tasks.
+<code>ramshield-facts-collector</code> cron job is failing due to an incorrect script path. This issue prevents upstream agents from collecting necessary data. Roadmap tasks for Q1 Advanced Analytics are pending. The most urgent task is to restore the facts collector's functionality.
 <h3>Prioritized Tasks</h3>
-<h3>T1: XGBoost Model Stub</h3>
-- Target: src/learning/xgboost.rs
-- Action: Create a basic Rust module structure for XGBoost threat scoring integration.
-- Verify: cargo check passes.
-<h3>T2: Preprocessing Module</h3>
-- Target: src/learning/preprocess.rs
-- Action: Implement a stub for scikit-learn style data preprocessing in Rust.
-- Verify: cargo check passes.
-<h3>T3: Dashboard Style Enhancement</h3>
-- Target: .github/scripts/html_dashboard_generator.py
-- Action: Add "Slick & Edgy" CSS variables for neon-cyan accents to match branding.
-- Verify: Run generator, check HTML colors.</div>
+<h3>T1: Fix Facts Collector Cron Job</h3>
+- Target: Hermes cron job <code>1cb5e490c826</code>
+- Action: Update the script path for <code>ramshield-facts-collector</code> to be relative to its workdir: <code>.github/scripts/facts_collector.py</code>.
+- Verify: <code>hermes cron list</code> shows the updated script path for job <code>1cb5e490c826</code>.
+<h3>T2: Create FACTS.json Placeholder</h3>
+- Target: <code>docs/FACTS.json</code>
+- Action: Create an empty <code>docs/FACTS.json</code> file as a placeholder to prevent downstream agents from failing on missing input.
+- Verify: <code>docs/FACTS.json</code> exists and is an empty JSON object.</div>
     </section>
     <section class="panel">
       <div class="panel-header"><h2>👷 Worker Status</h2></div>
@@ -841,12 +824,12 @@ FACTS.json shows 22 open roadmap tasks. Codebase is 4.8k lines of Rust. No TODOs
 <h3>🌱 New Ideas & Research Insights</h3>
 <p>This section highlights potential new features, research directions, or areas for improvement identified by the Helper Agent through its codebase and documentation scans.</p>
 <p>- Potential for ml integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for tokio integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for axum integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for ml integration based on discussions in docs/CHANGES.md<br>- Potential for ai integration based on discussions in docs/CHANGES.md<br>- Potential for rust integration based on discussions in docs/CHANGES.md<br>- Potential for ddos integration based on discussions in docs/CHANGES.md<br>- Potential for performance integration based on discussions in docs/CHANGES.md<br>- Potential for tokio integration based on discussions in docs/CHANGES.md<br>- Potential for ml integration based on discussions in docs/BENCHMARKS.md<br>- Potential for ai integration based on discussions in docs/BENCHMARKS.md<br>- Potential for rust integration based on discussions in docs/BENCHMARKS.md<br>- Potential for performance integration based on discussions in docs/BENCHMARKS.md<br>- Potential for async integration based on discussions in docs/BENCHMARKS.md<br>- Potential for ai integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for rust integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for metrics integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for ml integration based on discussions in docs/ROADMAP.md<br>- Potential for ai integration based on discussions in docs/ROADMAP.md<br>- Potential for rust integration based on discussions in docs/ROADMAP.md<br>- Potential for security integration based on discussions in docs/ROADMAP.md<br>- Potential for performance integration based on discussions in docs/ROADMAP.md<br>- Potential for ml integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for ai integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for rust integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for security integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for ddos integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for performance integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for async integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for tokio integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for axum integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for observability integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for metrics integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for ml integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for ai integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for rust integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for performance integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for ml integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for ai integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for rust integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for ddos integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for performance integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for tokio integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for observability integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for metrics integration based on discussions in docs/DOCUMENTATION.md<br>- Explore ml in depth from research/README.md<br>- Explore ai in depth from research/README.md<br>- Explore rust in depth from research/README.md<br>- Explore performance in depth from research/README.md</p>
-<p>---</p>
+<p>|-</p>
 <h3>📈 Dependency Audit Status</h3>
-<p>[See full report here](docs/DEPENDENCY_AUDIT.md)</p>
+<p>[Dependency audit report](docs/CRON_STATUS.md) *(placeholder — DEPENDENCY_AUDIT.md not yet generated)*</p>
 <p>---</p>
 <h3>🗺️ Roadmap Progress Overview</h3>
-<p>[See full roadmap here](docs/ROADMAP.md)</p>
+<p>[See full roadmap](docs/PLAN.md) *(placeholder — ROADMAP.md not yet generated)*</p>
 <p>---</p>
 <p>*Generated by RamShield Project Health Dashboard Agent v0.3.0*</p></div>
     </section>
@@ -897,13 +880,13 @@ FACTS.json shows 22 open roadmap tasks. Codebase is 4.8k lines of Rust. No TODOs
     <section class="panel">
       <div class="panel-header"><h2>🤖 Helper Agent Latest Report</h2></div>
       <div class="panel-body"><p># RamShield Helper Agent Report</p>
-<strong>Generated:</strong> 2026-07-19 20:43 UTC
+<strong>Generated:</strong> 2026-07-20 05:02 UTC
 <strong>Branch:</strong> <code>feature/ramshield-advanced</code>
-<strong>Commit:</strong> <code>72088d6</code>
-<strong>Commits (24h):</strong> 5
+<strong>Commit:</strong> <code>8522627</code>
+<strong>Commits (24h):</strong> 10
 <p>---</p>
 <h3>Codebase Metrics</h3>
-<p>| Metric | Value |<br>|--------|-------|<br>| Rust files | 24 |<br>| Total lines | 4,882 |<br>| Comment lines | 256 |<br>| Unsafe blocks | 2 |</p>
+<p>| Metric | Value |<br>|--------|-------|<br>| Rust files | 25 |<br>| Total lines | 4,976 |<br>| Comment lines | 270 |<br>| Unsafe blocks | 0 |</p>
 <p>---</p>
 <h3>Research Audit Tree</h3>
 <p>| Domain | Innovation |<br>|--------|-----------|<br>| <strong>Deep Learning for Packet Inspection</strong> | LSTM/GRU for sequence-based anomaly detection. |<br>| <strong>Reinforcement Learning (RL)</strong> | Adaptive rate-limiting policies that evolve with attacker behavior. |<br>| <strong>Federated Learning</strong> | Collaborative defense across distributed RamShield nodes without sharing raw traffic. |<br>| <strong>Zero-Knowledge Proofs (ZKP)</strong> | For privacy-preserving threat intelligence sharing. |<br>| <strong>Homomorphic Encryption</strong> | Analyzing encrypted traffic without decryption overhead. |<br>| <strong>Post-Quantum Cryptography (PQC)</strong> | Preparing IPC and storage encryption for the quantum era. |<br>| <strong>eBPF/XDP Integration</strong> | Kernel-level packet filtering bypassing userspace overhead. |<br>| <strong>Memory-Mapped I/O (mmap)</strong> | High-speed shared memory for multi-node RamShield clusters. |<br>| <strong>Data-Oriented Design (DOD)</strong> | Restructuring core data layouts for SIMD-heavy pipelines. |</p>

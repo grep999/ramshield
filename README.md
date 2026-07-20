@@ -2,6 +2,8 @@
 
 [![Crates.io](https://img.shields.io/crates/v/ramshield.svg)](https://crates.io/crates/ramshield)
 [![CI](https://github.com/grep999/ramshield/actions/workflows/ci.yml/badge.svg)](https://github.com/grep999/ramshield/actions/workflows/ci.yml)
+[![Clippy](https://github.com/grep999/ramshield/actions/workflows/clippy.yml/badge.svg)](https://github.com/grep999/ramshield/actions/workflows/clippy.yml)
+[![Coverage](https://img.shields.io/codecov/c/github/grep999/ramshield)](https://codecov.io/gh/grep999/ramshield)
 [![License](https://img.shields.io/crates.io/l/ramshield)](https://github.com/grep999/ramshield/blob/main/LICENSE)
 
 # RamShield - Enterprise-Grade Traffic Defense
