@@ -259,7 +259,7 @@ Config keys exist for TTL/WAL for forward compatibility.
 
 **Design choice:** JSON over TCP is simple to integrate from any language (Python scripts, nginx lua, Go sidecars). A binary protocol could be added later; the batch struct maps cleanly.
 
-See [Section 7 — IPC Protocol](#ipc-protocol).
+See [Section 7 — IPC Protocol](#7-ipc-protocol).
 
 ---
 
