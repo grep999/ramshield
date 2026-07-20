@@ -17,11 +17,11 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 10. [x] Add `make bench` target to Makefile
 
 ## P1 — Hardening & Observability
-11. [ ] Add structured logging via `tracing` crate
-12. [ ] Emit metrics to stdout in Prometheus format
-13. [ ] Add `healthcheck` HTTP endpoint stub
+11. [x] Add structured logging via `tracing` crate
+12. [x] Emit metrics to stdout in Prometheus format
+13. [x] Add `healthcheck` HTTP endpoint stub
 14. [ ] Write integration test for engine startup
-15. [ ] Add panic hook that logs to `stderr` with timestamp
+15. [x] Add panic hook that logs to `stderr` with timestamp
 16. [ ] Cover `preprocess::normalize` with property test
 17. [ ] Add `RUST_LOG` env support
 18. [ ] Benchmark `score()` with criterion
