@@ -1,39 +1,21 @@
-# Tweet Thread: RamShield DDoS Mitigation Architecture
+**RamShield Tweet Thread: DDoS Mitigation Architecture**
 
-**Thread: How RamShield detects & mitigates DDoS at the memory layer 🧵**
+1/x RamShield protects your services from DDoS attacks. How? By filtering malicious traffic *before* it hits your application. This thread explains our architecture. #RamShield #DDoS #Cybersecurity
 
-1/7
-Traditional DDoS defense = network layer (WAF, rate limiting, CDN). But what if the attack bypasses network controls? Memory exhaustion, fork bombs, connection table saturation — these live in RAM. RamShield watches there.
+2/x At its core, RamShield is a high-performance Rust-based proxy. It sits in front of your services, acting as the first line of defense. Rust's memory safety and speed are critical here. #RustLang #NetworkSecurity
 
-2/7
-eBPF probes on sys_enter/execve, memfd_create, process_vm_readv/writev, mprotect. Every suspicious memory op = event. Ring buffer → userspace → feature extraction in <1ms.
+3/x We use a multi-layered approach. First, rate limiting based on source IP and connection characteristics. This quickly prunes basic flood attacks. #RateLimiting
 
-3/7
-Behavioral features for DDoS:
-- execve chain depth (fork bomb signature)
-- memfd execve count (fileless malware)
-- cross-process VM ops (process injection)
-- mprotect RWX transitions (shellcode staging)
-- connection rate per PID (socket exhaustion)
+4/x Next, behavior analysis. We detect anomalous traffic patterns specific to common DDoS attack vectors (e.g., HTTP floods, SYN floods) and dynamically adjust filtering rules. #BehavioralAnalytics
 
-4/7
-ML pipeline: Isolation Forest (32 features) on-device via TFLite. No cloud, no PII, <1ms inference. Anomaly score >0.85 = alert with MITRE tags (T1499, T1499.001, T1499.002).
+5/x For more sophisticated attacks, RamShield employs a challenge-response mechanism, silently verifying clients without impacting legitimate users. Think invisible CAPTCHA for machines. #ChallengeResponse
 
-5/7
-Policy engine: YAML rules + YARA-Lite patterns. Example:
-```yaml
-- name: fork_bomb_detected
-  condition: "execve_chain_depth > 50 AND memfd_count > 10"
-  severity: critical
-  mitre: ["T1499.001"]
-  action: alert + kill
-```
+6/x All filtering happens at the edge, close to the source of the attack, minimizing network latency and conserving your backend resources. Fast, efficient, and resilient. #EdgeComputing
 
-6/7
-Alert output: JSONL → stdout, syslog, webhook, Prometheus. Integrates with Falco, Grafana, Loki. Kill chain: detect → enrich (MITRE/CVE) → respond (Falco Talon) → audit.
+7/x RamShield is designed for scalability. Deploy it on bare metal, VMs, or in containers. It integrates seamlessly with your existing infrastructure. #CloudNative #Scalability
 
-7/7
-RamShield = memory-side threat shield. Rust + eBPF + on-device ML. Zero-trust memory introspection. No kernel modules, CO-RE, rootless ready.
+8/x Protecting your digital assets shouldn't be complex. RamShield provides robust DDoS mitigation with a simple, developer-friendly configuration. #DevOps #SecurityMadeEasy
 
-🔗 GitHub: github.com/ramshield/ramshield
-#eBPF #Rust #Security #DDoS #RuntimeSecurity
+9/x Want to dive deeper? Check out our whitepaper on ramshield.io/ddos-mitigation and see how RamShield can safeguard your applications. [Link to Whitepaper] #OpenSource #InfoSec
+
+END THREAD
