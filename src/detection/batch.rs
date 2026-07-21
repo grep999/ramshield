@@ -5,12 +5,12 @@ use std::net::IpAddr;
 /// In-memory aggregation for one flush window — no store access until flush completes.
 #[derive(Debug, Default)]
 pub struct IpAgg {
-    pub count:        u32,
-    pub bytes:        u64,
-    pub status_dist:  [u32; 5],
-    pub proto_fp:     u32,
-    pub first_ts_ns:  u64,
-    pub last_ts_ns:   u64,
+    pub count: u32,
+    pub bytes: u64,
+    pub status_dist: [u32; 5],
+    pub proto_fp: u32,
+    pub first_ts_ns: u64,
+    pub last_ts_ns: u64,
 }
 
 impl IpAgg {
@@ -37,7 +37,7 @@ pub fn subnet_key_v4(octets: [u8; 4]) -> u32 {
 pub fn subnet_key(ip: IpAddr) -> Option<u32> {
     match ip {
         IpAddr::V4(v4) => Some(subnet_key_v4(v4.octets())),
-        IpAddr::V6(_)  => None,
+        IpAddr::V6(_) => None,
     }
 }
 
@@ -54,11 +54,7 @@ pub fn ip_in_subnet(ip: IpAddr, prefix: [u8; 3]) -> bool {
 
 #[inline]
 pub fn subnet_prefix(key: u32) -> [u8; 3] {
-    [
-        (key >> 24) as u8,
-        (key >> 16) as u8,
-        (key >> 8) as u8,
-    ]
+    [(key >> 24) as u8, (key >> 16) as u8, (key >> 8) as u8]
 }
 
 /// Aggregate a slice of connection events into IP and /24 maps in one pass.

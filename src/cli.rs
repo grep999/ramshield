@@ -14,25 +14,42 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    Check   { ip: String },
-    Block   {
+    Check {
         ip: String,
-        #[arg(short, long, default_value = "manual")] reason: String,
-        #[arg(short, long)] ttl: Option<u64>,
     },
-    Unblock { ip: String },
+    Block {
+        ip: String,
+        #[arg(short, long, default_value = "manual")]
+        reason: String,
+        #[arg(short, long)]
+        ttl: Option<u64>,
+    },
+    Unblock {
+        ip: String,
+    },
     Stats,
-    Status  { #[arg(long)] json: bool },
-    Info    { ip: String },
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    Info {
+        ip: String,
+    },
 }
 
 fn main() -> Result<()> {
-    let cli  = Cli::parse();
+    let cli = Cli::parse();
     let json = match &cli.cmd {
-        Cmd::Check   { ip }              => format!(r#"{{"type":"check_ip","ip":"{}"}}"#, ip),
-        Cmd::Block   { ip, reason, ttl } => match ttl {
-            Some(t) => format!(r#"{{"type":"block_ip","ip":"{}","reason":"{}","ttl_secs":{}}}"#, ip, reason, t),
-            None    => format!(r#"{{"type":"block_ip","ip":"{}","reason":"{}","ttl_secs":null}}"#, ip, reason),
+        Cmd::Check { ip } => format!(r#"{{"type":"check_ip","ip":"{}"}}"#, ip),
+        Cmd::Block { ip, reason, ttl } => match ttl {
+            Some(t) => format!(
+                r#"{{"type":"block_ip","ip":"{}","reason":"{}","ttl_secs":{}}}"#,
+                ip, reason, t
+            ),
+            None => format!(
+                r#"{{"type":"block_ip","ip":"{}","reason":"{}","ttl_secs":null}}"#,
+                ip, reason
+            ),
         },
         Cmd::Unblock { ip } => format!(r#"{{"type":"unblock_ip","ip":"{}"}}"#, ip),
         Cmd::Stats => r#"{"type":"get_stats"}"#.into(),
@@ -48,8 +65,8 @@ fn main() -> Result<()> {
 
     let mut resp = String::new();
     BufReader::new(&stream).read_line(&mut resp)?;
-    let v: serde_json::Value = serde_json::from_str(&resp)
-        .unwrap_or(serde_json::Value::String(resp.trim().into()));
+    let v: serde_json::Value =
+        serde_json::from_str(&resp).unwrap_or(serde_json::Value::String(resp.trim().into()));
     if compact {
         println!("{}", serde_json::to_string(&v)?);
     } else {

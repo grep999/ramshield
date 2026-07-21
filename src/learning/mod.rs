@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
-pub mod xgboost;
 pub mod preprocess;
+pub mod xgboost;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttackPattern {
@@ -61,16 +61,16 @@ impl PatternLearner {
         let pattern_id = self.generate_pattern_id(data);
         let mut patterns = self.patterns.write().unwrap();
 
-        let pattern = patterns.entry(pattern_id.clone()).or_insert_with(|| {
-            AttackPattern {
+        let pattern = patterns
+            .entry(pattern_id.clone())
+            .or_insert_with(|| AttackPattern {
                 id: pattern_id.clone(),
                 signature: data.to_vec(),
                 frequency: 0,
                 threat_level: 0.0,
                 last_seen: std::time::SystemTime::now(),
                 metadata: PatternMetadata::default(),
-            }
-        });
+            });
 
         pattern.frequency += 1;
         pattern.threat_level = (pattern.threat_level + threat_level) / 2.0;

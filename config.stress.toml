@@ -1,41 +1,44 @@
-# config.stress.toml — production-tuned for high-throughput stress test
-
 [engine]
 shard_count = 1024
-worker_threads = 0       # auto-detect (4 cores)
-ram_limit_mb = 8192      # 8GB cap
+worker_threads = 0
+ram_limit_mb = 8192
 
 [storage]
-wal_enabled = false      # disable for pure throughput benchmark
+wal_enabled = false
+wal_sync = "none"
+wal_segment_bytes = 67108864
 wal_path = "/tmp/ramshield_wal"
+wal_compress = true
 
 [detection]
 rps_threshold = 500
-batch_max_events = 8192
-block_duration_ms = 60000
-ewma_alpha = 0.3
-threat_threshold = 0.7
+rate_window_secs = 10
+subnet_batch_threshold = 5
+batch_block_enabled = true
+block_ttl_secs = 60
+ttl_wheel_resolution_ms = 100
+ttl_wheel_size = 36000
+bloom_bits = 8000000
+history_cap = 32
+pattern_similarity_threshold = 0.8
+batch_max_events = 4096
+batch_window_ms = 50
+promote_min_events = 8
+subnet_window_threshold = 500
 
 [forecasting]
 enabled = true
-interval_secs = 5
-hw_alpha = 0.3
+ewma_alpha = 0.3
 hw_beta = 0.1
-entropy_threshold = 0.7
+hw_gamma = 0.1
+seasonality_period = 3600
+anomaly_zscore = 2.5
+min_entropy = 2.0
 
 [ipc]
-enabled = true
 tcp_addr = "127.0.0.1:7890"
 max_connections = 1024
 
 [dashboard]
 enabled = true
 http_addr = "127.0.0.1:9999"
-
-[alerting]
-enabled = true
-rps_alert_threshold = 5000
-entropy_alert_threshold = 0.8
-alert_cooldown_secs = 60
-audit_log_enabled = true
-audit_log_path = "./audit.log"

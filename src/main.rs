@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use anyhow::Result;
-use ramshield::{Config, Engine, dashboard};
+use ramshield::{dashboard, Config, Engine};
+use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -18,24 +18,20 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("ramshield=info"));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("ramshield=info"));
 
     #[cfg(feature = "otel")]
     {
         use opentelemetry::trace::TracerProvider;
         let provider = init_otel();
         let _tracer = provider.tracer("ramshield");
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .init();
+        tracing_subscriber::fmt().with_env_filter(env_filter).init();
         let _ = (_tracer, provider);
     }
     #[cfg(not(feature = "otel"))]
     {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .init();
+        tracing_subscriber::fmt().with_env_filter(env_filter).init();
     }
 
     let mut config_path: Option<String> = None;
@@ -54,11 +50,15 @@ async fn main() -> Result<()> {
 
     let config = match config_path {
         Some(path) => {
-            let absolute_path = std::fs::canonicalize(&path).map_err(|e| anyhow::anyhow!("Error canonicalizing path {}: {}", path, e))?;
-            eprintln!("Attempting to load config from absolute path: {:?}", absolute_path);
+            let absolute_path = std::fs::canonicalize(&path)
+                .map_err(|e| anyhow::anyhow!("Error canonicalizing path {}: {}", path, e))?;
+            eprintln!(
+                "Attempting to load config from absolute path: {:?}",
+                absolute_path
+            );
             Config::load(absolute_path.to_str().unwrap())?
-        },
-        None       => Config::default(),
+        }
+        None => Config::default(),
     };
 
     // Start RamShield normally
