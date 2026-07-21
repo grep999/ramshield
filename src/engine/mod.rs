@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::detection::DetectionEngine;
 use crate::forecasting::Forecaster;
 use crate::learning::PatternLearner;
+use crate::storage::Store;
 use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, SubnetRow};
 use crate::storage::Store;
 use arc_swap::ArcSwap;
@@ -122,7 +123,7 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     ));
     tokio::spawn(async move { forecaster.run().await });
 
-    let server = crate::ipc::server::IpcServer::bind(&cfg_snapshot, engine.clone(), event_tx).await?;
+    let server = crate::ipc::server::IpcServer::bind(&cfg_snapshot, engine.clone(), event_tx, store).await?;
     server.start().await;
     Ok(())
 }
