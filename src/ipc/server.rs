@@ -75,10 +75,7 @@ async fn handle_connection(
             return Ok(());
         }
         buf.extend_from_slice(&chunk[..n]);
-        loop {
-            let Some(pos) = buf.iter().position(|&b| b == b'\n') else {
-                break;
-            };
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = buf.drain(..=pos).collect();
             let req: Request = match serde_json::from_slice(&line) {
                 Ok(r) => r,
