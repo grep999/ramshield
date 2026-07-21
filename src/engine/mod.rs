@@ -4,19 +4,31 @@ use arc_swap::ArcSwap;
 use crate::config::Config;
 use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, SubnetRow};
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 pub struct Engine {
     pub config: ArcSwap<Config>,
+    shutting_down: AtomicBool,
 }
 
 impl Engine {
     pub fn new(cfg: Config) -> Self {
         Self {
             config: ArcSwap::from_pointee(cfg),
+            shutting_down: AtomicBool::new(false),
         }
     }
 
     pub fn start(&self) {
         // stub: engine lifecycle
+    }
+
+    pub fn shutdown(&self) {
+        self.shutting_down.store(true, Ordering::Release);
+    }
+
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::Acquire)
     }
 
     pub fn dashboard_snapshot(&self) -> DashboardSnapshot {

@@ -75,6 +75,9 @@ def parse_errors_md():
     Skips summary/meta sections and the recovery playbook.
     Dashboard section false-positives are collapsed into one issue per
     category to avoid 13 separate chains for a single outdated checker.
+
+    Also skips issues whose HEALER_STATUS file already marks them fixed,
+    so stale one-shot healer jobs do not re-spawn endless chains.
     """
     text = read_text("docs/ERRORS.md")
     issues = []
@@ -116,9 +119,7 @@ def parse_errors_md():
             })
         else:
             for body in items:
-                issue_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", body)[:50].strip("-")
-                if not issue_id:
-                    issue_id = f"{cat}-{uuid.uuid4().hex[:8]}"
+                issue_id = normalize_issue_id(body, cat)
                 issues.append({
                     "id": issue_id,
                     "category": cat,
@@ -127,7 +128,15 @@ def parse_errors_md():
                     "count": 1,
                 })
 
-    return issues
+    # Skip issues already marked fixed in a previous healer cycle (case-insensitive)
+    filtered = []
+    for issue in issues:
+        if is_already_fixed(issue["id"]):
+            append_operator_log([f"SKIPPED: {issue['id']} already fixed (parse_errors_md)"])
+            continue
+        filtered.append(issue)
+
+    return filtered
 
 
 def parse_facts_errors():
@@ -159,18 +168,74 @@ def parse_facts_errors():
 
 
 def load_cycle_history(issue_id):
-    """Count how many times this issue has already been healed."""
-    status_file = Path(WORKSPACE) / "docs" / f"HEALER_STATUS_{issue_id}.md"
-    if not status_file.exists():
-        return 0
-    text = status_file.read_text(encoding="utf-8", errors="ignore")
-    cycles = re.findall(r"cycle:\s*(\d+)", text, re.I)
-    return max([int(c) for c in cycles] + [0])
+    """Count how many times this issue has already been healed.
+
+    Looks for an existing HEALER_STATUS file case-insensitively, because
+    normalize_issue_id lowercases IDs while older status files may use
+    uppercase issue IDs (e.g. EMPTY-PULSE_LOG...).
+    """
+    docs_dir = Path(WORKSPACE) / "docs"
+    target = issue_id.lower()
+    candidates = list(docs_dir.glob("HEALER_STATUS_*.md"))
+    for status_file in candidates:
+        name = status_file.stem.lower().replace("healer_status_", "")
+        if name == target:
+            text = status_file.read_text(encoding="utf-8", errors="ignore")
+            cycles = re.findall(r"cycle:\s*(\d+)", text, re.I)
+            return max([int(c) for c in cycles] + [0])
+    return 0
+
+
+def is_already_fixed(issue_id):
+    """Return True if a previous status file marks this issue as fixed.
+
+    Matches case-insensitively against existing HEALER_STATUS_*.md filenames.
+    """
+    docs_dir = Path(WORKSPACE) / "docs"
+    target = issue_id.lower()
+    for status_file in docs_dir.glob("HEALER_STATUS_*.md"):
+        name = status_file.stem.lower().replace("healer_status_", "")
+        if name == target:
+            text = status_file.read_text(encoding="utf-8", errors="ignore").lower()
+            return (
+                "fixed? yes" in text
+                or "fixed? true" in text
+                or "status: resolved" in text
+                or "status: fixed" in text
+            )
+    return False
 
 
 def issue_id_safe(issue_id):
     """Ensure safe cron job names."""
     return re.sub(r"[^a-zA-Z0-9_-]+", "-", issue_id).strip("-").lower()[:55]
+
+
+def normalize_issue_id(body, category):
+    """Generate an issue ID from an error body, normalizing stale healer alerts.
+
+    Stale one-shot healer jobs often appear in ERRORS.md as
+    `DELAYED: healer-verify-<original-id>`. This function strips common
+    prefixes (`DELAYED:`, `STUCK:`, `PAUSED:`, `STALE ONESHOT:`) and healer
+    stage prefixes (`healer-analyze-`, `healer-solve-`, `healer-verify-`) so
+    that such alerts map back to the original issue and reuse its cycle
+    history / fixed status.
+    """
+    nid = body.lower()
+    # Strip status prefixes
+    for prefix in ("delayed:", "stuck:", "paused:", "stale oneshot:"):
+        if nid.startswith(prefix):
+            nid = nid[len(prefix):].strip()
+    # Strip healer stage prefixes (may be nested, e.g. healer-verify-delayed-healer-verify-...)
+    for _ in range(3):  # bounded nesting
+        for stage in ("healer-analyze-", "healer-solve-", "healer-verify-"):
+            if nid.startswith(stage):
+                nid = nid[len(stage):].strip()
+    # Sanitize
+    nid = re.sub(r"[^a-zA-Z0-9_-]+", "-", nid)[:50].strip("-")
+    if not nid:
+        nid = f"{category}-{uuid.uuid4().hex[:8]}"
+    return nid
 
 
 def build_cron_create_cmd(name, schedule, prompt, skills, workdir, repeat=1):
@@ -335,7 +400,14 @@ def main():
         dispatch_lines.append("|-------|----------|-------|----------------|")
 
     all_jobs = []
+    skipped_fixed = []
     for issue in capped:
+        if is_already_fixed(issue["id"]):
+            skipped_fixed.append(issue["id"])
+            msg = f"SKIPPED: {issue['id']} already fixed"
+            append_operator_log([msg])
+            continue
+
         cycle = load_cycle_history(issue["id"]) + 1
         if cycle > MAX_CYCLES:
             msg = f"ESCALATE: {issue['id']} exceeded {MAX_CYCLES} cycles — needs manual review"
@@ -356,6 +428,12 @@ def main():
         dispatch_lines.append(
             f"| {issue['id']} | {issue['category']} | {cycle} | analyze/solve/verify |"
         )
+
+    if skipped_fixed:
+        dispatch_lines.append("")
+        dispatch_lines.append(f"Skipped {len(skipped_fixed)} already-fixed issue(s):")
+        for s in skipped_fixed:
+            dispatch_lines.append(f"- {s}")
 
     if skipped:
         dispatch_lines.append("")

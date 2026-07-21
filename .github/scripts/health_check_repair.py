@@ -25,6 +25,7 @@ def get_cron_status():
         r = subprocess.run(
             ["hermes", "cron", "list"],
             capture_output=True, text=True, timeout=30,
+            env={**os.environ, "HOME": os.path.expanduser("~")},
         )
         raw = r.stdout or r.stderr
         jobs = []
@@ -77,7 +78,31 @@ def check_cron_jobs(jobs):
                 nr = datetime.fromisoformat(next_run.replace("Z", "+00:00"))
                 if nr < now and status != "ok":
                     hours_overdue = (now - nr).total_seconds() / 3600
-                    if hours_overdue > 2:
+                    schedule = j.get("schedule", "")
+                    name = j.get("name", "")
+                    # One-shot healer jobs are created by error_healer.py with a
+                    # fixed ISO timestamp. They are expected to run once and then
+                    # disappear. If they miss their slot (e.g. LLM queue skip)
+                    # they become stale, not a systemic cron delay.
+                    # Detect them by schedule text ("once at" and a date) or by
+                    # repeat count in the job name, plus the healer- prefix.
+                    is_iso_timestamp = (
+                        "T" in schedule and not any(c in schedule for c in "*?/,")
+                    )
+                    is_one_shot = (
+                        ("once at" in schedule)
+                        or is_iso_timestamp
+                        or name.startswith(("healer-analyze-", "healer-solve-", "healer-verify-"))
+                    )
+                    if is_one_shot:
+                        if hours_overdue < 4.0:
+                            continue
+                        issues.append(
+                            f"STALE ONESHOT: {name} — {hours_overdue:.1f}h old "
+                            f"one-shot healer job, last_status={status}"
+                        )
+                        continue
+                    elif hours_overdue > 2:
                         issues.append(
                             f"STUCK: {name} — next_run was {hours_overdue:.1f}h ago, "
                             f"last_status={status}"
@@ -98,6 +123,46 @@ def check_cron_jobs(jobs):
 
 
 # ── 2. Dead Links ─────────────────────────────────────────────────────────
+
+def strip_inline_code_spans(content: str) -> str:
+    """Remove Markdown inline code spans, including those delimited by
+    multiple backticks that may contain single backticks inside.
+
+    Example: `` `![demo](docs/assets/demo.gif)` `` is removed entirely,
+    preventing the link syntax inside from being parsed as a real link.
+    """
+    result = []
+    i = 0
+    n = len(content)
+    while i < n:
+        if content[i] != '`':
+            result.append(content[i])
+            i += 1
+            continue
+        # Count opening backticks
+        j = i
+        while j < n and content[j] == '`':
+            j += 1
+        tick_count = j - i
+        # Find matching closing backticks of the same length
+        k = j
+        while k < n:
+            if content[k] == '`':
+                m = k
+                while m < n and content[m] == '`':
+                    m += 1
+                if m - k == tick_count:
+                    i = m
+                    break
+                k = m
+            else:
+                k += 1
+        else:
+            # No matching close — emit remaining backticks and stop
+            result.append(content[i:])
+            break
+    return ''.join(result)
+
 
 def check_dead_links():
     """Scan docs/*.md for broken internal links. Return (unique_issues, fixable_symlinks).
@@ -134,6 +199,9 @@ def check_dead_links():
                 content = d.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 continue
+            # Strip inline code spans so links inside backticks (e.g. examples)
+            # are not treated as real markdown links. Matches facts_collector.py.
+            content = strip_inline_code_spans(content)
             for link in re.findall(r"\[.*?\]\(([^)]+)\)", content):
                 if link.startswith(("http", "https", "mailto:")):
                     continue
@@ -211,7 +279,7 @@ def repair_missing_docs():
                 try:
                     subprocess.run(
                         ["python3", str(sp)],
-                        cwd=str(WORKSPACE), timeout=30,
+                        cwd=str(WORKSPACE), timeout=150,
                         capture_output=True,
                     )
                     fixes.append(f"Regenerated {doc} via {script}")
@@ -231,19 +299,18 @@ def check_dashboard_sections():
         return issues
     content = html_path.read_text(encoding="utf-8", errors="ignore")
     required = [
-        ("Main Timeline", "📅 Main Timeline"),
-        ("Priority Alignment", "🎯 Priority Alignment"),
-        ("Cycle Progress", "📊 Cycle Progress"),
-        ("Cron Jobs", "⏰ Cron Jobs"),
-        ("Atomic Backlog", "📦 Atomic Backlog"),
-        ("Pulse", "💓 Pulse"),
-        ("Promotion", "📣 Promotion"),
-        ("Research", "🔬 Research"),
-        ("Health Loop", "🏥 Health Loop"),
-        ("Dead Links Report", "🔗 Dead Links Report"),
-        ("Daily Work Plan", "📋 Daily Work Plan"),
-        ("Worker Status", "👷 Worker Status"),
-        ("Review & Assessment", "🔍 Review & Assessment"),
+        ("Operator Log", "Operator Log"),
+        ("Autonomous Pipeline", "Autonomous Pipeline"),
+        ("Cron Fleet Status", "Cron Fleet Status"),
+        ("Module Consoles", "Module Consoles"),
+        ("Project Health", "Project Health"),
+        ("Error Ledger", "Error Ledger"),
+        ("Backlog", "Backlog"),
+        ("Control Center", "Control Center"),
+        ("Roadmap", "Roadmap"),
+        ("Dependency Audit", "Dependency Audit"),
+        ("Cron Scaling & Recommendations", "Cron Scaling & Recommendations"),
+        ("Self-Healing Ledger", "Self-Healing Ledger"),
     ]
     for name, marker in required:
         if marker not in content:
@@ -313,7 +380,7 @@ def regenerate_facts():
         try:
             r = subprocess.run(
                 ["python3", str(collector)],
-                cwd=str(WORKSPACE), timeout=30,
+                cwd=str(WORKSPACE), timeout=150,
                 capture_output=True, text=True,
             )
             if r.returncode == 0:
@@ -419,7 +486,7 @@ def handle_frozen_elements(frozen):
             try:
                 r = subprocess.run(
                     ["python3", refresh_map[src]],
-                    cwd=str(WORKSPACE), timeout=30,
+                    cwd=str(WORKSPACE), timeout=150,
                     capture_output=True, text=True,
                 )
                 if r.returncode == 0:
