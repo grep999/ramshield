@@ -1,11 +1,11 @@
-# Errors & Error-Handling — 2026-07-21 09:44 UTC
+# Errors & Error-Handling — 2026-07-21 13:12 UTC
 
 ⚠️ **0 active errors**, 5 frozen element(s)
 ## Frozen Elements (5)
-- FROZEN: docs/PROMOTION_LOG.md not updated in 1071m (threshold 60m)
-- FROZEN: docs/RESEARCH.md not updated in 554m (threshold 90m)
-- FROZEN: docs/PULSE_LOG.md not updated in 40m (threshold 30m)
-- FROZEN: docs/HEALTH_LOOP.md not updated in 1659m (threshold 30m)
+- FROZEN: docs/PROMOTION_LOG.md not updated in 1278m (threshold 60m)
+- FROZEN: docs/RESEARCH.md not updated in 762m (threshold 90m)
+- FROZEN: docs/PULSE_LOG.md not updated in 247m (threshold 30m)
+- FROZEN: docs/HEALTH_LOOP.md not updated in 1867m (threshold 30m)
 - MISSING: docs/PROMOTION/REVIEW.md
 
 ## Recovery Playbook
