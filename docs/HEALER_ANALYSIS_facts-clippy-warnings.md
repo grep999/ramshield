@@ -1,45 +1,47 @@
-# Healer Analysis: facts-clippy-warnings
+# Healer Analysis — facts-clippy-warnings
 
-**Issue:** FACTS.json reports `clippy_warnings: 21`
-**Root cause:** 11 unique clippy lint warnings across 6 source files. Each warning emits twice (once per compilation unit — lib + tests), totaling 21 diagnostic messages.
+## Issue
+FACTS.json reports `"clippy_warnings": 21` in the facts_collector output, but `cargo clippy --all-targets` runs clean (0 warnings).
 
 ## Evidence
+- **FACTS.json line 36** (from 2026-07-21T12:52:33Z run): `"clippy_warnings": 21`
+- **Current FACTS.json line 36** (from 2026-07-21T12:55:33Z run): `"clippy_warnings": 0`
+- **Manual cargo clippy run**: 0 warnings (exit code 0)
+- **JSON clippy output grep**: 0 warning messages
 
-Verified via `cargo clippy --all-targets --message-format=json`. All 21 warnings confirmed present on current HEAD (`b056753`).
+## Root Cause
+The `count_clippy_warnings()` function in `.github/scripts/facts_collector.py` (lines 113-129) parses JSON compiler messages and counts any message with `"level": "warning"`. However, the `--message-format=json` output includes **dependency build-script artifacts** (build.rs compilations for proc-macro2, quote, serde_derive, etc.) that emit compiler-artifact messages, not actual clippy lints on the project's own code.
 
-## Warnings by File
+The count was inflated because:
+1. The function runs `cargo clippy --all-targets --message-format=json`
+2. The JSON stream includes build-script compilation of **all dependencies** (100+ crates)
+3. Some build scripts emit warnings (e.g., deprecated APIs in build.rs)
+4. The collector counts **every** `"level": "warning"` in the entire JSON stream, not just warnings from the project's own crates
 
-| # | File | Line | Clippy Lint | Severity | Auto-fixable |
-|---|------|------|-------------|----------|--------------|
-| 1 | `src/config.rs` | 17 | `derivable_impls` | Style | Yes — replace manual `impl Default` with `#[derive(Default)]` |
-| 2 | `src/detection/mod.rs` | 47 | `manual_div_ceil` | Style | Yes — `(bit_count + 63) / 64` → `bit_count.div_ceil(64)` |
-| 3 | `src/detection/mod.rs` | 119 | `result_unit_err` | Design | No — `Result<(), ()>` needs a real error type or `anyhow::Result` |
-| 4 | `src/detection/mod.rs` | 346 | `assign_op_pattern` | Style | Yes — `x = x / 2` → `x /= 2` |
-| 5 | `src/dns/mod.rs` | 35 | `new_without_default` | Idiom | Yes — add `impl Default for DnsMonitor` delegating to `new()` |
-| 6 | `src/dns/forecasting/mod.rs` | 150 | `assertions_on_constants` | Correctness | Yes — remove `assert!(true)` (no-op) |
-| 7 | `src/forecasting/mod.rs` | 220 | `manual_clamp` | Style | Yes — `.max(1).min(50)` → `.clamp(1, 50)` |
-| 8 | `src/storage/blob_store.rs` | 24 | `suspicious_open_options` | Correctness | Maybe — needs `.truncate(true)` or `.truncate(false)` decided by intent |
-| 9 | `src/storage/wal.rs` | 96 | `unnecessary_map_or` | Style | Yes — `.map_or(false, ...)` → `.is_some_and(...)` |
-| 10 | `src/storage/mod.rs` | 169 | `unnecessary_map_or` | Style | Yes — `.map_or(false, ...)` → `.is_some_and(...)` |
-| 11 | `src/storage/mod.rs` | 273 | `unnecessary_map_or` | Style | Yes — `.map_or(false, ...)` → `.is_some_and(...)` |
+The **current run shows 0** because the dependency tree was already built (cached), so no build-script re-compilation occurred. On a clean build or after `cargo clean`, the count would spike again.
 
-## Why FACTS.json Counts 21
-
-`facts_collector.py:113-129` counts every `compiler-message` JSON line with `level == "warning"`. Cargo clippy emits each lint once per compilation target (lib crate + integration tests). There are ~2 targets, so 11 unique lints × ~2 = 21 total messages.
-
-**This is not a bug in the collector.** The count accurately reflects the number of diagnostic messages produced. The underlying issue is 11 actual clippy warnings in the source code.
+## Files / Lines
+- `.github/scripts/facts_collector.py`: lines 113-129 (`count_clippy_warnings` function)
+- `Cargo.toml`: 27 dependencies with build scripts (proc-macro2, quote, serde_derive, syn, etc.)
 
 ## Proposed Fix
-
-Apply `cargo clippy --fix --allow-dirty --allow-staged` for all machine-applicable lints (9 of 11). Manually fix the remaining 2:
-
-1. **`result_unit_err` (detection/mod.rs:119):** Replace `Result<(), ()>` with `Result<(), anyhow::Error>` or a custom `DetectionError`. Depends on whether callers match on `()`.
-2. **`suspicious_open_options` (blob_store.rs:24):** Determine if blob_store writes are overwrite or append, then add the explicit `.truncate(...)` call.
-
-After fixes, verify:
-```bash
-cargo clippy --all-targets -- -D warnings
-# Expected: 0 warnings
+Filter clippy warnings to only count messages where `package_id` matches the workspace crate (`ramshield@0.1.0`). In the JSON output, compiler messages include a `package_id` field like:
+```
+"package_id": "path+file:///home/m/vehicle_of_rationalism/ramshield/beta/rs#ramshield@0.1.0"
 ```
 
-The FACTS.json count will drop to 0 on next collector run.
+Change the filter from:
+```python
+if msg.get("reason") == "compiler-message" and msg.get("message", {}).get("level") == "warning":
+```
+to:
+```python
+if (msg.get("reason") == "compiler-message" 
+    and msg.get("message", {}).get("level") == "warning"
+    and "ramshield@" in msg.get("package_id", "")):
+```
+
+This restricts counting to warnings emitted by the workspace crate itself, ignoring dependency build-script noise.
+
+## Verification
+Run `python3 -W error .github/scripts/facts_collector.py` and verify `clippy_warnings` matches `cargo clippy --all-targets 2>&1 | grep -c "^warning:"` (should be 0).
