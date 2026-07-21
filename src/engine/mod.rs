@@ -3,15 +3,14 @@ pub mod learning;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::info;
+use arc_swap::ArcSwap;
 
 use crate::config::Config;
 use crate::detection::DetectionEngine;
 use crate::forecasting::Forecaster;
+use crate::storage::Store;
 use crate::learning::PatternLearner;
-use crate::storage::Store;
 use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, SubnetRow};
-use crate::storage::Store;
-use arc_swap::ArcSwap;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

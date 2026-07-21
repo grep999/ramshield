@@ -10,6 +10,7 @@ use crossbeam_channel::Sender;
 use crate::config::Config;
 use crate::detection::ConnectionEvent;
 use crate::engine::Engine;
+use crate::storage::Store;
 use super::{Request, Response};
 
 const MAX_CONNECTIONS: usize = 1024;
