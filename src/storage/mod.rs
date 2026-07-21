@@ -27,6 +27,10 @@ pub struct TrafficCounters {
     pub subnet_window: Mutex<Vec<u64>>,
     /// High-threat IPs from latest flush (bounded sample for preemptive block).
     pub threat_sample: Mutex<Vec<(IpAddr, f32)>>,
+    /// RAM limit in MB from config.
+    pub ram_limit_mb: AtomicUsize,
+    /// Process uptime in seconds.
+    pub uptime_secs: AtomicU64,
 }
 
 impl TrafficCounters {
@@ -37,6 +41,8 @@ impl TrafficCounters {
             promoted_ips: AtomicU64::new(0),
             subnet_window: Mutex::new(Vec::with_capacity(256)),
             threat_sample: Mutex::new(Vec::with_capacity(128)),
+            ram_limit_mb: AtomicUsize::new(0),
+            uptime_secs: AtomicU64::new(0),
         }
     }
 
@@ -333,6 +339,27 @@ impl Store {
     }
     pub fn subnet_table(&self) -> &DashMap<u32, SubnetRecord> {
         &self.subnet_table
+    }
+    /// Returns aggregate store statistics for dashboard / CLI.
+    pub fn get_stats(&self) -> StoreStats {
+        let ips_tracked = self.inner.len();
+        let blocked = self
+            .inner
+            .iter()
+            .filter(|e| e.value().is_blocked())
+            .count() as u64;
+        let ram_bytes = self.ram_bytes.load(Ordering::Relaxed);
+        let ram_limit_mb = self.traffic.ram_limit_mb.load(Ordering::Relaxed);
+        let uptime_secs = self.traffic.uptime_secs.load(Ordering::Relaxed);
+        let evictions = self.total_evictions.load(Ordering::Relaxed);
+        StoreStats {
+            ips_tracked,
+            blocked,
+            ram_bytes,
+            ram_limit_mb,
+            uptime_secs,
+            evictions,
+        }
     }
 
     /// Update the reverse index for subnet lookups. Call after inserting/updating an IP record.
