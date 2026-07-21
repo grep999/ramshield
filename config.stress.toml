@@ -30,9 +30,6 @@ max_connections = 1024
 
 [dashboard]
 enabled = true
-<<<<<<< HEAD
-http_addr = "127.0.0.1:7891"
-=======
 http_addr = "127.0.0.1:9999"
 
 [alerting]
@@ -42,4 +39,3 @@ entropy_alert_threshold = 0.8
 alert_cooldown_secs = 60
 audit_log_enabled = true
 audit_log_path = "./audit.log"
->>>>>>> 5b4bb0e (Refactor: metrics to ms, detection timing; config tuning)
