@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
 
     // Start RamShield normally
     let engine = Arc::new(Engine::new(config.clone()));
-    engine.start();
+    let _engine_handle = engine.clone().start_async().expect("engine pipeline");
 
     // Start dashboard if enabled — dedicated OS thread + tokio runtime
     // to guarantee responsiveness under detection load.
