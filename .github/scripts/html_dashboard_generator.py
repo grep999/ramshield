@@ -173,6 +173,22 @@ td code { background:rgba(0,245,212,.1); color:var(--accent); padding:2px 6px; b
 }
 .log-line { display:block; padding:2px 0; border-bottom:1px solid rgba(255,255,255,.03); }
 .log-time { color:var(--muted-2); margin-right:6px; }
+.operator-log {
+  background:#05050a; border:1px solid var(--border); border-radius:10px; padding:14px;
+  font-family:'SF Mono',ui-monospace,monospace; font-size:.74rem; color:var(--muted);
+  max-height:220px; overflow:auto; white-space:pre-wrap;
+}
+.operator-log .log-entry { display:block; padding:3px 0; border-bottom:1px solid rgba(255,255,255,.03); }
+.operator-log .log-entry:hover { color:var(--text); }
+.operator-log .ts { color:var(--muted-2); margin-right:8px; }
+
+/* Code blocks for copy-paste commands */
+pre.cmd {
+  background:#05050a; border:1px solid var(--border); border-radius:8px; padding:10px 12px;
+  font-family:'SF Mono',ui-monospace,monospace; font-size:.72rem; color:var(--accent);
+  overflow-x:auto; margin:8px 0 0;
+}
+
 .collapsible {
   background:none; border:none; color:var(--accent); font-size:.72rem; cursor:pointer;
   display:flex; align-items:center; gap:6px; padding:0; font-family:inherit;
@@ -262,8 +278,17 @@ def read_report(path: str) -> str:
 def read_json(path: str) -> dict:
     try:
         return json.loads(Path(path).read_text(encoding='utf-8'))
-    except Exception:
+    except Exception as e:
         return {}
+
+
+def read_operator_log(path: str) -> str:
+    try:
+        text = Path(path).read_text(encoding='utf-8')
+        lines = [l for l in text.splitlines() if l.strip()]
+        return '\n'.join(lines[-30:])  # last 30 lines
+    except Exception:
+        return "_Operator log is empty._"
 
 
 def rel_time(iso: str) -> str:
@@ -331,28 +356,37 @@ def analyze_cron(jobs: list) -> dict:
             runs_per_hour += 1
 
     if len(freq_5m) > 3:
-        names = ", ".join(j["name"] for j in freq_5m[:3])
+        names = ", ".join(j["name"] for j in freq_5m)
+        cmd = "\n".join([f"hermes cron edit {j['job_id']} --schedule '*/15 * * * *'" for j in freq_5m])
         recommendations.append({
             "icon": "⚡", "title": "Batch 5-minute jobs",
-            "body": f"{len(freq_5m)} jobs run every 5 min ({names}...). Group non-urgent ones into a single orchestrator script to reduce gateway load."
+            "body": f"{len(freq_5m)} jobs run every 5 min ({names}). Reduce gateway load by moving non-urgent ones to 15 min or batching them into a single script.",
+            "cmd": cmd
         })
 
     if len(llm_jobs) > 2:
+        llm_names = ", ".join(j["name"] for j in llm_jobs)
+        cmd = f"# Convert data collection jobs to no_agent scripts\n# Keep only planner/reviewer as LLM agents\nhermes cron edit <job_id> --script <script.py> --no-agent"
         recommendations.append({
             "icon": "🤖", "title": "Move LLM agents off hot paths",
-            "body": f"{len(llm_jobs)} LLM-driven jobs. Consider converting health/pulse/research data collection to no_agent scripts and reserve LLM for planner/reviewer."
+            "body": f"{len(llm_jobs)} LLM-driven jobs ({llm_names}). Move deterministic data collection to no_agent scripts and reserve LLM for planning/review.",
+            "cmd": cmd
         })
 
     if error_jobs:
+        err_names = ", ".join(j['name'] for j in error_jobs)
+        cmd = "\n".join([f"hermes cron run {j['job_id']}  # debug {j['name']}" for j in error_jobs])
         recommendations.append({
             "icon": "🚨", "title": f"Stabilize {len(error_jobs)} failing jobs",
-            "body": f"{', '.join(j['name'] for j in error_jobs[:3])}{'...' if len(error_jobs)>3 else ''} are failing. Add no_agent fallbacks or reduce frequency."
+            "body": f"{err_names} are failing. Run them manually to capture error output, then convert to no_agent scripts or reduce frequency.",
+            "cmd": cmd
         })
 
     if runs_per_hour > 100:
         recommendations.append({
             "icon": "📊", "title": "Schedule density is high",
-            "body": f"~{runs_per_hour} job runs/hour. For scaling, shard by subsystem and introduce a lightweight scheduler that batches work."
+            "body": f"~{runs_per_hour} job runs/hour. For scaling, shard by subsystem and introduce a lightweight scheduler that batches work.",
+            "cmd": "# Example: batch quickwin promos into one job\nhermes cron remove promo-qw-github-topics promo-qw-awesome-rust promo-qw-crates-io\nhermes cron create '*/5 * * * *' --name promo-quickwin-batch --script promo_batch_all.py --no-agent"
         })
 
     return {
@@ -391,6 +425,7 @@ def generate_html_dashboard(workspace_root: str):
         "pulse": read_report("docs/PULSE_LOG.md"),
         "health_loop": read_report("docs/HEALTH_LOOP.md"),
         "errors": read_report("docs/ERRORS.md"),
+        "operator_log": read_operator_log("docs/OPERATOR_LOG.md"),
     }
 
     facts = reports["facts"]
@@ -449,6 +484,7 @@ def generate_html_dashboard(workspace_root: str):
     # Section overview statuses
     overview = [
         ("ops", "Operations", cron_statuses["error"] == 0 and cron_statuses["ok"] > 0),
+        ("log", "Log", True),
         ("chain", "Job Chain", cron_statuses.get("error", 0) == 0),
         ("modules", "Modules", True),
         ("health", "Health", module_status(reports["health"]) != "danger"),
@@ -513,12 +549,14 @@ def generate_html_dashboard(workspace_root: str):
     recs_html = ""
     if cron_analysis["recommendations"]:
         for r in cron_analysis["recommendations"]:
+            cmd_block = f'<pre class="cmd">{html_escape(r.get("cmd", ""))}</pre>' if r.get("cmd") else ""
             recs_html += f'''
     <div class="rec">
       <div class="rec-icon">{r['icon']}</div>
       <div>
         <div class="rec-title">{r['title']}</div>
         <div class="rec-body">{r['body']}</div>
+        {cmd_block}
       </div>
     </div>'''
     else:
@@ -613,6 +651,18 @@ def generate_html_dashboard(workspace_root: str):
     <div class="metric"><div class="metric-value">{cron_analysis['runs_per_hour']}</div><div class="metric-label">Runs / Hour</div><div class="metric-delta">fleet load</div></div>
   </div>
 
+  <!-- OPERATOR LOG -->
+  <div class="section-label" id="log">Operator Log</div>
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Live Event Stream</h2>
+      <span class="badge badge-info">last 30 events</span>
+    </div>
+    <div class="panel-body">
+      <div class="operator-log">{"".join(f'<span class="log-entry"><span class="ts">{html_escape(l[:19])}</span>{html_escape(l[22:])}</span>' for l in reports["operator_log"].splitlines() if l.strip())}</div>
+    </div>
+  </div>
+
   <!-- JOB CHAIN -->
   <div class="section-label" id="chain">Autonomous Pipeline</div>
   {chain_html}
@@ -703,6 +753,23 @@ function toggle(btn, id) {{
   const open = el.classList.toggle('open');
   btn.setAttribute('aria-expanded', open);
 }}
+
+// Section scrollspy for sticky overview
+const sections = ['overview','ops','log','chain','modules','health','growth','backlog','systems'];
+const navLinks = document.querySelectorAll('.overview a');
+function onScroll() {{
+  let current = 'overview';
+  for (const id of sections) {{
+    const el = document.getElementById(id);
+    if (el && el.getBoundingClientRect().top <= 100) current = id;
+  }}
+  navLinks.forEach(a => {{
+    a.style.color = a.getAttribute('href') === '#' + current ? 'var(--accent)' : '';
+    a.style.borderColor = a.getAttribute('href') === '#' + current ? 'var(--accent)' : '';
+  }});
+}}
+window.addEventListener('scroll', onScroll, {{passive:true}});
+onScroll();
 </script>
 </body>
 </html>'''
