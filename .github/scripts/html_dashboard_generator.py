@@ -442,15 +442,28 @@ def generate_html_dashboard(workspace_root: str):
     backlog_done = backlog_total - backlog_remaining
     backlog_pct = int(backlog_done / backlog_total * 100)
 
-    # Cron jobs: parse the markdown table (5 columns)
+    # Cron jobs: load structured JSON snapshot from CRON_STATUS.json (live state)
     cron_rows = []
-    if not reports['cron_status'].startswith('_'):
-        for line in reports['cron_status'].split('\n'):
-            parts = [p.strip() for p in line.split('|') if p.strip()]
-            if len(parts) >= 4 and parts[0].lower() != 'job' and parts[0].startswith(('ramshield-', 'RamShield')):
-                cron_rows.append({'name': parts[0], 'schedule': parts[1].strip('`'), 'status': parts[2]})
+    cron_statuses = {'ok': 0, 'error': 0, 'running': 0, 'pending': 0, 'scheduled': 0, 'unknown': 0}
+    try:
+        cron_json_path = Path('docs/CRON_STATUS.json')
+        if cron_json_path.exists():
+            with open(cron_json_path, encoding='utf-8') as f:
+                cron_data = json.load(f)
+            for job in cron_data.get('jobs', []):
+                cron_rows.append({
+                    'name': job.get('name', ''),
+                    'schedule': job.get('schedule', ''),
+                    'status': job.get('status', 'unknown'),
+                    'execution': job.get('execution', ''),
+                    'last_error': job.get('last_error', ''),
+                    'last_run': job.get('last_run', ''),
+                })
+                cron_statuses[job.get('status', 'unknown')] = cron_statuses.get(job.get('status', 'unknown'), 0) + 1
+    except Exception as e:
+        cron_rows = []
     cron_total = len(cron_rows)
-    cron_ok = sum(1 for r in cron_rows if r['status'].lower() == 'ok')
+    cron_ok = cron_statuses['ok']
 
     # Project name override (production-grade: anything goes)
     project_name = os.environ.get('DASHBOARD_PROJECT_NAME', 'RamShield Automation')
@@ -568,8 +581,15 @@ def generate_html_dashboard(workspace_root: str):
         <span class="badge badge-info">{cron_total} active</span>
       </div>
       <div class="panel-body">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+          <span class="badge badge-ok">OK: {cron_statuses['ok']}</span>
+          <span class="badge badge-danger">Errors: {cron_statuses['error']}</span>
+          <span class="badge badge-info">Running: {cron_statuses['running']}</span>
+          <span class="badge badge-warn">Pending: {cron_statuses['pending']}</span>
+          <span class="badge badge-neutral">Scheduled: {cron_statuses['scheduled']}</span>
+        </div>
         <table>
-          <thead><tr><th>Job</th><th>Sched</th><th>Status</th></tr></thead>
+          <thead><tr><th>Job</th><th>Sched</th><th>Status</th><th>Execution</th></tr></thead>
           <tbody>
 '''
 
@@ -577,16 +597,18 @@ def generate_html_dashboard(workspace_root: str):
         name = c["name"]
         sched = c["schedule"]
         st = c["status"].lower()
-        bg = "badge-ok" if st == "ok" else ("badge-warn" if st == "never" else "badge-danger")
+        bg = {"ok": "badge-ok", "error": "badge-danger", "running": "badge-info", "pending": "badge-warn", "scheduled": "badge-neutral"}.get(st, "badge-neutral")
+        title_attr = f"title=\"{c['last_error'][:120]}\"" if c.get("last_error") else ""
         html += f'''
-            <tr>
+            <tr {title_attr}>
               <td>{name}</td>
               <td><code>{sched}</code></td>
               <td><span class="badge {bg}">{c["status"]}</span></td>
+              <td><span style="color:var(--muted);font-size:.7rem;">{c["execution"]}</span></td>
             </tr>'''
 
     if not cron_rows:
-        html += '<tr><td colspan="3" style="color:var(--muted);text-align:center;">No cron data yet — first run collector.</td></tr>'
+        html += '<tr><td colspan="4" style="color:var(--muted);text-align:center;">No cron data yet — first run collector.</td></tr>'
 
     html += f'''
           </tbody>
