@@ -426,6 +426,7 @@ def generate_html_dashboard(workspace_root: str):
         "health_loop": read_report("docs/HEALTH_LOOP.md"),
         "errors": read_report("docs/ERRORS.md"),
         "operator_log": read_operator_log("docs/OPERATOR_LOG.md"),
+        "healer_dispatch": read_report("docs/HEALER_DISPATCH.md"),
     }
 
     facts = reports["facts"]
@@ -592,7 +593,26 @@ def generate_html_dashboard(workspace_root: str):
         worker_status = module_status(reports["workers"])
         worker_last = "recent"
 
+    # Healer status
+    healer_issues = 0
+    healer_pending = 0
+    healer_chains = []
+    for j in cron_jobs:
+        name = j.get("name", "")
+        if name.startswith("healer-"):
+            healer_chains.append(j)
+            if j.get("status") == "error":
+                healer_issues += 1
+            elif j.get("status") in ("scheduled", "pending", "running"):
+                healer_pending += 1
+    healer_status = "danger" if healer_issues else ("info" if healer_pending else "ok")
+    healer_tail = []
+    if healer_chains:
+        healer_tail.append(f"{len(healer_chains)} temp jobs active ({healer_issues} error, {healer_pending} pending)")
+    healer_tail.extend(parse_log_tail(reports["healer_dispatch"], 3))
+
     modules_html = ""
+    modules_html += module_card("Error Healer", healer_status, "recent", healer_tail, reports["healer_dispatch"], f"{len(healer_chains)} temp jobs")
     modules_html += module_card("Facts Collector", module_status(reports["facts"].get("generated_at", "")), rel_time(reports["facts"].get("generated_at", "")), [f"Rust files: {rust_files}, LOC: {loc:,}"], reports["facts"].get("generated_at", "") and json.dumps(reports["facts"], indent=2) or "_No FACTS.json_", f"{rust_files} files")
     modules_html += module_card("Daily Plan", module_status(reports["plan"]), rel_time(reports["plan"][:20] if reports["plan"].startswith("20") else ""), parse_log_tail(reports["plan"], 3), reports["plan"])
     modules_html += module_card("Worker Status", worker_status, worker_last, worker_lines, reports["workers"], f"{len(worker_jobs)} live")
@@ -731,13 +751,25 @@ def generate_html_dashboard(workspace_root: str):
 
   <!-- SYSTEMS ENGINEERING -->
   <div class="section-label" id="systems">Systems Engineering</div>
-  <div class="panel">
-    <div class="panel-header">
-      <h2>Cron Scaling & Recommendations</h2>
-      <span class="badge badge-purple">analysis</span>
+  <div class="grid grid-2">
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Cron Scaling & Recommendations</h2>
+        <span class="badge badge-purple">analysis</span>
+      </div>
+      <div class="panel-body">
+        {recs_html}
+      </div>
     </div>
-    <div class="panel-body">
-      {recs_html}
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Self-Healing Ledger</h2>
+        <span class="badge badge-{healer_status}">{healer_status.upper()}</span>
+      </div>
+      <div class="panel-body">
+        <p style="color:var(--muted);">Tree-like repair cycles: root <code>ramshield-error-healer</code> schedules analyze → solve → verify temp jobs per issue.</p>
+        {md_to_html(reports['healer_dispatch'])}
+      </div>
     </div>
   </div>
 
