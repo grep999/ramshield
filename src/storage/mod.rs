@@ -12,7 +12,7 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc, Mutex,
 };
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const INLINE_MAX: usize = 64;
 
@@ -105,6 +105,10 @@ impl Value {
             Value::SubnetRecord(_) => std::mem::size_of::<SubnetRecord>(),
             _ => 0,
         }
+    }
+
+    pub fn is_blocked(&self) -> bool {
+        matches!(self, Value::IpRecord(rec) if rec.block_state != BlockState::Clean)
     }
 }
 
@@ -346,7 +350,7 @@ impl Store {
         let blocked = self
             .inner
             .iter()
-            .filter(|e| e.value().is_blocked())
+            .filter(|e| e.value().value.is_blocked())
             .count() as u64;
         let ram_bytes = self.ram_bytes.load(Ordering::Relaxed);
         let ram_limit_mb = self.traffic.ram_limit_mb.load(Ordering::Relaxed);
@@ -395,6 +399,16 @@ impl Store {
             })
             .unwrap_or_default()
     }
+}
+
+#[derive(Debug)]
+pub struct StoreStats {
+    pub ips_tracked: usize,
+    pub blocked: u64,
+    pub ram_bytes: usize,
+    pub ram_limit_mb: usize,
+    pub uptime_secs: u64,
+    pub evictions: u64,
 }
 
 #[cfg(test)]
