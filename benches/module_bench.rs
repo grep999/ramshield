@@ -55,9 +55,19 @@ fn bench_store_insert(c: &mut Criterion) {
     c.bench_function("store_insert_replace", |b| {
         let store = Store::new(10_000_000);
         let ram_limit = 64 * 1024 * 1024;
-        let _ = store.insert("1.2.3.4".into(), Value::from_bytes(&[0u8; 48]), None, ram_limit);
+        let _ = store.insert(
+            "1.2.3.4".into(),
+            Value::from_bytes(&[0u8; 48]),
+            None,
+            ram_limit,
+        );
         b.iter(|| {
-            let _ = store.insert("1.2.3.4".into(), Value::from_bytes(&[0u8; 48]), None, ram_limit);
+            let _ = store.insert(
+                "1.2.3.4".into(),
+                Value::from_bytes(&[0u8; 48]),
+                None,
+                ram_limit,
+            );
         });
     });
 
@@ -84,7 +94,12 @@ fn bench_store_insert(c: &mut Criterion) {
                 );
             }
             // 101st insert should fail
-            let res = store.insert("10.0.1.0".into(), Value::from_bytes(&[0u8; 48]), None, ram_limit);
+            let res = store.insert(
+                "10.0.1.0".into(),
+                Value::from_bytes(&[0u8; 48]),
+                None,
+                ram_limit,
+            );
             black_box(res.is_err());
         });
     });

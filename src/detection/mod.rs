@@ -1,37 +1,36 @@
+use anyhow::Result;
 pub mod batch;
 pub mod rate_tracker;
 
 use crate::config::{ConfigHandle, DetectionConfig};
 use crate::detection::batch::{aggregate, ip_in_subnet, subnet_key, subnet_prefix, IpAgg};
-use crate::util::BoundedVecDeque;
 use crate::detection::rate_tracker::{ewma, is_exceeded};
 use crate::metrics::Metrics;
 use crate::storage::{ip_key, BlockReason, BlockState, IpRecord, Store, Value};
+use crate::util::BoundedVecDeque;
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
-use std::sync::{Arc, RwLock, atomic::AtomicBool};
+use std::sync::{atomic::AtomicBool, Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
-
 #[derive(Debug, Clone)]
 pub struct ConnectionEvent {
-    pub ip:                IpAddr,
-    pub timestamp_ns:      u64,
-    pub bytes:             u64,
-    pub status_code:       u16,
+    pub ip: IpAddr,
+    pub timestamp_ns: u64,
+    pub bytes: u64,
+    pub status_code: u16,
     pub proto_fingerprint: u32,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct BlockDecision {
-    pub ip:           IpAddr,
-    pub reason:       BlockReason,
-    pub ttl_secs:     Option<u64>,
+    pub ip: IpAddr,
+    pub reason: BlockReason,
+    pub ttl_secs: Option<u64>,
     pub batch_subnet: Option<[u8; 3]>,
 }
 
@@ -44,8 +43,11 @@ pub struct BloomFilter {
 
 impl BloomFilter {
     pub fn new(bit_count: usize) -> Self {
-        let words = (bit_count + 63) / 64;
-        Self { bits: vec![0u64; words], size: words * 64 }
+        let words = bit_count.div_ceil(64);
+        Self {
+            bits: vec![0u64; words],
+            size: words * 64,
+        }
     }
 
     fn slots(ip: IpAddr) -> (usize, usize) {
@@ -71,21 +73,20 @@ impl BloomFilter {
         let (a, b) = Self::slots(ip);
         let a = a % self.size;
         let b = b % self.size;
-        (self.bits[a / 64] >> (a % 64)) & 1 == 1
-            && (self.bits[b / 64] >> (b % 64)) & 1 == 1
+        (self.bits[a / 64] >> (a % 64)) & 1 == 1 && (self.bits[b / 64] >> (b % 64)) & 1 == 1
     }
 }
 
 // ── Detection engine — batch-first, subnet-scale diagnosis ───────────────────
 
 pub struct DetectionEngine {
-    store:    Arc<Store>,
-    config:   ConfigHandle,
-    metrics:  Arc<Metrics>,
+    store: Arc<Store>,
+    config: ConfigHandle,
+    metrics: Arc<Metrics>,
     event_tx: Sender<ConnectionEvent>,
     event_rx: Arc<Receiver<ConnectionEvent>>,
     block_tx: broadcast::Sender<BlockDecision>,
-    bloom:    Arc<RwLock<BloomFilter>>,
+    bloom: Arc<RwLock<BloomFilter>>,
     shutdown: Arc<AtomicBool>,
     /// Pattern learner for attack detection
     #[allow(dead_code)]
@@ -94,31 +95,42 @@ pub struct DetectionEngine {
 
 impl DetectionEngine {
     pub fn new(
-        store:    Arc<Store>,
-        config:   ConfigHandle,
+        store: Arc<Store>,
+        config: ConfigHandle,
         block_tx: broadcast::Sender<BlockDecision>,
-        metrics:  Arc<Metrics>,
+        metrics: Arc<Metrics>,
         pattern_learner: Arc<crate::learning::PatternLearner>,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         let bloom_bits = config.load().detection.bloom_bits;
-        let (tx, rx)   = bounded::<ConnectionEvent>(2_000_000);
+        let (tx, rx) = bounded::<ConnectionEvent>(2_000_000);
         Self {
-            store, config, metrics, event_tx: tx, event_rx: Arc::new(rx), block_tx,
+            store,
+            config,
+            metrics,
+            event_tx: tx,
+            event_rx: Arc::new(rx),
+            block_tx,
             bloom: Arc::new(RwLock::new(BloomFilter::new(bloom_bits))),
             shutdown,
             pattern_learner,
         }
     }
 
-    pub fn event_sender(&self) -> Sender<ConnectionEvent> { self.event_tx.clone() }
+    pub fn event_sender(&self) -> Sender<ConnectionEvent> {
+        self.event_tx.clone()
+    }
 
-    pub fn queue_depth(&self) -> usize { self.event_tx.len() }
+    pub fn queue_depth(&self) -> usize {
+        self.event_tx.len()
+    }
 
     /// Submit many events in one channel send (amortises IPC / edge overhead).
-    pub fn submit_batch(&self, events: Vec<ConnectionEvent>) -> Result<(), ()> {
+    pub fn submit_batch(&self, events: Vec<ConnectionEvent>) -> Result<()> {
         for ev in events {
-            self.event_tx.send(ev).map_err(|_| ())?;
+            self.event_tx
+                .send(ev)
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         }
         Ok(())
     }
@@ -140,13 +152,15 @@ impl DetectionEngine {
         }
 
         let eng = self.clone();
-        tokio::spawn(async move { eng.subnet_batch_loop().await; });
+        tokio::spawn(async move {
+            eng.subnet_batch_loop().await;
+        });
     }
 
     fn batch_processor_loop(&self) {
         let window = Duration::from_millis(self.config.load().detection.batch_window_ms);
-        let max    = self.config.load().detection.batch_max_events;
-        let rx     = self.event_rx.clone();
+        let max = self.config.load().detection.batch_max_events;
+        let rx = self.event_rx.clone();
 
         loop {
             if self.shutdown.load(std::sync::atomic::Ordering::Acquire) {
@@ -177,23 +191,22 @@ impl DetectionEngine {
 
     /// Single pass: aggregate in memory, then touch store only for promoted IPs.
     fn flush_batch(&self, events: &[ConnectionEvent]) {
-        let cfg     = self.config.load();
-        let det     = &cfg.detection;
+        let cfg = self.config.load();
+        let det = &cfg.detection;
         let ram_lim = cfg.engine.ram_limit_mb * 1024 * 1024;
-        let now     = now_ns();
+        let now = now_ns();
 
         let (ip_aggs, subnet_counts) = aggregate(events);
 
         // Incremental counters for forecasting (no full-store scan).
         let subnet_vals: Vec<u64> = subnet_counts.values().map(|&c| c as u64).collect();
-        self.store.traffic.record_flush(
-            events.len() as u64,
-            ip_aggs.len() as u64,
-            &subnet_vals,
-        );
+        self.store
+            .traffic
+            .record_flush(events.len() as u64, ip_aggs.len() as u64, &subnet_vals);
 
         for (&sk, &count) in &subnet_counts {
-            self.store.merge_subnet_window(sk, subnet_prefix(sk), count, now);
+            self.store
+                .merge_subnet_window(sk, subnet_prefix(sk), count, now);
         }
 
         let mut blocks = Vec::new();
@@ -227,8 +240,7 @@ impl DetectionEngine {
             promoted += 1;
             promoted_events += agg.count;
 
-            let (ewma_rps, threat, should_block) =
-                self.merge_record(ip, &agg, det, ram_lim, now);
+            let (ewma_rps, threat, should_block) = self.merge_record(ip, &agg, det, ram_lim, now);
 
             if threat > 0.5 {
                 threat_sample.push((ip, threat));
@@ -238,8 +250,8 @@ impl DetectionEngine {
                 self.bloom.write().unwrap().insert(ip);
                 blocks.push(BlockDecision {
                     ip,
-                    reason:       BlockReason::HighRps(ewma_rps as u64),
-                    ttl_secs:     (det.block_ttl_secs > 0).then_some(det.block_ttl_secs),
+                    reason: BlockReason::HighRps(ewma_rps as u64),
+                    ttl_secs: (det.block_ttl_secs > 0).then_some(det.block_ttl_secs),
                     batch_subnet: None,
                 });
             }
@@ -255,7 +267,8 @@ impl DetectionEngine {
 
         let block_count = blocks.len() as u32;
         for b in &blocks {
-            self.metrics.record_block(&b.ip.to_string(), &b.reason.to_string(), "detection");
+            self.metrics
+                .record_block(&b.ip.to_string(), &b.reason.to_string(), "detection");
         }
         for b in blocks {
             let _ = self.block_tx.send(b);
@@ -322,13 +335,13 @@ impl DetectionEngine {
         };
 
         rec.request_count = rec.request_count.saturating_add(agg.count as u64);
-        rec.last_seen_ns  = agg.last_ts_ns;
-        rec.bytes_in      = rec.bytes_in.saturating_add(agg.bytes);
+        rec.last_seen_ns = agg.last_ts_ns;
+        rec.bytes_in = rec.bytes_in.saturating_add(agg.bytes);
         for i in 0..5 {
             rec.status_dist[i] = rec.status_dist[i].saturating_add(agg.status_dist[i]);
         }
 
-        let elapsed  = (now.saturating_sub(rec.first_seen_ns)) as f64 / 1e9;
+        let elapsed = (now.saturating_sub(rec.first_seen_ns)) as f64 / 1e9;
         let inst_rps = if elapsed > 0.0 {
             rec.request_count as f64 / elapsed
         } else {
@@ -343,15 +356,18 @@ impl DetectionEngine {
 
         let window_ns = det.rate_window_secs * 1_000_000_000;
         if now.saturating_sub(rec.first_seen_ns) > window_ns {
-            rec.request_count = rec.request_count / 2;
+            rec.request_count /= 2;
             rec.first_seen_ns = now;
         }
 
         let ewma_rps = rec.ewma_rps;
-        let threat   = rec.threat_score;
-        let block    = is_exceeded(ewma_rps, det.rps_threshold);
+        let threat = rec.threat_score;
+        let block = is_exceeded(ewma_rps, det.rps_threshold);
 
-        if let Err(e) = self.store.insert(key.clone(), Value::IpRecord(rec), None, ram_lim) {
+        if let Err(e) = self
+            .store
+            .insert(key.clone(), Value::IpRecord(rec), None, ram_lim)
+        {
             warn!("Failed to insert IP record for {}: {}", key.clone(), e);
         }
         (ewma_rps, threat, block)
@@ -387,9 +403,14 @@ impl DetectionEngine {
                 .collect();
 
             for (sk, count, prefix) in hot {
-                warn!("Batch block /24 {:?}.{}.{} ({} events/window)", prefix[0], prefix[1], prefix[2], count);
+                warn!(
+                    "Batch block /24 {:?}.{}.{} ({} events/window)",
+                    prefix[0], prefix[1], prefix[2], count
+                );
                 for e in self.store.inner().iter() {
-                    let Value::IpRecord(ref r) = e.value().value else { continue };
+                    let Value::IpRecord(ref r) = e.value().value else {
+                        continue;
+                    };
                     if matches!(r.block_state, BlockState::Blocked { .. }) {
                         continue;
                     }
@@ -402,10 +423,11 @@ impl DetectionEngine {
                         ttl_secs: Some(cfg.detection.block_ttl_secs),
                         batch_subnet: Some(prefix),
                     });
-                    self.metrics.record_block(
-                        &r.ip.to_string(), "subnet_batch", "detection",
-                    );
-                    self.metrics.blocks_subnet.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.metrics
+                        .record_block(&r.ip.to_string(), "subnet_batch", "detection");
+                    self.metrics
+                        .blocks_subnet
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 self.store.reset_subnet_window(sk);
             }
@@ -432,9 +454,13 @@ mod tests {
         let store = Arc::new(Store::new(16));
         let metrics = Arc::new(Metrics::new());
         let (btx, _) = broadcast::channel(64);
-        let learner = Arc::new(crate::learning::PatternLearner::new(cfg.load().detection.pattern_similarity_threshold));
+        let learner = Arc::new(crate::learning::PatternLearner::new(
+            cfg.load().detection.pattern_similarity_threshold,
+        ));
         let shutdown = Arc::new(AtomicBool::new(false));
-        Arc::new(DetectionEngine::new(store, cfg, btx, metrics, learner, shutdown))
+        Arc::new(DetectionEngine::new(
+            store, cfg, btx, metrics, learner, shutdown,
+        ))
     }
 
     #[test]
@@ -458,15 +484,13 @@ mod tests {
     fn cold_ip_not_stored() {
         let eng = engine();
         let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
-        eng.flush_batch(&[
-            ConnectionEvent {
-                ip,
-                timestamp_ns: 1,
-                bytes: 1,
-                status_code: 200,
-                proto_fingerprint: 0,
-            },
-        ]);
+        eng.flush_batch(&[ConnectionEvent {
+            ip,
+            timestamp_ns: 1,
+            bytes: 1,
+            status_code: 200,
+            proto_fingerprint: 0,
+        }]);
         assert!(eng.store.get(&ip_key(ip)).is_none());
     }
 }

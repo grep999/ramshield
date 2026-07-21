@@ -15,14 +15,18 @@ mod tests {
     #[test]
     fn converges() {
         let mut e = 0.0f64;
-        for _ in 0..200 { e = ewma(e, 500.0); }
+        for _ in 0..200 {
+            e = ewma(e, 500.0);
+        }
         assert!((e - 500.0).abs() < 0.1, "ewma={}", e);
     }
 
     #[test]
     fn spike_dampened() {
         let mut e = 0.0f64;
-        for _ in 0..20 { e = ewma(e, 100.0); }
+        for _ in 0..20 {
+            e = ewma(e, 100.0);
+        }
         e = ewma(e, 50_000.0);
         assert!(e < 16_000.0, "ewma={}", e);
     }

@@ -31,6 +31,12 @@ pub struct DnsMonitor {
     forecaster: Arc<forecasting::DnsForecaster>,
 }
 
+impl Default for DnsMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DnsMonitor {
     pub fn new() -> Self {
         Self {
@@ -120,10 +126,17 @@ impl DnsMonitor {
 
         // Check if domain has been seen frequently
         let patterns = self.patterns.read().await;
-        let suspicious_count = patterns.iter().filter(|p| {
-            p.domain_pattern == "suspicious" &&
-            p.last_seen.elapsed().unwrap_or(Duration::from_secs(0)).as_secs() < 3600
-        }).count();
+        let suspicious_count = patterns
+            .iter()
+            .filter(|p| {
+                p.domain_pattern == "suspicious"
+                    && p.last_seen
+                        .elapsed()
+                        .unwrap_or(Duration::from_secs(0))
+                        .as_secs()
+                        < 3600
+            })
+            .count();
 
         if suspicious_count > 5 {
             0.8 // High threat score if many suspicious patterns recently

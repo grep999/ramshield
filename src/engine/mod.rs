@@ -1,8 +1,8 @@
 pub mod learning;
 
-use arc_swap::ArcSwap;
 use crate::config::Config;
 use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, SubnetRow};
+use arc_swap::ArcSwap;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -49,10 +49,34 @@ impl Engine {
 
     pub fn get_module_stats(&self) -> Vec<ModuleStats> {
         vec![
-            ModuleStats { label: "IPC".into(), events: 0, errors: 0, rate_per_sec: 0.0, detail: serde_json::json!({}) },
-            ModuleStats { label: "Detection".into(), events: 0, errors: 0, rate_per_sec: 0.0, detail: serde_json::json!({}) },
-            ModuleStats { label: "Forecasting".into(), events: 0, errors: 0, rate_per_sec: 0.0, detail: serde_json::json!({}) },
-            ModuleStats { label: "Storage".into(), events: 0, errors: 0, rate_per_sec: 0.0, detail: serde_json::json!({}) },
+            ModuleStats {
+                label: "IPC".into(),
+                events: 0,
+                errors: 0,
+                rate_per_sec: 0.0,
+                detail: serde_json::json!({}),
+            },
+            ModuleStats {
+                label: "Detection".into(),
+                events: 0,
+                errors: 0,
+                rate_per_sec: 0.0,
+                detail: serde_json::json!({}),
+            },
+            ModuleStats {
+                label: "Forecasting".into(),
+                events: 0,
+                errors: 0,
+                rate_per_sec: 0.0,
+                detail: serde_json::json!({}),
+            },
+            ModuleStats {
+                label: "Storage".into(),
+                events: 0,
+                errors: 0,
+                rate_per_sec: 0.0,
+                detail: serde_json::json!({}),
+            },
         ]
     }
 }

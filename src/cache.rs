@@ -16,9 +16,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone)]
 pub struct Entry<V> {
     /// The stored value.
-    pub value:   V,
+    pub value: V,
     /// Expiry timestamp in nanoseconds since UNIX epoch, or `None` for no expiry.
-    pub expire:  Option<u64>,
+    pub expire: Option<u64>,
     /// Creation timestamp in nanoseconds since UNIX epoch.
     pub created: u64,
 }
@@ -46,11 +46,11 @@ fn now_ns() -> u64 {
 /// All operations are lock-free at the DashMap shard level.  A
 /// background evictor thread removes expired entries every 5 seconds.
 pub struct Cache<K, V> {
-    inner:      Arc<DashMap<K, Entry<V>>>,
-    capacity:   usize,
+    inner: Arc<DashMap<K, Entry<V>>>,
+    capacity: usize,
     default_ttl: Duration,
-    count:      Arc<AtomicU64>,
-    shutdown:   Arc<AtomicBool>,
+    count: Arc<AtomicU64>,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl<K, V> Cache<K, V>
@@ -85,8 +85,8 @@ where
 
     /// Spawn the background evictor thread.
     fn spawn_evictor(
-        inner:    Arc<DashMap<K, Entry<V>>>,
-        count:    Arc<AtomicU64>,
+        inner: Arc<DashMap<K, Entry<V>>>,
+        count: Arc<AtomicU64>,
         shutdown: Arc<AtomicBool>,
     ) {
         let _ = std::thread::Builder::new()
@@ -96,14 +96,12 @@ where
                     std::thread::sleep(Duration::from_secs(5));
                     let now = now_ns();
                     let mut removed = 0u64;
-                    inner.retain(|_, entry| {
-                        match entry.expire {
-                            Some(exp) if now >= exp => {
-                                removed += 1;
-                                false
-                            }
-                            _ => true,
+                    inner.retain(|_, entry| match entry.expire {
+                        Some(exp) if now >= exp => {
+                            removed += 1;
+                            false
                         }
+                        _ => true,
                     });
                     if removed > 0 {
                         count.fetch_sub(removed, Ordering::Relaxed);
@@ -155,7 +153,11 @@ where
             Some(now_ns().saturating_add(ttl.as_nanos() as u64))
         };
 
-        let entry = Entry { value, expire, created: now_ns() };
+        let entry = Entry {
+            value,
+            expire,
+            created: now_ns(),
+        };
 
         let old = self.inner.insert(key, entry);
         if old.is_none() {
@@ -217,7 +219,10 @@ mod tests {
     fn insert_and_get() {
         let c = cache();
         c.insert("k1".to_owned(), "v1".to_owned(), None);
-        assert_eq!(c.get(&"k1".to_owned()).map(|e| e.value.clone()), Some("v1".to_owned()));
+        assert_eq!(
+            c.get(&"k1".to_owned()).map(|e| e.value.clone()),
+            Some("v1".to_owned())
+        );
         assert_eq!(c.len(), 1);
     }
 
@@ -256,7 +261,11 @@ mod tests {
     #[test]
     fn ttl_expiry_on_access() {
         let c = Cache::new(100, Duration::from_millis(1));
-        c.insert("k".to_owned(), "v".to_owned(), Some(Duration::from_millis(1)));
+        c.insert(
+            "k".to_owned(),
+            "v".to_owned(),
+            Some(Duration::from_millis(1)),
+        );
         thread::sleep(Duration::from_millis(5));
         assert!(c.get(&"k".to_owned()).is_none());
         assert!(c.is_empty());
@@ -296,10 +305,15 @@ mod tests {
                 c.insert(format!("k{}", i), format!("v{}", i), None);
             }));
         }
-        for h in handles { let _ = h.join(); }
+        for h in handles {
+            let _ = h.join();
+        }
         assert_eq!(c.len(), 16);
         for i in 0..16 {
-            assert_eq!(c.get(&format!("k{}", i)).map(|e| e.value.clone()), Some(format!("v{}", i)));
+            assert_eq!(
+                c.get(&format!("k{}", i)).map(|e| e.value.clone()),
+                Some(format!("v{}", i))
+            );
         }
     }
 

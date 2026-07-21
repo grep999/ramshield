@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 pub type ConfigHandle = Arc<ArcSwap<Config>>;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)] pub engine:      EngineConfig,
     #[serde(default)] pub detection:   DetectionConfig,
@@ -12,19 +12,6 @@ pub struct Config {
     #[serde(default)] pub ipc:         IpcConfig,
     #[serde(default)] pub forecasting: ForecastingConfig,
     #[serde(default)] pub dashboard:   DashboardConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            engine:      EngineConfig::default(),
-            detection:   DetectionConfig::default(),
-            storage:     StorageConfig::default(),
-            ipc:         IpcConfig::default(),
-            forecasting: ForecastingConfig::default(),
-            dashboard:   DashboardConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

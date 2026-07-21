@@ -44,15 +44,15 @@ impl DnsForecaster {
         // Update pattern frequency and threat score
         {
             let mut patterns = self.patterns.write().await;
-            let entry = patterns.entry(pattern.clone()).or_insert_with(|| {
-                DnsPattern {
+            let entry = patterns
+                .entry(pattern.clone())
+                .or_insert_with(|| DnsPattern {
                     pattern: pattern.clone(),
                     frequency: 0,
                     threat_score: 0.0,
                     last_seen: SystemTime::now(),
                     associated_ips: Vec::new(),
-                }
-            });
+                });
 
             entry.frequency += 1;
             entry.last_seen = SystemTime::now();
@@ -145,8 +145,5 @@ mod tests {
         };
 
         forecaster.record_query(record).await;
-
-        // Test passes if no panic
-        assert!(true);
     }
 }

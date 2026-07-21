@@ -5,9 +5,9 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex};
 
 pub struct BlobHandle {
-    pub offset:         u64,
+    pub offset: u64,
     pub compressed_len: u32,
-    pub original_len:   u32,
+    pub original_len: u32,
 }
 
 pub struct BlobStore {
@@ -15,27 +15,38 @@ pub struct BlobStore {
 }
 
 struct Inner {
-    file:   File,
+    file: File,
     cursor: u64,
 }
 
 impl BlobStore {
     pub fn open(path: &str) -> Result<Self> {
-        let file   = OpenOptions::new().create(true).read(true).write(true).open(path)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(path)?;
         let cursor = file.metadata()?.len();
-        Ok(Self { inner: Arc::new(Mutex::new(Inner { file, cursor })) })
+        Ok(Self {
+            inner: Arc::new(Mutex::new(Inner { file, cursor })),
+        })
     }
 
     pub fn write(&self, data: &[u8]) -> Result<BlobHandle> {
         let compressed = compress_prepend_size(data);
-        let comp_len   = compressed.len() as u32;
-        let orig_len   = data.len() as u32;
-        let mut g      = self.inner.lock().unwrap();
+        let comp_len = compressed.len() as u32;
+        let orig_len = data.len() as u32;
+        let mut g = self.inner.lock().unwrap();
         g.file.seek(SeekFrom::End(0))?;
         g.file.write_all(&compressed)?;
-        let offset  = g.cursor;
-        g.cursor   += comp_len as u64;
-        Ok(BlobHandle { offset, compressed_len: comp_len, original_len: orig_len })
+        let offset = g.cursor;
+        g.cursor += comp_len as u64;
+        Ok(BlobHandle {
+            offset,
+            compressed_len: comp_len,
+            original_len: orig_len,
+        })
     }
 
     pub fn read(&self, h: &BlobHandle) -> Result<Vec<u8>> {
@@ -53,11 +64,14 @@ mod tests {
 
     #[test]
     fn blob_roundtrip() {
-        let path = std::env::temp_dir().join("rs_blob.bin").to_string_lossy().to_string();
+        let path = std::env::temp_dir()
+            .join("rs_blob.bin")
+            .to_string_lossy()
+            .to_string();
         let _ = std::fs::remove_file(&path);
         let store = BlobStore::open(&path).unwrap();
-        let data  = b"ramshield blob store roundtrip test";
-        let h     = store.write(data).unwrap();
+        let data = b"ramshield blob store roundtrip test";
+        let h = store.write(data).unwrap();
         assert_eq!(store.read(&h).unwrap(), data);
         let _ = std::fs::remove_file(&path);
     }

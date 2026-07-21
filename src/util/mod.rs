@@ -10,7 +10,10 @@ pub struct BoundedVecDeque<T> {
 
 impl<T> BoundedVecDeque<T> {
     pub fn new(cap: usize) -> Self {
-        Self { buf: VecDeque::with_capacity(cap), cap }
+        Self {
+            buf: VecDeque::with_capacity(cap),
+            cap,
+        }
     }
 
     pub fn push(&mut self, v: T) {

@@ -27,7 +27,6 @@ pub async fn serve(engine: Arc<Engine>, addr: &str) -> Result<(), String> {
         .with_state(engine)
         .layer(CorsLayer::permissive());
 
-
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| e.to_string())?;
@@ -41,9 +40,17 @@ async fn index() -> Html<&'static str> {
 
 async fn api_healthz(State(eng): State<Arc<Engine>>) -> (StatusCode, Json<serde_json::Value>) {
     let snapshot = eng.dashboard_snapshot();
-    let status = if snapshot.is_healthy { "ok" } else { "degraded" };
+    let status = if snapshot.is_healthy {
+        "ok"
+    } else {
+        "degraded"
+    };
     (
-        if snapshot.is_healthy { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE },
+        if snapshot.is_healthy {
+            StatusCode::OK
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        },
         Json(serde_json::json!({
             "status": status,
             "reason": snapshot.health_reason,
@@ -92,7 +99,7 @@ pub struct ConfigPatch {
 
 #[derive(Serialize)]
 struct ConfigResponse {
-    ok:     bool,
+    ok: bool,
     config: Config,
 }
 
@@ -101,29 +108,36 @@ async fn api_set_config(
     Json(patch): Json<ConfigPatch>,
 ) -> (StatusCode, Json<ConfigResponse>) {
     let mut cfg = eng.config.load().as_ref().clone();
-    if let Some(v) = patch.engine { cfg.engine = v; }
-    if let Some(v) = patch.detection { cfg.detection = v; }
-    if let Some(v) = patch.ipc { cfg.ipc = v; }
-    if let Some(v) = patch.forecasting { cfg.forecasting = v; }
-    if let Some(v) = patch.dashboard { cfg.dashboard = v; }
+    if let Some(v) = patch.engine {
+        cfg.engine = v;
+    }
+    if let Some(v) = patch.detection {
+        cfg.detection = v;
+    }
+    if let Some(v) = patch.ipc {
+        cfg.ipc = v;
+    }
+    if let Some(v) = patch.forecasting {
+        cfg.forecasting = v;
+    }
+    if let Some(v) = patch.dashboard {
+        cfg.dashboard = v;
+    }
     eng.config.store(Arc::new(cfg.clone()));
     (
         StatusCode::OK,
-        Json(ConfigResponse { ok: true, config: cfg }),
+        Json(ConfigResponse {
+            ok: true,
+            config: cfg,
+        }),
     )
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Config;
-    use axum::{
-        body::Body,
-        http::Request,
-        routing::get,
-        Router,
-    };
+    use axum::{body::Body, http::Request, routing::get, Router};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -145,7 +159,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), 10_000).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 10_000)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "ok");
     }
@@ -164,7 +180,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 100_000)
+            .await
+            .unwrap();
         let json: DashboardSnapshot = serde_json::from_slice(&body).unwrap();
         // Uptime can be 0 for a freshly created engine with cached snapshot
         assert!(json.events_ingested == 0);
@@ -184,7 +202,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 100_000)
+            .await
+            .unwrap();
         let json: Config = serde_json::from_slice(&body).unwrap();
         assert_eq!(json.engine.ram_limit_mb, 512);
         assert_eq!(json.engine.shard_count, 256);
@@ -196,9 +216,18 @@ mod tests {
         let app = Router::new()
             .route("/api/history/batches", get(api_history_batches))
             .with_state(eng);
-        let response = app.oneshot(Request::get("/api/history/batches").body(Body::empty()).unwrap()).await.unwrap();
+        let response = app
+            .oneshot(
+                Request::get("/api/history/batches")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 10_000).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 10_000)
+            .await
+            .unwrap();
         let batches: Vec<BatchRecord> = serde_json::from_slice(&body).unwrap();
         assert!(batches.is_empty());
     }
@@ -209,9 +238,18 @@ mod tests {
         let app = Router::new()
             .route("/api/history/blocks", get(api_history_blocks))
             .with_state(eng);
-        let response = app.oneshot(Request::get("/api/history/blocks").body(Body::empty()).unwrap()).await.unwrap();
+        let response = app
+            .oneshot(
+                Request::get("/api/history/blocks")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 10_000).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 10_000)
+            .await
+            .unwrap();
         let blocks: Vec<BlockRecord> = serde_json::from_slice(&body).unwrap();
         assert!(blocks.is_empty());
     }
@@ -222,9 +260,18 @@ mod tests {
         let app = Router::new()
             .route("/api/traffic/subnets", get(api_traffic_subnets))
             .with_state(eng);
-        let response = app.oneshot(Request::get("/api/traffic/subnets").body(Body::empty()).unwrap()).await.unwrap();
+        let response = app
+            .oneshot(
+                Request::get("/api/traffic/subnets")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 10_000).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 10_000)
+            .await
+            .unwrap();
         let subnets: Vec<SubnetRow> = serde_json::from_slice(&body).unwrap();
         assert!(subnets.is_empty());
     }
@@ -235,9 +282,18 @@ mod tests {
         let app = Router::new()
             .route("/api/status/modules", get(api_status_modules))
             .with_state(eng);
-        let response = app.oneshot(Request::get("/api/status/modules").body(Body::empty()).unwrap()).await.unwrap();
+        let response = app
+            .oneshot(
+                Request::get("/api/status/modules")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 10_000).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 10_000)
+            .await
+            .unwrap();
         let modules: Vec<ModuleStats> = serde_json::from_slice(&body).unwrap();
         assert!(!modules.is_empty()); // Should have at least default modules
         assert_eq!(modules.len(), 4);

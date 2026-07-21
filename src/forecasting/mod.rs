@@ -1,8 +1,8 @@
 use crate::config::ForecastingConfig;
 use crate::detection::BlockDecision;
+use crate::learning::PatternLearner;
 use crate::metrics::Metrics;
 use crate::storage::{BlockReason, Store};
-use crate::learning::PatternLearner;
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -12,40 +12,52 @@ use tracing::{debug, info, warn};
 // ── Holt-Winters ──────────────────────────────────────────────────────────────
 
 pub struct HoltWinters {
-    pub level:    f64,
-    pub trend:    f64,
+    pub level: f64,
+    pub trend: f64,
     pub seasonal: Vec<f64>,
-    pub period:   usize,
+    pub period: usize,
     alpha: f64,
-    beta:  f64,
+    beta: f64,
     gamma: f64,
-    tick:  usize,
+    tick: usize,
 }
 
 impl HoltWinters {
     pub fn new(alpha: f64, beta: f64, gamma: f64, period: usize) -> Self {
         let p = period.max(1);
         Self {
-            level: 0.0, trend: 0.0, seasonal: vec![0.0; p],
-            period: p, alpha, beta, gamma, tick: 0,
+            level: 0.0,
+            trend: 0.0,
+            seasonal: vec![0.0; p],
+            period: p,
+            alpha,
+            beta,
+            gamma,
+            tick: 0,
         }
     }
 
     pub fn update(&mut self, y: f64) -> f64 {
-        if self.tick == 0 { self.level = y; self.tick += 1; return y; }
-        let s    = self.tick % self.period;
+        if self.tick == 0 {
+            self.level = y;
+            self.tick += 1;
+            return y;
+        }
+        let s = self.tick % self.period;
         let prev = self.level;
         let seas = self.seasonal[s];
-        self.level       = self.alpha * (y - seas) + (1.0 - self.alpha) * (prev + self.trend);
-        self.trend       = self.beta  * (self.level - prev) + (1.0 - self.beta) * self.trend;
+        self.level = self.alpha * (y - seas) + (1.0 - self.alpha) * (prev + self.trend);
+        self.trend = self.beta * (self.level - prev) + (1.0 - self.beta) * self.trend;
         self.seasonal[s] = self.gamma * (y - self.level) + (1.0 - self.gamma) * seas;
-        self.tick       += 1;
+        self.tick += 1;
         let ns = self.seasonal[self.tick % self.period];
         (self.level + self.trend + ns).max(0.0)
     }
 
     pub fn zscore(&self, actual: f64, forecast: f64, std: f64) -> f64 {
-        if std < 1e-9 { return 0.0; }
+        if std < 1e-9 {
+            return 0.0;
+        }
         (actual - forecast).abs() / std
     }
 }
@@ -58,18 +70,26 @@ pub struct RingBuffer {
 }
 
 impl RingBuffer {
-    pub fn new(cap: usize) -> Self { Self { buf: VecDeque::with_capacity(cap), cap } }
+    pub fn new(cap: usize) -> Self {
+        Self {
+            buf: VecDeque::with_capacity(cap),
+            cap,
+        }
+    }
 
     pub fn push(&mut self, v: f64) {
-        if self.buf.len() == self.cap { self.buf.pop_front(); }
+        if self.buf.len() == self.cap {
+            self.buf.pop_front();
+        }
         self.buf.push_back(v);
     }
 
     pub fn std(&self) -> f64 {
-        if self.buf.len() < 2 { return 0.0; }
+        if self.buf.len() < 2 {
+            return 0.0;
+        }
         let m = self.buf.iter().sum::<f64>() / self.buf.len() as f64;
-        let v = self.buf.iter().map(|x| (x - m).powi(2)).sum::<f64>()
-            / (self.buf.len() - 1) as f64;
+        let v = self.buf.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (self.buf.len() - 1) as f64;
         v.sqrt()
     }
 }
@@ -77,12 +97,12 @@ impl RingBuffer {
 // ── Forecaster — reads incremental counters, not full store scans ─────────────
 
 pub struct Forecaster {
-    store:    Arc<Store>,
-    config:   ForecastingConfig,
+    store: Arc<Store>,
+    config: ForecastingConfig,
     block_tx: broadcast::Sender<BlockDecision>,
-    metrics:  Arc<Metrics>,
-    hw:       tokio::sync::Mutex<HoltWinters>,
-    history:  tokio::sync::Mutex<RingBuffer>,
+    metrics: Arc<Metrics>,
+    hw: tokio::sync::Mutex<HoltWinters>,
+    history: tokio::sync::Mutex<RingBuffer>,
     /// Pattern learner for attack detection
     #[allow(dead_code)]
     pattern_learner: Arc<PatternLearner>,
@@ -90,19 +110,24 @@ pub struct Forecaster {
 
 impl Forecaster {
     pub fn new(
-        store:    Arc<Store>,
-        config:   ForecastingConfig,
+        store: Arc<Store>,
+        config: ForecastingConfig,
         block_tx: broadcast::Sender<BlockDecision>,
-        metrics:  Arc<Metrics>,
-    #[allow(dead_code)]
-    pattern_learner: Arc<PatternLearner>,
+        metrics: Arc<Metrics>,
+        #[allow(dead_code)] pattern_learner: Arc<PatternLearner>,
     ) -> Self {
         let hw = HoltWinters::new(
-            config.ewma_alpha, config.hw_beta, config.hw_gamma, config.seasonality_period,
+            config.ewma_alpha,
+            config.hw_beta,
+            config.hw_gamma,
+            config.seasonality_period,
         );
         Self {
-            store, config, block_tx, metrics,
-            hw:      tokio::sync::Mutex::new(hw),
+            store,
+            config,
+            block_tx,
+            metrics,
+            hw: tokio::sync::Mutex::new(hw),
             history: tokio::sync::Mutex::new(RingBuffer::new(60)),
             pattern_learner,
         }
@@ -121,11 +146,11 @@ impl Forecaster {
 
     async fn tick_hw(&self) {
         let traffic = &self.store.traffic;
-        let rps     = traffic.events_last_second.load(Ordering::Relaxed) as f64;
-        let n       = traffic.unique_ips_window.load(Ordering::Relaxed);
+        let rps = traffic.events_last_second.load(Ordering::Relaxed) as f64;
+        let n = traffic.unique_ips_window.load(Ordering::Relaxed);
 
         let z = {
-            let mut hw   = self.hw.lock().await;
+            let mut hw = self.hw.lock().await;
             let mut hist = self.history.lock().await;
             let f = hw.update(rps);
             let s = hist.std().max(1.0);
@@ -189,7 +214,8 @@ impl Forecaster {
                 ttl_secs: Some(300),
                 batch_subnet: None,
             });
-            self.metrics.record_block(&ip.to_string(), "forecast_anomaly", "forecasting");
+            self.metrics
+                .record_block(&ip.to_string(), "forecast_anomaly", "forecasting");
             self.metrics.blocks_forecast.fetch_add(1, Ordering::Relaxed);
             n += 1;
         }
@@ -217,7 +243,7 @@ impl Forecaster {
         let mut top: Vec<(std::net::IpAddr, f32)> = sample.into_iter().collect();
         top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        let cut = (top.len() / 10).max(1).min(50);
+        let cut = (top.len() / 10).clamp(1, 50);
         let mut n = 0usize;
 
         for (ip, _threat) in top.iter().take(cut) {
@@ -227,7 +253,8 @@ impl Forecaster {
                 ttl_secs: Some(600),
                 batch_subnet: None,
             });
-            self.metrics.record_block(&ip.to_string(), "entropy_anomaly", "forecasting");
+            self.metrics
+                .record_block(&ip.to_string(), "entropy_anomaly", "forecasting");
             self.metrics.blocks_forecast.fetch_add(1, Ordering::Relaxed);
             n += 1;
         }
@@ -239,8 +266,13 @@ impl Forecaster {
 }
 
 fn shannon_entropy(counts: &[u64], total: u64) -> f64 {
-    counts.iter().filter(|&&c| c > 0)
-        .map(|&c| { let p = c as f64 / total as f64; -p * p.log2() })
+    counts
+        .iter()
+        .filter(|&&c| c > 0)
+        .map(|&c| {
+            let p = c as f64 / total as f64;
+            -p * p.log2()
+        })
         .sum()
 }
 
@@ -259,7 +291,9 @@ mod tests {
     #[test]
     fn hw_stable_forecast() {
         let mut hw = HoltWinters::new(0.3, 0.1, 0.1, 10);
-        for _ in 0..50 { hw.update(1000.0); }
+        for _ in 0..50 {
+            hw.update(1000.0);
+        }
         assert!(hw.level > 900.0);
     }
 }
