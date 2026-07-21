@@ -3,754 +3,711 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RamShield Automation Dashboard</title>
+<title>RamShield Operator Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400,500,600,700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg:#0a0a0f; --panel:#11111a; --panel-border:#1f1f2e;
-  --text:#e8e8f0; --muted:#7a7a9a; --accent:#00f5d4; --accent-dim:#00c9a8;
-  --warn:#ffb800; --danger:#ff3d5a; --ok:#00d47e; --info:#4da6ff;
-  --grid:#0d0d14;
+  --bg:#07070b; --surface:#0f0f16; --surface-2:#15151f; --surface-3:#1b1b27;
+  --border:#252536; --border-strong:#33334a;
+  --text:#f0f0f7; --muted:#8b8ba7; --muted-2:#5c5c75;
+  --accent:#00f5d4; --accent-dim:#00c9a8; --accent-glow:rgba(0,245,212,.12);
+  --warn:#ffb800; --danger:#ff3d5a; --ok:#00d47e; --info:#4da6ff; --purple:#a78bfa;
+  --grid:rgba(0,245,212,.04);
 }
-*, *::before, *::after { box-sizing:border-box; }
-html { font-size:16px; }
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; }
 body {
   margin:0; min-height:100vh;
-  font-family:'Space Grotesk',system-ui,sans-serif;
+  font-family:'Space Grotesk',system-ui,-apple-system,sans-serif;
   background:var(--bg); color:var(--text);
   background-image:
-    linear-gradient(rgba(0,245,212,.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,245,212,.03) 1px, transparent 1px);
-  background-size:40px 40px;
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size:44px 44px;
+  background-attachment:fixed;
+  line-height:1.55;
 }
 a { color:var(--accent); text-decoration:none; }
-a:hover { text-shadow:0 0 8px var(--accent); }
-.container { max-width:1400px; margin:0 auto; padding:24px; }
+a:hover { text-shadow:0 0 10px var(--accent); }
 
-/* Header */
-header { margin-bottom:32px; }
-h1 {
-  font-size:clamp(1.6rem,3vw,2.2rem); font-weight:700; letter-spacing:-.02em;
+.container { max-width:1480px; margin:0 auto; padding:24px; }
+
+/* Header / Command bar */
+.cmdbar {
+  position:sticky; top:0; z-index:100;
+  background:rgba(7,7,11,.85); backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--border);
+  padding:14px 0; margin-bottom:24px;
+}
+.cmdbar-inner { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+.cmdbar-title { display:flex; align-items:center; gap:12px; }
+.cmdbar-title h1 {
+  margin:0; font-size:clamp(1.3rem,2.5vw,1.7rem); font-weight:700; letter-spacing:-.02em;
   background:linear-gradient(90deg,var(--accent),var(--info));
   -webkit-background-clip:text; background-clip:text; color:transparent;
-  margin:0 0 8px;
 }
-.subtitle { color:var(--muted); font-size:.95rem; }
-.badge-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+.cmdbar-meta { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.heartbeat {
+  width:10px; height:10px; border-radius:50%; background:var(--ok);
+  box-shadow:0 0 0 0 rgba(0,212,126,.4);
+  animation:pulse 2s infinite;
+}
+@keyframes pulse {
+  0% { box-shadow:0 0 0 0 rgba(0,212,126,.4); }
+  70% { box-shadow:0 0 0 8px rgba(0,212,126,0); }
+  100% { box-shadow:0 0 0 0 rgba(0,212,126,0); }
+}
 .badge {
-  font-size:.7rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em;
-  padding:4px 10px; border-radius:999px; border:1px solid transparent;
+  font-size:.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
+  padding:4px 10px; border-radius:999px; border:1px solid transparent; white-space:nowrap;
 }
 .badge-ok { background:rgba(0,212,126,.12); border-color:var(--ok); color:var(--ok); }
 .badge-warn { background:rgba(255,184,0,.12); border-color:var(--warn); color:var(--warn); }
 .badge-danger { background:rgba(255,61,90,.12); border-color:var(--danger); color:var(--danger); }
 .badge-info { background:rgba(77,166,255,.12); border-color:var(--info); color:var(--info); }
 .badge-neutral { background:rgba(122,122,154,.12); border-color:var(--muted); color:var(--muted); }
+.badge-purple { background:rgba(167,139,250,.12); border-color:var(--purple); color:var(--purple); }
 
-/* Layout grid */
-.grid { display:grid; gap:20px; }
-@media (min-width: 1000px) {
-  .grid-2 { grid-template-columns:1fr 1fr; }
-  .grid-3 { grid-template-columns:1fr 1fr 1fr; }
-  .grid-main { grid-template-columns:2fr 1fr; }
+/* Section overview nav */
+.overview {
+  display:flex; gap:10px; flex-wrap:wrap; margin-bottom:28px;
+  padding:14px; background:var(--surface); border:1px solid var(--border); border-radius:12px;
 }
+.overview a {
+  display:flex; align-items:center; gap:8px;
+  padding:8px 14px; border-radius:8px; background:var(--surface-2); border:1px solid var(--border);
+  color:var(--muted); font-size:.78rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em;
+  transition:all .15s;
+}
+.overview a:hover { background:var(--surface-3); color:var(--text); border-color:var(--accent-dim); }
+.overview-dot { width:7px; height:7px; border-radius:50%; background:var(--muted-2); }
 
-/* Cards / Panels */
+/* Cards */
+.section-label {
+  font-size:.65rem; color:var(--muted); letter-spacing:.2em; font-weight:600; text-transform:uppercase;
+  margin:32px 0 12px 6px; padding-left:8px; border-left:2px solid var(--accent-dim);
+}
+.grid { display:grid; gap:18px; }
+@media (min-width: 900px) {
+  .grid-2 { grid-template-columns:repeat(2,1fr); }
+  .grid-3 { grid-template-columns:repeat(3,1fr); }
+  .grid-4 { grid-template-columns:repeat(4,1fr); }
+}
 .panel {
-  background:var(--panel); border:1px solid var(--panel-border);
-  border-radius:12px; overflow:hidden;
-  transition:border-color .2s, box-shadow .2s;
+  background:var(--surface); border:1px solid var(--border); border-radius:14px; overflow:hidden;
+  transition:border-color .2s, box-shadow .2s, transform .2s;
 }
-.panel:hover { border-color:rgba(0,245,212,.18); box-shadow:0 0 0 1px rgba(0,245,212,.08); }
+.panel:hover { border-color:var(--border-strong); box-shadow:0 0 0 1px var(--accent-glow); }
 .panel-header {
-  display:flex; align-items:center; justify-content:space-between;
-  padding:14px 18px; border-bottom:1px solid var(--panel-border);
-  background:rgba(0,0,0,.15);
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:14px 18px; border-bottom:1px solid var(--border); background:rgba(0,0,0,.15);
 }
-.panel-header h2 { margin:0; font-size:.95rem; font-weight:600; letter-spacing:.01em; }
+.panel-header h2 { margin:0; font-size:.92rem; font-weight:600; letter-spacing:.01em; }
+.panel-header h2 span { color:var(--muted); font-weight:400; }
 .panel-body { padding:16px 18px 18px; }
 
-/* Timeline */
-.timeline { position:relative; padding-left:24px; }
-.timeline::before {
-  content:''; position:absolute; left:6px; top:0; bottom:0; width:2px;
-  background:linear-gradient(180deg,var(--accent),transparent);
+/* Metrics row */
+.metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-bottom:22px; }
+.metric {
+  background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px;
+  display:flex; flex-direction:column; gap:4px;
 }
-.timeline-item {
-  position:relative; padding:12px 0 12px 24px; border-radius:8px;
-  background:rgba(255,255,255,.02); margin-bottom:10px;
-  transition:background .2s;
-}
-.timeline-item:hover { background:rgba(0,245,212,.04); }
-.timeline-item::before {
-  content:''; position:absolute; left:-17px; top:18px; width:10px; height:10px;
-  border-radius:50%; border:2px solid var(--panel-border); background:var(--panel);
-  box-shadow:0 0 0 3px var(--bg); z-index:1;
-}
-.timeline-item.milestone::before { background:var(--accent); border-color:var(--accent); box-shadow:0 0 0 3px var(--bg), 0 0 12px var(--accent); }
-.timeline-item.current::before { background:var(--info); border-color:var(--info); box-shadow:0 0 0 3px var(--bg), 0 0 12px var(--info); }
-.timeline-item.completed::before { background:var(--ok); border-color:var(--ok); }
-.timeline-item.pending::before { background:transparent; border-color:var(--muted); }
-.timeline-meta { display:flex; gap:8px; align-items:center; margin-bottom:6px; font-size:.75rem; }
-.timeline-title { font-weight:600; font-size:.9rem; }
-.timeline-desc { color:var(--muted); font-size:.8rem; margin-top:2px; }
-
-/* Progress Ring */
-.progress-ring { width:48px; height:48px; transform:rotate(-90deg); }
-.progress-ring-bg { fill:none; stroke:var(--panel-border); stroke-width:3.5; }
-.progress-ring-fg {
-  fill:none; stroke:var(--accent); stroke-width:3.5; stroke-linecap:round;
-  stroke-dasharray:138; stroke-dashoffset:138; transition:stroke-dashoffset .6s ease;
-}
-.progress-ring-text { fill:var(--text); font-size:8px; dominant-baseline:middle; text-anchor:middle; }
-
-/* Priority Alignment */
-.priority-grid { display:grid; gap:10px; }
-@media (min-width:600px) { .priority-grid { grid-template-columns:1fr 1fr; } }
-.priority-card { background:rgba(255,255,255,.02); border:1px solid var(--panel-border); border-radius:8px; padding:12px; }
-.priority-card.aligned { border-color:rgba(0,212,126,.4); background:rgba(0,212,126,.05); }
-.priority-card.mismatch { border-color:rgba(255,184,0,.4); background:rgba(255,184,0,.05); }
-.priority-label { font-size:.7rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin-bottom:6px; }
-.priority-value { font-weight:600; font-size:.85rem; }
-.priority-value.ok { color:var(--ok); }
-.priority-value.warn { color:var(--warn); }
-.priority-value.miss { color:var(--danger); }
-
-/* Status indicators */
-.status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
-.status-ok { background:var(--ok); box-shadow:0 0 8px var(--ok); }
-.status-warn { background:var(--warn); box-shadow:0 0 8px var(--warn); }
-.status-danger { background:var(--danger); box-shadow:0 0 8px var(--danger); }
-.status-info { background:var(--info); box-shadow:0 0 8px var(--info); }
-.status-pending { background:transparent; border:1px solid var(--muted); }
+.metric-value { font-size:1.6rem; font-weight:700; color:var(--text); }
+.metric-label { font-size:.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+.metric-delta { font-size:.72rem; color:var(--muted-2); }
 
 /* Tables */
-table { width:100%; border-collapse:collapse; font-size:.8rem; }
-th, td { padding:8px 10px; text-align:left; border-bottom:1px solid var(--panel-border); }
-th { color:var(--muted); font-weight:600; font-size:.7rem; text-transform:uppercase; letter-spacing:.05em; }
-tr:hover td { background:rgba(0,245,212,.04); transition:background .15s; }
-td code { background:rgba(0,245,212,.1); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:.75rem; }
+table { width:100%; border-collapse:collapse; font-size:.78rem; }
+th, td { padding:8px 10px; text-align:left; border-bottom:1px solid var(--border); }
+th { color:var(--muted); font-weight:600; font-size:.65rem; text-transform:uppercase; letter-spacing:.06em; }
+tr:hover td { background:rgba(0,245,212,.04); }
+td code { background:rgba(0,245,212,.1); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:.7rem; }
 
-/* Divider between major sections */
-.section-divider {
-  height:1px; margin:32px 0 20px;
-  background:linear-gradient(90deg,transparent,var(--accent-dim),transparent);
-  position:relative;
+/* Job chain */
+.chain { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:14px; background:var(--surface-2); border-radius:10px; border:1px solid var(--border); }
+.chain-step {
+  display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:8px;
+  background:var(--surface-3); border:1px solid var(--border); min-width:140px;
 }
-.section-divider::after {
-  content:''; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-  width:8px; height:8px; border-radius:50%; background:var(--accent);
-  box-shadow:0 0 12px var(--accent);
+.chain-step.ok { border-color:rgba(0,212,126,.4); background:rgba(0,212,126,.06); }
+.chain-step.error { border-color:rgba(255,61,90,.4); background:rgba(255,61,90,.06); }
+.chain-step.running { border-color:rgba(77,166,255,.4); background:rgba(77,166,255,.06); }
+.chain-step.pending { border-color:rgba(255,184,0,.3); background:rgba(255,184,0,.05); }
+.chain-dot { width:8px; height:8px; border-radius:50%; background:var(--muted-2); flex-shrink:0; }
+.chain-dot.ok { background:var(--ok); box-shadow:0 0 8px var(--ok); }
+.chain-dot.error { background:var(--danger); box-shadow:0 0 8px var(--danger); }
+.chain-dot.running { background:var(--info); box-shadow:0 0 8px var(--info); }
+.chain-dot.pending { background:var(--warn); box-shadow:0 0 8px var(--warn); }
+.chain-title { font-weight:600; font-size:.82rem; }
+.chain-meta { font-size:.68rem; color:var(--muted); }
+.chain-arrow { color:var(--muted-2); font-size:1.1rem; }
+
+/* Module cards */
+.module-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:18px; }
+.module-status { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.module-status .status-dot { width:8px; height:8px; border-radius:50%; }
+.module-status .status-ok { background:var(--ok); box-shadow:0 0 8px var(--ok); }
+.module-status .status-warn { background:var(--warn); box-shadow:0 0 8px var(--warn); }
+.module-status .status-danger { background:var(--danger); box-shadow:0 0 8px var(--danger); }
+.module-status .status-info { background:var(--info); box-shadow:0 0 8px var(--info); }
+.module-status .status-neutral { background:transparent; border:1px solid var(--muted-2); }
+.log-tail {
+  background:#05050a; border:1px solid var(--border); border-radius:8px; padding:10px 12px;
+  font-family:'SF Mono',ui-monospace,monospace; font-size:.72rem; color:var(--muted);
+  max-height:110px; overflow:auto; white-space:pre-wrap; margin:12px 0;
+}
+.log-line { display:block; padding:2px 0; border-bottom:1px solid rgba(255,255,255,.03); }
+.log-time { color:var(--muted-2); margin-right:6px; }
+.operator-log {
+  background:#05050a; border:1px solid var(--border); border-radius:10px; padding:14px;
+  font-family:'SF Mono',ui-monospace,monospace; font-size:.74rem; color:var(--muted);
+  max-height:220px; overflow:auto; white-space:pre-wrap;
+}
+.operator-log .log-entry { display:block; padding:3px 0; border-bottom:1px solid rgba(255,255,255,.03); }
+.operator-log .log-entry:hover { color:var(--text); }
+.operator-log .ts { color:var(--muted-2); margin-right:8px; }
+
+/* Code blocks for copy-paste commands */
+pre.cmd {
+  background:#05050a; border:1px solid var(--border); border-radius:8px; padding:10px 12px;
+  font-family:'SF Mono',ui-monospace,monospace; font-size:.72rem; color:var(--accent);
+  overflow-x:auto; margin:8px 0 0;
 }
 
-/* Sticky section labels */
-.section-label {
-  font-size:.65rem; color:var(--muted); letter-spacing:.18em;
-  font-weight:600; text-transform:uppercase;
-  margin-bottom:8px; padding-left:6px; border-left:2px solid var(--accent-dim);
+.collapsible {
+  background:none; border:none; color:var(--accent); font-size:.72rem; cursor:pointer;
+  display:flex; align-items:center; gap:6px; padding:0; font-family:inherit;
 }
-
-/* Glow pulse on key panels */
-@keyframes pulse-glow {
-  0%,100% { box-shadow:0 0 0 0 rgba(0,245,212,.0); }
-  50% { box-shadow:0 0 0 4px rgba(0,245,212,.08); }
-}
-.panel.glow { animation:pulse-glow 3s ease-in-out infinite; }
-
-/* Make table within .panel not double up borders */
-.panel-body table { border:1px solid var(--panel-border); border-radius:6px; overflow:hidden; }
-.panel-body table th:first-child { border-top-left-radius:6px; }
-.panel-body table th:last-child { border-top-right-radius:6px; }
-
-/* Markdown rendering helpers */
-.markdown-body { line-height:1.6; }
-.markdown-body h3 { font-size:1rem; margin:16px 0 8px; color:var(--accent); }
-.markdown-body p { margin:8px 0; }
-.markdown-body ul, .markdown-body ol { margin:8px 0 8px 20px; }
-.markdown-body li { margin:4px 0; }
-.markdown-body code { background:rgba(0,245,212,.1); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:.85em; }
-.markdown-body pre { background:#050508; border:1px solid var(--panel-border); border-radius:8px; padding:12px; overflow-x:auto; }
-.markdown-body pre code { background:none; color:inherit; padding:0; }
-.markdown-body hr { border:none; border-top:1px solid var(--panel-border); margin:16px 0; }
-.markdown-body strong { color:var(--accent); }
-.markdown-body blockquote { border-left:3px solid var(--accent); padding-left:12px; color:var(--muted); margin:12px 0; font-style:italic; }
-
-/* Collapsible */
-.collapsible { border:none; background:none; color:var(--muted); font-size:.75rem; cursor:pointer; padding:4px 0; display:flex; align-items:center; gap:6px; }
-.collapsible:hover { color:var(--accent); }
-.collapsible svg { transition:transform .2s; width:14px; height:14px; }
+.collapsible:hover { color:var(--text); }
+.collapsible svg { width:12px; height:12px; transition:transform .2s; }
 .collapsible[aria-expanded="true"] svg { transform:rotate(90deg); }
 .collapsible-content { overflow:hidden; max-height:0; transition:max-height .3s ease; }
-.collapsible-content.open { max-height:5000px; }
+.collapsible-content.open { max-height:2000px; }
+
+/* Recommendations */
+.rec { display:flex; gap:12px; padding:12px; border-radius:10px; background:var(--surface-2); border:1px solid var(--border); margin-bottom:10px; }
+.rec-icon { font-size:1.1rem; flex-shrink:0; }
+.rec-title { font-weight:600; font-size:.82rem; margin-bottom:2px; }
+.rec-body { font-size:.76rem; color:var(--muted); }
 
 /* Footer */
-footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; }
+footer { text-align:center; padding:32px 24px; color:var(--muted); font-size:.72rem; }
+
+/* Markdown body inside modules */
+.markdown-body { line-height:1.6; font-size:.82rem; }
+.markdown-body h3 { font-size:.95rem; margin:14px 0 8px; color:var(--accent); }
+.markdown-body p { margin:8px 0; }
+.markdown-body ul, .markdown-body ol { margin:8px 0 8px 18px; }
+.markdown-body li { margin:4px 0; }
+.markdown-body code { background:rgba(0,245,212,.1); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:.78em; }
+.markdown-body pre { background:#05050a; border:1px solid var(--border); border-radius:8px; padding:12px; overflow-x:auto; font-size:.75rem; }
+.markdown-body pre code { background:none; color:inherit; padding:0; }
+.markdown-body hr { border:none; border-top:1px solid var(--border); margin:14px 0; }
+.markdown-body strong { color:var(--accent); }
+.markdown-body blockquote { border-left:3px solid var(--accent); padding-left:12px; color:var(--muted); margin:12px 0; font-style:italic; }
+.markdown-body table { font-size:.75rem; margin:10px 0; }
 </style>
 </head>
 <body>
+<div class="cmdbar">
+  <div class="container cmdbar-inner">
+    <div class="cmdbar-title">
+      <div class="heartbeat"></div>
+      <h1>RamShield Operator Console</h1>
+    </div>
+    <div class="cmdbar-meta">
+      <span class="badge badge-neutral">feature/ramshield-advanced</span>
+      <span class="badge badge-neutral">b056753</span>
+      <span class="badge badge-info">refreshed 2026-07-21 09:31 UTC</span>
+    </div>
+  </div>
+</div>
+
 <div class="container">
-  <header>
-    <h1>RamShield Automation Control Center</h1>
-    <p class="subtitle">Generated 2026-07-20 05:54 UTC  •  Branch: <code>feature/ramshield-advanced</code>  •  Commit: <code>bc77286</code></p>
-    <div class="badge-row">
-      <span class="badge badge-ok">Rust Files: 25</span>
-      <span class="badge badge-info">LOC: 4,956</span>
-      <span class="badge badge-warn">Clippy: -1</span>
-      <span class="badge badge-neutral">TODOs: 0</span>
-      <span class="badge badge-info">Roadmap: 22</span>
-      <span class="badge badge-neutral">Deps: 18</span>
-      <span class="badge badge-danger">Dead Links: 1</span>
-      <span class="badge badge-info">Cron: 0/14</span>
-      <span class="badge badge-neutral">Backlog: 48/50</span>
-      <span class="badge badge-info">Workers: 0% (0/2)</span>
-    </div>
-  </header>
+  <nav class="overview" id="overview">
+    <a href="#ops"><span class="overview-dot status-danger"></span>Operations</a><a href="#log"><span class="overview-dot status-ok"></span>Log</a><a href="#chain"><span class="overview-dot status-danger"></span>Job Chain</a><a href="#modules"><span class="overview-dot status-ok"></span>Modules</a><a href="#health"><span class="overview-dot status-danger"></span>Health</a><a href="#growth"><span class="overview-dot status-ok"></span>Growth</a><a href="#backlog"><span class="overview-dot status-ok"></span>Backlog</a><a href="#systems"><span class="overview-dot status-danger"></span>Systems</a>
+  </nav>
 
-  <!-- MAIN TIMELINE -->
-  <section class="panel glow" style="margin-bottom:24px;">
-    <div class="panel-header">
-      <h2>📅 Main Timeline — Roadmap → Sprint → Today</h2>
-      <span class="badge badge-info">Auto-synced from ROADMAP.md + PLAN.md</span>
-    </div>
-    <div class="panel-body">
-      <div class="timeline">
-
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q1:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Implement XGBoost threat scoring model</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q1:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Add scikit-learn preprocessing pipeline</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q1:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Integrate model versioning with Git LFS</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item milestone">
-          <div class="timeline-meta">
-            <span>Q1:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">95% accuracy on test dataset</div>
-          <div class="timeline-desc">Milestone</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q2:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Implement Rust-based ML inference (tflite-rust)</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q2:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Add AVX2/AVX2 optimization flags</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q2:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Benchmark against Go implementation</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item milestone">
-          <div class="timeline-meta">
-            <span>Q2:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">2x faster inference than Python baseline</div>
-          <div class="timeline-desc">Milestone</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q3:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">TLS 1.3 support for encrypted IPC</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q3:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">iptables rate limiting integration</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q3:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Cryptographic audit logging (SHA-256 signed)</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item milestone">
-          <div class="timeline-meta">
-            <span>Q3:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Zero-trust IPC communication</div>
-          <div class="timeline-desc">Milestone</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q4:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Launch RamShield Blog (weekly posts)</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q4:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Create GitHub Discussions for community feedback</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q4:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Launch "RamShield Champions" program</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q5:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Kubernetes Operator for auto-scaling</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q5:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Heroku buildpack for one-click deploy</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q5:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">Cloudflare Workers integration for edge detection</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q5:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">**WebAssembly (WASM) Module Support**: Allow users to write custom detection logic in WASM.</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q5:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">**IoT Gateway Shielding**: Optimized build for ARM/RISC-V edge devices.</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q5:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">**Time-Series Database Integration**: Sync with InfluxDB/Prometheus for long-term analytics.</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item pending">
-          <div class="timeline-meta">
-            <span>Q5:</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">**Kafka/Pulsar Streaming**: Real-time threat event streaming for enterprise logs.</div>
-          <div class="timeline-desc">Task</div>
-        </div>
-        <div class="timeline-item current">
-          <div class="timeline-meta">
-            <span>Today</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">T1: Fix Facts Collector Cron Job</div>
-          <div class="timeline-desc">Update the script path for `ramshield-facts-collector` to be relative to its workdir: `.github/scripts/facts_collector.py`.</div>
-        </div>
-        <div class="timeline-item current">
-          <div class="timeline-meta">
-            <span>Today</span>
-            <span style="color:var(--muted);"></span>
-          </div>
-          <div class="timeline-title">T2: Create FACTS.json Placeholder</div>
-          <div class="timeline-desc">Create an empty `docs/FACTS.json` file as a placeholder to prevent downstream agents from failing on missing input.</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- GRID: Priority Alignment + Progress + Quick Stats -->
-  <div class="grid grid-main">
-    <!-- Priority Alignment -->
-    <section class="panel">
-      <div class="panel-header">
-        <h2>🎯 Priority Alignment</h2>
-        <span class="badge badge-warn">Roadmap ↔ Daily Plan</span>
-      </div>
-      <div class="panel-body">
-        <div class="priority-grid">
-
-        <div class="priority-card mismatch">
-          <div class="priority-label">Roadmap → Today</div>
-          <div class="priority-value warn">Implement XGBoost threat scoring model</div>
-          <span class="badge badge-warn" style="margin-top:6px;display:inline-block;font-size:.6rem;">Mismatch</span>
-        </div>
-        <div class="priority-card mismatch">
-          <div class="priority-label">Roadmap → Today</div>
-          <div class="priority-value warn">Add scikit-learn preprocessing pipeline</div>
-          <span class="badge badge-warn" style="margin-top:6px;display:inline-block;font-size:.6rem;">Mismatch</span>
-        </div>
-        <div class="priority-card mismatch">
-          <div class="priority-label">Roadmap → Today</div>
-          <div class="priority-value warn">Integrate model versioning with Git LFS</div>
-          <span class="badge badge-warn" style="margin-top:6px;display:inline-block;font-size:.6rem;">Mismatch</span>
-        </div>
-        <div class="priority-card ">
-          <div class="priority-label">Extra in Today</div>
-          <div class="priority-value info">Fix Facts Collector Cron Job</div>
-          <span class="badge badge-info" style="margin-top:6px;display:inline-block;font-size:.6rem;">Only in Plan</span>
-        </div>
-        <div class="priority-card ">
-          <div class="priority-label">Extra in Today</div>
-          <div class="priority-value info">Create FACTS.json Placeholder</div>
-          <span class="badge badge-info" style="margin-top:6px;display:inline-block;font-size:.6rem;">Only in Plan</span>
-        </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Progress & Quick Stats -->
-    <section class="panel">
-      <div class="panel-header"><h2>📊 Cycle Progress</h2></div>
-      <div class="panel-body" style="display:flex;flex-direction:column;gap:16px;align-items:center;">
-        <div style="text-align:center;">
-          <div style="font-size:.75rem;color:var(--muted);margin-bottom:8px;">Worker Completion</div>
-          
-    <svg class="progress-ring" viewBox="0 0 52 52" aria-label="Progress 0%">
-      <circle class="progress-ring-bg" cx="26" cy="26" r="22"/>
-      <circle class="progress-ring-fg" cx="26" cy="26" r="22"
-              style="stroke-dashoffset:138.0"/>
-      <text class="progress-ring-text" x="26" y="27">0%</text>
-    </svg>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:320px;">
-          <div class="badge badge-ok" style="justify-content:center;font-size:.8rem;">✅ 0 Done</div>
-          <div class="badge badge-info" style="justify-content:center;font-size:.8rem;">⏳ 2 Pending</div>
-          <div class="badge badge-neutral" style="justify-content:center;font-size:.8rem;">📝 2 Planned</div>
-          <div class="badge badge-info" style="justify-content:center;font-size:.8rem;">🗺️ 22 Roadmap</div>
-        </div>
-      </div>
-    </section>
+  <!-- METRICS -->
+  <div class="metrics">
+    <div class="metric"><div class="metric-value" style="color:var(--ok);">3</div><div class="metric-label">Cron OK</div><div class="metric-delta">of 48 jobs</div></div>
+    <div class="metric"><div class="metric-value" style="color:var(--danger);">2</div><div class="metric-label">Cron Errors</div><div class="metric-delta">need attention</div></div>
+    <div class="metric"><div class="metric-value">27</div><div class="metric-label">Rust Files</div><div class="metric-delta">4,399 LOC</div></div>
+    <div class="metric"><div class="metric-value" style="color:var(--warn);">21</div><div class="metric-label">Clippy</div><div class="metric-delta">warnings</div></div>
+    <div class="metric"><div class="metric-value">0</div><div class="metric-label">TODOs</div><div class="metric-delta">across codebase</div></div>
+    <div class="metric"><div class="metric-value" style="color:var(--danger);">0</div><div class="metric-label">Dead Links</div><div class="metric-delta">in docs</div></div>
+    <div class="metric"><div class="metric-value">19</div><div class="metric-label">Dependencies</div><div class="metric-delta">tracked</div></div>
+    <div class="metric"><div class="metric-value">111</div><div class="metric-label">Runs / Hour</div><div class="metric-delta">fleet load</div></div>
   </div>
 
-  <!-- PROMOTION OUTCOMES -->
-  <section class="panel glow" style="margin-bottom:20px;">
+  <!-- OPERATOR LOG -->
+  <div class="section-label" id="log">Operator Log</div>
+  <div class="panel">
     <div class="panel-header">
-      <h2>📢 Promotion Outcomes</h2>
-      <span class="badge badge-info">Live Status</span>
+      <h2>Live Event Stream</h2>
+      <span class="badge badge-info">last 30 events</span>
     </div>
     <div class="panel-body">
-      <p style="color:var(--muted); font-size:.85rem;">No campaign data yet.</p>
+      <div class="operator-log"><span class="log-entry"><span class="ts">2026-07-21T09:10:21</span>cheduled verify job=healer-verify-dead-link-in-healer_solution_delayed-healer-verify rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:10:21</span>ealer dispatched 6 jobs for 2 issues</span><span class="log-entry"><span class="ts">2026-07-21T09:10:48</span>OLVED: DELAYED-healer-verify-empty-pulse_log-md-is-empty — removed 5 stale one-shot jobs, patched error_healer.py + health_check_repair.py</span><span class="log-entry"><span class="ts">2026-07-21T09:11:13</span>cheduled analyze job=healer-analyze-facts-clippy-warnings rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:11:16</span>cheduled solve job=healer-solve-facts-clippy-warnings rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:11:19</span>cheduled verify job=healer-verify-facts-clippy-warnings rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:11:22</span>cheduled analyze job=healer-analyze-dead-link-in-healer_solution_delayed-healer-verify rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:11:25</span>cheduled solve job=healer-solve-dead-link-in-healer_solution_delayed-healer-verify rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:11:30</span>cheduled verify job=healer-verify-dead-link-in-healer_solution_delayed-healer-verify rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:11:30</span>ealer dispatched 6 jobs for 2 issues</span><span class="log-entry"><span class="ts">2026-07-21T09:12:04</span>cheduled analyze job=healer-analyze-facts-clippy-warnings rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:12:08</span>cheduled solve job=healer-solve-facts-clippy-warnings rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:12:12</span>cheduled verify job=healer-verify-facts-clippy-warnings rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:12:15</span>cheduled analyze job=healer-analyze-dead-link-in-healer_solution_delayed-healer-verify rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:12:18</span>cheduled solve job=healer-solve-dead-link-in-healer_solution_delayed-healer-verify rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:12:21</span>cheduled verify job=healer-verify-dead-link-in-healer_solution_delayed-healer-verify rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:12:21</span>ealer dispatched 6 jobs for 2 issues</span><span class="log-entry"><span class="ts">2026-07-21T09:19:56</span> cron-status: 40 jobs, ok=3, error=3, running=1, pending=0</span><span class="log-entry"><span class="ts">2026-07-21T09:20:30</span>cheduled analyze job=healer-analyze-facts-clippy-warnings rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:20:32</span>cheduled solve job=healer-solve-facts-clippy-warnings rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:20:35</span>cheduled verify job=healer-verify-facts-clippy-warnings rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:20:39</span>cheduled analyze job=healer-analyze-dead-link-in-healer_solution_delayed-healer-verify rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:20:43</span>cheduled solve job=healer-solve-dead-link-in-healer_solution_delayed-healer-verify rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:20:46</span>cheduled verify job=healer-verify-dead-link-in-healer_solution_delayed-healer-verify rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:20:46</span>ealer dispatched 6 jobs for 2 issues</span><span class="log-entry"><span class="ts">2026-07-21T09:29:52</span>cheduled analyze job=healer-analyze-facts-clippy-warnings rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:29:54</span>cheduled solve job=healer-solve-facts-clippy-warnings rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:29:56</span>cheduled verify job=healer-verify-facts-clippy-warnings rc=0</span><span class="log-entry"><span class="ts">2026-07-21T09:29:56</span>ealer dispatched 3 jobs for 1 issues</span><span class="log-entry"><span class="ts">2026-07-21T09:31:20</span> cron-status: 48 jobs, ok=3, error=2, running=1, pending=10</span></div>
     </div>
-  </section>
+  </div>
 
-  <!-- 3-COLUMN OPS GRID: Cron | Backlog | Pulse -->
-  <div class="section-divider"></div>
-  <div class="section-label">Operations</div>
-  <div class="grid grid-3" style="margin-top:20px;">
-    <!-- Cron Jobs -->
-    <section class="panel">
-      <div class="panel-header">
-        <h2>⏰ Cron Jobs</h2>
-        <span class="badge badge-info">14 active</span>
+  <!-- JOB CHAIN -->
+  <div class="section-label" id="chain">Autonomous Pipeline</div>
+  <div class="chain">
+      <div class="chain-step scheduled">
+        <div class="chain-dot scheduled"></div>
+        <div>
+          <div class="chain-title">Facts</div>
+          <div class="chain-meta">1m ago — Script not found: /home/m/.hermes/script</div>
+        </div>
+      </div><div class="chain-arrow">→</div>
+      <div class="chain-step ok">
+        <div class="chain-dot ok"></div>
+        <div>
+          <div class="chain-title">Planner</div>
+          <div class="chain-meta">10h ago</div>
+        </div>
+      </div><div class="chain-arrow">→</div>
+      <div class="chain-step ok">
+        <div class="chain-dot ok"></div>
+        <div>
+          <div class="chain-title">Dispatcher</div>
+          <div class="chain-meta">6h ago</div>
+        </div>
+      </div><div class="chain-arrow">→</div>
+      <div class="chain-step info">
+        <div class="chain-dot info"></div>
+        <div>
+          <div class="chain-title">Workers (0)</div>
+          <div class="chain-meta">not dispatched</div>
+        </div>
+      </div><div class="chain-arrow">→</div>
+      <div class="chain-step error">
+        <div class="chain-dot error"></div>
+        <div>
+          <div class="chain-title">Reviewer</div>
+          <div class="chain-meta">8h ago — TimeoutError: Cron job 'ramshield-review</div>
+        </div>
+      </div></div>
+
+  <!-- OPERATIONS -->
+  <div class="section-label" id="ops">Operations</div>
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Cron Fleet Status <span>48 jobs • 19 script • 29 LLM</span></h2>
+      <span class="badge badge-danger">2 errors</span>
+    </div>
+    <div class="panel-body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+        <span class="badge badge-ok">OK 3</span>
+        <span class="badge badge-danger">Errors 2</span>
+        <span class="badge badge-info">Running 1</span>
+        <span class="badge badge-warn">Pending 10</span>
+        <span class="badge badge-neutral">Scheduled 19</span>
       </div>
-      <div class="panel-body">
-        <table>
-          <thead><tr><th>Job</th><th>Sched</th><th>Status</th></tr></thead>
-          <tbody>
-
-            <tr>
+      <table>
+        <thead><tr><th>Job</th><th>Schedule</th><th>Status</th><th>Last Run</th><th>Execution</th></tr></thead>
+        <tbody>
+            <tr title="">
               <td>ramshield-backup</td>
               <td><code>0 2 * * *</code></td>
-              <td><span class="badge badge-warn">never</span></td>
+              <td><span class="badge badge-ok">ok</span></td>
+              <td>9h ago</td>
+              <td>completed</td>
             </tr>
-            <tr>
+            <tr title="RuntimeError: Skipped to prevent unintended spend: global inference config drifted since this job was created (provider ">
               <td>RamShield Promotion Agent</td>
               <td><code>0 9 * * *</code></td>
-              <td><span class="badge badge-warn">never</span></td>
+              <td><span class="badge badge-danger">error</span></td>
+              <td>1h ago</td>
+              <td>failed</td>
             </tr>
-            <tr>
+            <tr title="RuntimeError: Skipped to prevent unintended spend: global inference config drifted since this job was created (provider ">
               <td>ramshield-helper-agent</td>
               <td><code>*/10 * * * *</code></td>
-              <td><span class="badge badge-warn">never</span></td>
+              <td><span class="badge badge-info">running</span></td>
+              <td>9m ago</td>
+              <td>running</td>
             </tr>
-            <tr>
+            <tr title="Script not found: /home/m/.hermes/scripts/.github/scripts/facts_collector.py">
               <td>ramshield-facts-collector</td>
               <td><code>*/30 * * * *</code></td>
-              <td><span class="badge badge-warn">never</span></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1m ago</td>
+              <td>claimed</td>
             </tr>
-            <tr>
+            <tr title="">
               <td>ramshield-daily-planner</td>
               <td><code>0 1 * * *</code></td>
-              <td><span class="badge badge-warn">never</span></td>
+              <td><span class="badge badge-ok">ok</span></td>
+              <td>10h ago</td>
+              <td>completed</td>
             </tr>
-            <tr>
+            <tr title="TimeoutError: Cron job 'ramshield-reviewer' idle for 600s (limit 600s) — last activity: waiting for non-streaming API re">
               <td>ramshield-reviewer</td>
               <td><code>0 3 * * *</code></td>
-              <td><span class="badge badge-warn">never</span></td>
+              <td><span class="badge badge-danger">error</span></td>
+              <td>8h ago</td>
+              <td>failed</td>
             </tr>
-            <tr>
-              <td>ramshield-worker-T1</td>
-              <td><code>once in 30m</code></td>
-              <td><span class="badge badge-warn">never</span></td>
-            </tr>
-            <tr>
-              <td>ramshield-worker-T2</td>
-              <td><code>once in 45m</code></td>
-              <td><span class="badge badge-warn">never</span></td>
-            </tr>
-            <tr>
-              <td>ramshield-worker-T3</td>
-              <td><code>once in 60m</code></td>
-              <td><span class="badge badge-warn">never</span></td>
-            </tr>
-            <tr>
+            <tr title="">
               <td>ramshield-cron-status</td>
               <td><code>*/5 * * * *</code></td>
-              <td><span class="badge badge-warn">never</span></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1m ago</td>
+              <td>claimed</td>
             </tr>
-            <tr>
+            <tr title="">
               <td>ramshield-pulse</td>
               <td><code>*/5 * * * *</code></td>
-              <td><span class="badge badge-warn">never</span></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1m ago</td>
+              <td>claimed</td>
             </tr>
-            <tr>
-              <td>ramshield-promotion-agent</td>
-              <td><code>*/30 * * * *</code></td>
-              <td><span class="badge badge-warn">never</span></td>
-            </tr>
-            <tr>
+            <tr title="RuntimeError: Skipped to prevent unintended spend: global inference config drifted since this job was created (provider ">
               <td>ramshield-research-agent</td>
               <td><code>0 * * * *</code></td>
-              <td><span class="badge badge-warn">never</span></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1h ago</td>
+              <td>claimed</td>
             </tr>
-            <tr>
+            <tr title="">
               <td>ramshield-health-loop</td>
               <td><code>*/15 * * * *</code></td>
-              <td><span class="badge badge-warn">never</span></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>48m ago</td>
+              <td>claimed</td>
             </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+            <tr title="">
+              <td>ramshield-health-repair</td>
+              <td><code>0 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1h ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>ramshield-git-automation</td>
+              <td><code>*/15 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>48m ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>promo-qw-github-topics</td>
+              <td><code>*/5 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1m ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>promo-qw-awesome-rust</td>
+              <td><code>*/5 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1m ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>promo-qw-crates-io</td>
+              <td><code>*/5 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1m ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>promo-fast-reddit</td>
+              <td><code>*/10 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1m ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>promo-fast-x</td>
+              <td><code>*/10 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1m ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>promo-std-devto</td>
+              <td><code>*/15 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>47m ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>promo-std-hn</td>
+              <td><code>*/15 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>47m ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>promo-deep-blog</td>
+              <td><code>*/30 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1m ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>promo-deep-rust-weekly</td>
+              <td><code>*/30 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1m ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>promo-strategic-plan</td>
+              <td><code>0 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1h ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>promo-reviewer</td>
+              <td><code>*/30 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1m ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>ramshield-dispatcher</td>
+              <td><code>30 1 * * *</code></td>
+              <td><span class="badge badge-ok">ok</span></td>
+              <td>6h ago</td>
+              <td>completed</td>
+            </tr>
+            <tr title="">
+              <td>ramshield-error-healer</td>
+              <td><code>*/30 * * * *</code></td>
+              <td><span class="badge badge-neutral">scheduled</span></td>
+              <td>1m ago</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>healer-solve-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:19</code></td>
+              <td><span class="badge badge-warn">pending</span></td>
+              <td>never</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>healer-verify-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:29</code></td>
+              <td><span class="badge badge-warn">pending</span></td>
+              <td>never</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>healer-solve-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:21</code></td>
+              <td><span class="badge badge-warn">pending</span></td>
+              <td>never</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>healer-verify-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:31</code></td>
+              <td><span class="badge badge-neutral">unknown</span></td>
+              <td>never</td>
+              <td></td>
+            </tr>
+            <tr title="">
+              <td>healer-solve-dead-link-in-healer_solution_delayed-healer-verify</td>
+              <td><code>once at 2026-07-21 09:22</code></td>
+              <td><span class="badge badge-warn">pending</span></td>
+              <td>never</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>healer-verify-dead-link-in-healer_solution_delayed-healer-verify</td>
+              <td><code>once at 2026-07-21 09:32</code></td>
+              <td><span class="badge badge-neutral">unknown</span></td>
+              <td>never</td>
+              <td></td>
+            </tr>
+            <tr title="">
+              <td>healer-solve-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:23</code></td>
+              <td><span class="badge badge-warn">pending</span></td>
+              <td>never</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>healer-verify-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:33</code></td>
+              <td><span class="badge badge-neutral">unknown</span></td>
+              <td>never</td>
+              <td></td>
+            </tr>
+            <tr title="">
+              <td>healer-solve-dead-link-in-healer_solution_delayed-healer-verify</td>
+              <td><code>once at 2026-07-21 09:23</code></td>
+              <td><span class="badge badge-warn">pending</span></td>
+              <td>never</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>healer-verify-dead-link-in-healer_solution_delayed-healer-verify</td>
+              <td><code>once at 2026-07-21 09:33</code></td>
+              <td><span class="badge badge-neutral">unknown</span></td>
+              <td>never</td>
+              <td></td>
+            </tr>
+            <tr title="">
+              <td>healer-solve-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:24</code></td>
+              <td><span class="badge badge-warn">pending</span></td>
+              <td>never</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>healer-verify-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:34</code></td>
+              <td><span class="badge badge-neutral">unknown</span></td>
+              <td>never</td>
+              <td></td>
+            </tr>
+            <tr title="">
+              <td>healer-solve-dead-link-in-healer_solution_delayed-healer-verify</td>
+              <td><code>once at 2026-07-21 09:24</code></td>
+              <td><span class="badge badge-warn">pending</span></td>
+              <td>never</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>healer-verify-dead-link-in-healer_solution_delayed-healer-verify</td>
+              <td><code>once at 2026-07-21 09:34</code></td>
+              <td><span class="badge badge-neutral">unknown</span></td>
+              <td>never</td>
+              <td></td>
+            </tr>
+            <tr title="">
+              <td>healer-analyze-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:22</code></td>
+              <td><span class="badge badge-warn">pending</span></td>
+              <td>never</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>healer-solve-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:32</code></td>
+              <td><span class="badge badge-neutral">unknown</span></td>
+              <td>never</td>
+              <td></td>
+            </tr>
+            <tr title="">
+              <td>healer-verify-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:42</code></td>
+              <td><span class="badge badge-neutral">unknown</span></td>
+              <td>never</td>
+              <td></td>
+            </tr>
+            <tr title="">
+              <td>healer-analyze-dead-link-in-healer_solution_delayed-healer-verify</td>
+              <td><code>once at 2026-07-21 09:22</code></td>
+              <td><span class="badge badge-warn">pending</span></td>
+              <td>never</td>
+              <td>claimed</td>
+            </tr>
+            <tr title="">
+              <td>healer-solve-dead-link-in-healer_solution_delayed-healer-verify</td>
+              <td><code>once at 2026-07-21 09:32</code></td>
+              <td><span class="badge badge-neutral">unknown</span></td>
+              <td>never</td>
+              <td></td>
+            </tr>
+            <tr title="">
+              <td>healer-verify-dead-link-in-healer_solution_delayed-healer-verify</td>
+              <td><code>once at 2026-07-21 09:42</code></td>
+              <td><span class="badge badge-neutral">unknown</span></td>
+              <td>never</td>
+              <td></td>
+            </tr>
+            <tr title="">
+              <td>healer-analyze-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:31</code></td>
+              <td><span class="badge badge-neutral">unknown</span></td>
+              <td>never</td>
+              <td></td>
+            </tr>
+            <tr title="">
+              <td>healer-solve-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:41</code></td>
+              <td><span class="badge badge-neutral">unknown</span></td>
+              <td>never</td>
+              <td></td>
+            </tr>
+            <tr title="">
+              <td>healer-verify-facts-clippy-warnings</td>
+              <td><code>once at 2026-07-21 09:51</code></td>
+              <td><span class="badge badge-neutral">unknown</span></td>
+              <td>never</td>
+              <td></td>
+            </tr></tbody>
+      </table>
+    </div>
+  </div>
 
-    <!-- Backlog -->
-    <section class="panel">
+  <!-- MODULES -->
+  <div class="section-label" id="modules">Module Consoles</div>
+  <div class="module-grid">
+    
+    <article class="panel">
       <div class="panel-header">
-        <h2>📦 Atomic Backlog</h2>
-        <span class="badge badge-neutral">48/50 left</span>
+        <h2>Error Healer <span>23 temp jobs</span></h2>
+        <span class="badge badge-info">INFO</span>
       </div>
       <div class="panel-body">
-        <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;">
-          <div style="position:relative;width:54px;height:54px;">
-            
-    <svg class="progress-ring" viewBox="0 0 52 52" aria-label="Progress 4%">
-      <circle class="progress-ring-bg" cx="26" cy="26" r="22"/>
-      <circle class="progress-ring-fg" cx="26" cy="26" r="22"
-              style="stroke-dashoffset:132.5"/>
-      <text class="progress-ring-text" x="26" y="27">4%</text>
-    </svg>
-          </div>
-          <div>
-            <div style="font-weight:600;font-size:1.1rem;">2 / 50</div>
-            <div style="color:var(--muted);font-size:.8rem;">atomic jobs picked up</div>
-          </div>
+        <div class="module-status"><div class="status-dot status-info"></div><span style="font-size:.78rem;color:var(--muted);">last activity recent</span></div>
+        <div class="log-tail"><span class="log-line">• 23 temp jobs active (0 error, 10 pending)</span><span class="log-line">• - `healer-analyze-facts-clippy-warnings` at 2026-07-21T09:31:49+00:00 (analyze)</span><span class="log-line">• - `healer-solve-facts-clippy-warnings` at 2026-07-21T09:41:49+00:00 (solve)</span><span class="log-line">• - `healer-verify-facts-clippy-warnings` at 2026-07-21T09:51:49+00:00 (verify)</span></div>
+        <button class="collapsible" aria-expanded="false" onclick="toggle(this,'mod-error-healer')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          Full report
+        </button>
+        <div id="mod-error-healer" class="collapsible-content">
+          <div class="markdown-body" style="margin-top:12px;"><p># Error Healer Dispatch — 2026-07-21 09:29 UTC</p>
+<p>Active issues detected: 1 (capped to 1 this run)</p>
+<p>| Issue | Category | Cycle | Jobs scheduled |<br>|-------|----------|-------|----------------|<br>| facts-clippy-warnings | facts | 1 | analyze/solve/verify |</p>
+<strong>Total temp jobs scheduled:</strong> 3
+<h3>Scheduled jobs</h3>
+<p>- <code>healer-analyze-facts-clippy-warnings</code> at 2026-07-21T09:31:49+00:00 (analyze)<br>- <code>healer-solve-facts-clippy-warnings</code> at 2026-07-21T09:41:49+00:00 (solve)<br>- <code>healer-verify-facts-clippy-warnings</code> at 2026-07-21T09:51:49+00:00 (verify)</p></div>
         </div>
-        <div style="font-size:.8rem;color:var(--muted);">P0 → P3 priority queue. Pulse agent picks top unfinished item every 5 min.</div>
-        <details style="margin-top:8px;">
-          <summary style="cursor:pointer;color:var(--accent);font-size:.75rem;">View top 10</summary>
-<div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Implement `src/learning/xgboost</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Implement `src/learning/preprocess</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Add `cargo clippy` CI gate to `</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Fix dead link in `DOCUMENTATION</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Write `src/engine/mod</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Add unit test skeleton for `xgboost::score`</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Pin `tflite-rust` version in Cargo</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Add `--version` flag to main binary</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Document IPC protocol in `docs/IPC</div><div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• Add `make bench` target to Makefile</div>
-        </details>
       </div>
-    </section>
-
-    <!-- Pulse -->
-    <section class="panel">
+    </article>
+    <article class="panel">
       <div class="panel-header">
-        <h2>💓 Pulse (5m)</h2>
-        <span class="badge badge-info">every 5m</span>
+        <h2>Facts Collector <span>27 files</span></h2>
+        <span class="badge badge-info">INFO</span>
       </div>
       <div class="panel-body">
-        <div style="font-size:.8rem;color:var(--muted);margin-bottom:10px;">High-frequency pickup from backlog. Last entry:</div>
-<div style="background:rgba(0,245,212,.05);border-left:3px solid var(--accent);padding:10px 12px;border-radius:4px;font-family:monospace;font-size:.85rem;">Mon 20 Jul 07:01:32 CEST 2026: Executed P0 task: Implement src/learning/preprocess.rs with normalize() stub (sandbox write to .hermes mirror; real repo path read-only here)</div>
+        <div class="module-status"><div class="status-dot status-info"></div><span style="font-size:.78rem;color:var(--muted);">last activity 1m ago</span></div>
+        <div class="log-tail"><span class="log-line">• Rust files: 27, LOC: 4,399</span></div>
+        <button class="collapsible" aria-expanded="false" onclick="toggle(this,'mod-facts-collector')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          Full report
+        </button>
+        <div id="mod-facts-collector" class="collapsible-content">
+          <div class="markdown-body" style="margin-top:12px;"><p>{<br>  "generated_at": "2026-07-21T09:29:35Z",<br>  "workspace": "/home/m/vehicle_of_rationalism/ramshield/beta/rs",<br>  "git": {<br>    "branch": "feature/ramshield-advanced",<br>    "commit_short": "b056753",<br>    "recent_commits": {<br>      "count": 70,<br>      "commits": [<br>        "b056753 feat(helper): extensive logging + dashboard progress reporting",<br>        "0f7183b docs(healer): initial dispatch, analysis and status placeholders",<br>        "341d247 feat(dashboard): self-healing ledger and error healer module card",<br>        "57efec3 ci(healer): GitHub Actions workflow for error healer",<br>        "33eff60 feat(healer): tree-like self-healing scheduler with analyze/solve/verify temp jobs",<br>        "3fd5f33 feat(dashboard): operator log stream + actionable scaling commands",<br>        "55f4f95 feat(dashboard): report live dispatcher + worker chain",<br>        "641aa39 feat(dashboard): production-grade operator console",<br>        "9017366 fix(dashboard): live cron status + promo job wrappers",<br>        "6864ef1 helper agent: automated update [skip ci]",<br>        "3aeadea helper agent: automated update [skip ci]",<br>        "e26c877 helper agent: automated update [skip ci]",<br>        "1851bc9 helper agent: automated update [skip ci]",<br>        "ebf8ee0 helper agent: automated update [skip ci]",<br>        "1e9a489 helper agent: automated update [skip ci]",<br>        "ac728e4 feat: mark CLI status tasks complete",<br>        "7c0a7f0 feat: implement CLI status --json output",<br>        "d5afe2a helper agent: automated update [skip ci]",<br>        "5f5e7ca helper agent: automated update [skip ci]",<br>        "3aab097 helper agent: automated update [skip ci]"<br>      ]<br>    }<br>  },<br>  "codebase": {<br>    "rust_files": 27,<br>    "lines_of_code": 4399,<br>    "clippy_warnings": 21<br>  },<br>  "todos": [],<br>  "dependencies": [<br>    {<br>      "name": "serde_json",<br>      "version": "1"<br>    },<br>    {<br>      "name": "dashmap",<br>      "version": "5"<br>    },<br>    {<br>      "name": "ahash",<br>      "version": "0.8"<br>    },<br>    {<br>      "name": "arc-swap",<br>      "version": "1"<br>    },<br>    {<br>      "name": "crossbeam-channel",<br>      "version": "0.5"<br>    },<br>    {<br>      "name": "crc32fast",<br>      "version": "1"<br>    },<br>    {<br>      "name": "lz4_flex",<br>      "version": "0.11"<br>    },<br>    {<br>      "name": "thiserror",<br>      "version": "1"<br>    },<br>    {<br>      "name": "anyhow",<br>      "version": "1"<br>    },<br>    {<br>      "name": "tracing",<br>      "version": "0.1"<br>    },<br>    {<br>      "name": "toml",<br>      "version": "0.8"<br>    },<br>    {<br>      "name": "num_cpus",<br>      "version": "1"<br>    },<br>    {<br>      "name": "axum",<br>      "version": "0.7"<br>    },<br>    {<br>      "name": "futures-util",<br>      "version": "0.3"<br>    },<br>    {<br>      "name": "tokio-stream",<br>      "version": "0.1"<br>    },<br>    {<br>      "name": "ctrlc",<br>      "version": "3"<br>    },<br>    {<br>      "name": "sysinfo",<br>      "version": "0.29"<br>    },<br>    {<br>      "name": "shlex",<br>      "version": "2.0.1"<br>    },<br>    {<br>      "name": "chrono",<br>      "version": "0.4"<br>    }<br>  ],<br>  "roadmap_open_tasks": [<br>    "Implement XGBoost threat scoring model",<br>    "Add scikit-learn preprocessing pipeline",<br>    "Integrate model versioning with Git LFS",<br>    "*Milestone:* 95% accuracy on test dataset",<br>    "Implement Rust-based ML inference (tflite-rust)",<br>    "Add AVX2/AVX2 optimization flags",<br>    "Benchmark against Go implementation",<br>    "*Milestone:* 2x faster inference than Python baseline",<br>    "TLS 1.3 support for encrypted IPC",<br>    "iptables rate limiting integration",<br>    "Cryptographic audit logging (SHA-256 signed)",<br>    "*Milestone:* Zero-trust IPC communication",<br>    "Launch RamShield Blog (weekly posts)",<br>    "Create GitHub Discussions for community feedback",<br>    "Launch \"RamShield Champions\" program",<br>    "Kubernetes Operator for auto-scaling",<br>    "Heroku buildpack for one-click deploy",<br>    "Cloudflare Workers integration for edge detection",<br>    "<strong>WebAssembly (WASM) Module Support</strong>: Allow users to write custom detection logic in WASM.",<br>    "<strong>IoT Gateway Shielding</strong>: Optimized build for ARM/RISC-V edge devices.",<br>    "<strong>Time-Series Database Integration</strong>: Sync with InfluxDB/Prometheus for long-term analytics.",<br>    "<strong>Kafka/Pulsar Streaming</strong>: Real-time threat event streaming for enterprise logs."<br>  ],<br>  "report_summaries": {<br>    "AGENT_REPORT.md": "# RamShield Helper Agent Report\n\n<strong>Generated:</strong> 2026-07-21 06:22 UTC\n<strong>Branch:</strong> <code>feature/ramshield-advanced</code>\n<strong>Commit:</strong> <code>0f7183b</code>\n<strong>Commits (24h):</strong> 56\n\n---\n\n## Codebase Metrics\n\n| Metric | Value |\n|--------|-------|\n| Rust files | 27 |\n| Total lines | 4,534 |\n| Comment lines | 258 |\n| Unsafe blocks | 0 |\n\n---\n\n## Research Audit Tree\n\n| Domain | Innovation |\n|--------|-----------|\n| <strong>Deep Learning for Packet Inspection</strong> | LSTM/GRU for sequence-based anomaly detection. |\n| <strong>Reinforcement Learning (RL)</strong> | Adaptive rate-limiting policies that evolve with attacker behavior. |\n| <strong>Federated Learning</strong> | Collaborative defense across distributed RamShield nodes without sharing raw traffic. |\n| <strong>Zero-Knowledge Proofs (ZKP)</strong> | For privacy-preserving threat intelligence sharing. |\n| <strong>Homomorphic Encryption</strong> | Analyzing encrypted traffic without decryption overhead. |\n| <strong>Post-Quantum Cryptography (PQC)</strong> | Preparing IPC and storage encryption for the quantum era. |\n| <strong>eBPF/XDP Integration</strong> | Kernel-level packet filtering bypassing userspace overhead. |\n| <strong>Memory-Mapped I/O (mmap)</strong> | High-speed shared memory for multi-node RamShield clusters. |\n| <strong>Data-Oriented Design (DOD)</strong> | Restructuring core data layouts for SIMD-heavy pipelines. |\n\n---\n\n## Expansion Tree\n\n- [ ] <strong>WebAssembly (WASM) Module Support</strong>: Allow users to write custom detection logic in WASM.\n- [ ] <strong>IoT Gateway Shielding</strong>: Optimized build for ARM/RISC-V edge devices.\n- [ ] <strong>Time-Series Database Integration</strong>: Sync with InfluxDB/Prometheus for long-term analytics.\n- [ ] <strong>Kafka/Pulsar Streaming</strong>: Real-time threat event streaming for enterprise logs.\n\n---\n\n## Roadmap Milestones\n\n\n---\n\n## Technical Debt\n\n- Open TODOs: <strong>0</strong>\n- Open FIXMEs: <strong>0</strong>\n\n---\n\n*Generated by RamShield Helper Agent v0.3.0*\n",<br>    "HEALTH_DASHBOARD.md": "# RamShield Project Health Dashboard\n\n<strong>Generated:</strong> 2026-07-21 06:22 UTC\n\n---\n\n## \u2699\ufe0f Agent Configuration\n\nThis section displays the current operational parameters for the Helper Agent. These settings can be modified to direct the agent's focus and behavior.\n\n``<code>json\n{\n  \"scan_frequency_minutes\": 5,\n  \"todo_scan_paths\": [\n    \"src\",\n    \"docs\",\n    \".github\"\n  ],\n  \"research_scan_keywords\": [\n    \"ml\",\n    \"ai\",\n    \"rust\",\n    \"security\",\n    \"ddos\",\n    \"performance\",\n    \"async\",\n    \"tokio\",\n    \"axum\",\n    \"observability\",\n    \"metrics\"\n  ],\n  \"new_ideas_output_file\": \"docs/NEW_IDEAS.md\",\n  \"report_output_file\": \"docs/HEALTH_DASHBOARD.md\",\n  \"helper_agent_log_file\": \".github/logs/helper_agent.log\",\n  \"operator_log_file\": \"docs/OPERATOR_LOG.md\",\n  \"dependency_audit_report\": \"docs/DEPENDENCY_AUDIT.md\",\n  \"roadmap_file\": \"docs/ROADMAP.md\",\n  \"log_tail_lines\": 8\n}\n</code>`<code>\n\n---\n\n## \ud83c\udfc3\u200d\u2640\ufe0f Helper Agent Activity Log\n\nThis log captures recent actions and observations from the Helper Agent's last runs.\n\n</code>`<code>\n2026-07-21T06:22:13.210+00:00 | INFO     | helper_agent | [scan] TODO scan complete\n2026-07-21T06:22:13.211+00:00 | INFO     | helper_agent | [metrics] Counting metrics under src\n2026-07-21T06:22:13.227+00:00 | INFO     | helper_agent | [metrics] Metrics counted\n2026-07-21T06:22:13.227+00:00 | INFO     | helper_agent | [roadmap] Parsing roadmap tree\n2026-07-21T06:22:13.228+00:00 | INFO     | helper_agent | [roadmap] Roadmap tree parsed\n2026-07-21T06:22:13.228+00:00 | INFO     | helper_agent | [git] Capturing git state\n2026-07-21T06:22:13.240+00:00 | INFO     | helper_agent | [git] Git state captured\n2026-07-21T06:22:13.241+00:00 | INFO     | helper_agent | [report] Report written to docs/AGENT_REPORT.md\n</code>`<code>\n\n### Latest Helper Stages\n\n| Stage | Latest Message |\n|-------|----------------|\n| <strong>main</strong> | Helper agent invoked |\n| <strong>report</strong> | Report written to docs/AGENT_REPORT.md |\n| <strong>scan</strong> | TODO scan complete |\n| <strong>metrics</strong> | Metrics counted |\n| <strong>roadmap</strong> | Roadmap tree ",<br>    "CONTROL_CENTER.md": "# RamShield Autonomous Helper Control Center\n\n<strong>Status:</strong> Operational\n<strong>Agent Cycle:</strong> 15m / 60m / Cron-local\n<strong>Branch:</strong> </code>feature/ramshield-advanced<code>\n\n---\n\n## \ud83e\udd16 Helper Agent Status\n\n| Agent | Last Execution | Health | Next Run |\n| :--- | :--- | :--- | :--- |\n| <strong>Helper Agent</strong> | [2026-07-19 22:30] | \u2705 OK | 22:45 |\n| <strong>Dependency Audit</strong> | [2026-07-19 22:00] | \u2705 OK | 23:00 |\n| <strong>Health Dashboard</strong> | [2026-07-19 22:15] | \u2705 OK | 22:30 |\n\n---\n\n## \ud83d\udee0 Directives & Expansion Panel\n\nTo modify agent behavior, update the </code>AGENT_CONFIG<code> in </code>health_dashboard.py<code> or provide instructions in this chat.\n\n### Current Agent Directives:\n1. <strong>[Active]</strong> Aggressively scan </code>src<code> and </code>docs<code> for TODO/FIXME markers.\n2. <strong>[Active]</strong> Track roadmap progress in </code>docs/ROADMAP.md<code>.\n3. <strong>[Active]</strong> Audit </code>Cargo.toml<code> dependencies hourly against crates.io.\n4. <strong>[Experimental]</strong> Scan </code>research/<code> directory for emerging ML/Rust patterns.\n\n### Expansion Ideas (Pending Implementation):\n- [ ] <strong>Adaptive Learning</strong>: Integrate LLM to process TODOs into actionable tasks.\n- [ ] <strong>Multi-Branch Watch</strong>: Monitor </code>main<code> vs </code>feature<code> branches for drift.\n- [ ] <strong>Interactive Command Interface</strong>: Allow user to inject commands via GitHub Issues.\n\n---\n\n## \ud83d\udca1 Exploration & Research Insights (Organic Growth)\n\n*Insights gathered by the agent through recursive exploration:*\n\n- <strong>Performance</strong>: High potential for AVX2 optimization in </code>detection/batch.rs<code>.\n- <strong>Architecture</strong>: </code>IPC<code> via JSON is bottlenecking at 5M events/s. Explore Protobuf/gRPC for internal protocol.\n- <strong>Community</strong>: The current README structure is solid, but the </code>research/<code> directory needs more automated exploration tools.\n\n---\n\n## \u2699\ufe0f Direct Input / Feedback\n\n<strong>Modify Agent Behavior:</strong>\n- *Increase scan frequency* -> Edit </code>.github/scripts/health_dashboard.py<code> -> </code>scan_frequency_minutes<code>\n- *Add research path* -> Edit </code>.github/scripts/health_dashboard.py<code> -> </code>research_scan_keywords<code>\n\n*Paste your instructions below to direct the Helper Agent.*\n"<br>  },<br>  "plan_review_worker_link": {<br>    "PLAN.md": "# Daily Plan \u2014 2026-07-20\n\n## State Assessment\n</code>ramshield-facts-collector<code> cron job is failing due to an incorrect script path. This issue prevents upstream agents from collecting necessary data. Roadmap tasks for Q1 Advanced Analytics are pending. The most urgent task is to restore the facts collector's functionality.\n\n## Prioritized Tasks\n### T1: Fix Facts Collector Cron Job\n- Target: Hermes cron job </code>1cb5e490c826<code>\n- Action: Update the script path for </code>ramshield-facts-collector<code> to be relative to its workdir: </code>.github/scripts/facts_collector.py<code>.\n- Verify: </code>hermes cron list<code> shows the updated script path for job </code>1cb5e490c826<code>.\n\n### T2: Create FACTS.json Placeholder\n- Target: </code>docs/FACTS.json<code>\n- Action: Create an empty </code>docs/FACTS.json<code> file as a placeholder to prevent downstream agents from failing on missing input.\n- Verify: </code>docs/FACTS.json<code> exists and is an empty JSON object.\n\n",<br>    "REVIEW.md": "_Report not found: REVIEW.md_",<br>    "WORKER_STATUS.md": "# Worker Status \u2014 2026-07-21\n\n<strong>Dispatcher Run:</strong> 2026-07-21T03:06:28Z  \n<strong>Last Updated:</strong> 2026-07-21T03:06:28Z\n\n| Task ID | Title | Worker Name | Cron Job ID | Schedule (UTC) | Status | Completion Time |\n|---------|-------|-------------|-------------|----------------|--------|-----------------|\n| T1 | Fix Facts Collector Cron Job | ramshield-worker-T1 | </code>cbc4de64dc24<code> | 2026-07-21T03:35:00Z | Pending | \u2014 |\n| T2 | Create FACTS.json Placeholder | ramshield-worker-T2 | </code>9ffce45d0474<code> | 2026-07-21T03:50:00Z | Pending | \u2014 |\n\n## Status Legend\n\n- <strong>Pending</strong> \u2014 Worker created, awaiting scheduled run.\n- <strong>Running</strong> \u2014 Worker has started execution.\n- <strong>Completed</strong> \u2014 Worker finished and reported success.\n- <strong>Failed</strong> \u2014 Worker reported failure or timed out.\n- <strong>Skipped</strong> \u2014 Duplicate worker was not created.\n",<br>    "LINK_REPORT.md": "_Report not found: LINK_REPORT.md_",<br>    "CRON_STATUS.md": "# Cron Job Status \u2014 2026-07-21 09:19 UTC\n\n<strong>Live snapshot from </code>hermes cron list<code>.</strong> 40 jobs tracked. Updated every 5 minutes.\n\n| State | Count |\n| :--- | :--- |\n| OK | 3 |\n| Error | 3 |\n| Running | 1 |\n| Pending | 0 |\n| Scheduled | 19 |\n\n| Job | Schedule | Status | Execution | Last Run |\n| :--- | :--- | :--- | :--- | :--- |\n| ramshield-backup | </code>0 2 * * *<code> | \u2705 ok | completed | 2026-07-21T02:00:36.463241+02:00 |\n| RamShield Promotion Agent | </code>0 9 * * *<code> | \u274c error | failed | 2026-07-21T10:21:32.484248+02:00 |\n| ramshield-helper-agent | </code>*/10 * * * *<code> | \u274c error | failed | 2026-07-21T11:12:36.319084+02:00 |\n| ramshield-facts-collector | </code>*/30 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:11:06.570945+02:00 |\n| ramshield-daily-planner | </code>0 1 * * *<code> | \u2705 ok | completed | 2026-07-21T01:07:11.719033+02:00 |\n| ramshield-reviewer | </code>0 3 * * *<code> | \u274c error | failed | 2026-07-21T03:20:26.751139+02:00 |\n| ramshield-cron-status | </code>*/5 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:21:49.563010+02:00 |\n| ramshield-pulse | </code>*/5 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:21:49.775474+02:00 |\n| ramshield-research-agent | </code>0 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:21:32.663572+02:00 |\n| ramshield-health-loop | </code>*/15 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:43:29.732805+02:00 |\n| ramshield-health-repair | </code>0 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:21:47.755380+02:00 |\n| ramshield-git-automation | </code>*/15 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:43:30.167281+02:00 |\n| promo-qw-github-topics | </code>*/5 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:21:49.902861+02:00 |\n| promo-qw-awesome-rust | </code>*/5 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:21:50.007275+02:00 |\n| promo-qw-crates-io | </code>*/5 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:21:50.151243+02:00 |\n| promo-fast-reddit | </code>*/10 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:21:50.302350+02:00 |\n| promo-fast-x | </code>*/10 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:21:50.438548+02:00 |\n| promo-std-devto | </code>*/15 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:43:30.620249+02:00 |\n| promo-std-hn | </code>*/15 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:43:31.018250+02:00 |\n| promo-deep-blog | </code>*/30 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:11:22.301559+02:00 |\n| promo-deep-rust-weekly | </code>*/30 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:11:22.433068+02:00 |\n| promo-strategic-plan | </code>0 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:21:47.919727+02:00 |\n| promo-reviewer | </code>*/30 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:11:22.610703+02:00 |\n| ramshield-dispatcher | </code>30 1 * * *<code> | \u2705 ok | completed | 2026-07-21T05:07:34.301482+02:00 |\n| ramshield-error-healer | </code>*/30 * * * *<code> | \ud83d\udcc5 scheduled | claimed | 2026-07-21T10:11:51.664779+02:00 |\n| healer-solve-delayed-healer-solve-facts-missing-key-facts-json | </code>once at 2026-07-21 08:23<code> | \ud83c\udfc3 running | running |  |\n| healer-solve-facts-clippy-warnings | </code>once at 2026-07-21 09:19<code> | \u2753 unknown |  |  |\n| healer-ver",<br>    "PROMOTION_LOG.md": "1|1|- 2026-07-20T14:05Z | #45 Tweet thread: DDoS mitigation architecture | docs/drafts/tweet-ddos-mitigation.md | DONE (local draft)\n2|2|- 2026-07-20T14:05Z | #50 Create blog calendar | docs/BLOG_CALENDAR.md | DONE\n3|3|- 2026-07-20T14:31Z | #50 Blog cadence: Week-3 draft | docs/drafts/blog-ddos-arch.md | DONE (local draft) [PENDING PUBLISH]\n4|4|- 2026-07-20T14:31Z | #47 crates.io publish checklist | docs/CRATES_IO_CHECKLIST.md | DONE (local doc) [PENDING PUBLISH]\n5|5|- 2026-07-20T16:35Z - 2026-07-20T17:30Z | #45 (verified already drafted) | docs/drafts/tweet-ddos-mitigation.md | NO-OP (no undone items 41-50; backstop staleness: backlog #45 marked </code>[ ]<code> but draft+log exist) | SKIP\n\n6|6|- 2026-07-20T16:35Z | #52 promo-qw-topics: add GitHub topics/badges | docs/promotion/content/promo-qw-topics.md | DONE (local doc) [PENDING PUBLISH]\n7|7|- 2026-07-20T16:36Z | #44 Record 30s demo GIF of dashboard | docs/drafts/demo-gif-guide.md | DONE (local guide)",<br>    "RESEARCH.md": "# Research Flow\n\nAutomated research findings feeding the pipeline. Populated by the research agent.\nEach entry links to a backlog item or roadmap task it informs.\n\n- task_id: roadmap/Q1-eBPF, summary: eBPF/XDP Integration, links: https://github.com/aya-rs/aya, suggested_implementation: Use aya-rs for safe kernel-level packet filtering.\n- task_id: roadmap/Q1-eBPF, summary: XDP drop path + aya perf-array \u2192 Ramshield batch channel, links: https://aya-rs.github.io/book/, https://docs.rs/aya/latest/aya/, https://github.com/libbpf/libbpf, suggested_implementation: Attach XDP drop program via aya::programs::xdp; forward per-CPU counters through BPF_MAP_TYPE_PERF_EVENT_ARRAY into dedicated tokio task and route into the existing 2M-event batch channel.\n- task_id: roadmap/Q2-tflite, summary: Rust ML Inference, links: https://github.com/rust-ml, suggested_implementation: Explore rust-ml/discussion to identify mature ML inference crates for XGBoost as tflite-rust support is limited/stale.\n- task_id: roadmap/Q1-linfa, summary: Classical ML Algorithms, links: https://github.com/rust-ml/linfa, https://docs.rs/linfa, suggested_implementation: Integrate linfa crate for classical supervised/unsupervised algorithms as robust Rust alternative to Python scikit-learn.\n- task_id: roadmap/WASM-Module-Support, summary: WebAssembly (WASM) Module Support, links: https://wasmtime.dev/, https://github.com/bytecodealliance/wasmtime, suggested_implementation: Integrate wasmtime runtime for sandboxed execution of user-provided WASM modules for custom detection rules.\n- task_id: roadmap/Q3-TLS-IPC, summary: TLS 1.3 encrypted IPC using tokio-rustls \u2014 pure-Rust, no OpenSSL, TLS 1.3 by default, composable with tokio::net::TcpListener already in axum stack. Links: https://docs.rs/tokio-rustls/latest/tokio_rustls/, https://docs.rs/rustls/latest/rustls/, https://github.com/rustls/tokio-rustls, suggested_implementation: Wrap existing IPC TcpStream with tokio-rustls TlsAcceptor/TlsConnector; load PEM certs via rustls::ServerConfig::builder().with_no_client_auth().with_single_cert(); enable ECH (Encrypted Client Hello) when rustls adds it \u2014 track issue #1604.",<br>    "PULSE_LOG.md": "Tue 21 Jul 07:55:37 UTC 2026: Pulse \u2014 Tab-completion script for bash/zsh\nTue 21 Jul 07:56:37 UTC 2026: Pulse \u2014 Tab-completion script for bash/zsh\nTue 21 Jul 08:10:28 UTC 2026: Pulse \u2014 Tab-completion script for bash/zsh\nTue 21 Jul 08:15:53 UTC 2026: Pulse \u2014 Tab-completion script for bash/zsh\nTue 21 Jul 08:21:11 UTC 2026: Pulse \u2014 Tab-completion script for bash/zsh\nTue 21 Jul 09:04:47 UTC 2026: Pulse \u2014 Tab-completion script for bash/zsh\n",<br>    "HEALTH_LOOP.md": "# Health Loop\n\nTime-series health checks. Read-only fast sanity. Newest row at top.\n\n| Timestamp | Facts Age (min) | Backlog Remaining | Active Cron | Notes |\n| :--- | :--- | :--- | :--- | :--- |\n|2026-07-20 06:04:25 | 12 | 48 | 14 | Routine check\n|2026-07-20 04:48:01 | 0 | 50 | 0 | Initial check\n",<br>    "BACKLOG.md": "# Atomic Backlog \u2014 Pickup Queue\n\nSmall, independently-executable tasks. Each is atomic: one file, one clear outcome.\nPicked by the Daily Planner or Pulse agent into the daily plan when capacity allows.\nPriority order: P0 (critical path) \u2192 P3 (nice-to-have).\n\n## P0 \u2014 Critical Path (core functionality)\n1. [x] Implement </code>src/learning/xgboost.rs<code> module stub with public </code>score()<code> fn\n2. [x] Implement </code>src/learning/preprocess.rs<code> with </code>normalize()<code> stub\n3. [x] Add </code>cargo clippy<code> CI gate to </code>.github/workflows/<code>\n4. [x] Fix dead link in </code>DOCUMENTATION.md<code> (empty target)\n12|5. [x] Write </code>src/engine/mod.rs<code> re-export for learning submodule\n6. [x] Add unit test skeleton for </code>xgboost::score<code>\n7. [x] Pin </code>tflite-rust<code> version in Cargo.toml\n8. [x] Add </code>--version<code> flag to main binary\n9. [x] Document IPC protocol in </code>docs/IPC.md<code>\n10. [x] Add </code>make bench<code> target to Makefile\n18. [x] Create a.txt, b.txt, c.txt\n\n## P1 \u2014 Hardening & Observability\n11. [x] Add structured logging via </code>tracing<code> crate\n12. [x] Emit metrics to stdout in Prometheus format\n13. [x] Add </code>healthcheck<code> HTTP endpoint stub\n14. [x] Write integration test for engine startup\n15. [x] Add panic hook that logs to </code>stderr<code> with timestamp\n16. [x] Cover </code>preprocess::normalize<code> with property test\n17. [x] Add </code>RUST_LOG<code> env support\n18. [x] Benchmark </code>score()<code> with criterion\n19. [x] Add OpenTelemetry trace spans (no-op default)\n20. [x] Self-test script: </code>scripts/selftest.sh<code>\n\n## P2 \u2014 Interface & UX\n21. [x] Add </code>status<code> subcommand to CLI\n22. [x] Render engine stats as JSON via </code>status --json<code>\n23. [x] Add </code>config validate<code> subcommand\n24. [ ] Tab-completion script for bash/zsh\n25. [ ] Man page stub in </code>docs/ramshield.1<code>\n26. [ ] Colorized terminal output behind </code>--color=auto<code>\n27. [ ] Add </code>interactive<code> REPL mode stub\n28. [ ] Config file watcher (reload on change)\n29. [ ] Add </code>explain<code> command for rule dump\n30. [ ] History file for REPL (</code>~/.ramshield_history<code>)\n\n## P3 \u2014 Outreach & Ecosystem\n31. [ ] Write </code>CONTRIBUTING.md<code>\n32. [ ] Add </code>CODE_OF_CONDUCT.md<code>\n33. [ ] Security policy </code>SECURITY.md<code>\n34. [ ] </code>CHANGELOG.md<code> initialized with v0.1.0\n35. [ ] GitHub issue template (bug)\n36. [ ] GitHub issue template (feature)\n37. [ ] PR template with checklist\n38. [ ] Add </code>FUNDING.yml<code> for sponsors\n39. [ ] Write </code>docs/QUICKSTART.md<code>\n40. [ ] Add </code>examples/minimal.toml<code> config\n\n## P0-cross \u2014 Promotion & Growth (promo agent queue)\n41. [x] Draft LinkedIn post: \"Why we built RamShield in Rust\"\n42. [x] Write Hacker News show post draft\n43. [x] Create </code>docs/PITCH.md<code> one-pager\n44. [x] Record 30s demo GIF of dashboard (guide written: docs/drafts/demo-gif-guide.md)\n45. [ ] Tweet thread on DDoS mitigation architecture\n46. [x] Add </code>README<code> badges (build, clippy, coverage)\n47. [~] Submit to crates.io as </code>ramshield-core<code> (checklist ready, PENDING PUBLISH; actual crate=</code>ramshield<code>)\n63. [x] Write dev.to article: \"Zero-trust IPC in 50 lines\"\n64. [x] Add </code>docs/BENCHMARKS.md<code> from criterion runs\n50. [~] Schedule weekly blog post in </code>docs/BLOG_CALENDAR.md` (calendar done; Week-3 draft written)\n"<br>  },<br>  "review_statuses": {},<br>  "dead_links": [],<br>  "backlog_remaining": 18<br>}</p></div>
+        </div>
       </div>
-    </section>
-  </div>
-
-  <!-- 2-COLUMN OPS GRID: Promotion | Research -->
-  <div class="section-divider"></div>
-  <div class="section-label">Growth & Discovery</div>
-  <div class="grid grid-2" style="margin-top:20px;">
-    <!-- Promotion -->
-    <section class="panel">
+    </article>
+    <article class="panel">
       <div class="panel-header">
-        <h2>📣 Promotion</h2>
-        <span class="badge badge-info">30m cadence</span>
+        <h2>Daily Plan <span></span></h2>
+        <span class="badge badge-info">INFO</span>
       </div>
       <div class="panel-body">
-        <p># Promotion Activity Log</p>
-<p>Latest promotion-agent output. Appended by the RamShield Promotion Agent cronjob.</p>
-<p>- 2026-07-20T07:03Z | #43 PITCH.md one-pager | docs/PITCH.md | DONE<br>- 2026-07-20T07:03Z | #46 README badges (clippy, coverage) | README.md | DONE</p>
-      </div>
-    </section>
-
-    <!-- Research -->
-    <section class="panel">
-      <div class="panel-header">
-        <h2>🔬 Research</h2>
-        <span class="badge badge-info">hourly</span>
-      </div>
-      <div class="panel-body">
-        <p># Research Flow</p>
-<p>Automated research findings feeding the pipeline. Populated by the research agent.<br>Each entry links to a backlog item or roadmap task it informs.</p>
-<p>- task_id: roadmap/Q1-eBPF, summary: eBPF/XDP Integration, links: https://github.com/aya-rs/aya, suggested_implementation: Use aya-rs for safe kernel-level packet filtering.<br>- task_id: roadmap/Q1-eBPF, summary: XDP drop path + aya perf-array → Ramshield batch channel, links: https://aya-rs.github.io/book/, https://docs.rs/aya/latest/aya/, https://github.com/libbpf/libbpf, suggested_implementation: Attach XDP drop program via aya::programs::xdp; forward per-CPU counters through BPF_MAP_TYPE_PERF_EVENT_ARRAY into dedicated tokio task and route into the existing 2M-event batch channel.</p>
-      </div>
-    </section>
-  </div>
-
-  <!-- 2-COLUMN OPS GRID: Health Loop | Backlog full -->
-  <div class="section-divider"></div>
-  <div class="section-label">Health & Backlog Detail</div>
-  <div class="grid grid-2" style="margin-top:20px;">
-    <section class="panel">
-      <div class="panel-header">
-        <h2>🏥 Health Loop (15m)</h2>
-        <span class="badge badge-info">read-only</span>
-      </div>
-      <div class="panel-body">
-        <p># Health Loop</p>
-<p>Time-series health checks. Read-only fast sanity. Newest row at top.</p>
-<p>| Timestamp | Facts Age (min) | Backlog Remaining | Active Cron | Notes |<br>| :--- | :--- | :--- | :--- | :--- |<br>|2026-07-20 04:48:01 | 0 | 50 | 0 | Initial check</p>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-header">
-        <h2>📦 Backlog (full)</h2>
-        <span class="badge badge-neutral">48/50</span>
-      </div>
-      <div class="panel-body">
-        <p># Atomic Backlog — Pickup Queue</p>
-<p>Small, independently-executable tasks. Each is atomic: one file, one clear outcome.<br>Picked by the Daily Planner or Pulse agent into the daily plan when capacity allows.<br>Priority order: P0 (critical path) → P3 (nice-to-have).</p>
-<h3>P0 — Critical Path (core functionality)</h3>
-1. [ ] Implement <code>src/learning/xgboost.rs</code> module stub with public <code>score()</code> fn
-2. [ ] Implement <code>src/learning/preprocess.rs</code> with <code>normalize()</code> stub
-3. [ ] Add <code>cargo clippy</code> CI gate to <code>.github/workflows/</code>
-4. [ ] Fix dead link in <code>DOCUMENTATION.md</code> (empty target)
-5. [ ] Write <code>src/engine/mod.rs</code> re-export for learning submodule
-6. [ ] Add unit test skeleton for <code>xgboost::score</code>
-7. [ ] Pin <code>tflite-rust</code> version in Cargo.toml
-8. [ ] Add <code>--version</code> flag to main binary
-9. [ ] Document IPC protocol in <code>docs/IPC.md</code>
-10. [ ] Add <code>make bench</code> target to Makefile
-<h3>P1 — Hardening & Observability</h3>
-11. [ ] Add structured logging via <code>tracing</code> crate
-12. [ ] Emit metrics to stdout in Prometheus format
-13. [ ] Add <code>healthcheck</code> HTTP endpoint stub
-14. [ ] Write integration test for engine startup
-15. [ ] Add panic hook that logs to <code>stderr</code> with timestamp
-16. [ ] Cover <code>preprocess::normalize</code> with property test
-17. [ ] Add <code>RUST_LOG</code> env support
-18. [ ] Benchmark <code>score()</code> with criterion
-19. [ ] Add OpenTelemetry trace spans (no-op default)
-20. [ ] Self-test script: <code>scripts/selftest.sh</code>
-<h3>P2 — Interface & UX</h3>
-21. [ ] Add <code>status</code> subcommand to CLI
-22. [ ] Render engine stats as JSON via <code>status --json</code>
-23. [ ] Add <code>config validate</code> subcommand
-24. [ ] Tab-completion script for bash/zsh
-25. [ ] Man page stub in <code>docs/ramshield.1</code>
-26. [ ] Colorized terminal output behind <code>--color=auto</code>
-27. [ ] Add <code>interactive</code> REPL mode stub
-28. [ ] Config file watcher (reload on change)
-29. [ ] Add <code>explain</code> command for rule dump
-30. [ ] History file for REPL (<code>~/.ramshield_history</code>)
-<h3>P3 — Outreach & Ecosystem</h3>
-31. [ ] Write <code>CONTRIBUTING.md</code>
-32. [ ] Add <code>CODE_OF_CONDUCT.md</code>
-33. [ ] Security policy <code>SECURITY.md</code>
-34. [ ] <code>CHANGELOG.md</code> initialized with v0.1.0
-35. [ ] GitHub issue template (bug)
-36. [ ] GitHub issue template (feature)
-37. [ ] PR template with checklist
-38. [ ] Add <code>FUNDING.yml</code> for sponsors
-39. [ ] Write <code>docs/QUICKSTART.md</code>
-40. [ ] Add <code>examples/minimal.toml</code> config
-<h3>P0-cross — Promotion & Growth (promo agent queue)</h3>
-41. [ ] Draft LinkedIn post: "Why we built RamShield in Rust"
-42. [ ] Write Hacker News show post draft
-43. [x] Create <code>docs/PITCH.md</code> one-pager
-44. [ ] Record 30s demo GIF of dashboard
-45. [ ] Tweet thread on DDoS mitigation architecture
-46. [x] Add <code>README</code> badges (build, clippy, coverage)
-47. [ ] Submit to crates.io as <code>ramshield-core</code>
-48. [ ] Write dev.to article: "Zero-trust IPC in 50 lines"
-49. [ ] Add <code>docs/BENCHMARKS.md</code> from criterion runs
-50. [ ] Schedule weekly blog post in <code>docs/BLOG_CALENDAR.md</code>
-      </div>
-    </section>
-  </div>
-
-  <!-- DEAD LINKS REPORT -->
-  <section class="panel" style="margin-top:20px;">
-    <div class="panel-header">
-      <h2>🔗 Dead Links Report</h2>
-      <span class="badge badge-danger">1 Dead Links</span>
-    </div>
-    <div class="panel-body">
-      <p>DOCUMENTATION.md: Broken link to ''</p>
-    </div>
-  </section>
-
-  <!-- DETAIL PANELS -->
-  <div class="grid grid-2" style="margin-top:20px;">
-    <section class="panel">
-      <div class="panel-header"><h2>📋 Daily Work Plan</h2></div>
-      <div class="panel-body"><p># Daily Plan — 2026-07-20</p>
+        <div class="module-status"><div class="status-dot status-info"></div><span style="font-size:.78rem;color:var(--muted);">last activity never</span></div>
+        <div class="log-tail"><span class="log-line">• - Target: `docs/FACTS.json`</span><span class="log-line">• - Action: Create an empty `docs/FACTS.json` file as a placeholder to prevent downstream agents from failing on missing input.</span><span class="log-line">• - Verify: `docs/FACTS.json` exists and is an empty JSON object.</span></div>
+        <button class="collapsible" aria-expanded="false" onclick="toggle(this,'mod-daily-plan')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          Full report
+        </button>
+        <div id="mod-daily-plan" class="collapsible-content">
+          <div class="markdown-body" style="margin-top:12px;"><p># Daily Plan — 2026-07-20</p>
 <h3>State Assessment</h3>
 <code>ramshield-facts-collector</code> cron job is failing due to an incorrect script path. This issue prevents upstream agents from collecting necessary data. Roadmap tasks for Q1 Advanced Analytics are pending. The most urgent task is to restore the facts collector's functionality.
 <h3>Prioritized Tasks</h3>
@@ -762,36 +719,130 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
 - Target: <code>docs/FACTS.json</code>
 - Action: Create an empty <code>docs/FACTS.json</code> file as a placeholder to prevent downstream agents from failing on missing input.
 - Verify: <code>docs/FACTS.json</code> exists and is an empty JSON object.</div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>👷 Worker Status</h2></div>
-      <div class="panel-body"><p># Worker Status — 2026-07-20</p>
-<h3>Task Execution</h3>
-| Task ID | Title | Status | Completion Time |
-| :--- | :--- | :--- | :--- |
-| T1 | XGBoost Model Stub | Pending | - |
-| T2 | Preprocessing Module | Pending | - |
-| T3 | Dashboard Style Enhancement | Pending | - |
-<p>---<br>*No workers have reported completion yet for today's cycle.*</p></div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>🔍 Review & Assessment</h2></div>
-      <div class="panel-body"><p class="muted">_Report not found or unreadable: docs/REVIEW.md_</p></div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>📤 Task Dispatch Log</h2></div>
-      <div class="panel-body"><p># Dispatch Log<br><h3>Timestamp</h3><br>2026-07-19T21:52:49Z</p>
-<h3>Dispatched Tasks</h3>
-- T1 (XGBoost Model Stub): ramshield-worker-T1 (ID: d59bf66d1d5c)
-- T2 (Preprocessing Module): ramshield-worker-T2 (ID: 81dc975889ad)
-- T3 (Dashboard Style Enhancement): ramshield-worker-T3 (ID: 57b89ea7a125)
-<h3>Expected Completion Window</h3>
-30-60 minutes from timestamp.</div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>🏥 Project Health Overview</h2></div>
+        </div>
+      </div>
+    </article>
+    <article class="panel">
+      <div class="panel-header">
+        <h2>Worker Status <span>0 live</span></h2>
+        <span class="badge badge-danger">DANGER</span>
+      </div>
+      <div class="panel-body">
+        <div class="module-status"><div class="status-dot status-danger"></div><span style="font-size:.78rem;color:var(--muted);">last activity recent</span></div>
+        <div class="log-tail"><span class="log-line">• - **Completed** — Worker finished and reported success.</span><span class="log-line">• - **Failed** — Worker reported failure or timed out.</span><span class="log-line">• - **Skipped** — Duplicate worker was not created.</span></div>
+        <button class="collapsible" aria-expanded="false" onclick="toggle(this,'mod-worker-status')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          Full report
+        </button>
+        <div id="mod-worker-status" class="collapsible-content">
+          <div class="markdown-body" style="margin-top:12px;"><p># Worker Status — 2026-07-21</p>
+<strong>Dispatcher Run:</strong> 2026-07-21T03:06:28Z  
+<strong>Last Updated:</strong> 2026-07-21T03:06:28Z
+<p>| Task ID | Title | Worker Name | Cron Job ID | Schedule (UTC) | Status | Completion Time |<br>|---------|-------|-------------|-------------|----------------|--------|-----------------|<br>| T1 | Fix Facts Collector Cron Job | ramshield-worker-T1 | <code>cbc4de64dc24</code> | 2026-07-21T03:35:00Z | Pending | — |<br>| T2 | Create FACTS.json Placeholder | ramshield-worker-T2 | <code>9ffce45d0474</code> | 2026-07-21T03:50:00Z | Pending | — |</p>
+<h3>Status Legend</h3>
+<p>- <strong>Pending</strong> — Worker created, awaiting scheduled run.<br>- <strong>Running</strong> — Worker has started execution.<br>- <strong>Completed</strong> — Worker finished and reported success.<br>- <strong>Failed</strong> — Worker reported failure or timed out.<br>- <strong>Skipped</strong> — Duplicate worker was not created.</p></div>
+        </div>
+      </div>
+    </article>
+    <article class="panel">
+      <div class="panel-header">
+        <h2>Review <span></span></h2>
+        <span class="badge badge-neutral">NEUTRAL</span>
+      </div>
+      <div class="panel-body">
+        <div class="module-status"><div class="status-dot status-neutral"></div><span style="font-size:.78rem;color:var(--muted);">last activity recent</span></div>
+        <div class="log-tail"><span class="log-line">• _Report not found: docs/REVIEW.md_</span></div>
+        <button class="collapsible" aria-expanded="false" onclick="toggle(this,'mod-review')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          Full report
+        </button>
+        <div id="mod-review" class="collapsible-content">
+          <div class="markdown-body" style="margin-top:12px;"><p style="color:var(--muted);font-style:italic;">_Report not found: docs/REVIEW.md_</p></div>
+        </div>
+      </div>
+    </article>
+    <article class="panel">
+      <div class="panel-header">
+        <h2>Health Loop <span></span></h2>
+        <span class="badge badge-info">INFO</span>
+      </div>
+      <div class="panel-body">
+        <div class="module-status"><div class="status-dot status-info"></div><span style="font-size:.78rem;color:var(--muted);">last activity recent</span></div>
+        <div class="log-tail"><span class="log-line">• | :--- | :--- | :--- | :--- | :--- |</span><span class="log-line">• |2026-07-20 06:04:25 | 12 | 48 | 14 | Routine check</span><span class="log-line">• |2026-07-20 04:48:01 | 0 | 50 | 0 | Initial check</span></div>
+        <button class="collapsible" aria-expanded="false" onclick="toggle(this,'mod-health-loop')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          Full report
+        </button>
+        <div id="mod-health-loop" class="collapsible-content">
+          <div class="markdown-body" style="margin-top:12px;"><p># Health Loop</p>
+<p>Time-series health checks. Read-only fast sanity. Newest row at top.</p>
+<p>| Timestamp | Facts Age (min) | Backlog Remaining | Active Cron | Notes |<br>| :--- | :--- | :--- | :--- | :--- |<br>|2026-07-20 06:04:25 | 12 | 48 | 14 | Routine check<br>|2026-07-20 04:48:01 | 0 | 50 | 0 | Initial check</p></div>
+        </div>
+      </div>
+    </article>
+    <article class="panel">
+      <div class="panel-header">
+        <h2>Promotion <span></span></h2>
+        <span class="badge badge-ok">OK</span>
+      </div>
+      <div class="panel-body">
+        <div class="module-status"><div class="status-dot status-ok"></div><span style="font-size:.78rem;color:var(--muted);">last activity recent</span></div>
+        <div class="log-tail"><span class="log-line">• 5|5|- 2026-07-20T16:35Z - 2026-07-20T17:30Z | #45 (verified already drafted) | docs/drafts/tweet-ddos-mitigation.md | NO-OP (no undone items 41-50; backstop staleness: backlog #45 </span><span class="log-line">• 6|6|- 2026-07-20T16:35Z | #52 promo-qw-topics: add GitHub topics/badges | docs/promotion/content/promo-qw-topics.md | DONE (local doc) [PENDING PUBLISH]</span><span class="log-line">• 7|7|- 2026-07-20T16:36Z | #44 Record 30s demo GIF of dashboard | docs/drafts/demo-gif-guide.md | DONE (local guide)</span></div>
+        <button class="collapsible" aria-expanded="false" onclick="toggle(this,'mod-promotion')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          Full report
+        </button>
+        <div id="mod-promotion" class="collapsible-content">
+          <div class="markdown-body" style="margin-top:12px;"><p>1|1|- 2026-07-20T14:05Z | #45 Tweet thread: DDoS mitigation architecture | docs/drafts/tweet-ddos-mitigation.md | DONE (local draft)<br>2|2|- 2026-07-20T14:05Z | #50 Create blog calendar | docs/BLOG_CALENDAR.md | DONE<br>3|3|- 2026-07-20T14:31Z | #50 Blog cadence: Week-3 draft | docs/drafts/blog-ddos-arch.md | DONE (local draft) [PENDING PUBLISH]<br>4|4|- 2026-07-20T14:31Z | #47 crates.io publish checklist | docs/CRATES_IO_CHECKLIST.md | DONE (local doc) [PENDING PUBLISH]<br>5|5|- 2026-07-20T16:35Z - 2026-07-20T17:30Z | #45 (verified already drafted) | docs/drafts/tweet-ddos-mitigation.md | NO-OP (no undone items 41-50; backstop staleness: backlog #45 marked <code>[ ]</code> but draft+log exist) | SKIP</p>
+<p>6|6|- 2026-07-20T16:35Z | #52 promo-qw-topics: add GitHub topics/badges | docs/promotion/content/promo-qw-topics.md | DONE (local doc) [PENDING PUBLISH]<br>7|7|- 2026-07-20T16:36Z | #44 Record 30s demo GIF of dashboard | docs/drafts/demo-gif-guide.md | DONE (local guide)</p></div>
+        </div>
+      </div>
+    </article>
+    <article class="panel">
+      <div class="panel-header">
+        <h2>Research <span></span></h2>
+        <span class="badge badge-ok">OK</span>
+      </div>
+      <div class="panel-body">
+        <div class="module-status"><div class="status-dot status-ok"></div><span style="font-size:.78rem;color:var(--muted);">last activity recent</span></div>
+        <div class="log-tail"><span class="log-line">• - task_id: roadmap/Q1-linfa, summary: Classical ML Algorithms, links: https://github.com/rust-ml/linfa, https://docs.rs/linfa, suggested_implementation: Integrate linfa crate for c</span><span class="log-line">• - task_id: roadmap/WASM-Module-Support, summary: WebAssembly (WASM) Module Support, links: https://wasmtime.dev/, https://github.com/bytecodealliance/wasmtime, suggested_implementa</span><span class="log-line">• - task_id: roadmap/Q3-TLS-IPC, summary: TLS 1.3 encrypted IPC using tokio-rustls — pure-Rust, no OpenSSL, TLS 1.3 by default, composable with tokio::net::TcpListener already in axu</span></div>
+        <button class="collapsible" aria-expanded="false" onclick="toggle(this,'mod-research')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          Full report
+        </button>
+        <div id="mod-research" class="collapsible-content">
+          <div class="markdown-body" style="margin-top:12px;"><p># Research Flow</p>
+<p>Automated research findings feeding the pipeline. Populated by the research agent.<br>Each entry links to a backlog item or roadmap task it informs.</p>
+<p>- task_id: roadmap/Q1-eBPF, summary: eBPF/XDP Integration, links: https://github.com/aya-rs/aya, suggested_implementation: Use aya-rs for safe kernel-level packet filtering.<br>- task_id: roadmap/Q1-eBPF, summary: XDP drop path + aya perf-array → Ramshield batch channel, links: https://aya-rs.github.io/book/, https://docs.rs/aya/latest/aya/, https://github.com/libbpf/libbpf, suggested_implementation: Attach XDP drop program via aya::programs::xdp; forward per-CPU counters through BPF_MAP_TYPE_PERF_EVENT_ARRAY into dedicated tokio task and route into the existing 2M-event batch channel.<br>- task_id: roadmap/Q2-tflite, summary: Rust ML Inference, links: https://github.com/rust-ml, suggested_implementation: Explore rust-ml/discussion to identify mature ML inference crates for XGBoost as tflite-rust support is limited/stale.<br>- task_id: roadmap/Q1-linfa, summary: Classical ML Algorithms, links: https://github.com/rust-ml/linfa, https://docs.rs/linfa, suggested_implementation: Integrate linfa crate for classical supervised/unsupervised algorithms as robust Rust alternative to Python scikit-learn.<br>- task_id: roadmap/WASM-Module-Support, summary: WebAssembly (WASM) Module Support, links: https://wasmtime.dev/, https://github.com/bytecodealliance/wasmtime, suggested_implementation: Integrate wasmtime runtime for sandboxed execution of user-provided WASM modules for custom detection rules.<br>- task_id: roadmap/Q3-TLS-IPC, summary: TLS 1.3 encrypted IPC using tokio-rustls — pure-Rust, no OpenSSL, TLS 1.3 by default, composable with tokio::net::TcpListener already in axum stack. Links: https://docs.rs/tokio-rustls/latest/tokio_rustls/, https://docs.rs/rustls/latest/rustls/, https://github.com/rustls/tokio-rustls, suggested_implementation: Wrap existing IPC TcpStream with tokio-rustls TlsAcceptor/TlsConnector; load PEM certs via rustls::ServerConfig::builder().with_no_client_auth().with_single_cert(); enable ECH (Encrypted Client Hello) when rustls adds it — track issue #1604.</p></div>
+        </div>
+      </div>
+    </article>
+    <article class="panel">
+      <div class="panel-header">
+        <h2>Pulse <span></span></h2>
+        <span class="badge badge-info">INFO</span>
+      </div>
+      <div class="panel-body">
+        <div class="module-status"><div class="status-dot status-info"></div><span style="font-size:.78rem;color:var(--muted);">last activity recent</span></div>
+        <div class="log-tail"><span class="log-line">• Tue 21 Jul 08:15:53 UTC 2026: Pulse — Tab-completion script for bash/zsh</span><span class="log-line">• Tue 21 Jul 08:21:11 UTC 2026: Pulse — Tab-completion script for bash/zsh</span><span class="log-line">• Tue 21 Jul 09:04:47 UTC 2026: Pulse — Tab-completion script for bash/zsh</span></div>
+        <button class="collapsible" aria-expanded="false" onclick="toggle(this,'mod-pulse')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          Full report
+        </button>
+        <div id="mod-pulse" class="collapsible-content">
+          <div class="markdown-body" style="margin-top:12px;"><p>Tue 21 Jul 07:55:37 UTC 2026: Pulse — Tab-completion script for bash/zsh<br>Tue 21 Jul 07:56:37 UTC 2026: Pulse — Tab-completion script for bash/zsh<br>Tue 21 Jul 08:10:28 UTC 2026: Pulse — Tab-completion script for bash/zsh<br>Tue 21 Jul 08:15:53 UTC 2026: Pulse — Tab-completion script for bash/zsh<br>Tue 21 Jul 08:21:11 UTC 2026: Pulse — Tab-completion script for bash/zsh<br>Tue 21 Jul 09:04:47 UTC 2026: Pulse — Tab-completion script for bash/zsh</p></div>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <!-- HEALTH & BACKLOG -->
+  <div class="section-label" id="health">Health & Backlog</div>
+  <div class="grid grid-2">
+    <div class="panel">
+      <div class="panel-header"><h2>Project Health</h2><span class="badge badge-danger">DANGER</span></div>
       <div class="panel-body"><p># RamShield Project Health Dashboard</p>
-<strong>Generated:</strong> 2026-07-19 20:54 UTC
+<strong>Generated:</strong> 2026-07-21 06:22 UTC
 <p>---</p>
 <h3>⚙️ Agent Configuration</h3>
 <p>This section displays the current operational parameters for the Helper Agent. These settings can be modified to direct the agent's focus and behavior.</p>
@@ -818,15 +869,26 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
   "new_ideas_output_file": "docs/NEW_IDEAS.md",
   "report_output_file": "docs/HEALTH_DASHBOARD.md",
   "helper_agent_log_file": ".github/logs/helper_agent.log",
+  "operator_log_file": "docs/OPERATOR_LOG.md",
   "dependency_audit_report": "docs/DEPENDENCY_AUDIT.md",
-  "roadmap_file": "docs/ROADMAP.md"
+  "roadmap_file": "docs/ROADMAP.md",
+  "log_tail_lines": 8
 }
 </code></pre>
 <p>---</p>
 <h3>🏃‍♀️ Helper Agent Activity Log</h3>
 <p>This log captures recent actions and observations from the Helper Agent's last runs.</p>
-<pre><code>No recent activity log found.
+<pre><code>2026-07-21T06:22:13.210+00:00 | INFO     | helper_agent | [scan] TODO scan complete
+2026-07-21T06:22:13.211+00:00 | INFO     | helper_agent | [metrics] Counting metrics under src
+2026-07-21T06:22:13.227+00:00 | INFO     | helper_agent | [metrics] Metrics counted
+2026-07-21T06:22:13.227+00:00 | INFO     | helper_agent | [roadmap] Parsing roadmap tree
+2026-07-21T06:22:13.228+00:00 | INFO     | helper_agent | [roadmap] Roadmap tree parsed
+2026-07-21T06:22:13.228+00:00 | INFO     | helper_agent | [git] Capturing git state
+2026-07-21T06:22:13.240+00:00 | INFO     | helper_agent | [git] Git state captured
+2026-07-21T06:22:13.241+00:00 | INFO     | helper_agent | [report] Report written to docs/AGENT_REPORT.md
 </code></pre>
+<h3>Latest Helper Stages</h3>
+<p>| Stage | Latest Message |<br>|-------|----------------|<br>| <strong>main</strong> | Helper agent invoked |<br>| <strong>report</strong> | Report written to docs/AGENT_REPORT.md |<br>| <strong>scan</strong> | TODO scan complete |<br>| <strong>metrics</strong> | Metrics counted |<br>| <strong>roadmap</strong> | Roadmap tree parsed |<br>| <strong>git</strong> | Git state captured |</p>
 <p>---</p>
 <h3>📝 Outstanding Tasks & Directives</h3>
 <p>Prioritized list of known tasks, TODOs, FIXMEs, and uncompleted roadmap items.</p>
@@ -834,18 +896,88 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
 <p>---</p>
 <h3>🌱 New Ideas & Research Insights</h3>
 <p>This section highlights potential new features, research directions, or areas for improvement identified by the Helper Agent through its codebase and documentation scans.</p>
-<p>- Potential for ml integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for tokio integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for axum integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for ml integration based on discussions in docs/CHANGES.md<br>- Potential for ai integration based on discussions in docs/CHANGES.md<br>- Potential for rust integration based on discussions in docs/CHANGES.md<br>- Potential for ddos integration based on discussions in docs/CHANGES.md<br>- Potential for performance integration based on discussions in docs/CHANGES.md<br>- Potential for tokio integration based on discussions in docs/CHANGES.md<br>- Potential for ml integration based on discussions in docs/BENCHMARKS.md<br>- Potential for ai integration based on discussions in docs/BENCHMARKS.md<br>- Potential for rust integration based on discussions in docs/BENCHMARKS.md<br>- Potential for performance integration based on discussions in docs/BENCHMARKS.md<br>- Potential for async integration based on discussions in docs/BENCHMARKS.md<br>- Potential for ai integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for rust integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for metrics integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for ml integration based on discussions in docs/ROADMAP.md<br>- Potential for ai integration based on discussions in docs/ROADMAP.md<br>- Potential for rust integration based on discussions in docs/ROADMAP.md<br>- Potential for security integration based on discussions in docs/ROADMAP.md<br>- Potential for performance integration based on discussions in docs/ROADMAP.md<br>- Potential for ml integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for ai integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for rust integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for security integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for ddos integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for performance integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for async integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for tokio integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for axum integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for observability integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for metrics integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for ml integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for ai integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for rust integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for performance integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for ml integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for ai integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for rust integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for ddos integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for performance integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for tokio integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for observability integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for metrics integration based on discussions in docs/DOCUMENTATION.md<br>- Explore ml in depth from research/README.md<br>- Explore ai in depth from research/README.md<br>- Explore rust in depth from research/README.md<br>- Explore performance in depth from research/README.md</p>
-<p>|-</p>
+<p>- Potential for ai integration based on discussions in docs/PLAN.md<br>- Potential for ml integration based on discussions in docs/HEALTH_CHECK.md<br>- Potential for ai integration based on discussions in docs/HEALTH_CHECK.md<br>- Potential for ml integration based on discussions in docs/OPERATOR_LOG.md<br>- Potential for ai integration based on discussions in docs/OPERATOR_LOG.md<br>- Potential for metrics integration based on discussions in docs/OPERATOR_LOG.md<br>- Potential for ai integration based on discussions in docs/BLOG_CALENDAR.md<br>- Potential for rust integration based on discussions in docs/BLOG_CALENDAR.md<br>- Potential for security integration based on discussions in docs/BLOG_CALENDAR.md<br>- Potential for ddos integration based on discussions in docs/BLOG_CALENDAR.md<br>- Potential for performance integration based on discussions in docs/BLOG_CALENDAR.md<br>- Potential for ml integration based on discussions in docs/GIT_AUTOMATION_MANUAL.md<br>- Potential for ai integration based on discussions in docs/GIT_AUTOMATION_MANUAL.md<br>- Potential for ml integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for tokio integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for axum integration based on discussions in docs/DEPENDENCY_AUDIT.md<br>- Potential for ml integration based on discussions in docs/CHANGES.md<br>- Potential for ai integration based on discussions in docs/CHANGES.md<br>- Potential for rust integration based on discussions in docs/CHANGES.md<br>- Potential for ddos integration based on discussions in docs/CHANGES.md<br>- Potential for performance integration based on discussions in docs/CHANGES.md<br>- Potential for tokio integration based on discussions in docs/CHANGES.md<br>- Potential for ml integration based on discussions in docs/ERRORS.md<br>- Potential for ai integration based on discussions in docs/ERRORS.md<br>- Potential for ai integration based on discussions in docs/HEAL_LOG.md<br>- Potential for ml integration based on discussions in docs/PITCH.md<br>- Potential for ai integration based on discussions in docs/PITCH.md<br>- Potential for rust integration based on discussions in docs/PITCH.md<br>- Potential for ddos integration based on discussions in docs/PITCH.md<br>- Potential for async integration based on discussions in docs/PITCH.md<br>- Potential for tokio integration based on discussions in docs/PITCH.md<br>- Potential for axum integration based on discussions in docs/PITCH.md<br>- Potential for ml integration based on discussions in docs/RESEARCH.md<br>- Potential for rust integration based on discussions in docs/RESEARCH.md<br>- Potential for tokio integration based on discussions in docs/RESEARCH.md<br>- Potential for axum integration based on discussions in docs/RESEARCH.md<br>- Potential for ddos integration based on discussions in docs/BENCHMARKS.md<br>- Potential for performance integration based on discussions in docs/BENCHMARKS.md<br>- Potential for ai integration based on discussions in docs/HEALER_ANALYSIS_EMPTY-PULSE_LOG-md-is-empty-pulse-agent-hasn-t-pro.md<br>- Potential for ai integration based on discussions in docs/HEALER_DISPATCH.md<br>- Potential for ai integration based on discussions in docs/WORKER_STATUS.md<br>- Potential for ddos integration based on discussions in docs/PROMOTION_LOG.md<br>- Potential for ml integration based on discussions in docs/CRATES_IO_CHECKLIST.md<br>- Potential for ai integration based on discussions in docs/CRATES_IO_CHECKLIST.md<br>- Potential for rust integration based on discussions in docs/CRATES_IO_CHECKLIST.md<br>- Potential for security integration based on discussions in docs/CRATES_IO_CHECKLIST.md<br>- Potential for ddos integration based on discussions in docs/CRATES_IO_CHECKLIST.md<br>- Potential for ai integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for rust integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for metrics integration based on discussions in docs/AGENT_REPORT.md<br>- Potential for ai integration based on discussions in docs/HEALER_ANALYSIS_facts-dead-links.md<br>- Potential for ml integration based on discussions in docs/ROADMAP.md<br>- Potential for ai integration based on discussions in docs/ROADMAP.md<br>- Potential for rust integration based on discussions in docs/ROADMAP.md<br>- Potential for security integration based on discussions in docs/ROADMAP.md<br>- Potential for performance integration based on discussions in docs/ROADMAP.md<br>- Potential for ai integration based on discussions in docs/HEALER_ANALYSIS_markdown-MALFORMED-docs-CRON_STATUS-md-missing-tab.md<br>- Potential for ai integration based on discussions in docs/HEALER_ANALYSIS_facts-MISSING-KEY-FACTS-json-missing-generated_at.md<br>- Potential for rust integration based on discussions in docs/HEALER_ANALYSIS_facts-MISSING-KEY-FACTS-json-missing-generated_at.md<br>- Potential for ai integration based on discussions in docs/HEALER_STATUS_dashboard-MISSING-SECTION-Main-Timeline-marker-Mai.md<br>- Potential for ai integration based on discussions in docs/DISPATCH_LOG.md<br>- Potential for ml integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for ai integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for rust integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for security integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for ddos integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for performance integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for async integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for tokio integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for axum integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for observability integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for metrics integration based on discussions in docs/HEALTH_DASHBOARD.md<br>- Potential for ml integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for ai integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for rust integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for performance integration based on discussions in docs/CONTROL_CENTER.md<br>- Potential for ai integration based on discussions in docs/HEALTH_CHECK_REPORT.md<br>- Potential for ml integration based on discussions in docs/BACKLOG.md<br>- Potential for ai integration based on discussions in docs/BACKLOG.md<br>- Potential for rust integration based on discussions in docs/BACKLOG.md<br>- Potential for security integration based on discussions in docs/BACKLOG.md<br>- Potential for ddos integration based on discussions in docs/BACKLOG.md<br>- Potential for observability integration based on discussions in docs/BACKLOG.md<br>- Potential for metrics integration based on discussions in docs/BACKLOG.md<br>- Potential for ai integration based on discussions in docs/IPC.md<br>- Potential for ai integration based on discussions in docs/HEALTH_LOOP.md<br>- Potential for ai integration based on discussions in docs/CRON_STATUS.md<br>- Potential for rust integration based on discussions in docs/CRON_STATUS.md<br>- Potential for ml integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for ai integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for rust integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for ddos integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for performance integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for tokio integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for observability integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for metrics integration based on discussions in docs/DOCUMENTATION.md<br>- Potential for ml integration based on discussions in docs/HEALER_ANALYSIS_dashboard-MISSING-SECTION-Main-Timeline-marker-Mai.md<br>- Potential for ai integration based on discussions in docs/HEALER_ANALYSIS_dashboard-MISSING-SECTION-Main-Timeline-marker-Mai.md<br>- Potential for ml integration based on discussions in docs/PULSE_LOG.md<br>- Potential for ai integration based on discussions in docs/PULSE_LOG.md<br>- Potential for rust integration based on discussions in docs/PULSE_LOG.md<br>- Potential for ddos integration based on discussions in docs/PULSE_LOG.md<br>- Potential for metrics integration based on discussions in docs/PULSE_LOG.md<br>- Potential for ml integration based on discussions in docs/drafts/tweet-ddos-mitigation.md<br>- Potential for ai integration based on discussions in docs/drafts/tweet-ddos-mitigation.md<br>- Potential for rust integration based on discussions in docs/drafts/tweet-ddos-mitigation.md<br>- Potential for security integration based on discussions in docs/drafts/tweet-ddos-mitigation.md<br>- Potential for ddos integration based on discussions in docs/drafts/tweet-ddos-mitigation.md<br>- Potential for performance integration based on discussions in docs/drafts/tweet-ddos-mitigation.md<br>- Potential for ai integration based on discussions in docs/drafts/linkedin-why-rust.md<br>- Potential for rust integration based on discussions in docs/drafts/linkedin-why-rust.md<br>- Potential for security integration based on discussions in docs/drafts/linkedin-why-rust.md<br>- Potential for ddos integration based on discussions in docs/drafts/linkedin-why-rust.md<br>- Potential for performance integration based on discussions in docs/drafts/linkedin-why-rust.md<br>- Potential for ai integration based on discussions in docs/drafts/hn-show-ramshield.md<br>- Potential for rust integration based on discussions in docs/drafts/hn-show-ramshield.md<br>- Potential for ddos integration based on discussions in docs/drafts/hn-show-ramshield.md<br>- Potential for async integration based on discussions in docs/drafts/hn-show-ramshield.md<br>- Potential for tokio integration based on discussions in docs/drafts/hn-show-ramshield.md<br>- Potential for axum integration based on discussions in docs/drafts/hn-show-ramshield.md<br>- Potential for ai integration based on discussions in docs/drafts/blog-why-rust.md<br>- Potential for rust integration based on discussions in docs/drafts/blog-why-rust.md<br>- Potential for security integration based on discussions in docs/drafts/blog-why-rust.md<br>- Potential for ddos integration based on discussions in docs/drafts/blog-why-rust.md<br>- Potential for performance integration based on discussions in docs/drafts/blog-why-rust.md<br>- Potential for tokio integration based on discussions in docs/drafts/blog-why-rust.md<br>- Potential for ml integration based on discussions in docs/drafts/demo-gif-guide.md<br>- Potential for ai integration based on discussions in docs/drafts/demo-gif-guide.md<br>- Potential for metrics integration based on discussions in docs/drafts/demo-gif-guide.md<br>- Potential for rust integration based on discussions in docs/drafts/blog-ddos-arch.md<br>- Potential for ddos integration based on discussions in docs/drafts/blog-ddos-arch.md<br>- Potential for tokio integration based on discussions in docs/drafts/blog-ddos-arch.md<br>- Potential for axum integration based on discussions in docs/drafts/blog-ddos-arch.md<br>- Potential for ai integration based on discussions in docs/tweets/ddos-mitigation.md<br>- Potential for ddos integration based on discussions in docs/tweets/ddos-mitigation.md<br>- Potential for ai integration based on discussions in docs/promotion/SCOPE.md<br>- Potential for rust integration based on discussions in docs/promotion/SCOPE.md<br>- Potential for security integration based on discussions in docs/promotion/SCOPE.md<br>- Potential for metrics integration based on discussions in docs/promotion/SCOPE.md<br>- Potential for ai integration based on discussions in docs/promotion/REVIEW.md<br>- Potential for ai integration based on discussions in docs/HEAL_TASKS/ramshield-heal-fix-ramshield-research-agent.md<br>- Potential for ai integration based on discussions in docs/HEAL_TASKS/ramshield-heal-fix-ramshield-helper-agent.md<br>- Potential for ai integration based on discussions in docs/HEAL_TASKS/ramshield-heal-verify-ramshield-helper-agent.md<br>- Potential for ai integration based on discussions in docs/HEAL_TASKS/ramshield-heal-analyze-ramshield-reviewer.md<br>- Potential for ai integration based on discussions in docs/HEAL_TASKS/ramshield-heal-analyze-ramshield-helper-agent.md<br>- Potential for ai integration based on discussions in docs/HEAL_TASKS/ramshield-heal-verify-ramshield-pulse.md<br>- Potential for ai integration based on discussions in docs/HEAL_TASKS/ramshield-heal-verify-ramshield-reviewer.md<br>- Potential for ai integration based on discussions in docs/HEAL_TASKS/ramshield-heal-analyze-ramshield-research-agent.md<br>- Potential for ai integration based on discussions in docs/HEAL_TASKS/ramshield-heal-verify-ramshield-research-agent.md<br>- Potential for ai integration based on discussions in docs/HEAL_TASKS/ramshield-heal-fix-ramshield-reviewer.md<br>- Potential for ai integration based on discussions in docs/HEAL_TASKS/ramshield-heal-analyze-ramshield-pulse.md<br>- Potential for ai integration based on discussions in docs/HEAL_TASKS/ramshield-heal-fix-ramshield-pulse.md<br>- Potential for ai integration based on discussions in docs/promotion/social/promo-fast-x.md<br>- Potential for ai integration based on discussions in docs/promotion/social/promo-fast-reddit.md<br>- Potential for rust integration based on discussions in docs/promotion/social/promo-fast-reddit.md<br>- Potential for ai integration based on discussions in docs/promotion/social/promo-std-hn.md<br>- Potential for ai integration based on discussions in docs/promotion/articles/promo-std-devto-ipc.md<br>- Potential for rust integration based on discussions in docs/promotion/articles/promo-std-devto-ipc.md<br>- Potential for security integration based on discussions in docs/promotion/articles/promo-std-devto-ipc.md<br>- Potential for performance integration based on discussions in docs/promotion/articles/promo-std-devto-ipc.md<br>- Potential for ai integration based on discussions in docs/promotion/articles/promo-deep-blog.md<br>- Potential for ai integration based on discussions in docs/promotion/articles/promo-std-devto.md<br>- Potential for ai integration based on discussions in docs/promotion/content/promo-qw-topics.md<br>- Potential for rust integration based on discussions in docs/promotion/content/promo-qw-topics.md<br>- Potential for security integration based on discussions in docs/promotion/content/promo-qw-topics.md<br>- Potential for ddos integration based on discussions in docs/promotion/content/promo-qw-topics.md<br>- Potential for performance integration based on discussions in docs/promotion/content/promo-qw-topics.md<br>- Potential for async integration based on discussions in docs/promotion/content/promo-qw-topics.md<br>- Potential for tokio integration based on discussions in docs/promotion/content/promo-qw-topics.md<br>- Potential for observability integration based on discussions in docs/promotion/content/promo-qw-topics.md<br>- Potential for ai integration based on discussions in docs/promotion/content/promo-qw-crates.md<br>- Potential for ddos integration based on discussions in docs/promotion/content/promo-qw-crates.md<br>- Potential for tokio integration based on discussions in docs/promotion/content/promo-qw-crates.md<br>- Potential for ai integration based on discussions in docs/promotion/campaigns/promo-strat-plan.md<br>- Potential for ai integration based on discussions in docs/promotion/lists/promo-qw-awesome.md<br>- Potential for rust integration based on discussions in docs/promotion/lists/promo-qw-awesome.md<br>- Potential for security integration based on discussions in docs/promotion/lists/promo-qw-awesome.md<br>- Potential for ai integration based on discussions in docs/promotion/lists/promo-deep-news.md<br>- Potential for rust integration based on discussions in docs/promotion/lists/promo-deep-news.md<br>- Explore ml in depth from research/README.md<br>- Explore ai in depth from research/README.md<br>- Explore rust in depth from research/README.md<br>- Explore performance in depth from research/README.md</p>
+<p>---</p>
 <h3>📈 Dependency Audit Status</h3>
-<p>[Dependency audit report](docs/CRON_STATUS.md) *(placeholder — DEPENDENCY_AUDIT.md not yet generated)*</p>
+<p>[See full report here](DEPENDENCY_AUDIT.md)</p>
 <p>---</p>
 <h3>🗺️ Roadmap Progress Overview</h3>
-<p>[See full roadmap](docs/PLAN.md) *(placeholder — ROADMAP.md not yet generated)*</p>
+<p>[See full roadmap here](ROADMAP.md)</p>
 <p>---</p>
 <p>*Generated by RamShield Project Health Dashboard Agent v0.3.0*</p></div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>🤖 Agent Control Center</h2></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><h2>Error Ledger</h2><span class="badge badge-danger">DANGER</span></div>
+      <div class="panel-body"><p># Errors & Error-Handling — 2026-07-21 09:31 UTC</p>
+<p>⚠️ <strong>0 active errors</strong>, 5 frozen element(s)<br><h3>Frozen Elements (5)</h3><br>- FROZEN: docs/CRON_STATUS.md not updated in 11m (threshold 10m)<br>- FROZEN: docs/PROMOTION_LOG.md not updated in 1058m (threshold 60m)<br>- FROZEN: docs/RESEARCH.md not updated in 541m (threshold 90m)<br>- FROZEN: docs/HEALTH_LOOP.md not updated in 1646m (threshold 30m)<br>- MISSING: docs/PROMOTION/REVIEW.md</p>
+<h3>Recovery Playbook</h3>
+- See <code>docs/GIT_AUTOMATION_MANUAL.md</code> for known patterns
+- Auto-fixers: symlink removal, FACTS.json regen, cron status refresh
+- Generated by <code>health_check_repair.py</code> every health-repair tick</div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><h2>Backlog</h2><span class="badge badge-info">live</span></div>
+      <div class="panel-body"><p># Atomic Backlog — Pickup Queue</p>
+<p>Small, independently-executable tasks. Each is atomic: one file, one clear outcome.<br>Picked by the Daily Planner or Pulse agent into the daily plan when capacity allows.<br>Priority order: P0 (critical path) → P3 (nice-to-have).</p>
+<h3>P0 — Critical Path (core functionality)</h3>
+1. [x] Implement <code>src/learning/xgboost.rs</code> module stub with public <code>score()</code> fn
+2. [x] Implement <code>src/learning/preprocess.rs</code> with <code>normalize()</code> stub
+3. [x] Add <code>cargo clippy</code> CI gate to <code>.github/workflows/</code>
+4. [x] Fix dead link in <code>DOCUMENTATION.md</code> (empty target)
+12|5. [x] Write <code>src/engine/mod.rs</code> re-export for learning submodule
+6. [x] Add unit test skeleton for <code>xgboost::score</code>
+7. [x] Pin <code>tflite-rust</code> version in Cargo.toml
+8. [x] Add <code>--version</code> flag to main binary
+9. [x] Document IPC protocol in <code>docs/IPC.md</code>
+10. [x] Add <code>make bench</code> target to Makefile
+18. [x] Create a.txt, b.txt, c.txt
+<h3>P1 — Hardening & Observability</h3>
+11. [x] Add structured logging via <code>tracing</code> crate
+12. [x] Emit metrics to stdout in Prometheus format
+13. [x] Add <code>healthcheck</code> HTTP endpoint stub
+14. [x] Write integration test for engine startup
+15. [x] Add panic hook that logs to <code>stderr</code> with timestamp
+16. [x] Cover <code>preprocess::normalize</code> with property test
+17. [x] Add <code>RUST_LOG</code> env support
+18. [x] Benchmark <code>score()</code> with criterion
+19. [x] Add OpenTelemetry trace spans (no-op default)
+20. [x] Self-test script: <code>scripts/selftest.sh</code>
+<h3>P2 — Interface & UX</h3>
+21. [x] Add <code>status</code> subcommand to CLI
+22. [x] Render engine stats as JSON via <code>status --json</code>
+23. [x] Add <code>config validate</code> subcommand
+24. [ ] Tab-completion script for bash/zsh
+25. [ ] Man page stub in <code>docs/ramshield.1</code>
+26. [ ] Colorized terminal output behind <code>--color=auto</code>
+27. [ ] Add <code>interactive</code> REPL mode stub
+28. [ ] Config file watcher (reload on change)
+29. [ ] Add <code>explain</code> command for rule dump
+30. [ ] History file for REPL (<code>~/.ramshield_history</code>)
+<h3>P3 — Outreach & Ecosystem</h3>
+31. [ ] Write <code>CONTRIBUTING.md</code>
+32. [ ] Add <code>CODE_OF_CONDUCT.md</code>
+33. [ ] Security policy <code>SECURITY.md</code>
+34. [ ] <code>CHANGELOG.md</code> initialized with v0.1.0
+35. [ ] GitHub issue template (bug)
+36. [ ] GitHub issue template (feature)
+37. [ ] PR template with checklist
+38. [ ] Add <code>FUNDING.yml</code> for sponsors
+39. [ ] Write <code>docs/QUICKSTART.md</code>
+40. [ ] Add <code>examples/minimal.toml</code> config
+<h3>P0-cross — Promotion & Growth (promo agent queue)</h3>
+41. [x] Draft LinkedIn post: "Why we built RamShield in Rust"
+42. [x] Write Hacker News show post draft
+43. [x] Create <code>docs/PITCH.md</code> one-pager
+44. [x] Record 30s demo GIF of dashboard (guide written: docs/drafts/demo-gif-guide.md)
+45. [ ] Tweet thread on DDoS mitigation architecture
+46. [x] Add <code>README</code> badges (build, clippy, coverage)
+47. [~] Submit to crates.io as <code>ramshield-core</code> (checklist ready, PENDING PUBLISH; actual crate=<code>ramshield</code>)
+63. [x] Write dev.to article: "Zero-trust IPC in 50 lines"
+64. [x] Add <code>docs/BENCHMARKS.md</code> from criterion runs
+50. [~] Schedule weekly blog post in <code>docs/BLOG_CALENDAR.md</code> (calendar done; Week-3 draft written)</div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><h2>Control Center</h2><span class="badge badge-info">directive</span></div>
       <div class="panel-body"><p># RamShield Autonomous Helper Control Center</p>
 <strong>Status:</strong> Operational
 <strong>Agent Cycle:</strong> 15m / 60m / Cron-local
@@ -875,9 +1007,66 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
 - *Increase scan frequency* -> Edit <code>.github/scripts/health_dashboard.py</code> -> <code>scan_frequency_minutes</code>
 - *Add research path* -> Edit <code>.github/scripts/health_dashboard.py</code> -> <code>research_scan_keywords</code>
 <p>*Paste your instructions below to direct the Helper Agent.*</p></div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>📦 Dependency Audit</h2></div>
+    </div>
+  </div>
+
+  <!-- GROWTH -->
+  <div class="section-label" id="growth">Growth & Discovery</div>
+  <div class="grid grid-2">
+    <div class="panel">
+      <div class="panel-header"><h2>Roadmap</h2><span class="badge badge-info">22 open</span></div>
+      <div class="panel-body"><p># RamShield Advanced Features & Research Roadmap</p>
+<h3>1. Research Audit Tree</h3>
+*Automated scanning of technical frontiers and potential integration points.*
+<h3>🧠 AI & Machine Learning Extensions</h3>
+- <strong>Deep Learning for Packet Inspection</strong>: LSTM/GRU for sequence-based anomaly detection.
+- <strong>Reinforcement Learning (RL)</strong>: Adaptive rate-limiting policies that evolve with attacker behavior.
+- <strong>Federated Learning</strong>: Collaborative defense across distributed RamShield nodes without sharing raw traffic.
+<h3>🔒 Cryptography & Security Extensions</h3>
+- <strong>Zero-Knowledge Proofs (ZKP)</strong>: For privacy-preserving threat intelligence sharing.
+- <strong>Homomorphic Encryption</strong>: Analyzing encrypted traffic without decryption overhead.
+- <strong>Post-Quantum Cryptography (PQC)</strong>: Preparing IPC and storage encryption for the quantum era.
+<h3>⚡ Performance & Systems Extensions</h3>
+- <strong>eBPF/XDP Integration</strong>: Kernel-level packet filtering bypassing userspace overhead.
+- <strong>Memory-Mapped I/O (mmap)</strong>: High-speed shared memory for multi-node RamShield clusters.
+- <strong>Data-Oriented Design (DOD)</strong>: Restructuring core data layouts for SIMD-heavy pipelines.
+<p>---</p>
+<h3>2. Feature Roadmap & Milestones</h3>
+<h3>Q1: Advanced Analytics (Weeks 1-2)</h3>
+- [ ] Implement XGBoost threat scoring model
+- [ ] Add scikit-learn preprocessing pipeline
+- [ ] Integrate model versioning with Git LFS
+- [ ] *Milestone:* 95% accuracy on test dataset
+<h3>Q2: Performance Optimization (Weeks 3-4)</h3>
+- [ ] Implement Rust-based ML inference (tflite-rust)
+- [ ] Add AVX2/AVX2 optimization flags
+- [ ] Benchmark against Go implementation
+- [ ] *Milestone:* 2x faster inference than Python baseline
+<h3>Q3: Security Enhancements (Weeks 5-6)</h3>
+- [ ] TLS 1.3 support for encrypted IPC
+- [ ] iptables rate limiting integration
+- [ ] Cryptographic audit logging (SHA-256 signed)
+- [ ] *Milestone:* Zero-trust IPC communication
+<h3>Q4: Promotion & Community (Weeks 7-8)</h3>
+- [ ] Launch RamShield Blog (weekly posts)
+- [ ] Create GitHub Discussions for community feedback
+- [ ] Launch "RamShield Champions" program
+<h3>Q5: Platform Integration (Weeks 9-12)</h3>
+- [ ] Kubernetes Operator for auto-scaling
+- [ ] Heroku buildpack for one-click deploy
+- [ ] Cloudflare Workers integration for edge detection
+<p>---</p>
+<h3>3. Extension Tree Expansion</h3>
+*Future-proofing RamShield for global-scale threats.*
+<h3>Edge-Native Expansions</h3>
+- [ ] <strong>WebAssembly (WASM) Module Support</strong>: Allow users to write custom detection logic in WASM.
+- [ ] <strong>IoT Gateway Shielding</strong>: Optimized build for ARM/RISC-V edge devices.
+<h3>Data Expansions</h3>
+- [ ] <strong>Time-Series Database Integration</strong>: Sync with InfluxDB/Prometheus for long-term analytics.
+- [ ] <strong>Kafka/Pulsar Streaming</strong>: Real-time threat event streaming for enterprise logs.</div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><h2>Dependency Audit</h2><span class="badge badge-info">19 crates</span></div>
       <div class="panel-body"><p># Dependency Audit Report</p>
 <strong>Generated:</strong> 2026-07-19 20:36 UTC
 <strong>Total dependencies:</strong> 18
@@ -887,37 +1076,108 @@ footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; 
 <strong>Outdated crates:</strong> 17
 <p>---</p>
 <p>*Generated by RamShield Helper Agent - Dependency Audit*</p></div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>🤖 Helper Agent Latest Report</h2></div>
-      <div class="panel-body"><p># RamShield Helper Agent Report</p>
-<strong>Generated:</strong> 2026-07-20 05:02 UTC
-<strong>Branch:</strong> <code>feature/ramshield-advanced</code>
-<strong>Commit:</strong> <code>8522627</code>
-<strong>Commits (24h):</strong> 10
-<p>---</p>
-<h3>Codebase Metrics</h3>
-<p>| Metric | Value |<br>|--------|-------|<br>| Rust files | 25 |<br>| Total lines | 4,976 |<br>| Comment lines | 270 |<br>| Unsafe blocks | 0 |</p>
-<p>---</p>
-<h3>Research Audit Tree</h3>
-<p>| Domain | Innovation |<br>|--------|-----------|<br>| <strong>Deep Learning for Packet Inspection</strong> | LSTM/GRU for sequence-based anomaly detection. |<br>| <strong>Reinforcement Learning (RL)</strong> | Adaptive rate-limiting policies that evolve with attacker behavior. |<br>| <strong>Federated Learning</strong> | Collaborative defense across distributed RamShield nodes without sharing raw traffic. |<br>| <strong>Zero-Knowledge Proofs (ZKP)</strong> | For privacy-preserving threat intelligence sharing. |<br>| <strong>Homomorphic Encryption</strong> | Analyzing encrypted traffic without decryption overhead. |<br>| <strong>Post-Quantum Cryptography (PQC)</strong> | Preparing IPC and storage encryption for the quantum era. |<br>| <strong>eBPF/XDP Integration</strong> | Kernel-level packet filtering bypassing userspace overhead. |<br>| <strong>Memory-Mapped I/O (mmap)</strong> | High-speed shared memory for multi-node RamShield clusters. |<br>| <strong>Data-Oriented Design (DOD)</strong> | Restructuring core data layouts for SIMD-heavy pipelines. |</p>
-<p>---</p>
-<h3>Expansion Tree</h3>
-<p>- [ ] <strong>WebAssembly (WASM) Module Support</strong>: Allow users to write custom detection logic in WASM.<br>- [ ] <strong>IoT Gateway Shielding</strong>: Optimized build for ARM/RISC-V edge devices.<br>- [ ] <strong>Time-Series Database Integration</strong>: Sync with InfluxDB/Prometheus for long-term analytics.<br>- [ ] <strong>Kafka/Pulsar Streaming</strong>: Real-time threat event streaming for enterprise logs.</p>
-<p>---</p>
-<h3>Roadmap Milestones</h3>
-<p>---</p>
-<h3>Technical Debt</h3>
-<p>- Open TODOs: <strong>0</strong><br>- Open FIXMEs: <strong>0</strong></p>
-<p>---</p>
-<p>*Generated by RamShield Helper Agent v0.3.0*</p></div>
-    </section>
+    </div>
+  </div>
+
+  <!-- SYSTEMS ENGINEERING -->
+  <div class="section-label" id="systems">Systems Engineering</div>
+  <div class="grid grid-2">
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Cron Scaling & Recommendations</h2>
+        <span class="badge badge-purple">analysis</span>
+      </div>
+      <div class="panel-body">
+        
+    <div class="rec">
+      <div class="rec-icon">⚡</div>
+      <div>
+        <div class="rec-title">Batch 5-minute jobs</div>
+        <div class="rec-body">5 jobs run every 5 min (ramshield-cron-status, ramshield-pulse, promo-qw-github-topics, promo-qw-awesome-rust, promo-qw-crates-io). Reduce gateway load by moving non-urgent ones to 15 min or batching them into a single script.</div>
+        <pre class="cmd">hermes cron edit 53feb7ef060c --schedule '*/15 * * * *'
+hermes cron edit 076a9de35470 --schedule '*/15 * * * *'
+hermes cron edit cdc99e8f0b2c --schedule '*/15 * * * *'
+hermes cron edit 4c68ff84646b --schedule '*/15 * * * *'
+hermes cron edit f192f20e812a --schedule '*/15 * * * *'</pre>
+      </div>
+    </div>
+    <div class="rec">
+      <div class="rec-icon">🤖</div>
+      <div>
+        <div class="rec-title">Move LLM agents off hot paths</div>
+        <div class="rec-body">29 LLM-driven jobs (RamShield Promotion Agent, ramshield-helper-agent, ramshield-daily-planner, ramshield-reviewer, ramshield-research-agent, ramshield-dispatcher, healer-solve-facts-clippy-warnings, healer-verify-facts-clippy-warnings, healer-solve-facts-clippy-warnings, healer-verify-facts-clippy-warnings, healer-solve-dead-link-in-healer_solution_delayed-healer-verify, healer-verify-dead-link-in-healer_solution_delayed-healer-verify, healer-solve-facts-clippy-warnings, healer-verify-facts-clippy-warnings, healer-solve-dead-link-in-healer_solution_delayed-healer-verify, healer-verify-dead-link-in-healer_solution_delayed-healer-verify, healer-solve-facts-clippy-warnings, healer-verify-facts-clippy-warnings, healer-solve-dead-link-in-healer_solution_delayed-healer-verify, healer-verify-dead-link-in-healer_solution_delayed-healer-verify, healer-analyze-facts-clippy-warnings, healer-solve-facts-clippy-warnings, healer-verify-facts-clippy-warnings, healer-analyze-dead-link-in-healer_solution_delayed-healer-verify, healer-solve-dead-link-in-healer_solution_delayed-healer-verify, healer-verify-dead-link-in-healer_solution_delayed-healer-verify, healer-analyze-facts-clippy-warnings, healer-solve-facts-clippy-warnings, healer-verify-facts-clippy-warnings). Move deterministic data collection to no_agent scripts and reserve LLM for planning/review.</div>
+        <pre class="cmd"># Convert data collection jobs to no_agent scripts
+# Keep only planner/reviewer as LLM agents
+hermes cron edit &lt;job_id&gt; --script &lt;script.py&gt; --no-agent</pre>
+      </div>
+    </div>
+    <div class="rec">
+      <div class="rec-icon">🚨</div>
+      <div>
+        <div class="rec-title">Stabilize 2 failing jobs</div>
+        <div class="rec-body">RamShield Promotion Agent, ramshield-reviewer are failing. Run them manually to capture error output, then convert to no_agent scripts or reduce frequency.</div>
+        <pre class="cmd">hermes cron run 18e3993ed6a0  # debug RamShield Promotion Agent
+hermes cron run d72f32a35099  # debug ramshield-reviewer</pre>
+      </div>
+    </div>
+    <div class="rec">
+      <div class="rec-icon">📊</div>
+      <div>
+        <div class="rec-title">Schedule density is high</div>
+        <div class="rec-body">~111 job runs/hour. For scaling, shard by subsystem and introduce a lightweight scheduler that batches work.</div>
+        <pre class="cmd"># Example: batch quickwin promos into one job
+hermes cron remove promo-qw-github-topics promo-qw-awesome-rust promo-qw-crates-io
+hermes cron create '*/5 * * * *' --name promo-quickwin-batch --script promo_batch_all.py --no-agent</pre>
+      </div>
+    </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Self-Healing Ledger</h2>
+        <span class="badge badge-info">INFO</span>
+      </div>
+      <div class="panel-body">
+        <p style="color:var(--muted);">Tree-like repair cycles: root <code>ramshield-error-healer</code> schedules analyze → solve → verify temp jobs per issue.</p>
+        <p># Error Healer Dispatch — 2026-07-21 09:29 UTC</p>
+<p>Active issues detected: 1 (capped to 1 this run)</p>
+<p>| Issue | Category | Cycle | Jobs scheduled |<br>|-------|----------|-------|----------------|<br>| facts-clippy-warnings | facts | 1 | analyze/solve/verify |</p>
+<strong>Total temp jobs scheduled:</strong> 3
+<h3>Scheduled jobs</h3>
+<p>- <code>healer-analyze-facts-clippy-warnings</code> at 2026-07-21T09:31:49+00:00 (analyze)<br>- <code>healer-solve-facts-clippy-warnings</code> at 2026-07-21T09:41:49+00:00 (solve)<br>- <code>healer-verify-facts-clippy-warnings</code> at 2026-07-21T09:51:49+00:00 (verify)</p>
+      </div>
+    </div>
   </div>
 
   <footer>
-    Generated by RamShield Automation Dashboard Generator v0.6.0  •  Slick & Edgy Theme
-    •  Docs: <a href="https://hermes-agent.nousresearch.com/docs">https://hermes-agent.nousresearch.com/docs</a>
+    RamShield Operator Console v1.0 • Generated 2026-07-21 09:31 UTC •
+    Docs: <a href="https://hermes-agent.nousresearch.com/docs">hermes-agent.nousresearch.com/docs</a>
   </footer>
 </div>
+
+<script>
+function toggle(btn, id) {
+  const el = document.getElementById(id);
+  const open = el.classList.toggle('open');
+  btn.setAttribute('aria-expanded', open);
+}
+
+// Section scrollspy for sticky overview
+const sections = ['overview','ops','log','chain','modules','health','growth','backlog','systems'];
+const navLinks = document.querySelectorAll('.overview a');
+function onScroll() {
+  let current = 'overview';
+  for (const id of sections) {
+    const el = document.getElementById(id);
+    if (el && el.getBoundingClientRect().top <= 100) current = id;
+  }
+  navLinks.forEach(a => {
+    a.style.color = a.getAttribute('href') === '#' + current ? 'var(--accent)' : '';
+    a.style.borderColor = a.getAttribute('href') === '#' + current ? 'var(--accent)' : '';
+  });
+}
+window.addEventListener('scroll', onScroll, {passive:true});
+onScroll();
+</script>
 </body>
 </html>

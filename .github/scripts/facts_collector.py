@@ -13,6 +13,43 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+
+def strip_inline_code_spans(content: str) -> str:
+    """Remove Markdown inline code spans, including those delimited by
+    multiple backticks that may contain single backticks inside.
+
+    Keeps facts_collector.py consistent with health_check_repair.py.
+    """
+    result = []
+    i = 0
+    n = len(content)
+    while i < n:
+        if content[i] != '`':
+            result.append(content[i])
+            i += 1
+            continue
+        j = i
+        while j < n and content[j] == '`':
+            j += 1
+        tick_count = j - i
+        k = j
+        while k < n:
+            if content[k] == '`':
+                m = k
+                while m < n and content[m] == '`':
+                    m += 1
+                if m - k == tick_count:
+                    i = m
+                    break
+                k = m
+            else:
+                k += 1
+        else:
+            result.append(content[i:])
+            break
+    return ''.join(result)
+
+
 WORKSPACE = os.environ.get(
     'GITHUB_WORKSPACE',
     str(Path(__file__).resolve().parent.parent.parent)
@@ -183,8 +220,14 @@ def check_local_links():
 
     for doc_file in docs_path.rglob("*.md"):
         content = doc_file.read_text(encoding="utf-8", errors="ignore")
-        for match in re.finditer(r'\[.*?\]\((?!https?://)(.*?)(?:#.*?|\))\)', content):
+        # Strip inline code spans so links inside backticks (e.g. checklist examples)
+        # are not treated as real markdown links. Use the same helper as
+        # health_check_repair.py so the two checkers stay consistent.
+        content_for_links = strip_inline_code_spans(content)
+        for match in re.finditer(r'\[.*?\]\((?!https?://)([^#)]*)(?:#.*?)?\)', content_for_links):
             link_target = match.group(1).split('#')[0] # Remove anchors
+            if not link_target: # Anchor-only in-document link, e.g. [text](#section)
+                continue
             if link_target.startswith('/'): # Absolute path
                 # Treat as relative to workspace, then relative to docs for check
                 abs_target_path = (Path(WORKSPACE) / link_target).resolve()
@@ -211,7 +254,7 @@ def check_local_links():
                     if not target_path.exists():
                         dead_links.append(f"{doc_file.name}: Broken relative link outside docs '{link_target}'")
             
-    return dead_links
+    return list(set(dead_links))
 
 def load_plan_review_worker_link():
     """Load existing plan/review/worker status/link report if any."""
@@ -273,8 +316,11 @@ def main():
 
     out = Path("docs") / "FACTS.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(facts, indent=2), encoding="utf-8")
-    print(f"FACTS.json written: {len(json.dumps(facts))} bytes, "
+    tmp = Path("docs") / "FACTS.json.tmp"
+    payload = json.dumps(facts, indent=2)
+    tmp.write_text(payload, encoding="utf-8")
+    os.replace(tmp, out)
+    print(f"FACTS.json written: {len(payload)} bytes, "
           f"{len(facts['todos'])} TODOs, "
           f"{len(facts['roadmap_open_tasks'])} roadmap tasks, "
           f"{len(facts['dead_links'])} dead links detected")

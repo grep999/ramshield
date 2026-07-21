@@ -352,3 +352,118 @@
 2026-07-21T06:22:13Z [helper/metrics] Codebase metrics collected | {"files":27,"lines":4534,"blank_lines":562,"comment_lines":258,"unsafe_count":0,"todo_count":0,"test_count":48}
 2026-07-21T06:22:13Z [helper/roadmap] Roadmap tree parsed | {"research_nodes":9,"extensions":4,"milestones":0}
 2026-07-21T06:22:13Z [helper/done] Helper agent run completed | {"todos":0,"fixmes":0,"files":27,"lines":4534}
+2026-07-21T07:44:47Z | cron-status: 45 jobs, ok=9, error=3, running=1, pending=19
+2026-07-21T07:47:48Z | cron-status: 44 jobs, ok=5, error=2, running=1, pending=18
+2026-07-21T07:49:34Z | cron-status: 44 jobs, ok=5, error=2, running=1, pending=18
+2026-07-21T08:02:22Z | cron-status: 39 jobs, ok=4, error=1, running=2, pending=13
+2026-07-21T08:11:24Z scheduled analyze job=healer-analyze-delayed-healer-verify-dashboard-missing-section-ma rc=0
+2026-07-21T08:11:25Z scheduled solve job=healer-solve-delayed-healer-verify-dashboard-missing-section-ma rc=0
+2026-07-21T08:11:26Z scheduled verify job=healer-verify-delayed-healer-verify-dashboard-missing-section-ma rc=0
+2026-07-21T08:11:27Z scheduled analyze job=healer-analyze-delayed-healer-verify-markdown-malformed-docs-cron rc=0
+2026-07-21T08:11:28Z scheduled solve job=healer-solve-delayed-healer-verify-markdown-malformed-docs-cron rc=0
+2026-07-21T08:11:29Z scheduled verify job=healer-verify-delayed-healer-verify-markdown-malformed-docs-cron rc=0
+2026-07-21T08:11:31Z scheduled analyze job=healer-analyze-delayed-healer-verify-facts-missing-key-facts-json rc=0
+2026-07-21T08:11:32Z scheduled solve job=healer-solve-delayed-healer-verify-facts-missing-key-facts-json rc=0
+2026-07-21T08:11:33Z scheduled verify job=healer-verify-delayed-healer-verify-facts-missing-key-facts-json rc=0
+2026-07-21T08:11:34Z scheduled analyze job=healer-analyze-delayed-healer-verify-facts-dead-links-1-5h-overdu rc=0
+2026-07-21T08:11:35Z scheduled solve job=healer-solve-delayed-healer-verify-facts-dead-links-1-5h-overdu rc=0
+2026-07-21T08:11:37Z scheduled verify job=healer-verify-delayed-healer-verify-facts-dead-links-1-5h-overdu rc=0
+2026-07-21T08:11:38Z scheduled analyze job=healer-analyze-delayed-healer-verify-empty-pulse_log-md-is-empty rc=0
+2026-07-21T08:11:39Z scheduled solve job=healer-solve-delayed-healer-verify-empty-pulse_log-md-is-empty rc=0
+2026-07-21T08:11:40Z scheduled verify job=healer-verify-delayed-healer-verify-empty-pulse_log-md-is-empty rc=0
+2026-07-21T08:11:41Z scheduled analyze job=healer-analyze-delayed-healer-solve-markdown-malformed-docs-cron_ rc=0
+2026-07-21T08:11:43Z scheduled solve job=healer-solve-delayed-healer-solve-markdown-malformed-docs-cron_ rc=0
+2026-07-21T08:11:44Z scheduled verify job=healer-verify-delayed-healer-solve-markdown-malformed-docs-cron_ rc=0
+2026-07-21T08:11:45Z scheduled analyze job=healer-analyze-delayed-healer-solve-facts-missing-key-facts-json rc=0
+2026-07-21T08:11:46Z scheduled solve job=healer-solve-delayed-healer-solve-facts-missing-key-facts-json rc=0
+2026-07-21T08:11:47Z scheduled verify job=healer-verify-delayed-healer-solve-facts-missing-key-facts-json rc=0
+2026-07-21T08:11:49Z scheduled analyze job=healer-analyze-delayed-healer-solve-facts-dead-links-1-6h-overdue rc=0
+2026-07-21T08:11:50Z scheduled solve job=healer-solve-delayed-healer-solve-facts-dead-links-1-6h-overdue rc=0
+2026-07-21T08:11:51Z scheduled verify job=healer-verify-delayed-healer-solve-facts-dead-links-1-6h-overdue rc=0
+2026-07-21T08:11:51Z Healer dispatched 24 jobs for 8 issues
+2026-07-21T08:12:24Z | cron-status: 59 jobs, ok=12, error=3, running=1, pending=9
+2026-07-21T08:44:55Z scheduled analyze job=healer-analyze-delayed-healer-verify-markdown-malformed-docs-cron rc=0
+2026-07-21T08:44:57Z scheduled solve job=healer-solve-delayed-healer-verify-markdown-malformed-docs-cron rc=0
+2026-07-21T08:44:58Z scheduled verify job=healer-verify-delayed-healer-verify-markdown-malformed-docs-cron rc=0
+2026-07-21T08:45:00Z scheduled analyze job=healer-analyze-delayed-healer-verify-facts-missing-key-facts-json rc=0
+2026-07-21T08:45:02Z scheduled solve job=healer-solve-delayed-healer-verify-facts-missing-key-facts-json rc=0
+2026-07-21T08:45:04Z scheduled verify job=healer-verify-delayed-healer-verify-facts-missing-key-facts-json rc=0
+2026-07-21T08:45:05Z scheduled analyze job=healer-analyze-delayed-healer-verify-facts-dead-links-1-7h-overdu rc=0
+2026-07-21T08:45:07Z scheduled solve job=healer-solve-delayed-healer-verify-facts-dead-links-1-7h-overdu rc=0
+2026-07-21T08:45:09Z scheduled verify job=healer-verify-delayed-healer-verify-facts-dead-links-1-7h-overdu rc=0
+2026-07-21T08:45:11Z scheduled analyze job=healer-analyze-delayed-healer-verify-empty-pulse_log-md-is-empty rc=0
+2026-07-21T08:45:12Z scheduled solve job=healer-solve-delayed-healer-verify-empty-pulse_log-md-is-empty rc=0
+2026-07-21T08:45:14Z scheduled verify job=healer-verify-delayed-healer-verify-empty-pulse_log-md-is-empty rc=0
+2026-07-21T08:45:16Z scheduled analyze job=healer-analyze-facts-clippy-warnings rc=0
+2026-07-21T08:45:17Z scheduled solve job=healer-solve-facts-clippy-warnings rc=0
+2026-07-21T08:45:19Z scheduled verify job=healer-verify-facts-clippy-warnings rc=0
+2026-07-21T08:45:21Z scheduled analyze job=healer-analyze-dead-link-in-healer_solution_facts-dead-links-md-d rc=0
+2026-07-21T08:45:23Z scheduled solve job=healer-solve-dead-link-in-healer_solution_facts-dead-links-md-d rc=0
+2026-07-21T08:45:24Z scheduled verify job=healer-verify-dead-link-in-healer_solution_facts-dead-links-md-d rc=0
+2026-07-21T08:45:24Z Healer dispatched 18 jobs for 6 issues
+2026-07-21T08:45:28Z | cron-status: 59 jobs, ok=5, error=4, running=1, pending=15
+2026-07-21T08:46:39Z scheduled analyze job=healer-analyze-facts-clippy-warnings rc=0
+2026-07-21T08:46:40Z scheduled solve job=healer-solve-facts-clippy-warnings rc=0
+2026-07-21T08:46:42Z scheduled verify job=healer-verify-facts-clippy-warnings rc=0
+2026-07-21T08:46:44Z scheduled analyze job=healer-analyze-dead-link-in-healer_analysis_delayed-healer-solve rc=0
+2026-07-21T08:46:45Z scheduled solve job=healer-solve-dead-link-in-healer_analysis_delayed-healer-solve rc=0
+2026-07-21T08:46:47Z scheduled verify job=healer-verify-dead-link-in-healer_analysis_delayed-healer-solve rc=0
+2026-07-21T08:46:49Z scheduled analyze job=healer-analyze-dead-link-in-healer_solution_facts-dead-links-md-d rc=0
+2026-07-21T08:46:51Z scheduled solve job=healer-solve-dead-link-in-healer_solution_facts-dead-links-md-d rc=0
+2026-07-21T08:46:52Z scheduled verify job=healer-verify-dead-link-in-healer_solution_facts-dead-links-md-d rc=0
+2026-07-21T08:46:52Z Healer dispatched 9 jobs for 3 issues
+2026-07-21T08:55:54Z | cron-status: 65 jobs, ok=5, error=4, running=1, pending=21
+2026-07-21T09:07:46Z scheduled analyze job=healer-analyze-facts-clippy-warnings rc=0
+2026-07-21T09:07:48Z scheduled solve job=healer-solve-facts-clippy-warnings rc=0
+2026-07-21T09:07:52Z scheduled verify job=healer-verify-facts-clippy-warnings rc=0
+2026-07-21T09:07:52Z Healer dispatched 3 jobs for 1 issues
+2026-07-21T09:07:58Z | cron-status: 61 jobs, ok=3, error=3, running=0, pending=30
+2026-07-21T09:10:02Z scheduled analyze job=healer-analyze-facts-clippy-warnings rc=0
+2026-07-21T09:10:06Z scheduled solve job=healer-solve-facts-clippy-warnings rc=0
+2026-07-21T09:10:10Z scheduled verify job=healer-verify-facts-clippy-warnings rc=0
+2026-07-21T09:10:14Z scheduled analyze job=healer-analyze-dead-link-in-healer_solution_delayed-healer-verify rc=0
+2026-07-21T09:10:18Z scheduled solve job=healer-solve-dead-link-in-healer_solution_delayed-healer-verify rc=0
+2026-07-21T09:10:21Z scheduled verify job=healer-verify-dead-link-in-healer_solution_delayed-healer-verify rc=0
+2026-07-21T09:10:21Z Healer dispatched 6 jobs for 2 issues
+2026-07-21T09:10:48Z SOLVED: DELAYED-healer-verify-empty-pulse_log-md-is-empty — removed 5 stale one-shot jobs, patched error_healer.py + health_check_repair.py
+2026-07-21T09:11:13Z scheduled analyze job=healer-analyze-facts-clippy-warnings rc=0
+2026-07-21T09:11:16Z scheduled solve job=healer-solve-facts-clippy-warnings rc=0
+2026-07-21T09:11:19Z scheduled verify job=healer-verify-facts-clippy-warnings rc=0
+2026-07-21T09:11:22Z scheduled analyze job=healer-analyze-dead-link-in-healer_solution_delayed-healer-verify rc=0
+2026-07-21T09:11:25Z scheduled solve job=healer-solve-dead-link-in-healer_solution_delayed-healer-verify rc=0
+2026-07-21T09:11:30Z scheduled verify job=healer-verify-dead-link-in-healer_solution_delayed-healer-verify rc=0
+2026-07-21T09:11:30Z Healer dispatched 6 jobs for 2 issues
+2026-07-21T09:12:04Z scheduled analyze job=healer-analyze-facts-clippy-warnings rc=0
+2026-07-21T09:12:08Z scheduled solve job=healer-solve-facts-clippy-warnings rc=0
+2026-07-21T09:12:12Z scheduled verify job=healer-verify-facts-clippy-warnings rc=0
+2026-07-21T09:12:15Z scheduled analyze job=healer-analyze-dead-link-in-healer_solution_delayed-healer-verify rc=0
+2026-07-21T09:12:18Z scheduled solve job=healer-solve-dead-link-in-healer_solution_delayed-healer-verify rc=0
+2026-07-21T09:12:21Z scheduled verify job=healer-verify-dead-link-in-healer_solution_delayed-healer-verify rc=0
+2026-07-21T09:12:21Z Healer dispatched 6 jobs for 2 issues
+2026-07-21T09:19:56Z | cron-status: 40 jobs, ok=3, error=3, running=1, pending=0
+2026-07-21T09:20:30Z scheduled analyze job=healer-analyze-facts-clippy-warnings rc=0
+2026-07-21T09:20:32Z scheduled solve job=healer-solve-facts-clippy-warnings rc=0
+2026-07-21T09:20:35Z scheduled verify job=healer-verify-facts-clippy-warnings rc=0
+2026-07-21T09:20:39Z scheduled analyze job=healer-analyze-dead-link-in-healer_solution_delayed-healer-verify rc=0
+2026-07-21T09:20:43Z scheduled solve job=healer-solve-dead-link-in-healer_solution_delayed-healer-verify rc=0
+2026-07-21T09:20:46Z scheduled verify job=healer-verify-dead-link-in-healer_solution_delayed-healer-verify rc=0
+2026-07-21T09:20:46Z Healer dispatched 6 jobs for 2 issues
+2026-07-21T09:29:52Z scheduled analyze job=healer-analyze-facts-clippy-warnings rc=0
+2026-07-21T09:29:54Z scheduled solve job=healer-solve-facts-clippy-warnings rc=0
+2026-07-21T09:29:56Z scheduled verify job=healer-verify-facts-clippy-warnings rc=0
+2026-07-21T09:29:56Z Healer dispatched 3 jobs for 1 issues
+2026-07-21T09:31:20Z | cron-status: 48 jobs, ok=3, error=2, running=1, pending=10
+2026-07-21T09:36:43Z scheduled analyze job=healer-analyze-facts-clippy-warnings rc=0
+2026-07-21T09:36:46Z scheduled solve job=healer-solve-facts-clippy-warnings rc=0
+2026-07-21T09:36:49Z scheduled verify job=healer-verify-facts-clippy-warnings rc=0
+2026-07-21T09:36:49Z Healer dispatched 3 jobs for 1 issues
+2026-07-21T09:39:00Z scheduled analyze job=healer-analyze-facts-clippy-warnings rc=0
+2026-07-21T09:39:01Z scheduled solve job=healer-solve-facts-clippy-warnings rc=0
+2026-07-21T09:39:03Z scheduled verify job=healer-verify-facts-clippy-warnings rc=0
+2026-07-21T09:39:03Z Healer dispatched 3 jobs for 1 issues
+2026-07-21T09:41:56Z | cron-status: 54 jobs, ok=7, error=3, running=0, pending=21
+2026-07-21T11:06:21Z [helper/start] Helper agent run started
+2026-07-21T11:06:21Z [helper/scan] TODO scan complete | {"markers":0}
+2026-07-21T11:06:21Z [helper/metrics] Codebase metrics collected | {"files":27,"lines":4420,"blank_lines":540,"comment_lines":239,"unsafe_count":0,"todo_count":0,"test_count":48}
+2026-07-21T11:06:21Z [helper/roadmap] Roadmap tree parsed | {"research_nodes":9,"extensions":4,"milestones":0}
+2026-07-21T11:06:21Z [helper/done] Helper agent run completed | {"todos":0,"fixmes":0,"files":27,"lines":4420}
