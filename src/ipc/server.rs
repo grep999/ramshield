@@ -67,9 +67,10 @@ impl IpcServer {
             let permit = self.semaphore.clone().acquire_owned().await;
             let engine = self.engine.clone();
             let event_tx = self.event_tx.clone();
+            let store = self.store.clone();
             tokio::spawn(async move {
                 let _permit = permit;
-                if let Err(e) = handle_connection(socket, engine, event_tx).await {
+                if let Err(e) = handle_connection(socket, engine, event_tx, store).await {
                     debug!("conn {} closed: {}", remote, e);
                 }
             });
@@ -79,8 +80,9 @@ impl IpcServer {
 
 async fn handle_connection(
     mut socket: TcpStream,
-    engine: Arc<Engine>,
+    _engine: Arc<Engine>,
     event_tx: Sender<ConnectionEvent>,
+    store: Arc<Store>,
 ) -> Result<(), std::io::Error> {
     let mut buf = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
@@ -103,7 +105,7 @@ async fn handle_connection(
                     continue;
                 }
             };
-            let resp = process_request(req, &engine, &event_tx);
+            let resp = process_request(req, &event_tx, &store);
             write_resp(&mut socket, &resp).await?;
         }
     }
@@ -118,18 +120,29 @@ async fn write_resp(socket: &mut TcpStream, resp: &Response) -> Result<(), std::
     Ok(())
 }
 
+fn epoch_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+}
+
 fn process_request(
     req: Request,
-    _engine: &Engine,
     event_tx: &Sender<ConnectionEvent>,
+    store: &Store,
 ) -> Response {
     match req {
-        Request::CheckIp { ip } => Response::IpStatus {
-            ip,
-            blocked: false,
-            threat: 0.0,
-            ewma_rps: 0.0,
-            reason: None,
+        Request::CheckIp { ip } => {
+            let key = crate::storage::ip_key(ip.parse().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)));
+            let status = store.get(&key);
+            Response::IpStatus {
+                ip,
+                blocked: status.is_some(),
+                threat: 0.0,
+                ewma_rps: 0.0,
+                reason: None,
+            }
         },
         Request::BlockIp { ip, reason, ttl_secs } => Response::Ok {
             message: format!("blocked {} ttl={:?} reason={}", ip, ttl_secs, reason),
@@ -147,14 +160,17 @@ fn process_request(
             first_seen_s: 0,
             last_seen_s: 0,
         }),
-        Request::GetStats => Response::Stats(crate::ipc::Stats {
-            ips_tracked: 0,
-            blocked: 0,
-            ram_bytes: 0,
-            ram_limit_mb: 0,
-            uptime_secs: 0,
-            evictions: 0,
-        }),
+        Request::GetStats => {
+            let stats = store.get_stats();
+            Response::Stats(crate::ipc::Stats {
+                ips_tracked: stats.ips_tracked,
+                blocked: stats.blocked as u64,
+                ram_bytes: stats.ram_bytes,
+                ram_limit_mb: stats.ram_limit_mb,
+                uptime_secs: stats.uptime_secs,
+                evictions: stats.evictions,
+            })
+        },
         Request::GetStatus => Response::Ok { message: "ok".into() },
         Request::ReportConnection { ip, bytes, status_code, proto_fp } => {
             let ev = ConnectionEvent {
@@ -196,11 +212,4 @@ fn process_request(
         },
         Request::Flush => Response::Ok { message: "flushed".into() },
     }
-}
-
-fn epoch_ns() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
 }
