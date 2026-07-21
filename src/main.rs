@@ -1,7 +1,7 @@
 use anyhow::Result;
 use ramshield::{dashboard, Config, Engine};
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, debug}; // Add debug
 use tracing_subscriber::EnvFilter;
 
 #[cfg(feature = "otel")]
@@ -60,6 +60,8 @@ async fn main() -> Result<()> {
         }
         None => Config::default(),
     };
+    info!("Loaded config: {:#?}", config);
+    debug!("Loaded config: {:#?}", config);
 
     // Start RamShield normally
     let engine = Arc::new(Engine::new(config.clone()));
