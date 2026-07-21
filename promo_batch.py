@@ -67,7 +67,10 @@ def run_campaign(campaign_id):
     return 0
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: promo_batch.py <campaign_id>")
-        sys.exit(1)
-    sys.exit(run_campaign(sys.argv[1]))
+    campaign_id = os.environ.get("PROMO_CAMPAIGN_ID")
+    if not campaign_id:
+        if len(sys.argv) < 2:
+            print("Usage: promo_batch.py <campaign_id>  or set PROMO_CAMPAIGN_ID")
+            sys.exit(1)
+        campaign_id = sys.argv[1]
+    sys.exit(run_campaign(campaign_id))

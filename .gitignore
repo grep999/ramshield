@@ -47,3 +47,10 @@ test_config.toml
 *.dll
 *.exe
 *.pdb
+
+# Generated agent/dashboard reports
+docs/CRON_STATUS.json
+docs/CRON_STATUS.md
+docs/AUTOMATION_DASHBOARD.html
+docs/AGENT_REPORT.md
+docs/FACTS.json
