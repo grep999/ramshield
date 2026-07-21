@@ -1,34 +1,68 @@
 pub mod learning;
 
+use std::sync::Arc;
+use tokio::sync::broadcast;
+use tracing::info;
+
 use crate::config::Config;
+use crate::detection::DetectionEngine;
+use crate::forecasting::Forecaster;
+use crate::learning::PatternLearner;
 use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, SubnetRow};
+use crate::storage::Store;
 use arc_swap::ArcSwap;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct Engine {
     pub config: ArcSwap<Config>,
-    shutting_down: AtomicBool,
+    shutdown: AtomicBool,
 }
 
 impl Engine {
     pub fn new(cfg: Config) -> Self {
         Self {
             config: ArcSwap::from_pointee(cfg),
-            shutting_down: AtomicBool::new(false),
+            shutdown: AtomicBool::new(false),
         }
     }
 
     pub fn start(&self) {
-        // stub: engine lifecycle
+        info!("Engine::start: sync stub — call start_async to actually boot");
+    }
+
+    /// Boot the full pipeline: store, detection, forecasting, IPC server.
+    /// Runs on a dedicated OS thread with its own current-thread tokio rt
+    /// (mirrors the dashboard pattern in main.rs).
+    pub fn start_async(self: Arc<Self>) -> std::io::Result<std::thread::JoinHandle<()>> {
+        let _cfg = self.config.load();
+        std::thread::Builder::new()
+            .name("rs-engine".into())
+            .spawn(move || {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_io()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        tracing::error!("engine rt: {}", e);
+                        return;
+                    }
+                };
+                rt.block_on(async move {
+                    if let Err(e) = boot_pipeline(self).await {
+                        tracing::error!("pipeline: {}", e);
+                    }
+                });
+            })
     }
 
     pub fn shutdown(&self) {
-        self.shutting_down.store(true, Ordering::Release);
+        self.shutdown.store(true, Ordering::Release);
     }
 
     pub fn is_shutting_down(&self) -> bool {
-        self.shutting_down.load(Ordering::Acquire)
+        self.shutdown.load(Ordering::Acquire)
     }
 
     pub fn dashboard_snapshot(&self) -> DashboardSnapshot {
@@ -49,37 +83,49 @@ impl Engine {
 
     pub fn get_module_stats(&self) -> Vec<ModuleStats> {
         vec![
-            ModuleStats {
-                label: "IPC".into(),
-                events: 0,
-                errors: 0,
-                rate_per_sec: 0.0,
-                detail: serde_json::json!({}),
-            },
-            ModuleStats {
-                label: "Detection".into(),
-                events: 0,
-                errors: 0,
-                rate_per_sec: 0.0,
-                detail: serde_json::json!({}),
-            },
-            ModuleStats {
-                label: "Forecasting".into(),
-                events: 0,
-                errors: 0,
-                rate_per_sec: 0.0,
-                detail: serde_json::json!({}),
-            },
-            ModuleStats {
-                label: "Storage".into(),
-                events: 0,
-                errors: 0,
-                rate_per_sec: 0.0,
-                detail: serde_json::json!({}),
-            },
+            ModuleStats { label: "IPC".into(), events: 0, errors: 0, rate_per_sec: 0.0, detail: serde_json::json!({}) },
+            ModuleStats { label: "Detection".into(), events: 0, errors: 0, rate_per_sec: 0.0, detail: serde_json::json!({}) },
+            ModuleStats { label: "Forecasting".into(), events: 0, errors: 0, rate_per_sec: 0.0, detail: serde_json::json!({}) },
+            ModuleStats { label: "Storage".into(), events: 0, errors: 0, rate_per_sec: 0.0, detail: serde_json::json!({}) },
         ]
     }
 }
+
+async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
+    let cfg_arc = engine.config.load(); // Arc<Config>
+    let cfg_snapshot = cfg_arc.as_ref().clone();  // owned Config clone
+    let cfg_handle = cfg_snapshot.clone().into_handle(); // ConfigHandle
+
+    let metrics = Arc::new(crate::metrics::Metrics::new());
+    let (block_tx, _) = broadcast::channel::<crate::detection::BlockDecision>(1024);
+    let learner = Arc::new(PatternLearner::new(cfg_snapshot.detection.pattern_similarity_threshold));
+
+    let store = Arc::new(Store::new(cfg_snapshot.engine.shard_count));
+    let detection = Arc::new(DetectionEngine::new(
+        store.clone(),
+        cfg_handle.clone(),
+        block_tx.clone(),
+        metrics.clone(),
+        learner.clone(),
+        Arc::new(AtomicBool::new(false)),
+    ));
+    let _tx = detection.event_sender(); // ponytail: stash when IPC server becomes the producer
+    detection.clone().spawn_workers(cfg_snapshot.engine.worker_threads);
+
+    let forecaster = Arc::new(Forecaster::new(
+        store.clone(),
+        cfg_snapshot.forecasting.clone(),
+        block_tx.clone(),
+        metrics.clone(),
+        learner,
+    ));
+    tokio::spawn(async move { forecaster.run().await });
+
+    let server = crate::ipc::server::IpcServer::bind(&cfg_snapshot, engine.clone()).await?;
+    server.start().await;
+    Ok(())
+}
+
 
 #[cfg(test)]
 mod startup_tests {
