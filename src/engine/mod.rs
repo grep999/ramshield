@@ -110,7 +110,7 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
         learner.clone(),
         Arc::new(AtomicBool::new(false)),
     ));
-    let _tx = detection.event_sender(); // ponytail: stash when IPC server becomes the producer
+    let event_tx = detection.event_sender();
     detection.clone().spawn_workers(cfg_snapshot.engine.worker_threads);
 
     let forecaster = Arc::new(Forecaster::new(
@@ -122,7 +122,7 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     ));
     tokio::spawn(async move { forecaster.run().await });
 
-    let server = crate::ipc::server::IpcServer::bind(&cfg_snapshot, engine.clone()).await?;
+    let server = crate::ipc::server::IpcServer::bind(&cfg_snapshot, engine.clone(), event_tx).await?;
     server.start().await;
     Ok(())
 }
