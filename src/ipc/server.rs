@@ -19,6 +19,7 @@ pub struct IpcServer {
     listener: TcpListener,
     engine: Arc<Engine>,
     event_tx: Sender<ConnectionEvent>,
+    store: Arc<Store>,
     semaphore: Arc<Semaphore>,
 }
 
@@ -27,6 +28,7 @@ impl IpcServer {
         config: &Config,
         engine: Arc<Engine>,
         event_tx: Sender<ConnectionEvent>,
+        store: Arc<Store>,
     ) -> std::io::Result<Self> {
         let addr = config.ipc.tcp_addr.clone();
         info!("IPC server binding to {}", addr);
@@ -36,6 +38,7 @@ impl IpcServer {
             listener,
             engine,
             event_tx,
+            store,
             semaphore: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
         })
     }
@@ -181,12 +184,13 @@ fn process_request(
                 };
                 match event_tx.try_send(ev) {
                     Ok(()) => accepted += 1,
-                    Err(_) => rejected += 1,
+                    Err(e) => { rejected += 1; debug!("tx full: {:?}", e); }
                 }
                 if accepted + rejected >= BATCH_MAX as u32 {
                     break;
                 }
             }
+            debug!("report_connections: accepted={} rejected={}", accepted, rejected);
             Response::BatchOk { accepted, rejected }
         },
         Request::Flush => Response::Ok { message: "flushed".into() },
