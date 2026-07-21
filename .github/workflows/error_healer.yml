@@ -1,0 +1,34 @@
+name: Error Healer
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'  # Every 30 minutes
+  workflow_dispatch:
+
+jobs:
+  healer:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/feature/ramshield-advanced'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Run Error Healer
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python .github/scripts/error_healer.py
+
+      - name: Commit and Push Changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add -A
+          git diff --quiet --cached || git commit -m "agent: error healer dispatch [skip ci]"
+          git push origin HEAD:${{ github.ref }}
