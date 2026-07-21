@@ -12,7 +12,7 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc, Mutex,
 };
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 pub const INLINE_MAX: usize = 64;
 

@@ -154,7 +154,7 @@ fn process_request(
             let key = crate::storage::ip_key(ip.parse().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)));
             if let Some(crate::storage::Value::IpRecord(rec)) = store.get(&key) {
                 Response::IpDetail(crate::ipc::IpDetail {
-                    ip: ip,
+                    ip,
                     count: rec.request_count,
                     ewma_rps: rec.ewma_rps,
                     threat: rec.threat_score,
@@ -180,7 +180,7 @@ fn process_request(
             let stats = store.get_stats();
             Response::Stats(crate::ipc::Stats {
                 ips_tracked: stats.ips_tracked,
-                blocked: stats.blocked as u64,
+                blocked: stats.blocked,
                 ram_bytes: stats.ram_bytes,
                 ram_limit_mb: stats.ram_limit_mb,
                 uptime_secs: stats.uptime_secs,
