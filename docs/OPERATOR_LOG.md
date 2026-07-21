@@ -495,3 +495,12 @@
 2026-07-21T12:50:16Z [helper/metrics] Codebase metrics collected | {"files":27,"lines":4904,"blank_lines":538,"comment_lines":238,"unsafe_count":0,"todo_count":0,"test_count":48}
 2026-07-21T12:50:16Z [helper/roadmap] Roadmap tree parsed | {"research_nodes":9,"extensions":4,"milestones":0}
 2026-07-21T12:50:16Z [helper/done] Helper agent run completed | {"todos":0,"fixmes":0,"files":27,"lines":4904}
+2026-07-21T12:50:38Z scheduled analyze job=healer-analyze-facts-clippy-warnings rc=0
+2026-07-21T12:50:39Z scheduled solve job=healer-solve-facts-clippy-warnings rc=0
+2026-07-21T12:50:40Z scheduled verify job=healer-verify-facts-clippy-warnings rc=0
+2026-07-21T12:50:40Z Healer dispatched 3 jobs for 1 issues
+2026-07-21T13:00:34Z [helper/start] Helper agent run started
+2026-07-21T13:00:34Z [helper/scan] TODO scan complete | {"markers":0}
+2026-07-21T13:00:34Z [helper/metrics] Codebase metrics collected | {"files":27,"lines":4904,"blank_lines":538,"comment_lines":238,"unsafe_count":0,"todo_count":0,"test_count":48}
+2026-07-21T13:00:34Z [helper/roadmap] Roadmap tree parsed | {"research_nodes":9,"extensions":4,"milestones":0}
+2026-07-21T13:00:34Z [helper/done] Helper agent run completed | {"todos":0,"fixmes":0,"files":27,"lines":4904}
