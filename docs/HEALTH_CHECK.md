@@ -1,9 +1,9 @@
-# Health Check — 2026-07-21 09:44 UTC
+# Health Check — 2026-07-21 13:12 UTC
 
 ## 1. Cron Jobs
-Found 54 scheduled jobs.
-- Ran successfully: 20
-- Never ran: 33
+Found 27 scheduled jobs.
+- Ran successfully: 22
+- Never ran: 4
   ✅ All jobs healthy.
 
 ## 2. Dead Links
@@ -26,10 +26,10 @@ Found 54 scheduled jobs.
 
 ## 8. Frozen / Blind-Spot Detection
 Detected 5 stale/frozen element(s):
-  - ❄️ FROZEN: docs/PROMOTION_LOG.md not updated in 1071m (threshold 60m)
-  - ❄️ FROZEN: docs/RESEARCH.md not updated in 554m (threshold 90m)
-  - ❄️ FROZEN: docs/PULSE_LOG.md not updated in 40m (threshold 30m)
-  - ❄️ FROZEN: docs/HEALTH_LOOP.md not updated in 1659m (threshold 30m)
+  - ❄️ FROZEN: docs/PROMOTION_LOG.md not updated in 1278m (threshold 60m)
+  - ❄️ FROZEN: docs/RESEARCH.md not updated in 762m (threshold 90m)
+  - ❄️ FROZEN: docs/PULSE_LOG.md not updated in 247m (threshold 30m)
+  - ❄️ FROZEN: docs/HEALTH_LOOP.md not updated in 1867m (threshold 30m)
   - ❄️ MISSING: docs/PROMOTION/REVIEW.md
 
 ## 9. Errors & Error-Handling

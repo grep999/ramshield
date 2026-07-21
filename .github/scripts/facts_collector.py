@@ -120,7 +120,9 @@ def count_clippy_warnings():
         for line in out.splitlines():
             try:
                 msg = json.loads(line)
-                if msg.get("reason") == "compiler-message" and msg.get("message", {}).get("level") == "warning":
+                if (msg.get("reason") == "compiler-message"
+                    and msg.get("message", {}).get("level") == "warning"
+                    and "ramshield@" in msg.get("package_id", "")):
                     warnings += 1
             except json.JSONDecodeError:
                 pass
