@@ -138,7 +138,7 @@ fn process_request(
             let status = store.get(&key);
             Response::IpStatus {
                 ip,
-                blocked: status.is_some(),
+                blocked: status.is_some_and(|v| matches!(v, crate::storage::Value::IpRecord(rec) if rec.block_state != crate::storage::BlockState::Clean)),
                 threat: 0.0,
                 ewma_rps: 0.0,
                 reason: None,
@@ -150,16 +150,32 @@ fn process_request(
         Request::UnblockIp { ip } => Response::Ok {
             message: format!("unblocked {}", ip),
         },
-        Request::GetIpStats { ip } => Response::IpDetail(crate::ipc::IpDetail {
-            ip: ip,
-            count: 0,
-            ewma_rps: 0.0,
-            threat: 0.0,
-            state: "unknown".into(),
-            bytes_in: 0,
-            first_seen_s: 0,
-            last_seen_s: 0,
-        }),
+        Request::GetIpStats { ip } => {
+            let key = crate::storage::ip_key(ip.parse().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)));
+            if let Some(crate::storage::Value::IpRecord(rec)) = store.get(&key) {
+                Response::IpDetail(crate::ipc::IpDetail {
+                    ip: ip,
+                    count: rec.request_count,
+                    ewma_rps: rec.ewma_rps,
+                    threat: rec.threat_score,
+                    state: format!("{:?}", rec.block_state),
+                    bytes_in: rec.bytes_in,
+                    first_seen_s: rec.first_seen_ns / 1_000_000_000,
+                    last_seen_s: rec.last_seen_ns / 1_000_000_000,
+                })
+            } else {
+                Response::IpDetail(crate::ipc::IpDetail {
+                    ip,
+                    count: 0,
+                    ewma_rps: 0.0,
+                    threat: 0.0,
+                    state: "not_tracked".into(),
+                    bytes_in: 0,
+                    first_seen_s: 0,
+                    last_seen_s: 0,
+                })
+            }
+        },
         Request::GetStats => {
             let stats = store.get_stats();
             Response::Stats(crate::ipc::Stats {
