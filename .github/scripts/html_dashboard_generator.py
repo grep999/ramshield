@@ -413,12 +413,16 @@ def generate_html_dashboard(workspace_root: str):
     # Build a job lookup
     job_by_name = {j["name"]: j for j in cron_jobs}
 
+    # Discover worker jobs from cron data
+    worker_jobs = [j for j in cron_jobs if j.get("name", "").startswith("ramshield-worker-")]
+    worker_ids = {j["name"].replace("ramshield-worker-", ""): j for j in worker_jobs}
+
     # Job chain steps
     chain_steps = [
         ("facts-collector", "Facts", "ramshield-facts-collector", reports["facts"].get("generated_at", "")),
         ("daily-planner", "Planner", "ramshield-daily-planner", ""),
-        ("dispatcher", "Dispatcher", "", ""),  # not a separate cron job yet
-        ("workers", "Workers", "", ""),
+        ("dispatcher", "Dispatcher", "ramshield-dispatcher", reports["dispatch"][:20] if reports["dispatch"].startswith("20") else ""),
+        ("workers", f"Workers ({len(worker_jobs)})", "", ""),
         ("reviewer", "Reviewer", "ramshield-reviewer", ""),
     ]
 
@@ -426,6 +430,19 @@ def generate_html_dashboard(workspace_root: str):
         if cron_name and cron_name in job_by_name:
             j = job_by_name[cron_name]
             return j.get("status", "unknown"), rel_time(j.get("last_run", "")), j.get("last_error", "")
+        if name == "workers":
+            if not worker_jobs:
+                return "info", "not dispatched", ""
+            error = any(j.get("status") == "error" for j in worker_jobs)
+            pending = any(j.get("status") in ("pending", "scheduled") for j in worker_jobs)
+            running = any(j.get("status") == "running" for j in worker_jobs)
+            if error:
+                return "error", f"{len(worker_jobs)} workers", ""
+            if running:
+                return "running", f"{len(worker_jobs)} workers", ""
+            if pending:
+                return "pending", f"{len(worker_jobs)} workers", ""
+            return "ok", f"{len(worker_jobs)} workers", ""
         st = module_status(fallback_text)
         return st, "manual", ""
 
@@ -524,10 +541,23 @@ def generate_html_dashboard(workspace_root: str):
     chain_html += '</div>'
 
     # Module cards
+    # Worker status card: prefer live cron jobs over static report
+    if worker_jobs:
+        worker_lines = []
+        for j in worker_jobs:
+            tid = j["name"].replace("ramshield-worker-", "")
+            worker_lines.append(f"{tid}: {j.get('status', 'unknown')} (last {rel_time(j.get('last_run',''))})")
+        worker_status = "error" if any(j.get("status") == "error" for j in worker_jobs) else ("pending" if any(j.get("status") in ("pending","scheduled") for j in worker_jobs) else "ok")
+        worker_last = f"{len(worker_jobs)} workers"
+    else:
+        worker_lines = parse_log_tail(reports["workers"], 3)
+        worker_status = module_status(reports["workers"])
+        worker_last = "recent"
+
     modules_html = ""
     modules_html += module_card("Facts Collector", module_status(reports["facts"].get("generated_at", "")), rel_time(reports["facts"].get("generated_at", "")), [f"Rust files: {rust_files}, LOC: {loc:,}"], reports["facts"].get("generated_at", "") and json.dumps(reports["facts"], indent=2) or "_No FACTS.json_", f"{rust_files} files")
     modules_html += module_card("Daily Plan", module_status(reports["plan"]), rel_time(reports["plan"][:20] if reports["plan"].startswith("20") else ""), parse_log_tail(reports["plan"], 3), reports["plan"])
-    modules_html += module_card("Worker Status", module_status(reports["workers"]), "recent", parse_log_tail(reports["workers"], 3), reports["workers"])
+    modules_html += module_card("Worker Status", worker_status, worker_last, worker_lines, reports["workers"], f"{len(worker_jobs)} live")
     modules_html += module_card("Review", module_status(reports["review"]), "recent", parse_log_tail(reports["review"], 3), reports["review"])
     modules_html += module_card("Health Loop", module_status(reports["health_loop"]), "recent", parse_log_tail(reports["health_loop"], 3), reports["health_loop"])
     modules_html += module_card("Promotion", module_status(reports["promotion"]), "recent", parse_log_tail(reports["promotion"], 3), reports["promotion"])
