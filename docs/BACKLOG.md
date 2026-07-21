@@ -15,7 +15,7 @@ Priority order: P0 (critical path) → P3 (nice-to-have).
 8. [x] Add `--version` flag to main binary
 9. [x] Document IPC protocol in `docs/IPC.md`
 10. [x] Add `make bench` target to Makefile
-18. [x] Create a.txt, b.txt, c.txt
+- [x] Create a.txt, b.txt, c.txt
 
 ## P1 — Hardening & Observability
 11. [x] Add structured logging via `tracing` crate
