@@ -25,8 +25,10 @@ AGENT_CONFIG = {
     "new_ideas_output_file": "docs/NEW_IDEAS.md",
     "report_output_file": "docs/HEALTH_DASHBOARD.md",
     "helper_agent_log_file": ".github/logs/helper_agent.log",
+    "operator_log_file": "docs/OPERATOR_LOG.md",
     "dependency_audit_report": "docs/DEPENDENCY_AUDIT.md",
-    "roadmap_file": "docs/ROADMAP.md"
+    "roadmap_file": "docs/ROADMAP.md",
+    "log_tail_lines": 8,
 }
 
 # --- Utility Functions (shared logic) ---
@@ -40,21 +42,37 @@ def write_file_content(file_path, content):
     Path(file_path).parent.mkdir(parents=True, exist_ok=True)
     Path(file_path).write_text(content, encoding='utf-8')
 
-# --- Core Data Gathering Functions ---
-def get_helper_agent_activity(log_file):
-    """Summarize recent activity from the helper agent's log."""
-    content = read_file_content(log_file)
+# --- Logging helpers ---
+def tail_lines(file_path, n=8):
+    """Return last n non-empty lines from a log file."""
+    content = read_file_content(file_path)
     if not content:
+        return []
+    lines = [l for l in content.splitlines() if l.strip()]
+    return lines[-n:]
+
+def get_helper_agent_activity(log_file):
+    """Summarize recent activity from the helper agent's log file."""
+    lines = tail_lines(log_file, AGENT_CONFIG["log_tail_lines"])
+    if not lines:
         return "No recent activity log found."
-    
-    lines = content.split('\n')
-    recent_activity = []
-    for line in reversed(lines):
-        if line.strip():
-            recent_activity.append(line)
-        if len(recent_activity) >= 5: # Show last 5 log entries
-            break
-    return "\n".join(reversed(recent_activity)) if recent_activity else "No detailed logs."
+    return "\n".join(lines)
+
+def get_helper_agent_highlights(log_file):
+    """Extract latest stage markers from the helper log."""
+    lines = tail_lines(log_file, 20)
+    stages = {}
+    for line in lines:
+        # Format: 2026-07-21T08:10:28.123+00:00 | INFO     | helper_agent | [scan] TODO scan complete | {"markers": 42}
+        if " | " not in line or "[" not in line or "]" not in line:
+            continue
+        try:
+            stage = line.split("[")[1].split("]")[0]
+            msg = line.split("]")[1].split("|")[0].strip() if "|" in line.split("]")[1] else line.split("]")[1].strip()
+            stages[stage] = msg
+        except Exception:
+            continue
+    return stages
 
 def get_outstanding_tasks():
     """Extract and prioritize tasks based on various markers/files."""
@@ -143,6 +161,19 @@ This log captures recent actions and observations from the Helper Agent's last r
 {get_helper_agent_activity(AGENT_CONFIG['helper_agent_log_file'])}
 ```
 
+### Latest Helper Stages
+
+| Stage | Latest Message |
+|-------|----------------|
+"""
+    highlights = get_helper_agent_highlights(AGENT_CONFIG['helper_agent_log_file'])
+    if highlights:
+        for stage, msg in highlights.items():
+            report += f"| **{stage}** | {msg} |\n"
+    else:
+        report += "| *no stages logged yet* | *run helper_agent.py* |\n"
+
+    report += """
 ---
 
 ## 📝 Outstanding Tasks & Directives
