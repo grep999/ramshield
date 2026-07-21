@@ -58,3 +58,4 @@ Tue 21 Jul 01:42:31 CEST 2026: Executed P0 task: Add status --json flag to ramsh
 Tue 21 Jul 01:45:51 CEST 2026: Executed P0 task: Add config validate subcommand
 Tue 21 Jul 01:53:45 CEST 2026: Executed P0 task: [P2 #24 skipped — YAGNI]
 2026-07-21: Executed P0 task: [Tweet thread on DDoS mitigation architecture]
+Tue 21 Jul 02:49:07 CEST 2026: Executed P0 task: Implement src/learning/xgboost.rs module stub with public score() fn

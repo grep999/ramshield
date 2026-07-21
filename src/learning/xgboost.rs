@@ -1,7 +1,7 @@
 //! XGBoost scoring module stub.
 
 /// Scores input data.
-pub fn score() -> f64 {
+#[inline] pub fn score() -> f64 {
     0.0
 }
 
