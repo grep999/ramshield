@@ -41,6 +41,7 @@ impl Engine {
             .spawn(move || {
                 let rt = match tokio::runtime::Builder::new_current_thread()
                     .enable_io()
+                    .enable_time()
                     .build()
                 {
                     Ok(rt) => rt,
