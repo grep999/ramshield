@@ -1,226 +1,231 @@
 #!/usr/bin/env python3
-"""HTML Automation Dashboard Generator — Improved version with Timeline.
+"""HTML Automation Dashboard Generator — Production-grade operator console.
 
-Reads Markdown reports and compiles into a single HTML dashboard with:
-- Dark theme, neon-cyan accents, grid background (Space Grotesk)
-- Main timeline: Roadmap milestones → Current sprint → Today's tasks
-- Priority alignment panel: Roadmap priorities vs daily plan
-- Dead links report
-- All sections that were previously in facts_collector.py now in html_dashboard_generator.py
+Renders a single-file, no-build HTML dashboard for the RamShield autonomous
+agent fleet. Features:
+- Sticky command bar + section overview
+- Live cron state panel with scaling analysis
+- Job chain visualization (facts → planner → dispatcher → workers → reviewer)
+- Per-module status cards with log tails
+- Slick & Edgy dark theme (neon cyan, Space Grotesk)
 """
 
+import json
 import os
 import re
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 
 
-# ─── CSS ──────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# CSS
+# ═══════════════════════════════════════════════════════════════════════════
 CSS = """
 :root {
-  --bg:#0a0a0f; --panel:#11111a; --panel-border:#1f1f2e;
-  --text:#e8e8f0; --muted:#7a7a9a; --accent:#00f5d4; --accent-dim:#00c9a8;
-  --warn:#ffb800; --danger:#ff3d5a; --ok:#00d47e; --info:#4da6ff;
-  --grid:#0d0d14;
+  --bg:#07070b; --surface:#0f0f16; --surface-2:#15151f; --surface-3:#1b1b27;
+  --border:#252536; --border-strong:#33334a;
+  --text:#f0f0f7; --muted:#8b8ba7; --muted-2:#5c5c75;
+  --accent:#00f5d4; --accent-dim:#00c9a8; --accent-glow:rgba(0,245,212,.12);
+  --warn:#ffb800; --danger:#ff3d5a; --ok:#00d47e; --info:#4da6ff; --purple:#a78bfa;
+  --grid:rgba(0,245,212,.04);
 }
-*, *::before, *::after { box-sizing:border-box; }
-html { font-size:16px; }
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; }
 body {
   margin:0; min-height:100vh;
-  font-family:'Space Grotesk',system-ui,sans-serif;
+  font-family:'Space Grotesk',system-ui,-apple-system,sans-serif;
   background:var(--bg); color:var(--text);
   background-image:
-    linear-gradient(rgba(0,245,212,.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,245,212,.03) 1px, transparent 1px);
-  background-size:40px 40px;
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size:44px 44px;
+  background-attachment:fixed;
+  line-height:1.55;
 }
 a { color:var(--accent); text-decoration:none; }
-a:hover { text-shadow:0 0 8px var(--accent); }
-.container { max-width:1400px; margin:0 auto; padding:24px; }
+a:hover { text-shadow:0 0 10px var(--accent); }
 
-/* Header */
-header { margin-bottom:32px; }
-h1 {
-  font-size:clamp(1.6rem,3vw,2.2rem); font-weight:700; letter-spacing:-.02em;
+.container { max-width:1480px; margin:0 auto; padding:24px; }
+
+/* Header / Command bar */
+.cmdbar {
+  position:sticky; top:0; z-index:100;
+  background:rgba(7,7,11,.85); backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--border);
+  padding:14px 0; margin-bottom:24px;
+}
+.cmdbar-inner { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+.cmdbar-title { display:flex; align-items:center; gap:12px; }
+.cmdbar-title h1 {
+  margin:0; font-size:clamp(1.3rem,2.5vw,1.7rem); font-weight:700; letter-spacing:-.02em;
   background:linear-gradient(90deg,var(--accent),var(--info));
   -webkit-background-clip:text; background-clip:text; color:transparent;
-  margin:0 0 8px;
 }
-.subtitle { color:var(--muted); font-size:.95rem; }
-.badge-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+.cmdbar-meta { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.heartbeat {
+  width:10px; height:10px; border-radius:50%; background:var(--ok);
+  box-shadow:0 0 0 0 rgba(0,212,126,.4);
+  animation:pulse 2s infinite;
+}
+@keyframes pulse {
+  0% { box-shadow:0 0 0 0 rgba(0,212,126,.4); }
+  70% { box-shadow:0 0 0 8px rgba(0,212,126,0); }
+  100% { box-shadow:0 0 0 0 rgba(0,212,126,0); }
+}
 .badge {
-  font-size:.7rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em;
-  padding:4px 10px; border-radius:999px; border:1px solid transparent;
+  font-size:.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
+  padding:4px 10px; border-radius:999px; border:1px solid transparent; white-space:nowrap;
 }
 .badge-ok { background:rgba(0,212,126,.12); border-color:var(--ok); color:var(--ok); }
 .badge-warn { background:rgba(255,184,0,.12); border-color:var(--warn); color:var(--warn); }
 .badge-danger { background:rgba(255,61,90,.12); border-color:var(--danger); color:var(--danger); }
 .badge-info { background:rgba(77,166,255,.12); border-color:var(--info); color:var(--info); }
 .badge-neutral { background:rgba(122,122,154,.12); border-color:var(--muted); color:var(--muted); }
+.badge-purple { background:rgba(167,139,250,.12); border-color:var(--purple); color:var(--purple); }
 
-/* Layout grid */
-.grid { display:grid; gap:20px; }
-@media (min-width: 1000px) {
-  .grid-2 { grid-template-columns:1fr 1fr; }
-  .grid-3 { grid-template-columns:1fr 1fr 1fr; }
-  .grid-main { grid-template-columns:2fr 1fr; }
+/* Section overview nav */
+.overview {
+  display:flex; gap:10px; flex-wrap:wrap; margin-bottom:28px;
+  padding:14px; background:var(--surface); border:1px solid var(--border); border-radius:12px;
 }
+.overview a {
+  display:flex; align-items:center; gap:8px;
+  padding:8px 14px; border-radius:8px; background:var(--surface-2); border:1px solid var(--border);
+  color:var(--muted); font-size:.78rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em;
+  transition:all .15s;
+}
+.overview a:hover { background:var(--surface-3); color:var(--text); border-color:var(--accent-dim); }
+.overview-dot { width:7px; height:7px; border-radius:50%; background:var(--muted-2); }
 
-/* Cards / Panels */
+/* Cards */
+.section-label {
+  font-size:.65rem; color:var(--muted); letter-spacing:.2em; font-weight:600; text-transform:uppercase;
+  margin:32px 0 12px 6px; padding-left:8px; border-left:2px solid var(--accent-dim);
+}
+.grid { display:grid; gap:18px; }
+@media (min-width: 900px) {
+  .grid-2 { grid-template-columns:repeat(2,1fr); }
+  .grid-3 { grid-template-columns:repeat(3,1fr); }
+  .grid-4 { grid-template-columns:repeat(4,1fr); }
+}
 .panel {
-  background:var(--panel); border:1px solid var(--panel-border);
-  border-radius:12px; overflow:hidden;
-  transition:border-color .2s, box-shadow .2s;
+  background:var(--surface); border:1px solid var(--border); border-radius:14px; overflow:hidden;
+  transition:border-color .2s, box-shadow .2s, transform .2s;
 }
-.panel:hover { border-color:rgba(0,245,212,.18); box-shadow:0 0 0 1px rgba(0,245,212,.08); }
+.panel:hover { border-color:var(--border-strong); box-shadow:0 0 0 1px var(--accent-glow); }
 .panel-header {
-  display:flex; align-items:center; justify-content:space-between;
-  padding:14px 18px; border-bottom:1px solid var(--panel-border);
-  background:rgba(0,0,0,.15);
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:14px 18px; border-bottom:1px solid var(--border); background:rgba(0,0,0,.15);
 }
-.panel-header h2 { margin:0; font-size:.95rem; font-weight:600; letter-spacing:.01em; }
+.panel-header h2 { margin:0; font-size:.92rem; font-weight:600; letter-spacing:.01em; }
+.panel-header h2 span { color:var(--muted); font-weight:400; }
 .panel-body { padding:16px 18px 18px; }
 
-/* Timeline */
-.timeline { position:relative; padding-left:24px; }
-.timeline::before {
-  content:''; position:absolute; left:6px; top:0; bottom:0; width:2px;
-  background:linear-gradient(180deg,var(--accent),transparent);
+/* Metrics row */
+.metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-bottom:22px; }
+.metric {
+  background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px;
+  display:flex; flex-direction:column; gap:4px;
 }
-.timeline-item {
-  position:relative; padding:12px 0 12px 24px; border-radius:8px;
-  background:rgba(255,255,255,.02); margin-bottom:10px;
-  transition:background .2s;
-}
-.timeline-item:hover { background:rgba(0,245,212,.04); }
-.timeline-item::before {
-  content:''; position:absolute; left:-17px; top:18px; width:10px; height:10px;
-  border-radius:50%; border:2px solid var(--panel-border); background:var(--panel);
-  box-shadow:0 0 0 3px var(--bg); z-index:1;
-}
-.timeline-item.milestone::before { background:var(--accent); border-color:var(--accent); box-shadow:0 0 0 3px var(--bg), 0 0 12px var(--accent); }
-.timeline-item.current::before { background:var(--info); border-color:var(--info); box-shadow:0 0 0 3px var(--bg), 0 0 12px var(--info); }
-.timeline-item.completed::before { background:var(--ok); border-color:var(--ok); }
-.timeline-item.pending::before { background:transparent; border-color:var(--muted); }
-.timeline-meta { display:flex; gap:8px; align-items:center; margin-bottom:6px; font-size:.75rem; }
-.timeline-title { font-weight:600; font-size:.9rem; }
-.timeline-desc { color:var(--muted); font-size:.8rem; margin-top:2px; }
-
-/* Progress Ring */
-.progress-ring { width:48px; height:48px; transform:rotate(-90deg); }
-.progress-ring-bg { fill:none; stroke:var(--panel-border); stroke-width:3.5; }
-.progress-ring-fg {
-  fill:none; stroke:var(--accent); stroke-width:3.5; stroke-linecap:round;
-  stroke-dasharray:138; stroke-dashoffset:138; transition:stroke-dashoffset .6s ease;
-}
-.progress-ring-text { fill:var(--text); font-size:8px; dominant-baseline:middle; text-anchor:middle; }
-
-/* Priority Alignment */
-.priority-grid { display:grid; gap:10px; }
-@media (min-width:600px) { .priority-grid { grid-template-columns:1fr 1fr; } }
-.priority-card { background:rgba(255,255,255,.02); border:1px solid var(--panel-border); border-radius:8px; padding:12px; }
-.priority-card.aligned { border-color:rgba(0,212,126,.4); background:rgba(0,212,126,.05); }
-.priority-card.mismatch { border-color:rgba(255,184,0,.4); background:rgba(255,184,0,.05); }
-.priority-label { font-size:.7rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin-bottom:6px; }
-.priority-value { font-weight:600; font-size:.85rem; }
-.priority-value.ok { color:var(--ok); }
-.priority-value.warn { color:var(--warn); }
-.priority-value.miss { color:var(--danger); }
-
-/* Status indicators */
-.status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
-.status-ok { background:var(--ok); box-shadow:0 0 8px var(--ok); }
-.status-warn { background:var(--warn); box-shadow:0 0 8px var(--warn); }
-.status-danger { background:var(--danger); box-shadow:0 0 8px var(--danger); }
-.status-info { background:var(--info); box-shadow:0 0 8px var(--info); }
-.status-pending { background:transparent; border:1px solid var(--muted); }
+.metric-value { font-size:1.6rem; font-weight:700; color:var(--text); }
+.metric-label { font-size:.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+.metric-delta { font-size:.72rem; color:var(--muted-2); }
 
 /* Tables */
-table { width:100%; border-collapse:collapse; font-size:.8rem; }
-th, td { padding:8px 10px; text-align:left; border-bottom:1px solid var(--panel-border); }
-th { color:var(--muted); font-weight:600; font-size:.7rem; text-transform:uppercase; letter-spacing:.05em; }
-tr:hover td { background:rgba(0,245,212,.04); transition:background .15s; }
-td code { background:rgba(0,245,212,.1); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:.75rem; }
+table { width:100%; border-collapse:collapse; font-size:.78rem; }
+th, td { padding:8px 10px; text-align:left; border-bottom:1px solid var(--border); }
+th { color:var(--muted); font-weight:600; font-size:.65rem; text-transform:uppercase; letter-spacing:.06em; }
+tr:hover td { background:rgba(0,245,212,.04); }
+td code { background:rgba(0,245,212,.1); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:.7rem; }
 
-/* Divider between major sections */
-.section-divider {
-  height:1px; margin:32px 0 20px;
-  background:linear-gradient(90deg,transparent,var(--accent-dim),transparent);
-  position:relative;
+/* Job chain */
+.chain { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:14px; background:var(--surface-2); border-radius:10px; border:1px solid var(--border); }
+.chain-step {
+  display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:8px;
+  background:var(--surface-3); border:1px solid var(--border); min-width:140px;
 }
-.section-divider::after {
-  content:''; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-  width:8px; height:8px; border-radius:50%; background:var(--accent);
-  box-shadow:0 0 12px var(--accent);
+.chain-step.ok { border-color:rgba(0,212,126,.4); background:rgba(0,212,126,.06); }
+.chain-step.error { border-color:rgba(255,61,90,.4); background:rgba(255,61,90,.06); }
+.chain-step.running { border-color:rgba(77,166,255,.4); background:rgba(77,166,255,.06); }
+.chain-step.pending { border-color:rgba(255,184,0,.3); background:rgba(255,184,0,.05); }
+.chain-dot { width:8px; height:8px; border-radius:50%; background:var(--muted-2); flex-shrink:0; }
+.chain-dot.ok { background:var(--ok); box-shadow:0 0 8px var(--ok); }
+.chain-dot.error { background:var(--danger); box-shadow:0 0 8px var(--danger); }
+.chain-dot.running { background:var(--info); box-shadow:0 0 8px var(--info); }
+.chain-dot.pending { background:var(--warn); box-shadow:0 0 8px var(--warn); }
+.chain-title { font-weight:600; font-size:.82rem; }
+.chain-meta { font-size:.68rem; color:var(--muted); }
+.chain-arrow { color:var(--muted-2); font-size:1.1rem; }
+
+/* Module cards */
+.module-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:18px; }
+.module-status { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+.module-status .status-dot { width:8px; height:8px; border-radius:50%; }
+.module-status .status-ok { background:var(--ok); box-shadow:0 0 8px var(--ok); }
+.module-status .status-warn { background:var(--warn); box-shadow:0 0 8px var(--warn); }
+.module-status .status-danger { background:var(--danger); box-shadow:0 0 8px var(--danger); }
+.module-status .status-info { background:var(--info); box-shadow:0 0 8px var(--info); }
+.module-status .status-neutral { background:transparent; border:1px solid var(--muted-2); }
+.log-tail {
+  background:#05050a; border:1px solid var(--border); border-radius:8px; padding:10px 12px;
+  font-family:'SF Mono',ui-monospace,monospace; font-size:.72rem; color:var(--muted);
+  max-height:110px; overflow:auto; white-space:pre-wrap; margin:12px 0;
 }
-
-/* Sticky section labels */
-.section-label {
-  font-size:.65rem; color:var(--muted); letter-spacing:.18em;
-  font-weight:600; text-transform:uppercase;
-  margin-bottom:8px; padding-left:6px; border-left:2px solid var(--accent-dim);
+.log-line { display:block; padding:2px 0; border-bottom:1px solid rgba(255,255,255,.03); }
+.log-time { color:var(--muted-2); margin-right:6px; }
+.collapsible {
+  background:none; border:none; color:var(--accent); font-size:.72rem; cursor:pointer;
+  display:flex; align-items:center; gap:6px; padding:0; font-family:inherit;
 }
-
-/* Glow pulse on key panels */
-@keyframes pulse-glow {
-  0%,100% { box-shadow:0 0 0 0 rgba(0,245,212,.0); }
-  50% { box-shadow:0 0 0 4px rgba(0,245,212,.08); }
-}
-.panel.glow { animation:pulse-glow 3s ease-in-out infinite; }
-
-/* Make table within .panel not double up borders */
-.panel-body table { border:1px solid var(--panel-border); border-radius:6px; overflow:hidden; }
-.panel-body table th:first-child { border-top-left-radius:6px; }
-.panel-body table th:last-child { border-top-right-radius:6px; }
-
-/* Markdown rendering helpers */
-.markdown-body { line-height:1.6; }
-.markdown-body h3 { font-size:1rem; margin:16px 0 8px; color:var(--accent); }
-.markdown-body p { margin:8px 0; }
-.markdown-body ul, .markdown-body ol { margin:8px 0 8px 20px; }
-.markdown-body li { margin:4px 0; }
-.markdown-body code { background:rgba(0,245,212,.1); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:.85em; }
-.markdown-body pre { background:#050508; border:1px solid var(--panel-border); border-radius:8px; padding:12px; overflow-x:auto; }
-.markdown-body pre code { background:none; color:inherit; padding:0; }
-.markdown-body hr { border:none; border-top:1px solid var(--panel-border); margin:16px 0; }
-.markdown-body strong { color:var(--accent); }
-.markdown-body blockquote { border-left:3px solid var(--accent); padding-left:12px; color:var(--muted); margin:12px 0; font-style:italic; }
-
-/* Collapsible */
-.collapsible { border:none; background:none; color:var(--muted); font-size:.75rem; cursor:pointer; padding:4px 0; display:flex; align-items:center; gap:6px; }
-.collapsible:hover { color:var(--accent); }
-.collapsible svg { transition:transform .2s; width:14px; height:14px; }
+.collapsible:hover { color:var(--text); }
+.collapsible svg { width:12px; height:12px; transition:transform .2s; }
 .collapsible[aria-expanded="true"] svg { transform:rotate(90deg); }
 .collapsible-content { overflow:hidden; max-height:0; transition:max-height .3s ease; }
-.collapsible-content.open { max-height:5000px; }
+.collapsible-content.open { max-height:2000px; }
+
+/* Recommendations */
+.rec { display:flex; gap:12px; padding:12px; border-radius:10px; background:var(--surface-2); border:1px solid var(--border); margin-bottom:10px; }
+.rec-icon { font-size:1.1rem; flex-shrink:0; }
+.rec-title { font-weight:600; font-size:.82rem; margin-bottom:2px; }
+.rec-body { font-size:.76rem; color:var(--muted); }
 
 /* Footer */
-footer { text-align:center; padding:24px; color:var(--muted); font-size:.75rem; }
+footer { text-align:center; padding:32px 24px; color:var(--muted); font-size:.72rem; }
+
+/* Markdown body inside modules */
+.markdown-body { line-height:1.6; font-size:.82rem; }
+.markdown-body h3 { font-size:.95rem; margin:14px 0 8px; color:var(--accent); }
+.markdown-body p { margin:8px 0; }
+.markdown-body ul, .markdown-body ol { margin:8px 0 8px 18px; }
+.markdown-body li { margin:4px 0; }
+.markdown-body code { background:rgba(0,245,212,.1); color:var(--accent); padding:2px 6px; border-radius:4px; font-size:.78em; }
+.markdown-body pre { background:#05050a; border:1px solid var(--border); border-radius:8px; padding:12px; overflow-x:auto; font-size:.75rem; }
+.markdown-body pre code { background:none; color:inherit; padding:0; }
+.markdown-body hr { border:none; border-top:1px solid var(--border); margin:14px 0; }
+.markdown-body strong { color:var(--accent); }
+.markdown-body blockquote { border-left:3px solid var(--accent); padding-left:12px; color:var(--muted); margin:12px 0; font-style:italic; }
+.markdown-body table { font-size:.75rem; margin:10px 0; }
 """
 
 
-# ─── Markdown → HTML ──────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# Markdown → HTML
+# ═══════════════════════════════════════════════════════════════════════════
 def md_to_html(md: str) -> str:
-    """Minimal markdown → HTML for our known report formats."""
     if not md or md.startswith("_"):
-        return f'<p class="muted">{md}</p>'
+        return f'<p style="color:var(--muted);font-style:italic;">{md}</p>'
     html = md
-    # Code fences first
     html = re.sub(r'```(\w+)?\n(.*?)```', r'<pre><code>\2</code></pre>', html, flags=re.S)
-    # Headings
     html = re.sub(r'^###\s+(.+)$', r'<h3>\1</h3>', html, flags=re.M)
     html = re.sub(r'^##\s+(.+)$', r'<h3>\1</h3>', html, flags=re.M)
-    # Bold
     html = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', html)
-    # Inline code
     html = re.sub(r'`([^`]+)`', r'<code>\1</code>', html)
-    # Tables
+
     def table_repl(m):
         rows = [r.strip() for r in m.group(0).strip().split('\n') if r.strip()]
-        if len(rows) < 2: return m.group(0)
+        if len(rows) < 2:
+            return m.group(0)
         header = [c.strip() for c in rows[0].split('|') if c.strip()]
-        sep = rows[1]
         body = [[c.strip() for c in r.split('|') if c.strip()] for r in rows[2:]]
         out = ['<table><thead><tr>']
         out += [f'<th>{h}</th>' for h in header]
@@ -231,14 +236,16 @@ def md_to_html(md: str) -> str:
             out.append('</tr>')
         out.append('</tbody></table>')
         return '\n'.join(out)
+
     html = re.sub(r'(?:\|.+\|\n)+(?:\|[-:]+\|+\n)+(?:\|.+\|\n?)+', table_repl, html)
-    # Paragraphs
     blocks = html.split('\n\n')
     out = []
     for b in blocks:
         b = b.strip()
-        if not b: continue
-        if b.startswith('<'): out.append(b)
+        if not b:
+            continue
+        if b.startswith('<'):
+            out.append(b)
         else:
             b = b.replace('\n', '<br>')
             out.append(f'<p>{b}</p>')
@@ -249,549 +256,435 @@ def read_report(path: str) -> str:
     try:
         return Path(path).read_text(encoding='utf-8')
     except Exception:
-        return f"_Report not found or unreadable: {path}_"
+        return f"_Report not found: {path}_"
 
 
-# ─── Data Extractors ──────────────────────────────────────────────────────
-def extract_roadmap_milestones(roadmap_md: str):
-    """Parse ROADMAP.md into structured milestones."""
-    milestones = []
-    current_quarter = None
-    for line in roadmap_md.split('\n'):
-        q_match = re.match(r'^###\s+(Q\d+:.*?)(?:\(Weeks?\s*[\d-]+\))?', line)
-        if q_match:
-            current_quarter = q_match.group(1).strip()
-            continue
-        m = re.match(r'^-\s*\[([ x])\]\s*(.+)', line)
-        if m and current_quarter:
-            done = m.group(1) == 'x'
-            text = m.group(2).strip()
-            # Extract milestone marker
-            is_milestone = text.startswith('*Milestone:')
-            clean = text.replace('*Milestone:*', '').strip()
-            milestones.append({
-                'quarter': current_quarter,
-                'task': clean,
-                'done': done,
-                'milestone': is_milestone
-            })
-    return milestones
+def read_json(path: str) -> dict:
+    try:
+        return json.loads(Path(path).read_text(encoding='utf-8'))
+    except Exception:
+        return {}
 
 
-def extract_plan_tasks(plan_md: str):
-    """Extract T1, T2, T3... tasks from PLAN.md."""
-    tasks = []
-    for m in re.finditer(r'###\s+(T\d+):\s*(.+?)\n(?:- Target:\s*(.+?)\n)?(?:- Action:\s*(.+?)\n)?(?:- Verify:\s*(.+?))?(?=\n###|\n##|\Z)', plan_md, re.S):
-        tasks.append({
-            'id': m.group(1),
-            'title': m.group(2).strip(),
-            'target': m.group(3).strip() if m.group(3) else '',
-            'action': m.group(4).strip() if m.group(4) else '',
-            'verify': m.group(5).strip() if m.group(5) else ''
+def rel_time(iso: str) -> str:
+    if not iso:
+        return "never"
+    try:
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - dt
+        if delta.total_seconds() < 60:
+            return f"{int(delta.total_seconds())}s ago"
+        if delta.total_seconds() < 3600:
+            return f"{int(delta.total_seconds()/60)}m ago"
+        if delta.total_seconds() < 86400:
+            return f"{int(delta.total_seconds()/3600)}h ago"
+        return f"{int(delta.total_seconds()/86400)}d ago"
+    except Exception:
+        return iso[:16]
+
+
+def parse_log_tail(text: str, n: int = 4) -> list:
+    lines = [l for l in text.splitlines() if l.strip() and not l.startswith('#')]
+    return lines[-n:]
+
+
+def module_status(report_text: str) -> str:
+    if report_text.startswith("_Report not found"):
+        return "neutral"
+    lowered = report_text.lower()
+    if "error" in lowered or "failed" in lowered or "timeout" in lowered:
+        return "danger"
+    if "warning" in lowered or "warn" in lowered:
+        return "warn"
+    if "done" in lowered or "completed" in lowered or "ok" in lowered:
+        return "ok"
+    return "info"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Cron analysis
+# ═══════════════════════════════════════════════════════════════════════════
+def analyze_cron(jobs: list) -> dict:
+    recommendations = []
+    llm_jobs = [j for j in jobs if not j.get("script") and not j.get("no_agent")]
+    script_jobs = [j for j in jobs if j.get("script")]
+    error_jobs = [j for j in jobs if j.get("status") == "error"]
+    freq_5m = [j for j in jobs if j.get("schedule", "").startswith("*/5")]
+    freq_10m = [j for j in jobs if j.get("schedule", "").startswith("*/10")]
+
+    # Estimate runs per hour
+    runs_per_hour = 0
+    for j in jobs:
+        sched = j.get("schedule", "")
+        if sched.startswith("*/"):
+            try:
+                mins = int(sched.split()[0].replace("*/", ""))
+                if mins > 0:
+                    runs_per_hour += 60 // mins
+            except Exception:
+                pass
+        elif sched.startswith("0 *") or sched == "0 * * * *":
+            runs_per_hour += 1
+        elif sched.startswith("0 "):
+            runs_per_hour += 1
+
+    if len(freq_5m) > 3:
+        names = ", ".join(j["name"] for j in freq_5m[:3])
+        recommendations.append({
+            "icon": "⚡", "title": "Batch 5-minute jobs",
+            "body": f"{len(freq_5m)} jobs run every 5 min ({names}...). Group non-urgent ones into a single orchestrator script to reduce gateway load."
         })
-    return tasks
 
-
-def extract_worker_status(worker_md: str):
-    """Parse WORKER_STATUS.md table."""
-    rows = []
-    for m in re.finditer(r'\|\s*(\w+)\s*\|\s*([^|]+)\s*\|\s*(\w+)\s*\|\s*([^|]*)\s*\|', worker_md):
-        rows.append({
-            'id': m.group(1).strip(),
-            'title': m.group(2).strip(),
-            'status': m.group(3).strip().lower(),
-            'time': m.group(4).strip()
+    if len(llm_jobs) > 2:
+        recommendations.append({
+            "icon": "🤖", "title": "Move LLM agents off hot paths",
+            "body": f"{len(llm_jobs)} LLM-driven jobs. Consider converting health/pulse/research data collection to no_agent scripts and reserve LLM for planner/reviewer."
         })
-    return rows
+
+    if error_jobs:
+        recommendations.append({
+            "icon": "🚨", "title": f"Stabilize {len(error_jobs)} failing jobs",
+            "body": f"{', '.join(j['name'] for j in error_jobs[:3])}{'...' if len(error_jobs)>3 else ''} are failing. Add no_agent fallbacks or reduce frequency."
+        })
+
+    if runs_per_hour > 100:
+        recommendations.append({
+            "icon": "📊", "title": "Schedule density is high",
+            "body": f"~{runs_per_hour} job runs/hour. For scaling, shard by subsystem and introduce a lightweight scheduler that batches work."
+        })
+
+    return {
+        "total": len(jobs),
+        "llm": len(llm_jobs),
+        "script": len(script_jobs),
+        "errors": len(error_jobs),
+        "runs_per_hour": runs_per_hour,
+        "recommendations": recommendations,
+    }
 
 
-def parse_review_status(review_md: str):
-    """Parses REVIEW.md and extracts task statuses."""
-    statuses = {}
-    if review_md.startswith("_Report not found"):
-        return statuses
-    
-    table_re = re.compile(r'\|\s*Task\s*\|\s*Status\s*\|\s*Evidence\s*\|\s*Notes\s*\|\n\|---+\|---+\|---+\|---+\|\n((?:\|[^|]*\|[^|]*\|[^|]*\|[^|]*\|\n)+)')
-    match = table_re.search(review_md)
-    
-    if match:
-        for line in match.group(1).strip().split('\n'):
-            parts = [p.strip() for p in line.split('|') if p.strip()]
-            if len(parts) >= 2: # At least Task and Status
-                task_id = parts[0]
-                status = parts[1].lower()
-                statuses[task_id] = status
-    return statuses
-
-
-def progress_ring_svg(percent: int) -> str:
-    """Inline SVG progress ring."""
-    offset = 138 - (138 * percent / 100)
-    return f'''
-    <svg class="progress-ring" viewBox="0 0 52 52" aria-label="Progress {percent}%">
-      <circle class="progress-ring-bg" cx="26" cy="26" r="22"/>
-      <circle class="progress-ring-fg" cx="26" cy="26" r="22"
-              style="stroke-dashoffset:{offset:.1f}"/>
-      <text class="progress-ring-text" x="26" y="27">{percent}%</text>
-    </svg>'''
-
-
-# ─── Main Generator ───────────────────────────────────────────────────────
-
+# ═══════════════════════════════════════════════════════════════════════════
+# Main generator
+# ═══════════════════════════════════════════════════════════════════════════
 def generate_html_dashboard(workspace_root: str):
     os.chdir(workspace_root)
     now = datetime.now(timezone.utc)
     timestamp = now.strftime("%Y-%m-%d %H:%M UTC")
-    date_key = now.strftime("%Y-%m-%d")
 
-    # Load reports
     reports = {
-        'agent': read_report('docs/AGENT_REPORT.md'),
-        'deps': read_report('docs/DEPENDENCY_AUDIT.md'),
-        'health': read_report('docs/HEALTH_DASHBOARD.md'),
-        'control': read_report('docs/CONTROL_CENTER.md'),
-        'plan': read_report('docs/PLAN.md'),
-        'review': read_report('docs/REVIEW.md'),
-        'dispatch': read_report('docs/DISPATCH_LOG.md'),
-        'workers': read_report('docs/WORKER_STATUS.md'),
-        'roadmap': read_report('docs/ROADMAP.md'),
-        'facts_raw': read_report('docs/FACTS.json'),
-        'cron_status': read_report('docs/CRON_STATUS.md'),
-        'backlog': read_report('docs/BACKLOG.md'),
-        'promotion': read_report('docs/PROMOTION_LOG.md'),
-        'research': read_report('docs/RESEARCH.md'),
-        'pulse': read_report('docs/PULSE_LOG.md'),
-        'health_loop': read_report('docs/HEALTH_LOOP.md'),
-        'errors': read_report('docs/ERRORS.md'),
+        "agent": read_report("docs/AGENT_REPORT.md"),
+        "deps": read_report("docs/DEPENDENCY_AUDIT.md"),
+        "health": read_report("docs/HEALTH_DASHBOARD.md"),
+        "control": read_report("docs/CONTROL_CENTER.md"),
+        "plan": read_report("docs/PLAN.md"),
+        "review": read_report("docs/REVIEW.md"),
+        "dispatch": read_report("docs/DISPATCH_LOG.md"),
+        "workers": read_report("docs/WORKER_STATUS.md"),
+        "roadmap": read_report("docs/ROADMAP.md"),
+        "facts": read_json("docs/FACTS.json"),
+        "cron": read_json("docs/CRON_STATUS.json"),
+        "backlog": read_report("docs/BACKLOG.md"),
+        "promotion": read_report("docs/PROMOTION_LOG.md"),
+        "research": read_report("docs/RESEARCH.md"),
+        "pulse": read_report("docs/PULSE_LOG.md"),
+        "health_loop": read_report("docs/HEALTH_LOOP.md"),
+        "errors": read_report("docs/ERRORS.md"),
     }
 
-    # Parse structured data
-    facts_data = json.loads(reports['facts_raw']) if reports['facts_raw'] and not reports['facts_raw'].startswith("_Report not found") else {}
+    facts = reports["facts"]
+    git = facts.get("git", {})
+    branch = git.get("branch", "?")
+    commit = git.get("commit_short", "?")
+    rust_files = facts.get("codebase", {}).get("rust_files", 0)
+    loc = facts.get("codebase", {}).get("lines_of_code", 0)
+    clippy = facts.get("codebase", {}).get("clippy_warnings", 0)
+    todo_count = len(facts.get("todos", []))
+    deps_count = len(facts.get("dependencies", []))
+    dead_links = facts.get("dead_links", [])
 
-    milestones = extract_roadmap_milestones(reports['roadmap'])
-    plan_tasks = extract_plan_tasks(reports['plan'])
-    
-    # Extract worker rows from FACTS.json if possible, fallback to WORKER_STATUS.md
-    worker_rows = []
-    if facts_data and "plan_review_worker_link" in facts_data and "WORKER_STATUS.md" in facts_data["plan_review_worker_link"]:
-        worker_rows = extract_worker_status(facts_data["plan_review_worker_link"]["WORKER_STATUS.md"])
+    cron_jobs = reports["cron"].get("jobs", [])
+    cron_analysis = analyze_cron(cron_jobs)
+    cron_statuses = {"ok": 0, "error": 0, "running": 0, "pending": 0, "scheduled": 0, "unknown": 0}
+    for j in cron_jobs:
+        cron_statuses[j.get("status", "unknown")] = cron_statuses.get(j.get("status", "unknown"), 0) + 1
+
+    # Build a job lookup
+    job_by_name = {j["name"]: j for j in cron_jobs}
+
+    # Job chain steps
+    chain_steps = [
+        ("facts-collector", "Facts", "ramshield-facts-collector", reports["facts"].get("generated_at", "")),
+        ("daily-planner", "Planner", "ramshield-daily-planner", ""),
+        ("dispatcher", "Dispatcher", "", ""),  # not a separate cron job yet
+        ("workers", "Workers", "", ""),
+        ("reviewer", "Reviewer", "ramshield-reviewer", ""),
+    ]
+
+    def step_state(name: str, cron_name: str, fallback_text: str):
+        if cron_name and cron_name in job_by_name:
+            j = job_by_name[cron_name]
+            return j.get("status", "unknown"), rel_time(j.get("last_run", "")), j.get("last_error", "")
+        st = module_status(fallback_text)
+        return st, "manual", ""
+
+    # Section overview statuses
+    overview = [
+        ("ops", "Operations", cron_statuses["error"] == 0 and cron_statuses["ok"] > 0),
+        ("chain", "Job Chain", cron_statuses.get("error", 0) == 0),
+        ("modules", "Modules", True),
+        ("health", "Health", module_status(reports["health"]) != "danger"),
+        ("growth", "Growth", module_status(reports["promotion"]) != "danger"),
+        ("backlog", "Backlog", True),
+        ("systems", "Systems", cron_analysis["errors"] == 0),
+    ]
+
+    project_name = os.environ.get("DASHBOARD_PROJECT_NAME", "RamShield")
+
+    # Helper to render a module card
+    def module_card(title: str, status: str, last: str, log_lines: list, full_report: str, badge_text: str = ""):
+        st_class = {"ok": "status-ok", "warn": "status-warn", "danger": "status-danger", "info": "status-info"}.get(status, "status-neutral")
+        st_label = status.upper()
+        log_html = ""
+        if log_lines:
+            for l in log_lines:
+                # If line starts with ISO date, strip it for cleaner tail
+                clean = re.sub(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?\s*', '', l)
+                log_html += f'<span class="log-line">• {html_escape(clean[:180])}</span>'
+        else:
+            log_html = '<span class="log-line" style="color:var(--muted-2);">No recent activity</span>'
+        content_id = f"mod-{title.lower().replace(' ', '-')}"
+        return f'''
+    <article class="panel">
+      <div class="panel-header">
+        <h2>{title} <span>{badge_text}</span></h2>
+        <span class="badge badge-{status if status in ('ok','warn','danger','info') else 'neutral'}">{st_label}</span>
+      </div>
+      <div class="panel-body">
+        <div class="module-status"><div class="status-dot {st_class}"></div><span style="font-size:.78rem;color:var(--muted);">last activity {last}</span></div>
+        <div class="log-tail">{log_html}</div>
+        <button class="collapsible" aria-expanded="false" onclick="toggle(this,'{content_id}')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          Full report
+        </button>
+        <div id="{content_id}" class="collapsible-content">
+          <div class="markdown-body" style="margin-top:12px;">{md_to_html(full_report)}</div>
+        </div>
+      </div>
+    </article>'''
+
+    def html_escape(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # Cron rows
+    cron_rows_html = ""
+    for j in cron_jobs:
+        st = j.get("status", "unknown")
+        bg = {"ok": "badge-ok", "error": "badge-danger", "running": "badge-info", "pending": "badge-warn", "scheduled": "badge-neutral"}.get(st, "badge-neutral")
+        title = html_escape(j.get("last_error", "")[:120])
+        cron_rows_html += f'''
+            <tr title="{title}">
+              <td>{j['name']}</td>
+              <td><code>{j.get('schedule','')}</code></td>
+              <td><span class="badge {bg}">{st}</span></td>
+              <td>{rel_time(j.get('last_run',''))}</td>
+              <td>{j.get('execution','')}</td>
+            </tr>'''
+
+    # Recommendations
+    recs_html = ""
+    if cron_analysis["recommendations"]:
+        for r in cron_analysis["recommendations"]:
+            recs_html += f'''
+    <div class="rec">
+      <div class="rec-icon">{r['icon']}</div>
+      <div>
+        <div class="rec-title">{r['title']}</div>
+        <div class="rec-body">{r['body']}</div>
+      </div>
+    </div>'''
     else:
-        worker_rows = extract_worker_status(reports['workers'])
+        recs_html = '<p style="color:var(--muted);">No critical scaling recommendations. Fleet looks healthy.</p>'
 
-    # Use review_statuses from FACTS.json
-    review_statuses = facts_data.get('review_statuses', {})
-    
-    # Dead links from FACTS.json
-    dead_links = facts_data.get('dead_links', [])
+    # Chain HTML
+    chain_html = '<div class="chain">'
+    for idx, (key, label, cron_name, fallback_ts) in enumerate(chain_steps):
+        status, last, err = step_state(key, cron_name, reports.get(key, ""))
+        chain_html += f'''
+      <div class="chain-step {status}">
+        <div class="chain-dot {status}"></div>
+        <div>
+          <div class="chain-title">{label}</div>
+          <div class="chain-meta">{last}{f" — {err[:40]}" if err else ""}</div>
+        </div>
+      </div>'''
+        if idx < len(chain_steps) - 1:
+            chain_html += '<div class="chain-arrow">→</div>'
+    chain_html += '</div>'
 
-    # Build timeline items: milestones + today's tasks
-    timeline_items = []
-    for ms in milestones:
-        cls = 'completed' if ms['done'] else 'pending'
-        if ms['milestone']: cls = 'milestone'
-        timeline_items.append({
-            'label': ms['quarter'],
-            'title': ms['task'],
-            'desc': 'Milestone' if ms['milestone'] else 'Task',
-            'class': cls,
-            'time': ''
-        })
+    # Module cards
+    modules_html = ""
+    modules_html += module_card("Facts Collector", module_status(reports["facts"].get("generated_at", "")), rel_time(reports["facts"].get("generated_at", "")), [f"Rust files: {rust_files}, LOC: {loc:,}"], reports["facts"].get("generated_at", "") and json.dumps(reports["facts"], indent=2) or "_No FACTS.json_", f"{rust_files} files")
+    modules_html += module_card("Daily Plan", module_status(reports["plan"]), rel_time(reports["plan"][:20] if reports["plan"].startswith("20") else ""), parse_log_tail(reports["plan"], 3), reports["plan"])
+    modules_html += module_card("Worker Status", module_status(reports["workers"]), "recent", parse_log_tail(reports["workers"], 3), reports["workers"])
+    modules_html += module_card("Review", module_status(reports["review"]), "recent", parse_log_tail(reports["review"], 3), reports["review"])
+    modules_html += module_card("Health Loop", module_status(reports["health_loop"]), "recent", parse_log_tail(reports["health_loop"], 3), reports["health_loop"])
+    modules_html += module_card("Promotion", module_status(reports["promotion"]), "recent", parse_log_tail(reports["promotion"], 3), reports["promotion"])
+    modules_html += module_card("Research", module_status(reports["research"]), "recent", parse_log_tail(reports["research"], 3), reports["research"])
+    modules_html += module_card("Pulse", module_status(reports["pulse"]), "recent", parse_log_tail(reports["pulse"], 3), reports["pulse"])
 
-    # Add today's tasks as current sprint
-    for t in plan_tasks:
-        status = review_statuses.get(t['id'], 'pending') # Get status from REVIEW.md via facts_data
-        cls = {'completed':'completed', 'in_progress':'current', 'pending':'current', 'failed':'danger', 'partial':'warn', 'not_started':'pending'}.get(status, 'current')
-        timeline_items.append({
-            'label': 'Today',
-            'title': f"{t['id']}: {t['title']}",
-            'desc': t['action'] or t['target'],
-            'class': cls,
-            'time': '' # Status and time are now derived from review_statuses
-        })
+    # Overview nav
+    overview_html = ""
+    for sec_id, sec_label, healthy in overview:
+        dot = "status-ok" if healthy else "status-danger"
+        overview_html += f'<a href="#{sec_id}"><span class="overview-dot {dot}"></span>{sec_label}</a>'
 
-    # Priority alignment: compare roadmap Q1 tasks vs today's plan
-    q1_tasks = [m['task'] for m in milestones if m['quarter'].startswith('Q1') and not m['milestone']]
-    plan_titles = [t['title'] for t in plan_tasks]
-    alignment = []
-    for qt in q1_tasks[:6]:
-        matched = any(qt.lower() in pt.lower() or pt.lower() in qt.lower() for pt in plan_titles)
-        alignment.append({'roadmap': qt, 'aligned': matched})
-    for pt in plan_titles:
-        if not any(pt.lower() in a['roadmap'].lower() or a['roadmap'].lower() in pt.lower() for a in alignment):
-            alignment.append({'roadmap': pt, 'aligned': False, 'extra': True})
-
-    # Quick facts from facts_data
-    rust_files = facts_data.get('codebase', {}).get('rust_files', 0)
-    loc = facts_data.get('codebase', {}).get('lines_of_code', 0)
-    clippy = facts_data.get('codebase', {}).get('clippy_warnings', 0)
-    todo_count = len(facts_data.get('todos', []))
-    roadmap_open = len(facts_data.get('roadmap_open_tasks', []))
-    deps = len(facts_data.get('dependencies', []))
-    dead_link_count = len(dead_links)
-
-    # Worker progress %
-    completed_workers = sum(1 for status in review_statuses.values() if status == 'completed')
-    total_workers = len(plan_tasks) or 1 # Base on planned tasks
-    worker_pct = int(completed_workers / total_workers * 100)
-
-    # Backlog progress %
-    backlog_remaining = facts_data.get('backlog_remaining')
-    backlog_total = 50
-    if backlog_remaining is None:
-        backlog_remaining = 50
-    backlog_done = backlog_total - backlog_remaining
-    backlog_pct = int(backlog_done / backlog_total * 100)
-
-    # Cron jobs: load structured JSON snapshot from CRON_STATUS.json (live state)
-    cron_rows = []
-    cron_statuses = {'ok': 0, 'error': 0, 'running': 0, 'pending': 0, 'scheduled': 0, 'unknown': 0}
-    try:
-        cron_json_path = Path('docs/CRON_STATUS.json')
-        if cron_json_path.exists():
-            with open(cron_json_path, encoding='utf-8') as f:
-                cron_data = json.load(f)
-            for job in cron_data.get('jobs', []):
-                cron_rows.append({
-                    'name': job.get('name', ''),
-                    'schedule': job.get('schedule', ''),
-                    'status': job.get('status', 'unknown'),
-                    'execution': job.get('execution', ''),
-                    'last_error': job.get('last_error', ''),
-                    'last_run': job.get('last_run', ''),
-                })
-                cron_statuses[job.get('status', 'unknown')] = cron_statuses.get(job.get('status', 'unknown'), 0) + 1
-    except Exception as e:
-        cron_rows = []
-    cron_total = len(cron_rows)
-    cron_ok = cron_statuses['ok']
-
-    # Project name override (production-grade: anything goes)
-    project_name = os.environ.get('DASHBOARD_PROJECT_NAME', 'RamShield Automation')
-
-    # ─── HTML Assembly ──────────────────────────────────────────────────
     html = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{project_name} Dashboard</title>
+<title>{project_name} Operator Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400,500,600,700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>{CSS}</style>
 </head>
 <body>
+<div class="cmdbar">
+  <div class="container cmdbar-inner">
+    <div class="cmdbar-title">
+      <div class="heartbeat"></div>
+      <h1>{project_name} Operator Console</h1>
+    </div>
+    <div class="cmdbar-meta">
+      <span class="badge badge-neutral">{branch}</span>
+      <span class="badge badge-neutral">{commit}</span>
+      <span class="badge badge-info">refreshed {timestamp}</span>
+    </div>
+  </div>
+</div>
+
 <div class="container">
-  <header>
-    <h1>{project_name} Control Center</h1>
-    <p class="subtitle">Generated {timestamp}  •  Branch: <code>{facts_data.get('git',{}).get('branch','?')}</code>  •  Commit: <code>{facts_data.get('git',{}).get('commit_short','?')}</code></p>
-    <div class="badge-row">
-      <span class="badge badge-ok">Rust Files: {rust_files}</span>
-      <span class="badge badge-info">LOC: {loc:,}</span>
-      <span class="badge {'badge-ok' if clippy==0 else 'badge-warn'}">Clippy: {clippy}</span>
-      <span class="badge badge-neutral">TODOs: {todo_count}</span>
-      <span class="badge badge-info">Roadmap: {roadmap_open}</span>
-      <span class="badge badge-neutral">Deps: {deps}</span>
-      <span class="badge badge-{'ok' if dead_link_count==0 else 'danger'}">Dead Links: {dead_link_count}</span>
-      <span class="badge badge-info">Cron: {cron_ok}/{cron_total}</span>
-      <span class="badge badge-neutral">Backlog: {backlog_remaining}/{backlog_total}</span>
-      <span class="badge badge-{'ok' if worker_pct==100 else 'info'}">Workers: {worker_pct}% ({completed_workers}/{total_workers})</span>
-    </div>
-  </header>
+  <nav class="overview" id="overview">
+    {overview_html}
+  </nav>
 
-  <!-- MAIN TIMELINE -->
-  <section class="panel glow" style="margin-bottom:24px;">
+  <!-- METRICS -->
+  <div class="metrics">
+    <div class="metric"><div class="metric-value" style="color:var(--ok);">{cron_statuses['ok']}</div><div class="metric-label">Cron OK</div><div class="metric-delta">of {cron_analysis['total']} jobs</div></div>
+    <div class="metric"><div class="metric-value" style="color:var(--danger);">{cron_statuses['error']}</div><div class="metric-label">Cron Errors</div><div class="metric-delta">need attention</div></div>
+    <div class="metric"><div class="metric-value">{rust_files}</div><div class="metric-label">Rust Files</div><div class="metric-delta">{loc:,} LOC</div></div>
+    <div class="metric"><div class="metric-value" style="color:var(--warn);">{clippy}</div><div class="metric-label">Clippy</div><div class="metric-delta">warnings</div></div>
+    <div class="metric"><div class="metric-value">{todo_count}</div><div class="metric-label">TODOs</div><div class="metric-delta">across codebase</div></div>
+    <div class="metric"><div class="metric-value" style="color:var(--danger);">{len(dead_links)}</div><div class="metric-label">Dead Links</div><div class="metric-delta">in docs</div></div>
+    <div class="metric"><div class="metric-value">{deps_count}</div><div class="metric-label">Dependencies</div><div class="metric-delta">tracked</div></div>
+    <div class="metric"><div class="metric-value">{cron_analysis['runs_per_hour']}</div><div class="metric-label">Runs / Hour</div><div class="metric-delta">fleet load</div></div>
+  </div>
+
+  <!-- JOB CHAIN -->
+  <div class="section-label" id="chain">Autonomous Pipeline</div>
+  {chain_html}
+
+  <!-- OPERATIONS -->
+  <div class="section-label" id="ops">Operations</div>
+  <div class="panel">
     <div class="panel-header">
-      <h2>📅 Main Timeline — Roadmap → Sprint → Today</h2>
-      <span class="badge badge-info">Auto-synced from ROADMAP.md + PLAN.md</span>
+      <h2>Cron Fleet Status <span>{cron_analysis['total']} jobs • {cron_analysis['script']} script • {cron_analysis['llm']} LLM</span></h2>
+      <span class="badge badge-{('ok' if cron_statuses['error']==0 else 'danger')}">{cron_statuses['error']} errors</span>
     </div>
     <div class="panel-body">
-      <div class="timeline">
-'''
-    for i, item in enumerate(timeline_items):
-        html += f'''
-        <div class="timeline-item {item['class']}">
-          <div class="timeline-meta">
-            <span>{item['label']}</span>
-            <span style="color:var(--muted);">{item['time']}</span>
-          </div>
-          <div class="timeline-title">{item['title']}</div>
-          <div class="timeline-desc">{item['desc']}</div>
-        </div>'''
-
-    html += f'''
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+        <span class="badge badge-ok">OK {cron_statuses['ok']}</span>
+        <span class="badge badge-danger">Errors {cron_statuses['error']}</span>
+        <span class="badge badge-info">Running {cron_statuses['running']}</span>
+        <span class="badge badge-warn">Pending {cron_statuses['pending']}</span>
+        <span class="badge badge-neutral">Scheduled {cron_statuses['scheduled']}</span>
       </div>
+      <table>
+        <thead><tr><th>Job</th><th>Schedule</th><th>Status</th><th>Last Run</th><th>Execution</th></tr></thead>
+        <tbody>{cron_rows_html}</tbody>
+      </table>
     </div>
-  </section>
-
-  <!-- GRID: Priority Alignment + Progress + Quick Stats -->
-  <div class="grid grid-main">
-    <!-- Priority Alignment -->
-    <section class="panel">
-      <div class="panel-header">
-        <h2>🎯 Priority Alignment</h2>
-        <span class="badge badge-{'ok' if all(a['aligned'] for a in alignment if not a.get('extra')) else 'warn'}">Roadmap ↔ Daily Plan</span>
-      </div>
-      <div class="panel-body">
-        <div class="priority-grid">
-'''
-
-    for a in alignment:
-        cls = 'aligned' if a['aligned'] else ('mismatch' if not a.get('extra') else '')
-        badge = 'ok' if a['aligned'] else ('warn' if not a.get('extra') else 'info')
-        label = 'Roadmap → Today' if not a.get('extra') else 'Extra in Today'
-        html += f'''
-        <div class="priority-card {cls}">
-          <div class="priority-label">{label}</div>
-          <div class="priority-value {('ok' if a['aligned'] else 'warn' if not a.get('extra') else 'info')}">{a['roadmap'][:80]}{'…' if len(a['roadmap'])>80 else ''}</div>
-          <span class="badge badge-{badge}" style="margin-top:6px;display:inline-block;font-size:.6rem;">{'Aligned' if a['aligned'] else 'Mismatch' if not a.get('extra') else 'Only in Plan'}</span>
-        </div>'''
-
-    html += f'''
-        </div>
-      </div>
-    </section>
-
-    <!-- Progress & Quick Stats -->
-    <section class="panel">
-      <div class="panel-header"><h2>📊 Cycle Progress</h2></div>
-      <div class="panel-body" style="display:flex;flex-direction:column;gap:16px;align-items:center;">
-        <div style="text-align:center;">
-          <div style="font-size:.75rem;color:var(--muted);margin-bottom:8px;">Worker Completion</div>
-          {progress_ring_svg(worker_pct)}
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:320px;">
-          <div class="badge badge-ok" style="justify-content:center;font-size:.8rem;">✅ {completed_workers} Done</div>
-          <div class="badge badge-info" style="justify-content:center;font-size:.8rem;">⏳ {total_workers - completed_workers} Pending</div>
-          <div class="badge badge-neutral" style="justify-content:center;font-size:.8rem;">📝 {len(plan_tasks)} Planned</div>
-          <div class="badge badge-info" style="justify-content:center;font-size:.8rem;">🗺️ {roadmap_open} Roadmap</div>
-        </div>
-      </div>
-    </section>
   </div>
 
-  <!-- 3-COLUMN OPS GRID: Cron | Backlog | Pulse -->
-  <div class="section-divider"></div>
-  <div class="section-label">Operations</div>
-  <div class="grid grid-3" style="margin-top:20px;">
-    <!-- Cron Jobs -->
-    <section class="panel">
-      <div class="panel-header">
-        <h2>⏰ Cron Jobs</h2>
-        <span class="badge badge-info">{cron_total} active</span>
-      </div>
-      <div class="panel-body">
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-          <span class="badge badge-ok">OK: {cron_statuses['ok']}</span>
-          <span class="badge badge-danger">Errors: {cron_statuses['error']}</span>
-          <span class="badge badge-info">Running: {cron_statuses['running']}</span>
-          <span class="badge badge-warn">Pending: {cron_statuses['pending']}</span>
-          <span class="badge badge-neutral">Scheduled: {cron_statuses['scheduled']}</span>
-        </div>
-        <table>
-          <thead><tr><th>Job</th><th>Sched</th><th>Status</th><th>Execution</th></tr></thead>
-          <tbody>
-'''
-
-    for c in cron_rows:
-        name = c["name"]
-        sched = c["schedule"]
-        st = c["status"].lower()
-        bg = {"ok": "badge-ok", "error": "badge-danger", "running": "badge-info", "pending": "badge-warn", "scheduled": "badge-neutral"}.get(st, "badge-neutral")
-        title_attr = f"title=\"{c['last_error'][:120]}\"" if c.get("last_error") else ""
-        html += f'''
-            <tr {title_attr}>
-              <td>{name}</td>
-              <td><code>{sched}</code></td>
-              <td><span class="badge {bg}">{c["status"]}</span></td>
-              <td><span style="color:var(--muted);font-size:.7rem;">{c["execution"]}</span></td>
-            </tr>'''
-
-    if not cron_rows:
-        html += '<tr><td colspan="4" style="color:var(--muted);text-align:center;">No cron data yet — first run collector.</td></tr>'
-
-    html += f'''
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- Backlog -->
-    <section class="panel">
-      <div class="panel-header">
-        <h2>📦 Atomic Backlog</h2>
-        <span class="badge badge-neutral">{backlog_remaining}/{backlog_total} left</span>
-      </div>
-      <div class="panel-body">
-        <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;">
-          <div style="position:relative;width:54px;height:54px;">
-            {progress_ring_svg(backlog_pct)}
-          </div>
-          <div>
-            <div style="font-weight:600;font-size:1.1rem;">{backlog_done} / {backlog_total}</div>
-            <div style="color:var(--muted);font-size:.8rem;">atomic jobs picked up</div>
-          </div>
-        </div>
-        <div style="font-size:.8rem;color:var(--muted);">P0 → P3 priority queue. Pulse agent picks top unfinished item every 5 min.</div>
-        <details style="margin-top:8px;">
-          <summary style="cursor:pointer;color:var(--accent);font-size:.75rem;">View top 10</summary>
-'''
-    bg_items = re.findall(r'^\d+\.\s+\[[ x]\]\s+([^.\n]+?)(?:\.|$)', reports['backlog'], re.M)
-    for line in bg_items[:10]:
-        html += f'<div style="font-size:.75rem;padding:4px 0;color:var(--muted);">• {line}</div>'
-    html += '''
-        </details>
-      </div>
-    </section>
-
-    <!-- Pulse -->
-    <section class="panel">
-      <div class="panel-header">
-        <h2>💓 Pulse (5m)</h2>
-        <span class="badge badge-info">every 5m</span>
-      </div>
-      <div class="panel-body">
-        <div style="font-size:.8rem;color:var(--muted);margin-bottom:10px;">High-frequency pickup from backlog. Last entry:</div>
-'''
-
-    pulse_lines = [l for l in reports['pulse'].split('\n') if l.strip() and not l.startswith('#') and 'No pulse' not in l]
-    last_pulse = pulse_lines[-1] if pulse_lines else '_Awaiting first pulse tick._'
-    html += f'<div style="background:rgba(0,245,212,.05);border-left:3px solid var(--accent);padding:10px 12px;border-radius:4px;font-family:monospace;font-size:.85rem;">{last_pulse}</div>'
-
-    html += f'''
-      </div>
-    </section>
+  <!-- MODULES -->
+  <div class="section-label" id="modules">Module Consoles</div>
+  <div class="module-grid">
+    {modules_html}
   </div>
 
-  <!-- 2-COLUMN OPS GRID: Promotion | Research -->
-  <div class="section-divider"></div>
-  <div class="section-label">Growth & Discovery</div>
-  <div class="grid grid-2" style="margin-top:20px;">
-    <!-- Promotion -->
-    <section class="panel">
-      <div class="panel-header">
-        <h2>📣 Promotion</h2>
-        <span class="badge badge-info">30m cadence</span>
-      </div>
-      <div class="panel-body">
-        {md_to_html(reports['promotion'])}
-      </div>
-    </section>
-
-    <!-- Research -->
-    <section class="panel">
-      <div class="panel-header">
-        <h2>🔬 Research</h2>
-        <span class="badge badge-info">hourly</span>
-      </div>
-      <div class="panel-body">
-        {md_to_html(reports['research'])}
-      </div>
-    </section>
-  </div>
-
-  <!-- 2-COLUMN OPS GRID: Health Loop | Backlog full -->
-  <div class="section-divider"></div>
-  <div class="section-label">Health & Backlog Detail</div>
-  <div class="grid grid-2" style="margin-top:20px;">
-    <section class="panel">
-      <div class="panel-header">
-        <h2>🏥 Health Loop (15m)</h2>
-        <span class="badge badge-info">read-only</span>
-      </div>
-      <div class="panel-body">
-        {md_to_html(reports['health_loop'])}
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-header">
-        <h2>📦 Backlog (full)</h2>
-        <span class="badge badge-neutral">{backlog_remaining}/{backlog_total}</span>
-      </div>
-      <div class="panel-body">
-        {md_to_html(reports['backlog'])}
-      </div>
-    </section>
-  </div>
-
-  <!-- ERRORS & ERROR-HANDLING -->
-  <section class="panel" style="margin-top:20px;border-left:3px solid var(--danger);">
-    <div class="panel-header">
-      <h2>🚨 Errors &amp; Error-Handling</h2>
-      <span class="badge badge-{'ok' if not reports['errors'].startswith('_') and '0 active' in reports['errors'] else 'danger'}">{('no active errors' if not reports['errors'].startswith('_') and '0 active' in reports['errors'] else 'review')}</span>
-    </div>
-    <div class="panel-body">
-      {md_to_html(reports['errors']) if not reports['errors'].startswith('_') else md_to_html('_No active errors tracked. Health-repair job monitoring all sections._')}
-    </div>
-  </section>
-
-  <!-- DEAD LINKS REPORT -->
-  <section class="panel" style="margin-top:20px;">
-    <div class="panel-header">
-      <h2>🔗 Dead Links Report</h2>
-      <span class="badge badge-{'ok' if dead_link_count == 0 else 'danger'}">{dead_link_count} Dead Links</span>
-    </div>
-    <div class="panel-body">
-      {md_to_html(chr(10).join(dead_links)) if dead_links else md_to_html('_No dead links found._')}
-    </div>
-  </section>
-
-  <!-- DETAIL PANELS -->
-  <div class="grid grid-2" style="margin-top:20px;">
-    <section class="panel">
-      <div class="panel-header"><h2>📋 Daily Work Plan</h2></div>
-      <div class="panel-body">{md_to_html(reports['plan'])}</div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>👷 Worker Status</h2></div>
-      <div class="panel-body">{md_to_html(reports['workers'])}</div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>🔍 Review & Assessment</h2></div>
-      <div class="panel-body">{md_to_html(reports['review'])}</div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>📤 Task Dispatch Log</h2></div>
-      <div class="panel-body">{md_to_html(reports['dispatch'])}</div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>🏥 Project Health Overview</h2></div>
+  <!-- HEALTH & BACKLOG -->
+  <div class="section-label" id="health">Health & Backlog</div>
+  <div class="grid grid-2">
+    <div class="panel">
+      <div class="panel-header"><h2>Project Health</h2><span class="badge badge-{module_status(reports['health'])}">{module_status(reports['health']).upper()}</span></div>
       <div class="panel-body">{md_to_html(reports['health'])}</div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>🤖 Agent Control Center</h2></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><h2>Error Ledger</h2><span class="badge badge-{module_status(reports['errors'])}">{module_status(reports['errors']).upper()}</span></div>
+      <div class="panel-body">{md_to_html(reports['errors'])}</div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><h2>Backlog</h2><span class="badge badge-info">live</span></div>
+      <div class="panel-body">{md_to_html(reports['backlog'])}</div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><h2>Control Center</h2><span class="badge badge-info">directive</span></div>
       <div class="panel-body">{md_to_html(reports['control'])}</div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>📦 Dependency Audit</h2></div>
+    </div>
+  </div>
+
+  <!-- GROWTH -->
+  <div class="section-label" id="growth">Growth & Discovery</div>
+  <div class="grid grid-2">
+    <div class="panel">
+      <div class="panel-header"><h2>Roadmap</h2><span class="badge badge-info">{len(facts.get('roadmap_open_tasks', []))} open</span></div>
+      <div class="panel-body">{md_to_html(reports['roadmap'])}</div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><h2>Dependency Audit</h2><span class="badge badge-info">{deps_count} crates</span></div>
       <div class="panel-body">{md_to_html(reports['deps'])}</div>
-    </section>
-    <section class="panel">
-      <div class="panel-header"><h2>🤖 Helper Agent Latest Report</h2></div>
-      <div class="panel-body">{md_to_html(reports['agent'])}</div>
-    </section>
+    </div>
+  </div>
+
+  <!-- SYSTEMS ENGINEERING -->
+  <div class="section-label" id="systems">Systems Engineering</div>
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Cron Scaling & Recommendations</h2>
+      <span class="badge badge-purple">analysis</span>
+    </div>
+    <div class="panel-body">
+      {recs_html}
+    </div>
   </div>
 
   <footer>
-    Generated by {project_name} Dashboard Generator v0.6.0  •  Slick & Edgy Theme
-    •  Docs: <a href="https://hermes-agent.nousresearch.com/docs">https://hermes-agent.nousresearch.com/docs</a>
+    {project_name} Operator Console v1.0 • Generated {timestamp} •
+    Docs: <a href="https://hermes-agent.nousresearch.com/docs">hermes-agent.nousresearch.com/docs</a>
   </footer>
 </div>
+
+<script>
+function toggle(btn, id) {{
+  const el = document.getElementById(id);
+  const open = el.classList.toggle('open');
+  btn.setAttribute('aria-expanded', open);
+}}
+</script>
 </body>
 </html>'''
 
     out = Path('docs') / 'AUTOMATION_DASHBOARD.html'
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding='utf-8')
-    print(f"Generated HTML dashboard: {out} ({len(html):,} bytes)")
+    print(f"Generated operator console: {out} ({len(html):,} bytes)")
 
 
 def main():
-    workspace = os.environ.get(
-        'GITHUB_WORKSPACE',
-        str(Path(__file__).parent.parent.parent)
-    )
+    workspace = os.environ.get('GITHUB_WORKSPACE', str(Path(__file__).parent.parent.parent))
     generate_html_dashboard(workspace)
 
 
