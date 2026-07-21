@@ -48,6 +48,11 @@ test_config.toml
 *.exe
 *.pdb
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
 # Generated agent/dashboard reports
 docs/CRON_STATUS.json
 docs/CRON_STATUS.md
