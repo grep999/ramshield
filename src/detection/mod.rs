@@ -91,6 +91,8 @@ pub struct DetectionEngine {
     /// Pattern learner for attack detection
     #[allow(dead_code)]
     pattern_learner: Arc<crate::learning::PatternLearner>,
+    /// Pre-aggregation buffer for IPs before promotion to main store
+    pre_aggs: Arc<DashMap<IpAddr, IpAgg>>,
 }
 
 impl DetectionEngine {
@@ -114,6 +116,7 @@ impl DetectionEngine {
             bloom: Arc::new(RwLock::new(BloomFilter::new(bloom_bits))),
             shutdown,
             pattern_learner,
+            pre_aggs: Arc::new(DashMap::with_shard_amount(bloom_bits.max(1) / 1024)), // Heuristic for shard count
         }
     }
 
