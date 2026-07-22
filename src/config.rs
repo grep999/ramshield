@@ -48,12 +48,16 @@ pub struct DetectionConfig {
     /// /24 event count in one window that lowers promotion threshold for that subnet.
     #[serde(default = "default_subnet_window_threshold")]
     pub subnet_window_threshold: u64,
+    /// Max unique IPs in the pre-aggregation buffer before flushing to main store.
+    #[serde(default = "default_pre_aggs_max_size")]
+    pub pre_aggs_max_size:       usize,
 }
 
 fn default_batch_max_events() -> usize { 4096 }
 fn default_batch_window_ms() -> u64 { 50 }
 fn default_promote_min() -> u32 { 8 }
 fn default_subnet_window_threshold() -> u64 { 500 }
+fn default_pre_aggs_max_size() -> usize { 1_000_000 }
 fn default_history_cap() -> usize { 32 }
 fn default_pattern_similarity_threshold() -> f32 { 0.8 }
 

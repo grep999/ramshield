@@ -93,6 +93,7 @@ pub struct DetectionEngine {
     pattern_learner: Arc<crate::learning::PatternLearner>,
     /// Pre-aggregation buffer for IPs before promotion to main store
     pre_aggs: Arc<DashMap<IpAddr, IpAgg>>,
+    last_pre_aggs_flush_ns: Arc<AtomicU64>,
 }
 
 impl DetectionEngine {
@@ -138,6 +139,18 @@ impl DetectionEngine {
         Ok(())
     }
 
+    fn process_event_into_pre_aggs(&self, ev: ConnectionEvent) {
+        let entry = self.pre_aggs.entry(ev.ip).or_insert_with(IpAgg::default);
+        let agg = entry.value_mut();
+        agg.count += 1;
+        agg.bytes += ev.bytes;
+        agg.last_ts_ns = ev.timestamp_ns;
+        // Update status_dist
+        if ev.status_code >= 100 && ev.status_code < 600 {
+            agg.status_dist[(ev.status_code / 100 - 1) as usize] += 1;
+        }
+    }
+
     pub fn spawn_workers(self: Arc<Self>, _n: usize) {
         let det = self.config.load().detection.clone();
         info!(
@@ -174,21 +187,22 @@ impl DetectionEngine {
             let mut batch = Vec::with_capacity(max.min(4096));
 
             match rx.recv_timeout(window) {
-                Ok(ev) => batch.push(ev),
+                Ok(ev) => self.process_event_into_pre_aggs(ev),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }
 
-            while batch.len() < max {
+            // Drain remaining events from channel within the window
+            while rx.len() > 0 {
                 match rx.try_recv() {
-                    Ok(ev) => batch.push(ev),
-                    Err(_) => break,
+                    Ok(ev) => self.process_event_into_pre_aggs(ev),
+                    Err(_) => break, // Channel empty
                 }
             }
 
-            if !batch.is_empty() {
-                self.metrics.inc_ingested(batch.len() as u64);
-                self.flush_batch(&batch);
+            // Periodically flush pre_aggs to main store
+            if self.pre_aggs.len() >= self.config.load().detection.pre_aggs_max_size || self.pre_aggs_needs_flush_due_to_timeout() {
+                self.flush_pre_aggs_to_store();
             }
         }
     }
