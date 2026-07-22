@@ -2,18 +2,411 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RamShield // Ops</title>
 <style>
-:root { --bg:#050505; --fg:#00f2ff; --muted:#007a80; --border:#003333; --neon:#00f2ff; }
-body { background:var(--bg); color:var(--fg); font-family:'Space Grotesk', sans-serif; margin:0; padding:20px; }
-.card { border:1px solid var(--border); padding:20px; background:rgba(0,255,255,0.02); box-shadow:0 0 10px rgba(0,242,255,0.1); }
-h1 { color:var(--neon); text-transform:uppercase; letter-spacing:2px; text-shadow:0 0 10px var(--neon); }
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+:root {
+  --bg: #050505;
+  --bg2: #0a0a0f;
+  --fg: #00f2ff;
+  --fg2: #00c8d4;
+  --muted: #005f66;
+  --border: #0d2a2e;
+  --neon: #00f2ff;
+  --danger: #ff3366;
+  --warn: #ffaa00;
+  --ok: #00ff88;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'Space Grotesk', sans-serif;
+  min-height: 100vh;
+  background-image:
+    linear-gradient(rgba(0,242,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,242,255,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(10px);
+}
+.header h1 {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: var(--neon);
+  text-shadow: 0 0 20px rgba(0,242,255,0.6), 0 0 40px rgba(0,242,255,0.3);
+}
+.header .status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%,100% { opacity:1; transform:scale(1); }
+  50% { opacity:0.5; transform:scale(0.8); }
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  padding: 24px;
+}
+.card {
+  background: rgba(0,242,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+.card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--neon), transparent);
+  opacity: 0.5;
+}
+.card:hover {
+  border-color: var(--muted);
+  box-shadow: 0 0 20px rgba(0,242,255,0.1);
+}
+.card-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.card-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--neon);
+  text-shadow: 0 0 10px rgba(0,242,255,0.4);
+  line-height: 1;
+  margin-bottom: 4px;
+}
+.card-value.danger { color: var(--danger); text-shadow: 0 0 10px rgba(255,51,102,0.4); }
+.card-value.warn { color: var(--warn); text-shadow: 0 0 10px rgba(255,170,0,0.4); }
+.card-value.ok { color: var(--ok); text-shadow: 0 0 10px rgba(0,255,136,0.4); }
+.card-sub { font-size: 11px; color: var(--muted); }
+.card-row { display: flex; justify-content: space-between; margin-top: 12px; }
+.card-row span { font-size: 11px; color: var(--fg2); }
+.card-row span b { color: var(--fg); font-weight: 600; }
+
+/* Bar charts */
+.bar-track {
+  background: rgba(0,242,255,0.08);
+  border-radius: 4px;
+  height: 4px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--neon);
+  transition: width 1s ease;
+  box-shadow: 0 0 6px var(--neon);
+}
+
+/* Tables */
+.table-card { grid-column: span 2; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { text-align: left; padding: 8px 12px; color: var(--muted); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+td { padding: 8px 12px; border-bottom: 1px solid rgba(13,42,46,0.5); color: var(--fg2); }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(0,242,255,0.03); }
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+.badge-danger { background: rgba(255,51,102,0.15); color: var(--danger); border: 1px solid rgba(255,51,102,0.3); }
+.badge-warn { background: rgba(255,170,0,0.15); color: var(--warn); border: 1px solid rgba(255,170,0,0.3); }
+.badge-ok { background: rgba(0,255,136,0.15); color: var(--ok); border: 1px solid rgba(0,255,136,0.3); }
+.badge-muted { background: rgba(0,95,102,0.2); color: var(--muted); border: 1px solid rgba(0,95,102,0.3); }
+
+/* Refresh indicator */
+.refresh-info { text-align: center; padding: 8px; font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+
+/* Modules section */
+.modules-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  padding: 0 24px 24px;
+}
+.module-card {
+  background: rgba(0,242,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  text-align: center;
+}
+.module-name { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--fg2); margin-bottom: 6px; }
+.module-rate { font-size: 22px; font-weight: 700; color: var(--neon); text-shadow: 0 0 8px rgba(0,242,255,0.3); }
+.module-detail { font-size: 10px; color: var(--muted); margin-top: 4px; }
 </style>
 </head>
 <body>
-<h1>RamShield // Ops</h1>
-<div class="card">
-  <h2>Overview</h2>
-  <div id="mIngest">0</div>
+
+<div class="header">
+  <h1>RamShield // Ops</h1>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <span style="font-size:11px;color:var(--muted);" id="uptime">uptime: 0s</span>
+    <div class="status-dot"></div>
+    <span style="font-size:11px;color:var(--ok);" id="health">running</span>
+  </div>
 </div>
+
+<!-- Overview Cards -->
+<div class="grid">
+  <div class="card">
+    <div class="card-label">Events Ingested</div>
+    <div class="card-value" id="ingested">0</div>
+    <div class="card-sub">total events processed</div>
+    <div class="bar-track"><div class="bar-fill" id="ingested-bar" style="width:0%"></div></div>
+  </div>
+  <div class="card">
+    <div class="card-label">Batches</div>
+    <div class="card-value" id="batches">0</div>
+    <div class="card-sub">detection cycles</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Promotions</div>
+    <div class="card-value ok" id="promotions">0</div>
+    <div class="card-sub">hot IPs tracked</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Cold Skipped</div>
+    <div class="card-value warn" id="cold">0</div>
+    <div class="card-sub">below threshold</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Blocks Applied</div>
+    <div class="card-value danger" id="blocks">0</div>
+    <div class="card-sub">total blocks issued</div>
+  </div>
+  <div class="card">
+    <div class="card-label">IPs Tracked</div>
+    <div class="card-value" id="tracked">0</div>
+    <div class="card-sub">active in store</div>
+    <div class="card-row"><span>RAM <b id="ram-mb">0</b> MB</span><span>PCT <b id="ram-pct">0.0</b>%</span></div>
+  </div>
+  <div class="card">
+    <div class="card-label">IPC Requests</div>
+    <div class="card-value" id="requests">0</div>
+    <div class="card-sub">client requests</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Rejections</div>
+    <div class="card-value warn" id="rejected">0</div>
+    <div class="card-sub">dropped events</div>
+  </div>
+</div>
+
+<!-- Module Stats -->
+<div style="padding: 0 24px 8px; font-size: 10px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase;">Module Performance</div>
+<div class="modules-grid" id="modules-grid">
+  <!-- populated by JS -->
+</div>
+
+<!-- Block Log -->
+<div class="grid">
+  <div class="card table-card">
+    <div class="card-label">Block Log</div>
+    <div style="max-height: 240px; overflow-y: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>IP</th>
+            <th>Reason</th>
+            <th>Module</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody id="block-log">
+          <tr><td colspan="4" style="text-align:center;color:var(--muted);padding:20px;">No blocks yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Batch History -->
+  <div class="card table-card">
+    <div class="card-label">Batch History</div>
+    <div style="max-height: 240px; overflow-y: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Events</th>
+            <th>Unique IPs</th>
+            <th>Promoted</th>
+            <th>Cold</th>
+            <th>Blocks</th>
+            <th>Subnets</th>
+          </tr>
+        </thead>
+        <tbody id="batch-history">
+          <tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px;">No batches yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Hot Subnets -->
+  <div class="card table-card">
+    <div class="card-label">Hot Subnets</div>
+    <div style="max-height: 240px; overflow-y: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Subnet</th>
+            <th>Events/s</th>
+          </tr>
+        </thead>
+        <tbody id="hot-subnets">
+          <tr><td colspan="2" style="text-align:center;color:var(--muted);padding:20px;">No subnets yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="refresh-info" id="last-updated">loading...</div>
+
+<script>
+const fmt = (n) => n >= 1e6 ? (n/1e6).toFixed(2)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : n.toString();
+const fmtTime = (ms) => new Date(ms).toLocaleTimeString();
+const fmtUptime = (s) => { if(s<60)return s+'s'; if(s<3600)return Math.floor(s/60)+'m '+(s%60)+'s'; return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m'; };
+
+let lastIngested = 0;
+
+function render(data) {
+  // Header
+  document.getElementById('uptime').textContent = 'uptime: ' + fmtUptime(data.uptime_secs || 0);
+  document.getElementById('health').textContent = data.is_healthy ? 'running' : 'degraded';
+  document.getElementById('health').style.color = data.is_healthy ? 'var(--ok)' : 'var(--danger)';
+
+  // Cards
+  document.getElementById('ingested').textContent = fmt(data.events_ingested || 0);
+  document.getElementById('ingested-bar').style.width = Math.min(100, (data.events_ingested||0) / 500000 * 100) + '%';
+  document.getElementById('batches').textContent = fmt(data.batches_total || 0);
+  document.getElementById('promotions').textContent = fmt(data.promotions || 0);
+  document.getElementById('cold').textContent = fmt(data.cold_skipped || 0);
+  document.getElementById('blocks').textContent = fmt(data.blocks_applied || 0);
+  document.getElementById('tracked').textContent = fmt(data.ips_tracked || 0);
+  document.getElementById('requests').textContent = fmt(data.ipc_requests || 0);
+  document.getElementById('rejected').textContent = fmt(data.events_rejected || 0);
+  document.getElementById('ram-mb').textContent = Math.round((data.ram_bytes||0)/1048576);
+  document.getElementById('ram-pct').textContent = (data.ram_pct||0).toFixed(4);
+
+  document.getElementById('last-updated').textContent = 'last updated: ' + fmtTime(data.ts_ms || Date.now());
+}
+
+function renderModules(modules) {
+  const grid = document.getElementById('modules-grid');
+  if (!modules || modules.length === 0) {
+    grid.innerHTML = '<div class="module-card"><div class="module-name">No Data</div></div>';
+    return;
+  }
+  grid.innerHTML = modules.map(m => `
+    <div class="module-card">
+      <div class="module-name">${m.label}</div>
+      <div class="module-rate">${fmt(m.events||0)}</div>
+      <div class="module-detail">${m.rate_per_sec?.toFixed(1)||'0'} /s &nbsp; err=${m.errors||0}</div>
+    </div>
+  `).join('');
+}
+
+function renderBlockLog(blocks) {
+  const tb = document.getElementById('block-log');
+  if (!blocks || blocks.length === 0) {
+    tb.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:20px;">No blocks yet</td></tr>';
+    return;
+  }
+  tb.innerHTML = blocks.map(b => {
+    const badgeClass = b.reason?.includes('HighRps')||b.reason?.includes('detection') ? 'badge-danger'
+                     : b.reason?.includes('subnet') ? 'badge-warn'
+                     : b.reason?.includes('forecast') ? 'badge-muted' : 'badge-muted';
+    return `<tr>
+      <td><b>${b.ip||'?'}</b></td>
+      <td><span class="badge ${badgeClass}">${(b.reason||'').split('(')[0]}</span></td>
+      <td style="color:var(--muted)">${b.module||''}</td>
+      <td>${fmtTime(b.ts_ms||0)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderBatchHistory(batches) {
+  const tb = document.getElementById('batch-history');
+  if (!batches || batches.length === 0) {
+    tb.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px;">No batches yet</td></tr>';
+    return;
+  }
+  tb.innerHTML = batches.slice(-20).reverse().map(b => `<tr>
+    <td>${fmtTime(b.ts_ms||0)}</td>
+    <td>${b.events||0}</td>
+    <td>${b.unique_ips||0}</td>
+    <td style="color:var(--ok)">${b.promoted||0}</td>
+    <td style="color:var(--warn)">${b.cold_skipped||0}</td>
+    <td><span class="badge badge-danger">${b.blocks||0}</span></td>
+    <td>${b.hot_subnets||0}</td>
+  </tr>`).join('');
+}
+
+function renderHotSubnets(subnets) {
+  const tb = document.getElementById('hot-subnets');
+  if (!subnets || subnets.length === 0) {
+    tb.innerHTML = '<tr><td colspan="2" style="text-align:center;color:var(--muted);padding:20px;">No subnets yet</td></tr>';
+    return;
+  }
+  tb.innerHTML = subnets.map(s => `<tr>
+    <td><b>${s.prefix||'?'}</b>.0/24</td>
+    <td style="color:var(--danger)">${fmt(s.events||0)} rps</td>
+  </tr>`).join('');
+}
+
+async function refresh() {
+  try {
+    const [snap, modules, blocks, batches, subnets] = await Promise.all([
+      fetch('/api/snapshot').then(r=>r.json()),
+      fetch('/api/status/modules').then(r=>r.json()),
+      fetch('/api/history/blocks').then(r=>r.json()),
+      fetch('/api/history/batches').then(r=>r.json()),
+      fetch('/api/traffic/subnets').then(r=>r.json()),
+    ]);
+    render(snap);
+    renderModules(modules);
+    renderBlockLog(blocks);
+    renderBatchHistory(batches);
+    renderHotSubnets(subnets);
+  } catch(e) {
+    document.getElementById('last-updated').textContent = 'error: ' + e.message;
+  }
+}
+
+refresh();
+setInterval(refresh, 3000);
+</script>
 </body>
 </html>
