@@ -142,7 +142,9 @@ mod tests {
     use tower::ServiceExt;
 
     fn test_engine() -> Arc<Engine> {
-        Arc::new(Engine::new(Config::default()))
+        use crate::metrics::Metrics;
+        use crate::storage::Store;
+        Arc::new(Engine::new(Config::default(), Arc::new(Store::new(16)), Arc::new(Metrics::new())))
     }
 
     #[tokio::test]

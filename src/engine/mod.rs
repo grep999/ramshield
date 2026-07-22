@@ -178,15 +178,18 @@ mod startup_tests {
     //! task); in-tree tests ride `cargo test --lib`.
     use super::*;
     use crate::Config;
+    use crate::metrics::Metrics;
+    use crate::storage::Store;
+    use std::sync::Arc;
 
     #[test]
     fn engine_constructs_with_default_config() {
-        let _engine = Engine::new(Config::default());
+        let _engine = Engine::new(Config::default(), Arc::new(Store::new(16)), Arc::new(Metrics::new()));
     }
 
     #[test]
     fn engine_start_then_snapshot_default_state() {
-        let engine = Engine::new(Config::default());
+        let engine = Engine::new(Config::default(), Arc::new(Store::new(16)), Arc::new(Metrics::new()));
         engine.start();
         let snap = engine.dashboard_snapshot();
         assert!(snap.is_healthy);
@@ -197,7 +200,7 @@ mod startup_tests {
 
     #[test]
     fn engine_module_stats_have_four_canonical_rows() {
-        let engine = Engine::new(Config::default());
+        let engine = Engine::new(Config::default(), Arc::new(Store::new(16)), Arc::new(Metrics::new()));
         engine.start();
         let stats = engine.get_module_stats();
         assert_eq!(stats.len(), 4);
