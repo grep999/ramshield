@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 
 /// In-memory aggregation for one flush window — no store access until flush completes.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct IpAgg {
     pub count: u32,
     pub bytes: u64,
