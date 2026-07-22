@@ -184,6 +184,7 @@ impl DetectionEngine {
             }
 
             if !batch.is_empty() {
+                self.metrics.inc_ingested(batch.len() as u64);
                 self.flush_batch(&batch);
             }
         }
