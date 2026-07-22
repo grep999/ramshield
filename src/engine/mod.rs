@@ -1,6 +1,7 @@
 pub mod learning;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::broadcast;
 use tracing::info;
 use arc_swap::ArcSwap;
@@ -8,21 +9,23 @@ use arc_swap::ArcSwap;
 use crate::config::Config;
 use crate::detection::DetectionEngine;
 use crate::forecasting::Forecaster;
-use crate::storage::Store;
 use crate::learning::PatternLearner;
-use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, SubnetRow};
-
-use std::sync::atomic::{AtomicBool, Ordering};
+use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, Metrics, SubnetRow};
+use crate::storage::Store;
 
 pub struct Engine {
-    pub config: ArcSwap<Config>,
+    pub config: Arc<arc_swap::ArcSwap<Config>>,
+    pub store: Arc<Store>,
+    pub metrics: Arc<Metrics>,
     shutdown: AtomicBool,
 }
 
 impl Engine {
-    pub fn new(cfg: Config) -> Self {
+    pub fn new(cfg: Config, store: Arc<Store>, metrics: Arc<Metrics>) -> Self {
         Self {
-            config: ArcSwap::from_pointee(cfg),
+            config: Arc::new(ArcSwap::from_pointee(cfg)),
+            store,
+            metrics,
             shutdown: AtomicBool::new(false),
         }
     }
@@ -32,8 +35,6 @@ impl Engine {
     }
 
     /// Boot the full pipeline: store, detection, forecasting, IPC server.
-    /// Runs on a dedicated OS thread with its own current-thread tokio rt
-    /// (mirrors the dashboard pattern in main.rs).
     pub fn start_async(self: Arc<Self>) -> std::io::Result<std::thread::JoinHandle<()>> {
         let _cfg = self.config.load();
         std::thread::Builder::new()
@@ -67,20 +68,59 @@ impl Engine {
     }
 
     pub fn dashboard_snapshot(&self) -> DashboardSnapshot {
-        DashboardSnapshot::default()
+        let store = &self.store;
+        let metrics = &self.metrics;
+        let stats = store.get_stats();
+        let (cpu_usage, memory_usage_mb) = crate::metrics::get_system_usage();
+
+        DashboardSnapshot {
+            ts_ms: crate::metrics::now_ms(),
+            uptime_secs: stats.uptime_secs,
+            ips_tracked: stats.ips_tracked,
+            blocked_total: stats.blocked,
+            ram_bytes: stats.ram_bytes,
+            ram_limit_mb: stats.ram_limit_mb,
+            ram_pct: if stats.ram_limit_mb > 0 { (stats.ram_bytes as f64 / (stats.ram_limit_mb as f64 * 1048576.0) * 100.0).min(100.0) } else { 0.0 },
+            cpu_usage,
+            memory_usage_mb,
+            ipc_requests: metrics.requests_total.load(Ordering::Relaxed),
+            events_ingested: metrics.events_ingested.load(Ordering::Relaxed),
+            events_rejected: metrics.events_rejected.load(Ordering::Relaxed),
+            channel_depth: 0,
+            batches_total: metrics.batches_total.load(Ordering::Relaxed),
+            promotions: metrics.promotions_total.load(Ordering::Relaxed),
+            cold_skipped: metrics.cold_skipped_total.load(Ordering::Relaxed),
+            blocks_applied: metrics.blocks_detection.load(Ordering::Relaxed) + metrics.blocks_subnet.load(Ordering::Relaxed) + metrics.blocks_forecast.load(Ordering::Relaxed),
+            pipeline: crate::metrics::PipelineFlow {
+                ingest: 0,
+                queued: 0,
+                batched: 0,
+                promoted: 0,
+                merged: 0,
+                blocked: 0,
+            },
+            is_healthy: true,
+            health_reason: "running".into(),
+        }
     }
 
     pub fn get_batch_history(&self) -> Vec<BatchRecord> {
-        Vec::new()
+        self.metrics.batch_history.lock().unwrap().iter().cloned().collect()
     }
 
     pub fn get_block_log(&self) -> Vec<BlockRecord> {
-        Vec::new()
+        self.metrics.block_log.lock().unwrap().iter().cloned().collect()
     }
 
     pub fn get_hot_subnets(&self) -> Vec<SubnetRow> {
-        Vec::new()
-    }
+            self.store.subnet_table().iter().map(|e| {
+                let rec = e.value();
+                SubnetRow {
+                    prefix: format!("{}.{}.{}", rec.prefix[0], rec.prefix[1], rec.prefix[2]),
+                    events: rec.total_rps,
+                }
+            }).collect()
+        }
 
     pub fn get_module_stats(&self) -> Vec<ModuleStats> {
         vec![
@@ -97,11 +137,13 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     let cfg_snapshot = cfg_arc.as_ref().clone();  // owned Config clone
     let cfg_handle = cfg_snapshot.clone().into_handle(); // ConfigHandle
 
-    let metrics = Arc::new(crate::metrics::Metrics::new());
+    // Use engine's shared store and metrics (shared with dashboard)
+    let store = engine.store.clone();
+    let metrics = engine.metrics.clone();
+
     let (block_tx, _) = broadcast::channel::<crate::detection::BlockDecision>(1024);
     let learner = Arc::new(PatternLearner::new(cfg_snapshot.detection.pattern_similarity_threshold));
 
-    let store = Arc::new(Store::new(cfg_snapshot.engine.shard_count));
     let detection = Arc::new(DetectionEngine::new(
         store.clone(),
         cfg_handle.clone(),
