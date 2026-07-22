@@ -41,7 +41,10 @@ pub struct DetectionConfig {
     pub batch_max_events:        usize,
     /// Max wait (ms) before flushing a partial batch.
     #[serde(default = "default_batch_window_ms")]
-    pub batch_window_ms:         u64,
+    pub batch_window_ms: u64,
+    /// Max wait (ms) before flushing the pre-aggregation buffer.
+    #[serde(default = "default_pre_aggs_flush_interval_ms")]
+    pub pre_aggs_flush_interval_ms: u64,
     /// Per-IP hits required in one window before full IpRecord tracking.
     #[serde(default = "default_promote_min")]
     pub promote_min_events:      u32,
@@ -58,6 +61,7 @@ fn default_batch_window_ms() -> u64 { 50 }
 fn default_promote_min() -> u32 { 8 }
 fn default_subnet_window_threshold() -> u64 { 500 }
 fn default_pre_aggs_max_size() -> usize { 1_000_000 }
+fn default_pre_aggs_flush_interval_ms() -> u64 { 1000 }
 fn default_history_cap() -> usize { 32 }
 fn default_pattern_similarity_threshold() -> f32 { 0.8 }
 
@@ -73,6 +77,8 @@ impl Default for DetectionConfig {
             batch_window_ms: default_batch_window_ms(),
             promote_min_events: default_promote_min(),
             subnet_window_threshold: default_subnet_window_threshold(),
+            pre_aggs_max_size: default_pre_aggs_max_size(),
+            pre_aggs_flush_interval_ms: default_pre_aggs_flush_interval_ms(),
         }
     }
 }
@@ -272,6 +278,9 @@ impl Config {
         }
         if self.detection.subnet_window_threshold < 10 {
             anyhow::bail!("detection.subnet_window_threshold should be at least 10");
+        }
+        if self.detection.pre_aggs_max_size == 0 {
+            anyhow::bail!("detection.pre_aggs_max_size must be > 0");
         }
         if !(0.0..=1.0).contains(&self.detection.pattern_similarity_threshold) {
             anyhow::bail!("detection.pattern_similarity_threshold must be in range [0.0, 1.0]");
