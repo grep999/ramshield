@@ -55,7 +55,10 @@ def worker_task(worker_id, target, events_per_worker, batch_size, attack_modes):
             if not batch:
                 break
 
-            message = json.dumps(batch) + "\n"
+            message_lines = []
+            for event in batch:
+                message_lines.append(json.dumps(event))
+            message = "\n".join(message_lines) + "\n"
             sock.sendall(message.encode('utf-8'))
             sent_events += len(batch)
             # Add a tiny delay to prevent overwhelming the socket if batch_size is small
