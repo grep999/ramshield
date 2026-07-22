@@ -148,7 +148,7 @@ impl DetectionEngine {
         let det = &self.config.load().detection;
         let last_flush = self.last_pre_aggs_flush_ns.load(Ordering::Relaxed);
         now_ns().saturating_sub(last_flush)
-            >= (det.pre_aggs_flush_interval_ms as u64 * 1_000_000)
+            >= det.pre_aggs_flush_interval_ms * 1_000_000
     }
 
     fn process_event_into_pre_aggs(&self, ev: ConnectionEvent) {
