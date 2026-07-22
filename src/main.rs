@@ -1,5 +1,7 @@
 use anyhow::Result;
 use ramshield::{dashboard, Config, Engine};
+use ramshield::metrics::Metrics;
+use ramshield::storage::Store;
 use std::sync::Arc;
 use tracing::{info, debug}; // Add debug
 use tracing_subscriber::EnvFilter;
@@ -64,7 +66,9 @@ async fn main() -> Result<()> {
     debug!("Loaded config: {:#?}", config);
 
     // Start RamShield normally
-    let engine = Arc::new(Engine::new(config.clone()));
+    let store = Arc::new(ramshield::storage::Store::new(config.engine.shard_count));
+    let metrics = Arc::new(ramshield::metrics::Metrics::new());
+    let engine = Arc::new(Engine::new(config.clone(), store, metrics));
     let _engine_handle = engine.clone().start_async().expect("engine pipeline");
 
     // Start dashboard if enabled — dedicated OS thread + tokio runtime
