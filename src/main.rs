@@ -1,7 +1,5 @@
 use anyhow::Result;
 use ramshield::{dashboard, Config, Engine};
-use ramshield::metrics::Metrics;
-use ramshield::storage::Store;
 use std::sync::Arc;
 use tracing::{info, debug}; // Add debug
 use tracing_subscriber::EnvFilter;
@@ -67,9 +65,27 @@ async fn main() -> Result<()> {
 
     // Start RamShield normally
     let store = Arc::new(ramshield::storage::Store::new(config.engine.shard_count));
+    store.traffic.ram_limit_mb.store(config.engine.ram_limit_mb, std::sync::atomic::Ordering::Relaxed);
+    // Store created_at for uptime tracking
+    store.traffic.uptime_secs.store(1, std::sync::atomic::Ordering::Relaxed); // mark non-zero
     let metrics = Arc::new(ramshield::metrics::Metrics::new());
-    let engine = Arc::new(Engine::new(config.clone(), store, metrics));
+    let engine = Arc::new(Engine::new(config.clone(), store.clone(), metrics.clone()));
     let _engine_handle = engine.clone().start_async().expect("engine pipeline");
+
+    // Periodic uptime updater (every second)
+    {
+        let started = std::time::Instant::now();
+        let traffic = store.traffic.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                traffic.uptime_secs.store(
+                    started.elapsed().as_secs(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
+        });
+    }
 
     // Start dashboard if enabled — dedicated OS thread + tokio runtime
     // to guarantee responsiveness under detection load.
