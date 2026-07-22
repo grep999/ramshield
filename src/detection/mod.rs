@@ -9,10 +9,14 @@ use crate::metrics::Metrics;
 use crate::storage::{ip_key, BlockReason, BlockState, IpRecord, Store, Value};
 use crate::util::BoundedVecDeque;
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
+use dashmap::DashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
-use std::sync::{atomic::AtomicBool, Arc, RwLock};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, RwLock,
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
@@ -88,12 +92,11 @@ pub struct DetectionEngine {
     block_tx: broadcast::Sender<BlockDecision>,
     bloom: Arc<RwLock<BloomFilter>>,
     shutdown: Arc<AtomicBool>,
-    /// Pattern learner for attack detection
     #[allow(dead_code)]
     pattern_learner: Arc<crate::learning::PatternLearner>,
-    /// Pre-aggregation buffer for IPs before promotion to main store
-    pre_aggs: Arc<DashMap<IpAddr, IpAgg>>,
-    last_pre_aggs_flush_ns: Arc<AtomicU64>,
+    /// Pre-aggregation buffer — DashMap is internally thread-safe, no Arc needed
+    pre_aggs: DashMap<IpAddr, IpAgg>,
+    last_pre_aggs_flush_ns: AtomicU64,
 }
 
 impl DetectionEngine {
@@ -107,6 +110,7 @@ impl DetectionEngine {
     ) -> Self {
         let bloom_bits = config.load().detection.bloom_bits;
         let (tx, rx) = bounded::<ConnectionEvent>(2_000_000);
+        let shard_count = (bloom_bits / 1024).max(1).next_power_of_two();
         Self {
             store,
             config,
@@ -117,8 +121,9 @@ impl DetectionEngine {
             bloom: Arc::new(RwLock::new(BloomFilter::new(bloom_bits))),
             shutdown,
             pattern_learner,
-            pre_aggs: Arc::new(DashMap::with_shard_amount(bloom_bits.max(1) / 1024)), // Heuristic for shard count
-            last_pre_aggs_flush_ns: Arc::new(AtomicU64::new(now_ns())),
+            pre_aggs: DashMap::with_shard_amount(shard_count),
+            last_pre_aggs_flush_ns: AtomicU64::new(now_ns()),
+        }
     }
 
     pub fn event_sender(&self) -> Sender<ConnectionEvent> {
@@ -140,41 +145,42 @@ impl DetectionEngine {
     }
 
     fn pre_aggs_needs_flush_due_to_timeout(&self) -> bool {
-        let det = self.config.load().detection;
+        let det = &self.config.load().detection;
         let last_flush = self.last_pre_aggs_flush_ns.load(Ordering::Relaxed);
-        now_ns().saturating_sub(last_flush) >= (det.batch_window_ms as u64 * 1_000_000)
+        now_ns().saturating_sub(last_flush)
+            >= (det.pre_aggs_flush_interval_ms as u64 * 1_000_000)
     }
 
     fn process_event_into_pre_aggs(&self, ev: ConnectionEvent) {
-        let entry = self.pre_aggs.entry(ev.ip).or_insert_with(IpAgg::default);
+        let mut entry = self.pre_aggs.entry(ev.ip).or_default();
         let agg = entry.value_mut();
         agg.count += 1;
         agg.bytes += ev.bytes;
         agg.last_ts_ns = ev.timestamp_ns;
-        // Update status_dist
         if ev.status_code >= 100 && ev.status_code < 600 {
             agg.status_dist[(ev.status_code / 100 - 1) as usize] += 1;
         }
     }
 
     fn flush_pre_aggs_to_store(&self) {
-        let now = now_ns();
-        self.last_pre_aggs_flush_ns.store(now, Ordering::Relaxed);
+        self.last_pre_aggs_flush_ns.store(now_ns(), Ordering::Relaxed);
 
         if self.pre_aggs.is_empty() {
             return;
         }
 
-        // Collect all aggregates from pre_aggs into a Vec
-        let aggs: Vec<(IpAddr, IpAgg)> = self.pre_aggs.drain().collect();
+        // DashMap has no drain() — collect via iter(), then clear()
+        let aggs: Vec<(IpAddr, IpAgg)> = self
+            .pre_aggs
+            .iter()
+            .map(|e| (*e.key(), e.value().clone()))
+            .collect();
+        self.pre_aggs.clear();
 
-        // Update metrics for total events ingested
         let total_events: u64 = aggs.iter().map(|a| a.1.count as u64).sum();
         self.metrics.inc_ingested(total_events);
 
-        // Reconstruct events Vec for the existing flush_batch logic
-        // This is suboptimal; we should refactor flush_batch to accept IpAgg directly.
-        // For now, this works correctly.
+        // Reconstruct events for existing flush_batch logic
         let events: Vec<ConnectionEvent> = aggs
             .into_iter()
             .flat_map(|(ip, agg)| {
@@ -218,29 +224,31 @@ impl DetectionEngine {
         let rx = self.event_rx.clone();
 
         loop {
-            if self.shutdown.load(std::sync::atomic::Ordering::Acquire) {
+            if self.shutdown.load(Ordering::Acquire) {
                 info!("Batch processor shutting down");
                 break;
             }
 
-            let mut batch = Vec::with_capacity(max.min(4096));
-
+            // Drain events from channel into pre_aggs
             match rx.recv_timeout(window) {
                 Ok(ev) => self.process_event_into_pre_aggs(ev),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }
 
-            // Drain remaining events from channel within the window
-            while rx.len() > 0 {
+            // Drain remaining events up to batch_max_events
+            for _ in 0..max.saturating_sub(1) {
                 match rx.try_recv() {
                     Ok(ev) => self.process_event_into_pre_aggs(ev),
-                    Err(_) => break, // Channel empty
+                    Err(_) => break,
                 }
             }
 
-            // Periodically flush pre_aggs to main store
-            if self.pre_aggs.len() >= self.config.load().detection.pre_aggs_max_size || self.pre_aggs_needs_flush_due_to_timeout() {
+            // Flush pre_aggs to main store when size or timeout threshold hit
+            let cfg = self.config.load();
+            if self.pre_aggs.len() >= cfg.detection.pre_aggs_max_size
+                || self.pre_aggs_needs_flush_due_to_timeout()
+            {
                 self.flush_pre_aggs_to_store();
             }
         }
@@ -319,7 +327,7 @@ impl DetectionEngine {
         self.store.traffic.set_threat_sample(threat_sample);
         self.store.traffic.promoted_ips.store(
             self.store.len() as u64,
-            std::sync::atomic::Ordering::Relaxed,
+            Ordering::Relaxed,
         );
 
         let block_count = blocks.len() as u32;
@@ -434,7 +442,7 @@ impl DetectionEngine {
     async fn subnet_batch_loop(&self) {
         let mut tick = tokio::time::interval(Duration::from_millis(500));
         loop {
-            if self.shutdown.load(std::sync::atomic::Ordering::Acquire) {
+            if self.shutdown.load(Ordering::Acquire) {
                 info!("Subnet batch loop shutting down");
                 break;
             }
@@ -484,7 +492,7 @@ impl DetectionEngine {
                         .record_block(&r.ip.to_string(), "subnet_batch", "detection");
                     self.metrics
                         .blocks_subnet
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        .fetch_add(1, Ordering::Relaxed);
                 }
                 self.store.reset_subnet_window(sk);
             }
