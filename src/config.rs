@@ -127,7 +127,7 @@ impl Default for DashboardConfig {
     fn default() -> Self {
         Self {
             enabled:   true,
-            http_addr: "127.0.0.1:7891".into(),
+            http_addr: "127.0.0.1:9999".into(),
         }
     }
 }
