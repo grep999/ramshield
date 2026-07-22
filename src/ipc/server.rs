@@ -80,7 +80,7 @@ impl IpcServer {
 
 async fn handle_connection(
     mut socket: TcpStream,
-    _engine: Arc<Engine>,
+    engine: Arc<Engine>,
     event_tx: Sender<ConnectionEvent>,
     store: Arc<Store>,
 ) -> Result<(), std::io::Error> {
@@ -105,6 +105,7 @@ async fn handle_connection(
                     continue;
                 }
             };
+            engine.metrics.inc_requests(); // Increment request count
             let resp = process_request(req, &event_tx, &store);
             write_resp(&mut socket, &resp).await?;
         }
