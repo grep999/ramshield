@@ -9,7 +9,9 @@ fn ipc_wiring_binds_and_accepts() {
     let mut cfg = Config::default();
     cfg.ipc.tcp_addr = "127.0.0.1:17890".into(); // off default port — don't collide
 
-    let engine = Arc::new(Engine::new(cfg.clone()));
+    let store = Arc::new(ramshield::storage::Store::new(cfg.engine.shard_count));
+    let metrics = Arc::new(ramshield::metrics::Metrics::new());
+    let engine = Arc::new(Engine::new(cfg.clone(), store, metrics));
     let _handle = engine.clone().start_async().expect("start");
 
     // Give the OS thread time to bind
@@ -35,7 +37,9 @@ fn ipc_wiring_rejects_invalid_json() {
     let mut cfg = Config::default();
     cfg.ipc.tcp_addr = "127.0.0.1:17891".into();
 
-    let engine = Arc::new(Engine::new(cfg.clone()));
+    let store = Arc::new(ramshield::storage::Store::new(cfg.engine.shard_count));
+    let metrics = Arc::new(ramshield::metrics::Metrics::new());
+    let engine = Arc::new(Engine::new(cfg.clone(), store, metrics));
     let _handle = engine.clone().start_async().expect("start");
     std::thread::sleep(Duration::from_secs(1));
 
