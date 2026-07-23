@@ -1,1 +1,2 @@
 - [R-T04] Heroku buildpack for one-click deploy — informs roadmap/Q5-Heroku-Buildpack — implement Rust-based buildpack that detects Cargo.toml, compiles binary with `cargo build --release`, and packages according to Heroku specifications
+- [R-T05] Kubernetes Operator for auto-scaling — informs roadmap/Q5-Kubernetes-Operator — use `kube` crate to define RamShieldCluster CRD, write controller reconciler for Deployment scaling and resource limit adjustment
