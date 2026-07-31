@@ -121,9 +121,9 @@ impl IpcServer {
             let event_tx = self.event_tx.clone();
             let store = self.store.clone();
             let max_bytes = self.max_connection_bytes;
-            let read_timeout = self.read_timeout_ms;
-            let write_timeout = self.write_timeout_ms;
-            let idle_timeout = self.connection_idle_timeout_ms;
+            let read_timeout = Duration::from_millis(self.read_timeout_ms);
+            let write_timeout = Duration::from_millis(self.write_timeout_ms);
+            let idle_timeout = Duration::from_millis(self.connection_idle_timeout_ms);
             let active = self.active_connections.clone();
             let dropped = self.dropped_events.clone();
 
@@ -193,9 +193,6 @@ async fn handle_connection(
     let mut chunk = [0u8; 8192];
     let mut total_bytes_read = 0usize;
     let mut last_activity = Instant::now();
-    let idle_timeout = Duration::from_millis(idle_timeout_ms);
-    let read_timeout = Duration::from_millis(read_timeout_ms);
-    let write_timeout = Duration::from_millis(write_timeout_ms);
 
     loop {
         if last_activity.elapsed() > idle_timeout {
@@ -203,8 +200,8 @@ async fn handle_connection(
             return Ok(());
         }
 
-        if total_bytes_read >= max_connection_bytes {
-            debug!("Connection exceeded max bytes ({})", max_connection_bytes);
+        if total_bytes_read >= max_bytes {
+            debug!("Connection exceeded max bytes ({})", max_bytes);
             return Ok(());
         }
 
