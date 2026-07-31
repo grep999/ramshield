@@ -59,3 +59,11 @@ docs/CRON_STATUS.md
 docs/AUTOMATION_DASHBOARD.html
 docs/AGENT_REPORT.md
 docs/FACTS.json
+
+# Auto-generated healer and agent outputs
+docs/HEALER_*.md
+docs/HEAL_
+docs/drafts/
+docs/promotion/
+docs/healer_sessions/
+docs/radok/

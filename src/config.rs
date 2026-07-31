@@ -104,9 +104,23 @@ impl Default for StorageConfig {
 pub struct IpcConfig {
     pub tcp_addr:        String,
     pub max_connections: usize,
+    #[serde(default = "default_max_connection_bytes")]
+    pub max_connection_bytes: Option<usize>,
+    #[serde(default = "default_read_timeout_ms")]
+    pub read_timeout_ms: Option<u64>,
+    #[serde(default = "default_write_timeout_ms")]
+    pub write_timeout_ms: Option<u64>,
+    #[serde(default = "default_connection_idle_timeout_ms")]
+    pub connection_idle_timeout_ms: Option<u64>,
+}
+
+fn default_max_connection_bytes() -> Option<usize> { Some(1_048_576) }
+fn default_read_timeout_ms() -> Option<u64> { Some(5000) }
+fn default_write_timeout_ms() -> Option<u64> { Some(5000) }
+fn default_connection_idle_timeout_ms() -> Option<u64> { Some(30_000)
 }
 impl Default for IpcConfig {
-    fn default() -> Self { Self { tcp_addr: "127.0.0.1:7890".into(), max_connections: 256 } }
+    fn default() -> Self { Self { tcp_addr: "127.0.0.1:7890".into(), max_connections: 256, max_connection_bytes: None, read_timeout_ms: None, write_timeout_ms: None, connection_idle_timeout_ms: None } }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

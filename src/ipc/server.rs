@@ -2,10 +2,13 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::Semaphore,
+    time::{timeout, Duration, Instant},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use crossbeam_channel::Sender;
+use serde::{Deserialize, Serialize}; // Added for IpcServerStats
 
 use crate::config::Config;
 use crate::detection::ConnectionEvent;
@@ -13,8 +16,13 @@ use crate::engine::Engine;
 use crate::storage::Store;
 use super::{Request, Response};
 
-const MAX_CONNECTIONS: usize = 1024;
+const DEFAULT_MAX_CONNECTIONS: usize = 1024;
+const DEFAULT_MAX_CONNECTION_BYTES: usize = 1_048_576; // 1MB per connection
+const DEFAULT_READ_TIMEOUT_MS: u64 = 5000;
+const DEFAULT_WRITE_TIMEOUT_MS: u64 = 5000;
 const BATCH_MAX: usize = 4096;
+const MAX_LINE_LENGTH: usize = 1_048_576; // 1MB max single line
+const CONNECTION_IDLE_TIMEOUT_MS: u64 = 30_000; // 30s idle
 
 pub struct IpcServer {
     listener: TcpListener,
@@ -22,6 +30,15 @@ pub struct IpcServer {
     event_tx: Sender<ConnectionEvent>,
     store: Arc<Store>,
     semaphore: Arc<Semaphore>,
+    max_connections: usize,
+    max_connection_bytes: usize,
+    read_timeout_ms: u64,
+    write_timeout_ms: u64,
+    connection_idle_timeout_ms: u64,
+    total_connections: Arc<AtomicU64>,
+    active_connections: Arc<AtomicU64>,
+    rejected_connections: Arc<AtomicU64>,
+    dropped_events: Arc<AtomicU64>,
 }
 
 impl IpcServer {
@@ -35,12 +52,28 @@ impl IpcServer {
         info!("IPC server binding to {}", addr);
         let listener = TcpListener::bind(&addr).await?;
         info!("IPC server bound to {}", addr);
+
+        let max_connections = config.ipc.max_connections.max(1);
+        let max_connection_bytes = config.ipc.max_connection_bytes.unwrap_or(DEFAULT_MAX_CONNECTION_BYTES);
+        let read_timeout_ms = config.ipc.read_timeout_ms.unwrap_or(DEFAULT_READ_TIMEOUT_MS);
+        let write_timeout_ms = config.ipc.write_timeout_ms.unwrap_or(DEFAULT_WRITE_TIMEOUT_MS);
+        let connection_idle_timeout_ms = config.ipc.connection_idle_timeout_ms.unwrap_or(CONNECTION_IDLE_TIMEOUT_MS);
+
         Ok(Self {
             listener,
             engine,
             event_tx,
             store,
-            semaphore: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+            semaphore: Arc::new(Semaphore::new(max_connections)),
+            max_connections,
+            max_connection_bytes,
+            read_timeout_ms,
+            write_timeout_ms,
+            connection_idle_timeout_ms,
+            total_connections: Arc::new(AtomicU64::new(0)),
+            active_connections: Arc::new(AtomicU64::new(0)),
+            rejected_connections: Arc::new(AtomicU64::new(0)),
+            dropped_events: Arc::new(AtomicU64::new(0)),
         })
     }
 
