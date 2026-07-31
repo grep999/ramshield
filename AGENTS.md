@@ -18,134 +18,107 @@ This file defines the project anatomy and coding standards that AI coding assist
 
 ## 2. Project Structure
 
+The `ramshield` workspace is designed for high-throughput, low-latency threat detection. Each module has a distinct responsibility.
+
 ```
 rs/
 ├── src/
-│   ├── main.rs          # Server entry point (binary)
-│   ├── cli.rs           # CLI admin tool (binary)
-│   ├── lib.rs           # Library root
-│   ├── config.rs        # TOML config with validation
-│   ├── error.rs         # RsError enum (thiserror)
-│   ├── engine/          # Core orchestrator (Engine struct)
-│   ├── detection/       # Batch-first detection pipeline
-│   │   ├── batch.rs     # IP aggregation logic
-│   │   └── rate_tracker.rs  # EWMA + threshold checks
-│   ├── storage/         # DashMap store + WAL + TTL wheel
-│   │   ├── blob_store.rs
-│   │   ├── ttl_wheel.rs
-│   │   └── wal.rs
-│   ├── metrics/         # Atomic counters + dashboard snapshot
-│   ├── forecasting/     # Holt-Winters + Shannon entropy
-│   ├── dns/             # DNS monitoring + forecaster
+│   ├── main.rs          # Server entry point (binary). Minimal logic, defers to `engine`.
+│   ├── cli.rs           # CLI admin tool (binary). For stats, health checks, and manual actions.
+│   ├── lib.rs           # Library root. Exports key types and orchestrates features.
+│   ├── config.rs        # TOML config with strict validation at startup.
+│   ├── error.rs         # RsError enum (`thiserror`) for library-level errors.
+│   ├── engine/          # Core orchestrator (`Engine` struct). Integrates all subsystems.
+│   ├── detection/       # Batch-first detection pipeline. Hot path.
+│   │   ├── batch.rs     # IP aggregation logic. Optimized for speed.
+│   │   └── rate_tracker.rs  # EWMA + threshold checks.
+│   ├── storage/         # In-memory store with persistence and eviction.
+│   │   ├── blob_store.rs # The `DashMap` based core data store.
+│   │   ├── ttl_wheel.rs # Hierarchical timing wheel for efficient key expiration.
+│   │   └── wal.rs       # Write-Ahead Log for crash recovery.
+│   ├── metrics/         # Atomic counters for performance monitoring.
+│   ├── forecasting/     # Predictive models (Holt-Winters, Shannon entropy).
+│   ├── dns/             # DNS monitoring subsystem.
 │   │   └── forecasting/
-│   ├── learning/        # Pattern learner
-│   ├── prediction/      # Prediction engine
-│   ├── dashboard/       # Axum HTTP server + SSE
-│   ├── ipc/             # TCP JSON protocol
-│   └── util/            # BoundedVecDeque, DataProcessor
-├── scripts/             # Python attack simulators
-│   ├── attack_sim_100k.py
-│   ├── attack_nexus.py
-│   ├── attack_extreme.py
-│   └── stress_test.py
-├── config.toml          # Default config (512 MB, 256 shards)
-├── config.stress.toml   # Production-tuned (8 GB, 1024 shards)
+│   ├── learning/        # Pattern learner for adaptive threat identification.
+│   ├── prediction/      # Prediction engine using learned models.
+│   ├── dashboard/       # Axum HTTP server + SSE for the real-time web dashboard.
+│   ├── ipc/             # TCP JSON protocol for agent-server communication.
+│   └── util/            # Shared utilities like `BoundedVecDeque`.
+├── scripts/             # Python attack simulators for load and correctness testing.
+├── config.toml          # Default config (dev-friendly).
+├── config.stress.toml   # Production-tuned config for high load.
 └── Cargo.toml
 ```
 
 ## 3. Idiomatic Rust Coding Standards
 
 ### Memory & Ownership
-- Prefer static dispatch over `dyn Trait` wherever possible.
-- Do NOT insert excessive `.clone()` to bypass the borrow checker. Restructure lifetimes or use reference passing.
-- Use `Arc<T>` only when true concurrent multi-ownership is required.
-- Use `Box<T>` sparingly — only for trait objects or recursive types.
-- Prefer `&str` over `&String`, `&[T]` over `&Vec<T>` in function signatures.
+- Prefer static dispatch (`impl Trait`) over dynamic dispatch (`dyn Trait`).
+- Avoid `.clone()` where a reference (`&T`) or a change in ownership would suffice.
+- Use `Arc<T>` strictly for shared ownership across threads.
+- Use `Box<T>` only for trait objects or recursive types.
+- Prefer `&str` over `&String` and `&[T]` over `&Vec<T>` in function signatures.
 
 ### Async Concurrency (Tokio)
-- NEVER run CPU-bound or synchronous I/O directly in async context. Use `tokio::task::spawn_blocking`.
-- Keep `Mutex` / `RwLock` guards short-lived. Always `drop(guard)` before `.await` points.
-- Use `crossbeam_channel` for dedicated threads, `tokio::sync::broadcast` for async fan-out.
-- Prefer `AtomicU64` / `AtomicBool` over locks for simple counters and flags.
-- Dedicated OS threads for blocking loops must check shutdown flags.
+- Isolate blocking or CPU-intensive work with `tokio::task::spawn_blocking`.
+- Keep `Mutex` / `RwLock` guards short. Drop guards explicitly with `drop(guard)` before any `.await`.
+- Use `tokio::sync::broadcast` for async fan-out and `crossbeam_channel` for sync/async bridges.
+- Use atomic types for simple counters and flags instead of locks.
 
 ### Error Handling
-- NEVER use `.unwrap()` or `.expect()` in production modules.
-- Use `Result` + `?` operator. `thiserror` for library boundaries, `anyhow` for application entrypoints.
-- Log errors with `tracing::warn!` or `tracing::error!` — never silently ignore.
-- Convert `let _ = result` to explicit error logging.
-
-### Type Safety
-- Use newtypes for domain concepts.
-- Prefer `#[derive(Debug, Clone, Serialize, Deserialize)]` on all public types.
-- Use `#[serde(default)]` for config fields with sensible defaults.
-- Validate config at startup, not at runtime.
+- **No `.unwrap()` or `.expect()` in production code.** Use the `?` operator.
+- Use `thiserror` for library boundaries and `anyhow` in binary entry points (`main.rs`, `cli.rs`).
+- Log all errors via `tracing`. Do not ignore `Result::Err` variants.
 
 ## 4. The Self-Healing Protocol (MANDATORY)
 
-Before marking ANY task complete, execute ALL steps:
+Before marking ANY task complete, the full verification suite MUST be run. This is non-negotiable and inspired by the rigorous CI guardrails of mature projects like `jcode`.
 
-1. **`cargo build --all-targets`** — must compile clean
-2. **Diagnostics Loop** — if build fails, read stderr, fix exact line, repeat
-3. **`cargo clippy --all-targets -- -D warnings`** — zero lints allowed
-4. **`cargo test`** — all assertions pass
-5. **Manual Review** — scan for unnecessary clones, unwraps, or dead code
+1.  **Build All Targets**: `cargo build --all-targets`
+    *   Ensures all code, including binaries and tests, compiles successfully.
+2.  **Run Clippy (Strict)**: `cargo clippy --all-targets -- -D warnings`
+    *   Enforces zero warnings. All lints must be addressed.
+3.  **Run Tests**: `cargo test --all`
+    *   Ensures all unit and integration tests pass.
 
-Expected output:
-```
-   Compiling ramshield v0.1.0
-    Finished dev profile
-    Checking ramshield v0.1.0
-    Finished dev profile
-     Running unittests
-test result: ok. N passed; 0 failed
-```
+A single command for this sequence is provided in `Build Commands`.
 
-## 5. Performance-Critical Paths
+## 5. `jcode`-Inspired Practices & Future Enhancements
+
+The `jcode` project showcases advanced Rust engineering patterns. While `ramshield` has a different focus, we can adopt several of its philosophies.
+
+-   **Fine-Grained Crates**: As `ramshield` grows, we may break large modules (like `detection` or `storage`) into their own crates within the workspace. This improves compile times and enforces clearer boundaries. For now, the single-package structure is sufficient.
+-   **Profile-Guided Optimization**: `jcode` uses `[profile.<name>.package.<dep>]` to selectively optimize performance-critical dependencies even in debug builds. If profiling reveals bottlenecks in `ramshield`'s dependencies (e.g., hashing or compression libraries), we should adopt this technique to improve development-loop latency.
+-   **Automated Guardrails**: `jcode`'s `scripts/check_guardrails.sh` automates checks for code formatting, linting, and various code quality ratchets. We should consider a similar script for `ramshield` to ensure consistency before commits.
+
+## 6. Performance-Critical Paths
 
 | Path | Requirement |
 |------|-------------|
-| `detection/batch_processor_loop` | Dedicated OS thread, never blocks, checks shutdown flag |
-| `detection/flush_batch` | No allocations in inner loop, no await |
-| `engine/dashboard_snapshot` | Separate tokio runtime, never starves |
-| `engine/ipc_server` | Semaphore backpressure, graceful conn limit |
-| `storage/Store::insert` | RAM limit enforced, rollback on capacity |
-| `storage/BoundedVecDeque` | Fixed capacity, no unbounded growth |
+| `detection/batch_processor_loop` | Dedicated OS thread, never blocks, checks shutdown flag. |
+| `detection/flush_batch` | No allocations in the inner loop, no `.await`. |
+| `storage/Store::insert` | Enforce RAM limits; rollback on capacity failure. |
+| `dashboard/` | Dashboard updates must not starve the detection engine. |
 
-## 6. Testing Strategy
-
-- Unit tests in `#[cfg(test)]` modules within each source file.
-- Integration via `cargo test`.
-- Performance benchmarks via `scripts/stress_test.py`.
-- Attack simulation via `scripts/attack_sim_100k.py` and `scripts/attack_nexus.py`.
-
-## 7. Configuration
-
-- Default: `config.toml` (512 MB RAM, 256 shards)
-- Production: `config.stress.toml` (8 GB RAM, 1024 shards, tuned thresholds)
-- Env overrides: `RAMSHIELD_DETECTION__RPS_THRESHOLD=500`
-
-## 8. Build Commands
+## 7. Build Commands
 
 ```bash
-# Debug build
+# Debug build (all targets)
 cd rs && cargo build --all-targets
 
 # Release build
 cd rs && cargo build --release
 
-# Full verification
-cd rs && cargo build --all-targets && cargo clippy --all-targets -- -D warnings && cargo test
+# Full verification (build, clippy, test)
+cd rs && cargo build --all-targets && cargo clippy --all-targets -- -D warnings && cargo test --all
 
-# Run server
+# Run server (production config)
 ./rs/target/release/ramshield ./rs/config.stress.toml
 
 # Run attack simulation
-python3 rs/scripts/attack_sim_100k.py --events 1000000 --workers 64
+python3 rs/scripts/attack_sim_100k.py --events 1000000
 
 # Check server health
 curl http://127.0.0.1:7891/healthz
-
-# Get server stats
-./rs/target/release/ramshield-cli stats
 ```

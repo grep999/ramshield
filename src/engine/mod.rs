@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::detection::DetectionEngine;
 use crate::forecasting::Forecaster;
 use crate::learning::PatternLearner;
-use crate::metrics::{BatchRecord, BlockRecord, ConnectionEventRecord, DashboardSnapshot, ModuleStats, Metrics, SubnetRow};
+use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, Metrics, SubnetRow};
 use crate::storage::Store;
 
 pub struct Engine {
