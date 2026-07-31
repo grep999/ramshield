@@ -16,6 +16,26 @@ use crate::engine::Engine;
 use crate::storage::Store;
 use super::{Request, Response};
 
+/// Connection handling configuration
+#[derive(Clone)]
+struct ConnectionConfig {
+    max_bytes: usize,
+    read_timeout: Duration,
+    write_timeout: Duration,
+    idle_timeout: Duration,
+}
+
+impl ConnectionConfig {
+    fn from_server(server: &IpcServer) -> Self {
+        Self {
+            max_bytes: server.max_connection_bytes,
+            read_timeout: Duration::from_millis(server.read_timeout_ms),
+            write_timeout: Duration::from_millis(server.write_timeout_ms),
+            idle_timeout: Duration::from_millis(server.connection_idle_timeout_ms),
+        }
+    }
+}
+
 // Tunable constants or defaults (can be moved to config.rs)
 const DEFAULT_MAX_CONNECTION_BYTES: usize = 1_048_576; // 1MB per connection
 const DEFAULT_READ_TIMEOUT_MS: u64 = 5000;
@@ -120,10 +140,7 @@ impl IpcServer {
             let engine = self.engine.clone();
             let event_tx = self.event_tx.clone();
             let store = self.store.clone();
-            let max_bytes = self.max_connection_bytes;
-            let read_timeout = Duration::from_millis(self.read_timeout_ms);
-            let write_timeout = Duration::from_millis(self.write_timeout_ms);
-            let idle_timeout = Duration::from_millis(self.connection_idle_timeout_ms);
+            let config = ConnectionConfig::from_server(self);
             let active = self.active_connections.clone();
             let dropped = self.dropped_events.clone();
 
@@ -134,10 +151,7 @@ impl IpcServer {
                     engine,
                     event_tx,
                     store,
-                    max_bytes,
-                    read_timeout,
-                    write_timeout,
-                    idle_timeout,
+                    config,
                     dropped,
                 ).await {
                     debug!("conn {} closed: {}", remote, e);
@@ -183,10 +197,7 @@ async fn handle_connection(
     engine: Arc<Engine>,
     event_tx: Sender<ConnectionEvent>,
     store: Arc<Store>,
-    max_bytes: usize,
-    read_timeout: Duration,
-    write_timeout: Duration,
-    idle_timeout: Duration,
+    config: ConnectionConfig,
     dropped_events: Arc<AtomicU64>,
 ) -> Result<(), std::io::Error> {
     let mut buf = Vec::with_capacity(8192);
@@ -195,17 +206,17 @@ async fn handle_connection(
     let mut last_activity = Instant::now();
 
     loop {
-        if last_activity.elapsed() > idle_timeout {
+        if last_activity.elapsed() > config.idle_timeout {
             debug!("Connection idle timeout");
             return Ok(());
         }
 
-        if total_bytes_read >= max_bytes {
-            debug!("Connection exceeded max bytes ({})", max_bytes);
+        if total_bytes_read >= config.max_bytes {
+            debug!("Connection exceeded max bytes ({})", config.max_bytes);
             return Ok(());
         }
 
-        let n = match timeout(read_timeout, socket.read(&mut chunk)).await {
+        let n = match timeout(config.read_timeout, socket.read(&mut chunk)).await {
             Ok(Ok(n)) => n,
             Ok(Err(e)) => return Err(e),
             Err(_) => {
@@ -230,7 +241,7 @@ async fn handle_connection(
                 Ok(r) => r,
                 Err(e) => {
                     let resp = Response::Error { code: 1, message: format!("parse: {}", e) };
-                    if timeout(write_timeout, write_resp(&mut socket, &resp)).await.is_err() {
+                    if timeout(config.write_timeout, write_resp(&mut socket, &resp)).await.is_err() {
                         debug!("Write timeout on error response");
                         return Ok(());
                     }
@@ -240,7 +251,7 @@ async fn handle_connection(
 
             engine.metrics.inc_requests();
             let resp = process_request(req, &event_tx, &store, dropped_events.clone());
-            if timeout(write_timeout, write_resp(&mut socket, &resp)).await.is_err() {
+            if timeout(config.write_timeout, write_resp(&mut socket, &resp)).await.is_err() {
                 debug!("Write timeout");
                 return Ok(());
             }

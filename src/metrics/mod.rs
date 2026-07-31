@@ -7,6 +7,8 @@ use sysinfo::{CpuExt, System, SystemExt};
 
 const HISTORY: usize = 80;
 const BLOCK_LOG: usize = 40;
+/// Max connection events tracked in the ring buffer (jcode-style event history)
+const CONNECTION_EVENT_HISTORY: usize = 5000;
 
 pub fn now_ms() -> u64 {
     SystemTime::now()
