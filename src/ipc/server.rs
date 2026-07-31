@@ -8,7 +8,7 @@ use tracing::{debug, error, info, warn};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use crossbeam_channel::Sender;
-use serde::{Deserialize, Serialize}; // Added for IpcServerStats
+use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::detection::ConnectionEvent;
@@ -16,7 +16,7 @@ use crate::engine::Engine;
 use crate::storage::Store;
 use super::{Request, Response};
 
-const DEFAULT_MAX_CONNECTIONS: usize = 1024;
+// Tunable constants or defaults (can be moved to config.rs)
 const DEFAULT_MAX_CONNECTION_BYTES: usize = 1_048_576; // 1MB per connection
 const DEFAULT_READ_TIMEOUT_MS: u64 = 5000;
 const DEFAULT_WRITE_TIMEOUT_MS: u64 = 5000;
@@ -78,37 +78,104 @@ impl IpcServer {
     }
 
     pub async fn start(&self) {
-        info!("IPC server listening");
+        info!("IPC server listening (max_connections={}, max_bytes/conn={})", self.max_connections, self.max_connection_bytes);
+        let mut backoff = Duration::from_millis(100);
         loop {
             if self.engine.is_shutting_down() {
-                info!("IPC server shutting down");
+                info!("IPC server initiating graceful shutdown");
+                self.drain_connections().await;
+                info!("IPC server shut down complete");
                 break;
             }
-            let accept = tokio::time::timeout(
-                std::time::Duration::from_secs(1),
+            let accept = timeout(
+                Duration::from_secs(1),
                 self.listener.accept(),
             )
             .await;
-            let (socket, remote) = match accept {
+            let (mut socket, remote) = match accept {
                 Ok(Ok(pair)) => pair,
                 Ok(Err(e)) => {
                     error!("accept error: {}", e);
+                    backoff = Duration::from_secs(1).min(backoff * 2);
+                    tokio::time::sleep(backoff).await;
                     continue;
                 }
                 Err(_) => continue,
             };
-            let permit = self.semaphore.clone().acquire_owned().await;
+            backoff = Duration::from_millis(100);
+
+            let permit = match self.semaphore.clone().try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    self.rejected_connections.fetch_add(1, Ordering::Relaxed);
+                    warn!("Connection rejected from {}: semaphore exhausted ({})", remote, self.max_connections);
+                    let _ = socket.shutdown().await;
+                    continue;
+                }
+            };
+
+            self.total_connections.fetch_add(1, Ordering::Relaxed);
+            self.active_connections.fetch_add(1, Ordering::Relaxed);
+
             let engine = self.engine.clone();
             let event_tx = self.event_tx.clone();
             let store = self.store.clone();
+            let max_bytes = self.max_connection_bytes;
+            let read_timeout = self.read_timeout_ms;
+            let write_timeout = self.write_timeout_ms;
+            let idle_timeout = self.connection_idle_timeout_ms;
+            let active = self.active_connections.clone();
+            let dropped = self.dropped_events.clone();
+
             tokio::spawn(async move {
                 let _permit = permit;
-                if let Err(e) = handle_connection(socket, engine, event_tx, store).await {
+                if let Err(e) = handle_connection(
+                    socket,
+                    engine,
+                    event_tx,
+                    store,
+                    max_bytes,
+                    read_timeout,
+                    write_timeout,
+                    idle_timeout,
+                    dropped,
+                ).await {
                     debug!("conn {} closed: {}", remote, e);
                 }
+                active.fetch_sub(1, Ordering::Relaxed);
             });
         }
     }
+
+    async fn drain_connections(&self) {
+        let start = Instant::now();
+        while self.active_connections.load(Ordering::Relaxed) > 0 {
+            if start.elapsed() > Duration::from_secs(30) {
+                warn!("Shutdown timeout: {} connections still active", self.active_connections.load(Ordering::Relaxed));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    pub fn stats(&self) -> IpcServerStats {
+        IpcServerStats {
+            total_connections: self.total_connections.load(Ordering::Relaxed),
+            active_connections: self.active_connections.load(Ordering::Relaxed),
+            rejected_connections: self.rejected_connections.load(Ordering::Relaxed),
+            max_connections: self.max_connections as u64,
+            dropped_events: self.dropped_events.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IpcServerStats {
+    pub total_connections: u64,
+    pub active_connections: u64,
+    pub rejected_connections: u64,
+    pub max_connections: u64,
+    pub dropped_events: u64,
 }
 
 async fn handle_connection(
@@ -116,31 +183,70 @@ async fn handle_connection(
     engine: Arc<Engine>,
     event_tx: Sender<ConnectionEvent>,
     store: Arc<Store>,
+    max_bytes: usize,
+    read_timeout: Duration,
+    write_timeout: Duration,
+    idle_timeout: Duration,
+    dropped_events: Arc<AtomicU64>,
 ) -> Result<(), std::io::Error> {
-    let mut buf = Vec::with_capacity(4096);
-    let mut chunk = [0u8; 4096];
+    let mut buf = Vec::with_capacity(8192);
+    let mut chunk = [0u8; 8192];
+    let mut total_bytes_read = 0usize;
+    let mut last_activity = Instant::now();
+    let idle_timeout = Duration::from_millis(idle_timeout_ms);
+    let read_timeout = Duration::from_millis(read_timeout_ms);
+    let write_timeout = Duration::from_millis(write_timeout_ms);
+
     loop {
-        let n = socket.read(&mut chunk).await?;
-        if n == 0 {
+        if last_activity.elapsed() > idle_timeout {
+            debug!("Connection idle timeout");
             return Ok(());
         }
+
+        if total_bytes_read >= max_connection_bytes {
+            debug!("Connection exceeded max bytes ({})", max_connection_bytes);
+            return Ok(());
+        }
+
+        let n = match timeout(read_timeout, socket.read(&mut chunk)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                debug!("Read timeout");
+                return Ok(());
+            }
+        };
+
+        if n == 0 { return Ok(()); }
+
+        total_bytes_read += n;
+        last_activity = Instant::now();
         buf.extend_from_slice(&chunk[..n]);
+
         while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            if pos > MAX_LINE_LENGTH {
+                warn!("Line exceeds max length ({}), dropping connection", MAX_LINE_LENGTH);
+                return Ok(());
+            }
             let line: Vec<u8> = buf.drain(..=pos).collect();
             let req: Request = match serde_json::from_slice(&line) {
                 Ok(r) => r,
                 Err(e) => {
-                    let resp = Response::Error {
-                        code: 1,
-                        message: format!("parse: {}", e),
-                    };
-                    write_resp(&mut socket, &resp).await?;
+                    let resp = Response::Error { code: 1, message: format!("parse: {}", e) };
+                    if timeout(write_timeout, write_resp(&mut socket, &resp)).await.is_err() {
+                        debug!("Write timeout on error response");
+                        return Ok(());
+                    }
                     continue;
                 }
             };
-            engine.metrics.inc_requests(); // Increment request count
-            let resp = process_request(req, &event_tx, &store);
-            write_resp(&mut socket, &resp).await?;
+
+            engine.metrics.inc_requests();
+            let resp = process_request(req, &event_tx, &store, dropped_events.clone());
+            if timeout(write_timeout, write_resp(&mut socket, &resp)).await.is_err() {
+                debug!("Write timeout");
+                return Ok(());
+            }
         }
     }
 }
@@ -165,6 +271,7 @@ fn process_request(
     req: Request,
     event_tx: &Sender<ConnectionEvent>,
     store: &Store,
+    dropped_events: Arc<AtomicU64>,
 ) -> Response {
     match req {
         Request::CheckIp { ip } => {
@@ -234,6 +341,7 @@ fn process_request(
             if accepted {
                 Response::Ok { message: "accepted".into() }
             } else {
+                dropped_events.fetch_add(1, Ordering::Relaxed);
                 Response::BatchOk { accepted: 0, rejected: 1 }
             }
         },
@@ -251,7 +359,11 @@ fn process_request(
                 };
                 match event_tx.try_send(ev) {
                     Ok(()) => accepted += 1,
-                    Err(e) => { rejected += 1; debug!("tx full: {:?}", e); }
+                    Err(e) => {
+                        rejected += 1;
+                        dropped_events.fetch_add(1, Ordering::Relaxed);
+                        debug!("tx full: {:?}", e);
+                    }
                 }
                 if accepted + rejected >= BATCH_MAX as u32 {
                     break;
