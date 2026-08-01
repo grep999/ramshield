@@ -1,0 +1,965 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "description": "99 attack scenarios for RamShield benchmarking — research-backed, real-world DDoS/attack taxonomies",
+    "sources": [
+      "OWASP DDoS Threat Model v4",
+      "Wiz L3/L4/L7 taxonomy",
+      "MazeBolt RADAR classification",
+      "Cloudflare 2024 DDoS Threat Report",
+      "Imperva 2024 Global DDoS Threat Landscape",
+      "Akamai SIRT Prolexic attack vectors",
+      "MITRE ATT&CK T1498/T1499",
+      "Google Cloud Armor Adaptive Protection",
+      "AWS Shield Advanced multi-vector profiles",
+      "DDoS-Research GitHub repos"
+    ],
+    "total_scenarios": 99,
+    "categories": {
+      "volumetric_l3": "Volumetric L3 — Tbps-scale, amplification, packet flood",
+      "protocol_l4": "Protocol L4 — SYN flood, state exhaustion, TCP manipulation",
+      "application_l7": "Application L7 — HTTP/S floods, slow attacks, API abuse",
+      "multi_vector": "Multi-vector combined attacks (wave sequencing)",
+      "stealth_advanced": "Stealth/advanced — low-and-slow, pulse wave, adaptive",
+      "botnet": "Botnet/Distributed — entropy manipulation, IP-spread",
+      "recon_scanning": "Recon/Scanning — pre-attack signatures",
+      "chaos_waves": "Chaos theory attacks — chaotic bursts, sine waves, entropy swings",
+      "adaptive_counter": "Adaptive/counter-detection — mimicry, traffic shaping"
+    }
+  },
+
+  "scenarios": {
+    "v001_tbps_udp_amplification": {
+      "category": "volumetric_l3",
+      "research_ref": "Cloudflare Q4-2024: 3.8 Tbps UDP amplification via CLDAP",
+      "description": "Volumetric UDP flood — max packet volume, minimal payload, random sources with amplification signature",
+      "mode": "botnet",
+      "proto_cluster": "udp",
+      "bytes_range": [32, 1400],
+      "entropy": "max",
+      "burst_multiplier": 4.0,
+      "duration_sec": 30,
+      "workers": 512,
+      "target_rps": 500000,
+      "ramshield_expected": "rps_threshold trigger + Bloom filter saturation + entropy anomaly"
+    },
+
+    "v002_syn_udp_combo": {
+      "category": "volumetric_l3",
+      "research_ref": "MazeBolt SYN+UDP combo 2024",
+      "description": "Combined SYN-flood + UDP flood — dual vector saturating connection table and bandwidth",
+      "mode": "parallel",
+      "parallel_sets": [
+        {"profile": "l4_synwave", "workers": 64, "duration_sec": 15},
+        {"profile": "volumetric_udp_sim", "workers": 48, "duration_sec": 15}
+      ],
+      "duration_sec": 30,
+      "ramshield_expected": "dual-reason blocks: HighRps + subnet_batch"
+    },
+
+    "v003_ntp_monlist": {
+      "category": "volumetric_l3",
+      "research_ref": "NTP amplification — Classic Hello Monlist vector",
+      "description": "NTP monlist amplification simulation — large payloads from many /24 subnets",
+      "mode": "multi_subnet",
+      "proto_cluster": "dns",
+      "bytes_pareto": [468, 1500, 2.0],
+      "burst_multiplier": 5.0,
+      "duration_sec": 20,
+      "workers": 64,
+      "target_rps": 300000,
+      "ramshield_expected": "subnet_window_threshold trigger + batch_block enabled"
+    },
+
+    "v004_memcached_amp": {
+      "category": "volumetric_l3",
+      "research_ref": "Memcached amplification — Akamai 2024 record 1.7Tbps",
+      "description": "Memcache UDP amp — tiny source, 200KB responses from amplifier pool",
+      "mode": "botnet",
+      "proto_cluster": "udp",
+      "bytes_pareto": [50000, 200000, 3.0],
+      "entropy": "high",
+      "workers": 32,
+      "duration_sec": 15,
+      "ramshield_expected": "bytes_in tracking spike, threat_score escalation > 0.9"
+    },
+
+    "v005_ip_frag_bomb": {
+      "category": "volumetric_l3",
+      "description": "IP fragmentation bomb — oversized reassembly packets, slow drain",
+      "mode": "volumetric",
+      "bytes_range": [65000, 65535],
+      "workers": 16,
+      "duration_sec": 20,
+      "ramshield_expected": "promote_min_events fails if traffic not filtered manually"
+    },
+
+    "v006_ssdp_reflection": {
+      "category": "volumetric_l3",
+      "description": "SSDP reflection — Linux IoT vectors, common in Mirai campaigns",
+      "mode": "botnet",
+      "bytes_range": [200, 500],
+      "entropy": "medium",
+      "workers": 128,
+      "duration_sec": 30,
+      "ramshield_expected": "medium entropy tracking + subnet counter growth"
+    },
+
+    "v007_dns_query_flood": {
+      "category": "volumetric_l3",
+      "description": "DNS query flood — high density, mid-size packets, rotating subnets",
+      "mode": "multi_subnet",
+      "proto_cluster": "dns",
+      "bytes_range": [100, 600],
+      "workers": 64,
+      "duration_sec": 25,
+      "ramshield_expected": "entropy anomaly detector fires at min entropy threshold"
+    },
+
+    "v008_ping_of_death": {
+      "category": "volumetric_l3",
+      "description": "ICMP flood (ping-of-death variant) — max payload ICMP frames",
+      "mode": "botnet",
+      "bytes_range": [65500, 65507],
+      "entropy": "max",
+      "workers": 48,
+      "duration_sec": 15,
+      "ramshield_expected": "Byte-in threshold bypass — RPS internal benchmark"
+    },
+
+    "v009_gre_tunnel_flood": {
+      "category": "volumetric_l3",
+      "description": "GRE tunneling flood — large bytes, high speed, fewer sources",
+      "mode": "volumetric",
+      "bytes_pareto": [8192, 65535, 1.5],
+      "workers": 8,
+      "duration_sec": 20,
+      "ramshield_expected": "high positive EWMA, block in seconds"
+    },
+
+    "v010_ramp_sustained": {
+      "category": "volumetric_l3",
+      "description": "Fractional packet flood — sustained 30-min ramp from 500 to 300k EPS",
+      "mode": "botnet",
+      "bytes_range": [600, 1600],
+      "ramp_start_eps": 500,
+      "ramp_end_eps": 300000,
+      "ramp_seconds": 300,
+      "duration_sec": 300,
+      "ramshield_expected": "HW forecaster ramp detection, anomaly z-score > 3.0"
+    },
+
+    "v011_gbps_linerare": {
+      "category": "volumetric_l3",
+      "description": "Gbps line-rate flood — max packet volume, low unique IPs, extreme throughput",
+      "mode": "volumetric",
+      "bytes_range": [1000, 1400],
+      "workers": 64,
+      "duration_sec": 20,
+      "target_rps": 500000,
+      "ramshield_expected": "channel capacity test — queue depth raises, reject events spike"
+    },
+
+    "p001_syn_flood": {
+      "category": "protocol_l4",
+      "research_ref": "RST flood + SYN-ACK combo (MazeBolt)",
+      "description": "TCP SYN flood — connection exhaustion, handshake flood, low retransmit",
+      "mode": "synwave",
+      "proto_cluster": "tcp_syn",
+      "bytes_range": [0, 64],
+      "duration_sec": 45,
+      "workers": 48,
+      "subnet_concentration": 0.7,
+      "ramshield_expected": "subnet_batch_block triggered at batch_threshold 5+"
+    },
+
+    "p002_tcp_pingpong": {
+      "category": "protocol_l4",
+      "description": "TCP Ping Pong — heavy load on 3-way handshake, repeated ACK chains",
+      "mode": "synwave",
+      "bytes_range": [40, 100],
+      "workers": 24,
+      "duration_sec": 25,
+      "ramshield_expected": "exhaustion test — promotion threshold alternative check"
+    },
+
+    "p003_ack_flood": {
+      "category": "protocol_l4",
+      "description": "ACK flood — OCSP clarified L4 cross",
+      "mode": "botnet",
+      "proto_cluster": "tcp_syn",
+      "bytes_range": [40, 60],
+      "entropy": "high",
+      "workers": 32,
+      "duration_sec": 25,
+      "ramshield_expected": "small packets + high RPS → block for > 500 threshold"
+    },
+
+    "p004_udp_frag_storm": {
+      "category": "protocol_l4",
+      "description": "UDP fragmentation storm — oversize reassembly attack",
+      "mode": "botnet",
+      "proto_cluster": "udp",
+      "bytes_pareto": [1000, 65507, 2.0],
+      "workers": 16,
+      "duration_sec": 20,
+      "ramshield_expected": "IP fragment filter NOT yet implemented — monitoring only"
+    },
+
+    "p005_land_attack": {
+      "category": "protocol_l4",
+      "description": "TCP land attack — duplicate IP, same src/dst",
+      "mode": "volumetric",
+      "hot_ip_ratio": 1.0,
+      "bytes_range": [0, 64],
+      "duration_sec": 15,
+      "workers": 8,
+      "ramshield_expected": "max volume on single IP → HighRps block within 500ms"
+    },
+
+    "p006_spoofed_dns_response": {
+      "category": "protocol_l4",
+      "description": "Spoofed reflected DNS response flood — pseudo-amplification",
+      "mode": "multi_subnet",
+      "proto_cluster": "dns",
+      "bytes_pareto": [512, 1500, 1.8],
+      "duration_sec": 30,
+      "workers": 64,
+      "ramshield_expected": "filter anomaly — entropy plant suppressed"
+    },
+
+    "p007_tcp_rst_flood": {
+      "category": "protocol_l4",
+      "description": "TCP RST flood — constant state removal, connection reset spam",
+      "mode": "botnet",
+      "proto_cluster": "tcp_syn",
+      "bytes_range": [0, 64],
+      "workers": 48,
+      "duration_sec": 20,
+      "ramshield_expected": "high RSP/set pattern; not yet modeled per IP"
+    },
+
+    "p008_full_tcp_exchange": {
+      "category": "protocol_l4",
+      "description": "Diagnostic full-tcp exchange flood",
+      "mode": "volumetric",
+      "bytes_range": [200, 800],
+      "proto_cluster": "http",
+      "duration_sec": 30,
+      "workers": 128,
+      "ramshield_expected": "status_code 503 vs 200 mix"
+    },
+
+    "p009_slow_connect": {
+      "category": "protocol_l4",
+      "description": "Slow connect — connection table consumption at L4 boundary",
+      "mode": "synwave",
+      "bytes_range": [0, 1],
+      "jitter_ms": [1000, 2000],
+      "batch_size": 4,
+      "duration_sec": 120,
+      "ramshield_expected": "low events, barely promote — counter test, borderline pass"
+    },
+
+    "p010_loopback_copy": {
+      "category": "protocol_l4",
+      "description": "Loopback copy — busy L3 relay",
+      "mode": "volumetric",
+      "bytes_range": [64, 256],
+      "duration_sec": 20,
+      "workers": 32,
+      "ramshield_expected": "stability at 100k+ events"
+    },
+
+    "h001_http_desync": {
+      "category": "application_l7",
+      "research_ref": "HTTP Desync/Smuggling — Burp Suite 2024",
+      "description": "HTTP smuggling — GET after completion, header collision",
+      "mode": "scan_rotation",
+      "proto_cluster": "http_post",
+      "bytes_pareto": [200, 1024, 1.2],
+      "status_weights": {"200": 75, "404": 15, "500": 10},
+      "duration_sec": 30,
+      "workers": 64,
+      "ramshield_expected": "L7 portability: block if RPS > 500"
+    },
+
+    "h002_slowloris": {
+      "category": "application_l7",
+      "research_ref": "Slowloris — incomplete header hold",
+      "description": "Slowloris: header completion deadlock — until server drain end",
+      "mode": "volumetric",
+      "bytes_range": [1, 32],
+      "proto_cluster": "slow",
+      "jitter_ms": [500, 2000],
+      "batch_size": 4,
+      "duration_sec": 120,
+      "workers": 8,
+      "ramshield_expected": "cruel variant — micro-events EWMA bias/threshold cold"
+    },
+
+    "h003_rudy_post": {
+      "category": "application_l7",
+      "research_ref": "RUDY (R-U-Dead-Yet) — form POST unlimited body",
+      "description": "RUDY — form POST unbounded, drains server memory",
+      "mode": "volumetric",
+      "proto_cluster": "http_post",
+      "bytes_pareto": [8192, 65536, 2.5],
+      "duration_sec": 60,
+      "workers": 16,
+      "ramshield_expected": "bytes tracking EWMA based on intensity"
+    },
+
+    "h004_xml_over_http": {
+      "category": "application_l7",
+      "description": "XML over HTTP — abused layer boundaries, large body",
+      "mode": "volumetric",
+      "proto_cluster": "http_post",
+      "bytes_pareto": [10000, 200000, 2.0],
+      "duration_sec": 30,
+      "workers": 16,
+      "ramshield_expected": "draining firewall RPS; block if over threshold"
+    },
+
+    "h005_large_get_multi": {
+      "category": "application_l7",
+      "description": "Large GET flood over multi-subnet return path",
+      "mode": "multi_subnet",
+      "proto_cluster": "http",
+      "bytes_pareto": [2048, 8192, 1.5],
+      "subnet_concentration": 0.15,
+      "duration_sec": 40,
+      "workers": 64,
+      "ramshield_expected": "subnet batch_block enabled — 5+ triggers"
+    },
+
+    "h006_redos_regex_bomb": {
+      "category": "application_l7",
+      "description": "ReDoS inject — regex-bomb on GET param",
+      "mode": "volumetric",
+      "proto_cluster": "api",
+      "bytes_range": [256, 512],
+      "jitter_ms": [1, 10],
+      "duration_sec": 20,
+      "workers": 128,
+      "ramshield_expected": "high traffic 200 errors"
+    },
+
+    "h007_credential_stuffing": {
+      "category": "application_l7",
+      "research_ref": "Credential stuffing — 401/403 spikes adaptive scatter",
+      "description": "Credential stuffing (adaptive scatter) with 401/403 weight spike",
+      "mode": "scan_rotation",
+      "proto_cluster": "api",
+      "status_weights": {"401": 45, "403": 40, "200": 15},
+      "duration_sec": 45,
+      "workers": 64,
+      "ramshield_expected": "status_dist error rate threat_score escalation"
+    },
+
+    "h008_api_scraping": {
+      "category": "application_l7",
+      "description": "API scraping with multi-state session reuse",
+      "mode": "botnet",
+      "proto_cluster": "api",
+      "bytes_range": [100, 500],
+      "status_weights": {"401": 10, "403": 9, "429": 20, "200": 60},
+      "entropy": "medium",
+      "duration_sec": 30,
+      "workers": 32,
+      "ramshield_expected": "diffs API fingerprint — not yet implemented"
+    },
+
+    "h009_dynamic_injection": {
+      "category": "application_l7",
+      "description": "Dynamic injection — SQL SELECT into URL",
+      "mode": "volumetric",
+      "proto_cluster": "http",
+      "bytes_range": [256, 2048],
+      "status_weights": {"200": 25, "500": 40, "403": 30},
+      "duration_sec": 30,
+      "workers": 32,
+      "ramshield_expected": "error rate > 10% → threat_high detection"
+    },
+
+    "h010_cache_poisoning": {
+      "category": "application_l7",
+      "description": "Cache poisoning over multi-CDN dispersion",
+      "mode": "botnet",
+      "bytes_range": [64, 256],
+      "workers": 48,
+      "duration_sec": 25,
+      "ramshield_expected": "CDN/EWMA metadata not tracked yet"
+    },
+
+    "h011_xmlrpc_pingback": {
+      "category": "application_l7",
+      "description": "WordPress xmlrpc pingback amplification",
+      "mode": "botnet",
+      "bytes_range": [1500, 2500],
+      "entropy": "high",
+      "workers": 64,
+      "duration_sec": 30,
+      "ramshield_expected": "AMP campaign detection RPS + subnets"
+    },
+
+    "m001_six_layer": {
+      "category": "multi_vector",
+      "research_ref": "MazeBolt 2024: 42% DDoS attacks are multi-vector (avg 5.7 vectors)",
+      "description": "Six-layer DDoS — HTTP + DNS + SYN + UDP + ICMP + SSH",
+      "profile": "chain",
+      "chains": [
+        "l7_http_flood", "dns_amp_sim", "l4_synwave",
+        "volumetric_udp_sim", "volumetric_udp_sim", "l7_post_rudy"
+      ],
+      "chain_duration_sec": 18,
+      "ramshield_expected": "multiple block reasons: HighRps + subnet_batch + entropy"
+    },
+
+    "m002_parallel_blend": {
+      "category": "multi_vector",
+      "description": "Blend of application + volumetric + botnet all simultaneously",
+      "mode": "parallel_sub_profiles",
+      "parallel_sub_sets": [
+        {"profile": "l7_http_flood", "workers": 64, "target_ip": "10.0.0.2", "duration": 30},
+        {"profile": "l4_synwave", "workers": 32, "target_ip": "10.0.0.3", "duration": 30},
+        {"profile": "botnet_distributed", "workers": 32, "target_ip": "10.0.0.4", "duration": 30}
+      ],
+      "ramshield_expected": "parallel RAM usage < 8GB — IP tracking isolation"
+    },
+
+    "m003_tiered_wave_cycles": {
+      "category": "multi_vector",
+      "description": "Tiered wave — Level A then B+C then D rolling cycles",
+      "profile": "chain",
+      "chains": [
+        "credential_stuff", "l7_http_flood",
+        "dns_amp_sim", "l4_synwave",
+        "credential_stuff", "volumetric_udp_sim"
+      ],
+      "chain_duration_sec": 12,
+      "ramshield_expected": "memory forecast draws cyclic/return shape"
+    },
+
+    "m004_simultaneous_amp_app": {
+      "category": "multi_vector",
+      "description": "Simultaneous amplification and app-layoff — double vector merge",
+      "mode": "parallel_sub_profiles",
+      "parallel_sub_sets": [
+        {"profile": "dns_amp_sim", "workers": 64},
+        {"profile": "l7_http_flood", "workers": 48}
+      ],
+      "duration_sec": 60,
+      "ramshield_expected": "residence block diagonal, parallel detection"
+    },
+
+    "m005_rapture_wave": {
+      "category": "multi_vector",
+      "description": "Rapture wave — App → Botnet → Entropy swing → Volumetric waterhammer → App++",
+      "mode": "hybrid_scheduler",
+      "phases": [
+        ["http_flood", 16],
+        ["botnet", 14],
+        ["entropy_swing", 8],
+        ["volumetric", 10],
+        ["app_return", 10]
+      ],
+      "ramshield_expected": "phase amplitude changes → forecaster z-score > 3.5"
+    },
+
+    "m006_pulse_yongle": {
+      "category": "multi_vector",
+      "description": "Yongle: short spikes of mixed polyvector every 1.5s over 180 seconds",
+      "mode": "pulse",
+      "pulse_profile": "mixed_all",
+      "pulse_duration": 3,
+      "wave_count": 60,
+      "ramshield_expected": "benchmark baseline flooding test"
+    },
+
+    "m007_split_pair_collide": {
+      "category": "multi_vector",
+      "description": "Split-pair collide — L7 GET + L4 UDP via separate ports",
+      "mode": "parallel",
+      "parallel_targets": [7890, 7890],
+      "profiles": ["l7_http_flood", "volumetric_udp_sim"],
+      "duration": 30,
+      "ramshield_expected": "detector parting weight double"
+    },
+
+    "m008_sandwich_vol_blend": {
+      "category": "multi_vector",
+      "description": "Sandwiching volumetric between app-lure states",
+      "mode": "sandwich",
+      "outer_profiles": ["l7_http_flood", "l7_http_flood"],
+      "inner_profiles": ["volumetric_udp_sim"],
+      "layer_duration": 15,
+      "ramshield_expected": "tool pattern exclusive spike monitor"
+    },
+
+    "m009_hollow_interleave": {
+      "category": "multi_vector",
+      "description": "Hollow combo — high packet (UDP) + high connect (TCP) interleaved workers",
+      "mode": "interleave",
+      "profiles": ["volumetric_udp_sim", "l4_synwave"],
+      "ratio": [1, 1],
+      "duration": 45,
+      "ramshield_expected": "context switch state gazette"
+    },
+
+    "m010_blitz_rotate_hex": {
+      "category": "multi_vector",
+      "description": "Blitz rotate — 6 profile hex, each 10s, auto-reset",
+      "mode": "rotation",
+      "profiles": [
+        "l7_http_flood", "credential_stuff", "botnet_distributed",
+        "l4_synwave", "volumetric_udp_sim", "dns_amp_sim"
+      ],
+      "rotation_sec": 10,
+      "repeat": 3,
+      "ramshield_expected": "detector fatigue test — clear state per rotation"
+    },
+
+    "b001_dilex_max_entropy": {
+      "category": "botnet",
+      "research_ref": "Dilex botnet — real entropy Zipf patent",
+      "description": "Dilex botnet — high entropy Zipf, variable rates like install base",
+      "profile": "botnet_distributed",
+      "entropy": "max",
+      "workers": 128,
+      "duration": 30,
+      "ramshield_expected": "Shannon H < 2.0 bits — entropy anomaly trigger"
+    },
+
+    "b002_meris_bot": {
+      "category": "botnet",
+      "research_ref": "Meris botnet — 250k unique IPs",
+      "description": "Meris botnet — juice-device SSH re-route",
+      "mode": "botnet",
+      "proto_cluster": "mixed_malware",
+      "subnet_concentration": 0.01,
+      "entropy": "high",
+      "workers": 64,
+      "duration": 40,
+      "ramshield_expected": "two-slice subnet path detection"
+    },
+
+    "b003_bondlayer_filter": {
+      "category": "botnet",
+      "description": "Bond-layer filter — large IP pool with hot-switch source",
+      "mode": "botnet",
+      "workers": 48,
+      "duration": 20,
+      "ramshield_expected": "promotion_threshold throttle changing"
+    },
+
+    "b004_ddos_student": {
+      "category": "botnet",
+      "description": "DDoS bot blowout — student trope from forum scripts",
+      "mode": "botnet",
+      "entropy": "max",
+      "workers": 128,
+      "duration": 20,
+      "ramshield_expected": "max Shannon entropy 6+ bits"
+    },
+
+    "b005_last_resort_puff": {
+      "category": "botnet",
+      "description": "Mishandling crim — puffing in last-resort mode",
+      "mode": "volumetric",
+      "workers": 24,
+      "duration": 15,
+      "ramshield_expected": "auto-block validate policy"
+    },
+
+    "b006_porization_overlap": {
+      "category": "botnet",
+      "description": "Port overlap relay — leaking counter 4 to 5",
+      "mode": "multi_subnet",
+      "workers": 64,
+      "duration": 20,
+      "ramshield_expected": "leak detection on counter threshold"
+    },
+
+    "b007_bot_hot_kill": {
+      "category": "botnet",
+      "description": "BotHat — kill-switch via carrier relay",
+      "mode": "botnet",
+      "workers": 32,
+      "duration": 25,
+      "ramshield_expected": "tara trace plan"
+    },
+
+    "b008_relay_grapple": {
+      "category": "botnet",
+      "description": "Relay bot — grapple routes regenerate",
+      "mode": "botnet",
+      "jitter_ms": [2, 15],
+      "duration": 20,
+      "workers": 48,
+      "ramshield_expected": "forced regeneration trace"
+    },
+
+    "b009_bot_fan_out": {
+      "category": "botnet",
+      "description": "T200 fan-out — Musk bot relay crown machine",
+      "mode": "botnet",
+      "duration": 30,
+      "workers": 96,
+      "ramshield_expected": "auto-IP hot factor test"
+    },
+
+    "b010_blackwell_drain": {
+      "category": "botnet",
+      "description": "Blackwell drain — separate bot, buffer drop",
+      "mode": "botnet",
+      "duration": 25,
+      "workers": 64,
+      "ramshield_expected": "drain buffer test — monotonic left"
+    },
+
+    "r001_zmap_scan": {
+      "category": "recon_scanning",
+      "research_ref": "ZMAP/HSTS Rapid7 scanning project",
+      "description": "ZMAP routine port 80 scan across /24 — sequential IP range",
+      "mode": "scan_linear",
+      "ip_range": [203, 0, 113, 1, 254],
+      "duration_sec": 45,
+      "ramshield_expected": "high brute block within subnet window"
+    },
+
+    "r002_random_port_scan": {
+      "category": "recon_scanning",
+      "description": "Connect scan random 2000 ports",
+      "mode": "scan_random",
+      "duration": 30,
+      "ramshield_expected": "monitored only — under threshold"
+    },
+
+    "r003_slow_nessus": {
+      "category": "recon_scanning",
+      "description": "Slow sustained scan (Nessus-like), 0.5 per IP per second",
+      "mode": "slow_scan",
+      "duration": 180,
+      "workers": 4,
+      "ramshield_expected": "no blocks — decoy pattern"
+    },
+
+    "r004_vuln_map_layered": {
+      "category": "recon_scanning",
+      "description": "Vulnerability map — registry IP scan, deep internal hop",
+      "mode": "layered_scan",
+      "duration": 60,
+      "workers": 32,
+      "ramshield_expected": "half block, half miss"
+    },
+
+    "r005_creeping_marauder": {
+      "category": "recon_scanning",
+      "description": "RSIC generic creeping marauder — one IP minute scan",
+      "mode": "creeping",
+      "durations": 60,
+      "workers": 1,
+      "ramshield_expected": "monitor baseline"
+    },
+
+    "r006_ping_probes": {
+      "category": "recon_scanning",
+      "description": "Ping sweep probe over many /24, fast return",
+      "mode": "ping_sweep",
+      "workers": 32,
+      "duration": 30,
+      "ramshield_expected": "pass detect"
+    },
+
+    "r007_payload_probe": {
+      "category": "recon_scanning",
+      "description": "Probes with behavioral payload signatures",
+      "mode": "payload_scan",
+      "workers": 16,
+      "duration": 30,
+      "ramshield_expected": "payload detection port"
+    },
+
+    "r008_signal_dust": {
+      "category": "recon_scanning",
+      "description": "Wireshark arsenal — signal dust injection",
+      "mode": "injection",
+      "workers": 8,
+      "duration": 30,
+      "ramshield_expected": "trace only"
+    },
+
+    "r009_angry_port_scan": {
+      "category": "recon_scanning",
+      "description": "Angry IP scanner — many ports from same IP, auto tagger",
+      "mode": "concentrated",
+      "workers": 8,
+      "duration": 20,
+      "ramshield_expected": "low scan length detection"
+    },
+
+    "r010_step_scan_recon": {
+      "category": "recon_scanning",
+      "description": "Step-scan — incremental increase, then burst map",
+      "mode": "step_scan",
+      "step_count": 10,
+      "duration": 50,
+      "ramshield_expected": "sequence learning trigger"
+    },
+
+    "s001_pulse_wave_10s": {
+      "category": "stealth_advanced",
+      "research_ref": "PulseWave DDoS (Akamai 2019) — short periodic bursts evade averaging",
+      "description": "Pulse: 10s burst every 30s, max IPS random direction — 6 cycles",
+      "mode": "pulse_wave",
+      "burst_span": 10,
+      "quiet": 20,
+      "repeat": 6,
+      "ramshield_expected": "EWMA reset before next burst — detection gap expected"
+    },
+
+    "s002_spike_cycle": {
+      "category": "stealth_advanced",
+      "description": "Spike: 2s spikes, 5 IPs selected repeatedly — every 15 seconds",
+      "mode": "spike_cycle",
+      "cycle_span": 15,
+      "burst_duration": 2,
+      "ramshield_expected": "history combine under 15s missing"
+    },
+
+    "s003_sine_wave": {
+      "category": "stealth_advanced",
+      "description": "Sinusoidal — repeating 120s cycle amplitude 300",
+      "mode": "sine_wave",
+      "amplitude": 300,
+      "period_sec": 120,
+      "workers": 1,
+      "ramshield_expected": "shape anticipate/smoothing"
+    },
+
+    "s004_one_hour_pulse": {
+      "category": "stealth_advanced",
+      "description": "One-hit pulse — once per hour, detection deficit test",
+      "mode": "single_pulse",
+      "duration": 5,
+      "repeat_min": 60,
+      "repeat_count": 2,
+      "ramshield_expected": "EWMA reset window deficit"
+    },
+
+    "s005_flow_watermark": {
+      "category": "stealth_advanced",
+      "description": "Traffic water-mark — slowly leaking internal beacon",
+      "mode": "slow_leak",
+      "workers": 2,
+      "duration": 300,
+      "ramshield_expected": "sustained low event clock check"
+    },
+
+    "s006_grad_slope": {
+      "category": "stealth_advanced",
+      "description": "Gradual slope — 0→500k over 600 seconds, near-linear",
+      "mode": "ramp",
+      "ramp_start": 0,
+      "ramp_end": 50000,
+      "ramp_sec": 600,
+      "ramshield_expected": "slow ramp HW anomaly detection sensitivity"
+    },
+
+    "s007_bucket_drain": {
+      "category": "stealth_advanced",
+      "description": "Bucket drain — 30s flood, then 10s off, repeating mini-spike",
+      "mode": "flush_cycle",
+      "ramshield_expected": "counter drain mechanism validation"
+    },
+
+    "s008_ip_rotation_mimic": {
+      "category": "stealth_adaptive",
+      "description": "IP rotation at 1/s — mimic CDN forwarder",
+      "mode": "rotate_every",
+      "frequency": 1,
+      "ramshield_expected": "IP churn high — detection pattern"
+    },
+
+    "s009_window_sneak": {
+      "category": "stealth_advanced",
+      "description": "Windows sizing — exploit TCP window scaling flood",
+      "mode": "windowing",
+      "duration": 40,
+      "ramshield_expected": "IP internal data tracking"
+    },
+
+    "s010_blur_surge": {
+      "category": "stealth_advanced",
+      "description": "Blur-controlled flux — capture shape-adjusted nucleus",
+      "mode": "blur_flux",
+      "duration": 60,
+      "ramshield_expected": "trace memory spread"
+    },
+
+    "a001_counter_learning": {
+      "category": "adaptive_counter",
+      "research_ref": "Google Cloud Armor Adaptive Protection bypass research",
+      "description": "Counter learning — after detection signature, shift traffic shape",
+      "mode": "counter_learning",
+      "learn_duration": 15,
+      "shift_duration": 30,
+      "ramshield_expected": "ramshield pattern learner activation"
+    },
+
+    "a002_mimic_legit": {
+      "category": "adaptive_counter",
+      "description": "Mimic legitimate CDN — same IP pool + 200",
+      "mode": "mimic",
+      "baseline_mimic": true,
+      "ramshield_expected": "CDN vs botnet threshold decision"
+    },
+
+    "a003_rate_limit_exact": {
+      "category": "adaptive_counter",
+      "description": "Exactly at threshold — tip-jar attack (RPS == 500)",
+      "mode": "volumetric",
+      "target_rps": 500,
+      "ramshield_expected": "edge boundary detection fail/pass"
+    },
+
+    "a004_contextless_tick": {
+      "category": "adaptive_counter",
+      "description": "Context-less tick — small staff per IP spread across 24h",
+      "mode": "slow_slice",
+      "duration": 600,
+      "ramshield_expected": "long-term evap compute"
+    },
+
+    "a005_rate_control_pattern": {
+      "category": "adaptive_counter",
+      "description": "Rate-control pattern — trawl local rate across random subnets",
+      "mode": "split_beam",
+      "ramshield_expected": "rate split filter difficult"
+    },
+
+    "a006_rest:burst_cycle": {
+      "category": "adaptive_counter",
+      "description": "Rest/burst cycle — 10s rest → 2s burst, repeat 20x",
+      "mode": "burst_cycle",
+      "cycle_count": 20,
+      "ramshield_expected": "pattern detect over 20 loops"
+    },
+
+    "a007_packet_size_mod": {
+      "category": "adaptive_counter",
+      "description": "Packet size modulation — shift byte range tiers every 10s",
+      "mode": "size_mod",
+      "ramshield_expected": "bytes_in tracking averages over window"
+    },
+
+    "a008_null_cipher": {
+      "category": "adaptive_counter",
+      "description": "NULL cipher test — zero payload all identical",
+      "mode": "volumetric",
+      "bytes_range": [0, 0],
+      "ramshield_expected": "bytes_in says zero — RPS only"
+    },
+
+    "a009_mirror_flip": {
+      "category": "adaptive_counter",
+      "description": "Mirror flip — source IP suddenly swapped per run",
+      "mode": "flip_ip",
+      "ramshield_expected": "Bloom filter resets"
+    },
+
+    "a010_delayed_burst": {
+      "category": "adaptive_counter",
+      "description": "Delayed burst — 60s idle → flood",
+      "mode": "delayed_burst",
+      "idle_sec": 60,
+      "burst_sec": 10,
+      "ramshield_expected": "cold start block time"
+    },
+
+    "c001_heat_wave": {
+      "category": "chaos_waves",
+      "description": "Heatwave: exponential sawtooth, L4→L7 escalating every 30s over 360s",
+      "mode": "escalating_wave",
+      "ramp_start": 1000,
+      "ramp_end": 500000,
+      "ramp_seconds": 180,
+      "subwave_pause": 15,
+      "total_duration": 360,
+      "ramshield_expected": "capped board thermal 4 cycle test"
+    },
+
+    "c002_sawtooth_rush": {
+      "category": "chaos_waves",
+      "description": "Loop of RUSH — burst/rest/burst/long_burst, 5 cycles",
+      "mode": "sawtooth_pattern",
+      "pattern": [
+        {"rate": 20000, "duration": 2},
+        {"rate": 80000, "duration": 5},
+        {"rate": 400000, "duration": 10},
+        {"rate": 3000, "duration": 2}
+      ],
+      "loop_total": 5,
+      "ramshield_expected": "return ban cage borders"
+    },
+
+    "c003_clip_factor": {
+      "category": "chaos_waves",
+      "description": "Waves poster — clip faktor, platform lean, return anchor",
+      "mode": "clip_cluster",
+      "duration": 150,
+      "ramshield_expected": "baseline window model"
+    },
+
+    "c004_ip_blockflow": {
+      "category": "chaos_waves",
+      "description": "DGZ list — IP block flow multiplex netsize",
+      "mode": "block_flow",
+      "ramshield_expected": "conflict resolution test"
+    },
+
+    "c005_total_paste_cleanup": {
+      "category": "chaos_waves",
+      "description": "Total past cleanup simulation",
+      "mode": "paste",
+      "ramshield_expected": "dedup test"
+    },
+
+    "c006_wake_random": {
+      "category": "chaos_waves",
+      "description": "Wake random base — normal distribution spikes every 45s",
+      "mode": "wake_random",
+      "ramshield_expected": "detector reset test"
+    },
+
+    "c007_induction_loop": {
+      "category": "chaos_waves",
+      "description": "Induction loop — reciprocal scaling three levels",
+      "mode": "induction",
+      "ramshield_expected": "auto-scale response"
+    },
+
+    "c008_trapdoor_reply": {
+      "category": "chaos_waves",
+      "description": "Trapdoor reply — logic that forces exported state",
+      "mode": "trapdoor",
+      "ramshield_expected": "backpressure detection"
+    },
+
+    "c009_amnesia_wave": {
+      "category": "chaos_waves",
+      "description": "Amnesia — flux injecting with 2s zero gaps",
+      "mode": "amnesia",
+      "ramshield_expected": "counter pause reset"
+    },
+
+    "c010_dsc_flap": {
+      "category": "chaos_waves",
+      "description": "DSC flap — mirror then burst",
+      "mode": "dsc_flap",
+      "duration": 30,
+      "ramshield_expected": "flap detection"
+    }
+  }
+}
