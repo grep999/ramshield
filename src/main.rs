@@ -1,9 +1,9 @@
 use anyhow::Result;
 use ramshield::{dashboard, Config, Engine};
+use ramshield_metrics::Metrics;
 use std::sync::Arc;
-use tracing::{info, debug}; // Add debug
+use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
-
 #[cfg(feature = "otel")]
 fn init_otel() -> opentelemetry_sdk::trace::TracerProvider {
     opentelemetry_sdk::trace::TracerProvider::default()
@@ -65,10 +65,16 @@ async fn main() -> Result<()> {
 
     // Start RamShield normally
     let store = Arc::new(ramshield::storage::Store::new(config.engine.shard_count));
-    store.traffic.ram_limit_mb.store(config.engine.ram_limit_mb, std::sync::atomic::Ordering::Relaxed);
+    store.traffic.ram_limit_mb.store(
+        config.engine.ram_limit_mb,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     // Store created_at for uptime tracking
-    store.traffic.uptime_secs.store(1, std::sync::atomic::Ordering::Relaxed); // mark non-zero
-    let metrics = Arc::new(ramshield::metrics::Metrics::new());
+    store
+        .traffic
+        .uptime_secs
+        .store(1, std::sync::atomic::Ordering::Relaxed); // mark non-zero
+    let metrics = Arc::new(Metrics::new());
     let engine = Arc::new(Engine::new(config.clone(), store.clone(), metrics.clone()));
     let _engine_handle = engine.clone().start_async().expect("engine pipeline");
 

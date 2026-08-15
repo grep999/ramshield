@@ -1,93 +1,97 @@
 # Contributing to RamShield
 
-Thank you for your interest in contributing! This document outlines the process and standards for contributing to RamShield.
+We welcome contributions. This document explains how to contribute effectively.
 
 ## Ways to Contribute
 
-- **Bug reports** — Found a crash, data race, or incorrect behavior? Open an issue with a minimal reproduction.
-- **Feature requests** — Have an idea? Start a [Discussion](https://github.com/grep999/ramshield/discussions) first.
-- **Code contributions** — Fix bugs, add features, improve performance, or enhance documentation.
-- **Testing** — Run attack simulators, stress tests, or add test cases.
-- **Documentation** — Improve README, add examples, clarify config options.
+- **Code**: bug fixes, features, performance improvements
+- **Documentation**: README, API docs, guides
+- **Testing**: unit tests, integration tests, stress tests
+- **Issues**: bug reports, feature requests, questions
 
 ## Development Setup
 
-### Prerequisites
-
-- Rust 1.70+ (2021 edition) — [rustup.rs](https://rustup.rs/)
-- Python 3.8+ — for attack simulators
-
-### Clone & Build
-
 ```bash
+# Prerequisites: Rust 1.70+
+rustup update stable
+
+# Clone and build
 git clone https://github.com/grep999/ramshield.git
-cd ramshield/rs
-cargo build --all-targets
-cargo test
+cd ramshield/beta/rs
+cargo build --all-targets --all-features
 ```
 
 ## Code Standards
 
-- **Edition**: Rust 2021
-- **Formatting**: `cargo fmt --all`
-- **Linting**: `cargo clippy --all-targets -- -D warnings` (zero warnings)
-- **Error handling**: `thiserror` for library, `anyhow` for application
-- **Async**: Tokio full; never block in async context
-- **Concurrency**: Prefer atomics/channels over locks; short guard lifetimes
+- **Edition**: Rust 2024 (see `Cargo.toml`)
+- **Formatting**: `cargo fmt --all` (enforced in CI)
+- **Linting**: `cargo clippy --all-targets --all-features -- -D warnings` (zero warnings)
+- **Testing**: `cargo test --all-targets --all-features` (all tests must pass)
+- **Dependencies**: minimal, prefer stdlib; no new deps without justification
 
-## Commit Messages
+## Commit Format
 
-Follow [Conventional Commits](https://www.conventionalcommits.org/):
+Use [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
-feat: add Holt-Winters forecasting engine
-fix: correct EWMA alpha calculation
-perf: reduce batch lock contention by 40%
-docs: update CLI reference
+type(scope): short description
+
+Longer explanation if needed. Wrap at 72 chars.
 ```
+
+Types: `feat`, `fix`, `refactor`, `docs`, `test`, `ci`, `chore`, `perf`
+
+Examples:
+```
+feat(detection): add subnet aggregation to batch processor
+fix(storage): correct TTL eviction race condition
+docs(readme): add benchmark results table
+```
+
+## Branch Naming
+
+- `feat/description` — new features
+- `fix/description` — bug fixes
+- `refactor/description` — code restructuring
+- `docs/description` — documentation
+- `ci/description` — CI/CD changes
 
 ## Pull Request Process
 
-1. Fork → feature branch → PR
-2. Run full verification:
+1. Fork and create a branch from `main`
+2. Make changes with tests
+3. Run full verification locally:
    ```bash
-   cargo build --all-targets
-   cargo clippy --all-targets -- -D warnings
-   cargo test --all-targets
-   cargo fmt --all -- --check
+   cargo fmt --all --check
+   cargo clippy --all-targets --all-features -- -D warnings
+   cargo test --all-targets --all-features
    ```
-3. PR must include: clear title, description, linked issue
-4. All CI checks must pass
-5. Squash on merge
+4. Push and open PR against `main`
+5. CI must pass (clippy, check, build, test)
+6. PR will be reviewed; address feedback
+7. Squash merge on approval
 
-## PR Checklist
+## Review Guidelines
 
-- [ ] All CI checks pass
-- [ ] `cargo clippy --all-targets -- -D warnings`
-- [ ] `cargo test` passes
-- [ ] New code has tests
-- [ ] Documentation updated
-- [ ] No `unwrap()` in production paths
-- [ ] Performance impact considered
+- Does it solve the stated problem?
+- Are types correct (ownership, borrowing, lifetimes)?
+- Are errors returned as `Result` (not panics)?
+- Is the hot path allocation-free?
+- Are new dependencies justified?
+- Do tests cover the change?
+- Is documentation updated?
 
-## Testing
+## Performance Changes
 
-```bash
-# Unit + integration
-cargo test
-
-# Attack simulation
-python3 scripts/attack_sim_100k.py --events 1000000 --workers 64
-```
+For performance-related PRs:
+- Include `cargo bench` before/after
+- Prefer `criterion` for statistical rigor
+- Report allocations (`cargo llvm-lines`) and binary size (`cargo bloat`)
 
 ## Security
 
-Do not open public issues for security vulnerabilities. See [SECURITY.md](SECURITY.md).
+Report security issues privately via GitHub Security Advisories. Do not open public issues for vulnerabilities.
 
-## Getting Help
+## Questions
 
-- [GitHub Discussions](https://github.com/grep999/ramshield/discussions)
-- [Discord](https://discord.gg/ramshield)
-- [Issues](https://github.com/grep999/ramshield/issues)
-
-First-time contributors welcome! Look for `good first issue` labels.
+Open a GitHub Discussion or issue with the `question` label.
