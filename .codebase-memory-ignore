@@ -1,0 +1,5 @@
+target/
+*.lock
+*.bin
+*.wasm
+.git/

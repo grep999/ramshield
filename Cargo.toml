@@ -46,7 +46,10 @@ tokio-stream      = "0.1"
 ctrlc             = "3"
 sysinfo           = "0.29"
 shlex = "2.0.1"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
 opentelemetry = { version = "0.21", optional = true }
 opentelemetry_sdk = { version = "0.21", optional = true, features = ["rt-tokio"] }
 tracing-opentelemetry = { version = "0.22", optional = true }

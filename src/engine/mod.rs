@@ -73,6 +73,26 @@ impl Engine {
         let stats = store.get_stats();
         let (cpu_usage, memory_usage_mb) = crate::metrics::get_system_usage();
 
+        let ram_pct = if stats.ram_limit_mb > 0 {
+            (stats.ram_bytes as f64 / (stats.ram_limit_mb as f64 * 1048576.0) * 100.0).min(100.0)
+        } else {
+            0.0
+        };
+        let ingested = metrics.events_ingested.load(Ordering::Relaxed);
+        let batches = metrics.batches_total.load(Ordering::Relaxed);
+        let promotions = metrics.promotions_total.load(Ordering::Relaxed);
+        let blocks_applied = metrics.blocks_detection.load(Ordering::Relaxed)
+            + metrics.blocks_subnet.load(Ordering::Relaxed)
+            + metrics.blocks_forecast.load(Ordering::Relaxed);
+        let (is_healthy, health_reason) = if self.is_shutting_down() {
+            (false, "shutting down".into())
+        } else if ram_pct >= 95.0 {
+            (false, "ram pressure".into())
+        } else {
+            (true, "running".into())
+        };
+        // ponytail: no last-event heartbeat; add when Metrics grows a last_event_ns.
+
         DashboardSnapshot {
             ts_ms: crate::metrics::now_ms(),
             uptime_secs: stats.uptime_secs,
@@ -80,36 +100,36 @@ impl Engine {
             blocked_total: stats.blocked,
             ram_bytes: stats.ram_bytes,
             ram_limit_mb: stats.ram_limit_mb,
-            ram_pct: if stats.ram_limit_mb > 0 { (stats.ram_bytes as f64 / (stats.ram_limit_mb as f64 * 1048576.0) * 100.0).min(100.0) } else { 0.0 },
+            ram_pct,
             cpu_usage,
             memory_usage_mb,
             ipc_requests: metrics.requests_total.load(Ordering::Relaxed),
-            events_ingested: metrics.events_ingested.load(Ordering::Relaxed),
+            events_ingested: ingested,
             events_rejected: metrics.events_rejected.load(Ordering::Relaxed),
             channel_depth: 0,
-            batches_total: metrics.batches_total.load(Ordering::Relaxed),
-            promotions: metrics.promotions_total.load(Ordering::Relaxed),
+            batches_total: batches,
+            promotions,
             cold_skipped: metrics.cold_skipped_total.load(Ordering::Relaxed),
-            blocks_applied: metrics.blocks_detection.load(Ordering::Relaxed) + metrics.blocks_subnet.load(Ordering::Relaxed) + metrics.blocks_forecast.load(Ordering::Relaxed),
+            blocks_applied,
             pipeline: crate::metrics::PipelineFlow {
-                ingest: 0,
+                ingest: ingested,
                 queued: 0,
-                batched: 0,
-                promoted: 0,
+                batched: batches,
+                promoted: promotions,
                 merged: 0,
-                blocked: 0,
+                blocked: blocks_applied,
             },
-            is_healthy: true,
-            health_reason: "running".into(),
+            is_healthy,
+            health_reason,
         }
     }
 
     pub fn get_batch_history(&self) -> Vec<BatchRecord> {
-        self.metrics.batch_history.lock().unwrap().iter().cloned().collect()
+        self.metrics.get_batch_history()
     }
 
     pub fn get_block_log(&self) -> Vec<BlockRecord> {
-        self.metrics.block_log.lock().unwrap().iter().cloned().collect()
+        self.metrics.get_block_log()
     }
 
     pub fn get_hot_subnets(&self) -> Vec<SubnetRow> {
@@ -123,12 +143,16 @@ impl Engine {
         }
 
     pub fn get_module_stats(&self) -> Vec<ModuleStats> {
-        vec![
-            ModuleStats { label: "IPC".into(), events: 0, errors: 0, rate_per_sec: 0.0, detail: serde_json::json!({}) },
-            ModuleStats { label: "Detection".into(), events: 0, errors: 0, rate_per_sec: 0.0, detail: serde_json::json!({}) },
-            ModuleStats { label: "Forecasting".into(), events: 0, errors: 0, rate_per_sec: 0.0, detail: serde_json::json!({}) },
-            ModuleStats { label: "Storage".into(), events: 0, errors: 0, rate_per_sec: 0.0, detail: serde_json::json!({}) },
-        ]
+        let stats = self.store.get_stats();
+        let ingested = self.metrics.events_ingested.load(Ordering::Relaxed);
+        self.metrics.get_module_stats_data(
+            stats.uptime_secs,
+            ingested,
+            0,
+            stats.ips_tracked,
+            stats.ram_bytes,
+            stats.ram_limit_mb,
+        )
     }
 }
 
@@ -209,5 +233,14 @@ mod startup_tests {
         assert!(labels.contains(&"Detection"));
         assert!(labels.contains(&"Forecasting"));
         assert!(labels.contains(&"Storage"));
+    }
+
+    #[test]
+    fn engine_snapshot_unhealthy_when_shutting_down() {
+        let engine = Engine::new(Config::default(), Arc::new(Store::new(16)), Arc::new(Metrics::new()));
+        engine.shutdown();
+        let snap = engine.dashboard_snapshot();
+        assert!(!snap.is_healthy);
+        assert_eq!(snap.health_reason, "shutting down");
     }
 }

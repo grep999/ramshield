@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use tokio::time::{interval, Duration, MissedTickBehavior};
 use tracing::debug;
@@ -5,21 +6,21 @@ use tracing::debug;
 use crate::storage::Store;
 
 pub struct TtlWheel {
-    slots: Vec<Arc<Mutex<Vec<String>>>>,
+    slots: Vec<Arc<Mutex<Vec<IpAddr>>>>,
     size: usize,
     resolution_ms: u64,
     overflow: Arc<Mutex<Vec<Overflow>>>,
 }
 
 struct Overflow {
-    key: String,
+    key: IpAddr,
     expire_ms: u64,
 }
 
 impl TtlWheel {
     pub fn new(size: usize, resolution_ms: u64) -> Self {
         let slots = (0..size)
-            .map(|_| Arc::new(Mutex::new(Vec::<String>::new())))
+            .map(|_| Arc::new(Mutex::new(Vec::<IpAddr>::new())))
             .collect();
         Self {
             slots,
@@ -29,7 +30,7 @@ impl TtlWheel {
         }
     }
 
-    pub fn schedule(&self, key: String, ttl_ms: u64) {
+    pub fn schedule(&self, key: IpAddr, ttl_ms: u64) {
         let now_ms = epoch_ms();
         let expire_ms = now_ms + ttl_ms;
         let max_range = self.size as u64 * self.resolution_ms;
@@ -46,7 +47,7 @@ impl TtlWheel {
         self.slots[slot].lock().unwrap().push(key);
     }
 
-    pub fn tick(&self) -> Vec<String> {
+    pub fn tick(&self) -> Vec<IpAddr> {
         let now_ms = epoch_ms();
         let cursor = (now_ms / self.resolution_ms) as usize;
         let slot = cursor % self.size;
@@ -112,7 +113,7 @@ mod tests {
     #[test]
     fn overflow_when_exceeds_window() {
         let wheel = TtlWheel::new(10, 100);
-        wheel.schedule("key".into(), 5_000);
+        wheel.schedule("127.0.0.1".parse().unwrap(), 5_000);
         assert_eq!(wheel.overflow.lock().unwrap().len(), 1);
     }
 }

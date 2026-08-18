@@ -18,6 +18,7 @@ pub struct PredictionModel {
 }
 
 pub struct PredictionEngine {
+    #[allow(dead_code)] // reserved for future training integration
     learner: Arc<PatternLearner>,
     model: Arc<Mutex<PredictionModel>>,
     /// Historical data for training
@@ -125,8 +126,7 @@ mod tests {
 
     #[test]
     fn test_prediction_engine_creation() {
-        let engine = PredictionEngine::new();
-        // Simple test to ensure compilation
-        assert!(true);
+        let _ = PredictionEngine::new();
+        // Smoke test: ensures module compiles with all dependencies
     }
 }

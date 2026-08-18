@@ -100,7 +100,7 @@ impl PatternLearner {
     /// Detect if data matches a known pattern with enhanced micro-attack detection
     pub fn detect_pattern(&self, data: &[u8]) -> Option<AttackPattern> {
         let patterns = self.patterns.read().unwrap();
-        for (_, pattern) in patterns.iter() {
+        for pattern in patterns.values() {
             if self.calculate_similarity(data, &pattern.signature) > self.similarity_threshold {
                 return Some(pattern.clone());
             }
@@ -154,14 +154,24 @@ impl PatternLearner {
             return 0.0;
         }
 
-        // Simple similarity calculation based on common elements
-        let common_count = a.iter().filter(|&x| b.contains(x)).count();
-        let max_len = a.len().max(b.len());
+        let mut freq_a = [0u32; 256];
+        let mut freq_b = [0u32; 256];
 
-        if max_len == 0 {
+        for &byte in a {
+            freq_a[byte as usize] += 1;
+        }
+        for &byte in b {
+            freq_b[byte as usize] += 1;
+        }
+
+        let dot_product = freq_a.iter().zip(freq_b.iter()).map(|(&x, &y)| (x * y) as f64).sum::<f64>();
+        let mag_a = freq_a.iter().map(|&x| (x * x) as f64).sum::<f64>().sqrt();
+        let mag_b = freq_b.iter().map(|&y| (y * y) as f64).sum::<f64>().sqrt();
+
+        if mag_a == 0.0 || mag_b == 0.0 {
             0.0
         } else {
-            common_count as f32 / max_len as f32
+            (dot_product / (mag_a * mag_b)) as f32
         }
     }
 }

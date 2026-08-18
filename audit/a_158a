@@ -1,0 +1,1313 @@
+The project has a promising architecture, but several compile failures, security bugs, no-op control paths, accounting errors, and shutdown problems make it unsafe for production in its current form.
+
+Highest-priority findings
+
+| Priority | Area | Problem | Impact |
+|---|---|---|---|
+| P0 | Alerting | AlertingConfig and RamShieldError do not exist | Module cannot compile if included |
+| P0 | IPC | Invalid IPs become 0.0.0.0 | Different invalid inputs alias one store key |
+| P0 | IPC | BlockIp, UnblockIp, and Flush only return success text | Administrative commands do nothing |
+| P0 | Detection | Reconstructed events lose status, fingerprint, and first timestamp | Threat scoring and rate calculations are corrupted |
+| P0 | Shutdown | Detection and forecasting use independent/no shutdown state | Engine shutdown does not stop workers |
+| P0 | Dashboard | Config mutation is unauthenticated, permissive-CORS, and unvalidated | Remote configuration takeover if exposed |
+| P1 | Store | Replacement RAM accounting only adds growth and never subtracts shrinkage | RAM counter becomes inaccurate |
+| P1 | Store | Expired get() entries are not removed or accounted | Memory remains occupied indefinitely |
+| P1 | Detection | Subnet reverse index exists but subnet blocking still scans entire store | O(store size) hot path |
+| P1 | IPC | Single-event path uses blocking send() inside async request handling | Tokio worker can block indefinitely |
+| P1 | Metrics | Detection blocks are counted twice conceptually; total block counter is unused | Dashboard/Prometheus disagree |
+| P1 | Config | Runtime patch replaces whole sections and skips validation | Invalid live configurations |
+| P1 | Security | No dashboard or IPC authentication | Any reachable client can administer the service |
+| P2 | Cache | Capacity is documented but never enforced | Unbounded growth |
+| P2 | WAL | Always opens segment 0 and lexicographic ordering can be fragile | Restart/rotation correctness risk |
+| P2 | Forecasting | eventslastsecond is actually "events from latest flush" | RPS forecasts use the wrong unit |
+| P2 | ML/DNS | Several modules are heuristic stubs presented as advanced functionality | Misleading product behavior |
+
+Compile and module consistency
+Alerting module is disconnected and references missing types
+
+src/alerting/mod.rs imports:
+
+``rust
+use crate::config::AlertingConfig;
+use crate::error::RamShieldError;
+`
+
+Neither type exists, and lib.rs does not export alerting.
+
+Use the existing error type and add configuration explicitly:
+
+`rust
+// config.rs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertingConfig {
+    pub enabled: bool,
+    pub rpsalertthreshold: u64,
+    pub entropyalertthreshold: f64,
+    pub alertcooldownsecs: u64,
+    pub auditlogenabled: bool,
+    pub auditlogpath: String,
+}
+
+impl Default for AlertingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            rpsalertthreshold: 10000,
+            entropyalertthreshold: 6.0,
+            alertcooldownsecs: 300,
+            auditlogenabled: true,
+            auditlogpath: "./ramshield-audit.jsonl".into(),
+        }
+    }
+}
+`
+
+Add it to Config:
+
+`rust
+#[serde(default)]
+pub alerting: AlertingConfig,
+`
+
+Then fix imports and registration:
+
+`rust
+// alerting/mod.rs
+use crate::error::RsError;
+
+pub async fn start(
+    &self,
+    mut shutdownrx: broadcast::Receiver<()>,
+) -> Result<(), RsError> {
+    // ...
+}
+`
+
+`rust
+// lib.rs
+pub mod alerting;
+`
+
+Alternatively, delete the unused module until it is integrated. Dead, uncompilable enterprise functionality is worse than an explicit backlog item.
+
+ipc/transport.rs is not compiled
+
+ipc/mod.rs exports only server:
+
+`rust
+pub mod server;
+`
+
+Therefore issues in transport.rs are hidden from normal builds. If intended for use:
+
+`rust
+pub mod server;
+pub mod transport;
+`
+
+After enabling it, avoid method-name ambiguity in trait implementations:
+
+`rust
+#[asynctrait::asynctrait]
+impl Listener for TcpListener {
+    type Stream = TcpStream;
+
+    async fn accept(&mut self) -> anyhow::Result<(TcpStream, String)> {
+        let (stream, addr) = TcpListener::accept(self).await?;
+        Ok((stream, addr.tostring()))
+    }
+}
+`
+
+For shutdown:
+
+`rust
+use tokio::io::AsyncWriteExt;
+
+#[asynctrait::asynctrait]
+impl Stream for TcpStream {
+    fn peeraddr(&self) -> Option<String> {
+        TcpStream::peeraddr(self).ok().map(|a| a.tostring())
+    }
+
+    async fn shutdown(&mut self) -> anyhow::Result<()> {
+        AsyncWriteExt::shutdown(self).await?;
+        Ok(())
+    }
+}
+`
+
+Error naming is inconsistent
+
+The project exports RsError, while alerting expects RamShieldError. Pick one public name. The least disruptive fix is:
+
+`rust
+pub type RamShieldError = RsError;
+`
+
+But consistently using RsError is cleaner.
+
+IPC correctness and security
+Never turn invalid IP input into 0.0.0.0
+
+This pattern appears repeatedly:
+
+`rust
+ip.parse().unwrapor(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+`
+
+That means "garbage", "", and "999.999.999.999" all operate on the same key. Return a structured error instead:
+
+`rust
+fn parseip(value: &str) -> Result<std::net::IpAddr, Response> {
+    value.parse().maperr(|| Response::Error {
+        code: 400,
+        message: format!("invalid IP address: {value}"),
+    })
+}
+`
+
+Then:
+
+`rust
+Request::CheckIp { ip } => {
+    let parsed = match parseip(&ip) {
+        Ok(ip) => ip,
+        Err(resp) => return resp,
+    };
+
+    let status = store.get(&crate::storage::ipkey(parsed));
+    match status {
+        Some(crate::storage::Value::IpRecord(rec)) => {
+            let reason = match &rec.blockstate {
+                crate::storage::BlockState::Blocked { reason, .. } => {
+                    Some(reason.tostring())
+                }
+                 => None,
+            };
+
+            Response::IpStatus {
+                ip,
+                blocked: matches!(
+                    rec.blockstate,
+                    crate::storage::BlockState::Blocked { .. }
+                ),
+                threat: rec.threatscore,
+                ewmarps: rec.ewmarps,
+                reason,
+            }
+        }
+         => Response::IpStatus {
+            ip,
+            blocked: false,
+            threat: 0.0,
+            ewmarps: 0.0,
+            reason: None,
+        },
+    }
+}
+`
+
+The current code also treats Suspicious as blocked in CheckIp, while DetectionEngine::isblocked() treats only Blocked as blocked. That semantic mismatch should be removed.
+
+Administrative commands are no-ops
+
+These branches lie to the caller:
+
+`rust
+Request::BlockIp { ... } => Response::Ok {
+    message: format!("blocked ..."),
+},
+Request::UnblockIp { ... } => Response::Ok {
+    message: format!("unblocked ..."),
+},
+Request::Flush => Response::Ok { message: "flushed".into() },
+`
+
+Implement real state changes. A basic manual block method could be:
+
+`rust
+impl Store {
+    pub fn setblockstate(
+        &self,
+        ip: IpAddr,
+        state: BlockState,
+        ttlsecs: Option<u64>,
+        ramlimitbytes: usize,
+    ) -> Result<()> {
+        let key = ipkey(ip);
+        let mut rec = match self.get(&key) {
+            Some(Value::IpRecord(rec)) => rec,
+             => IpRecord::new(ip, 32),
+        };
+
+        rec.blockstate = state;
+        self.insert(key, Value::IpRecord(rec), ttlsecs, ramlimitbytes)
+    }
+}
+`
+
+Then pass the engine/config into request processing and actually mutate the store. Flush needs a command channel to the detection worker; returning success without triggering a flush must be removed.
+
+Blocking channel send inside async code
+
+The single report path uses:
+
+`rust
+eventtx.send(ev)
+`
+
+crossbeamchannel::Sender::send blocks when the channel is full. Because this happens in an async connection task, it can block the runtime thread.
+
+Use trysend consistently:
+
+`rust
+match eventtx.trysend(ev) {
+    Ok(()) => Response::Ok {
+        message: "accepted".into(),
+    },
+    Err() => {
+        droppedevents.fetchadd(1, Ordering::Relaxed);
+        Response::BatchOk {
+            accepted: 0,
+            rejected: 1,
+        }
+    }
+}
+`
+
+Also increment the shared metric, not only the server-local counter:
+
+`rust
+engine.metrics.increjected(1);
+`
+
+At present, dashboard eventsrejected remains zero while the IPC server tracks dropped events separately.
+
+Batch size handling silently discards excess input
+
+ReportConnections deserializes an arbitrarily large vector, processes only 4096 events, then silently ignores the remainder. Reject oversized batches before iteration:
+
+`rust
+if events.len() > BATCHMAX {
+    return Response::Error {
+        code: 413,
+        message: format!("batch exceeds maximum of {BATCHMAX} events"),
+    };
+}
+`
+
+A deserialization limit is also necessary because the whole JSON value is allocated before this check. The existing 1 MB connection limit partly constrains it, but it applies cumulatively per connection, not cleanly per request.
+
+Response write errors are ignored
+
+This only checks whether the timeout elapsed:
+
+`rust
+if timeout(config.writetimeout, writeresp(...)).await.iserr()
+`
+
+An inner I/O error is treated as success. Match both levels:
+
+`rust
+match timeout(config.writetimeout, writeresp(&mut socket, &resp)).await {
+    Ok(Ok(())) => {}
+    Ok(Err(e)) => return Err(e),
+    Err() => {
+        debug!("Write timeout");
+        return Ok(());
+    }
+}
+`
+
+Idle timeout does not behave as intended
+
+The read timeout is 5 seconds and returns immediately on timeout, so the 30-second idle timeout is effectively unreachable. Either:
+
+• Treat a read timeout as a loop continuation until total idle time is exceeded, or
+• Remove the separate idle timeout.
+
+Example:
+
+`rust
+Err() => {
+    if lastactivity.elapsed() >= config.idletimeout {
+        return Ok(());
+    }
+    continue;
+}
+`
+
+Add authentication and safer binding defaults
+
+The dashboard allows config writes, and the IPC allows blocking operations, without authentication. CorsLayer::permissive() makes browser-origin attacks easier if bound beyond loopback.
+
+Minimum fixes:
+
+• Bind control interfaces to loopback by default.
+• Require a bearer token or mutually authenticated TLS.
+• Remove permissive CORS unless a separate frontend requires it.
+• Split read-only monitoring routes from administrative routes.
+• Apply request body limits.
+• Reject startup when an admin endpoint is bound publicly without authentication.
+
+Detection pipeline correctness
+Pre-aggregation destroys event data
+
+processeventintopreaggs() does not initialize:
+
+• firsttsns
+• protofp
+
+It also accepts only status codes 100-599, while IpAgg::absorb() maps all values into a bucket with saturating arithmetic.
+
+Then flushpreaggstostore() reconstructs one event per original event with:
+
+`rust
+statuscode: 0,
+protofingerprint: 0,
+timestampns: agg.lasttsns,
+`
+
+This loses the status distribution and first timestamp, performs a potentially huge allocation, and defeats pre-aggregation.
+
+Do not reconstruct events. Refactor the batch processor to consume aggregates directly:
+
+`rust
+fn processeventintopreaggs(&self, ev: ConnectionEvent) {
+    let mut entry = self.preaggs.entry(ev.ip).ordefault();
+    entry.absorb(&ev);
+}
+
+fn flushpreaggstostore(&self) {
+    self.lastpreaggsflushns
+        .store(nowns(), Ordering::Relaxed);
+
+    if self.preaggs.isempty() {
+        return;
+    }
+
+    let aggs: HashMap<IpAddr, IpAgg> = self
+        .preaggs
+        .iter()
+        .map(|entry| (entry.key(), entry.value().clone()))
+        .collect();
+
+    self.preaggs.clear();
+
+    let totalevents = aggs.values().map(|a| u64::from(a.count)).sum();
+    self.metrics.incingested(totalevents);
+
+    let mut subnetcounts = HashMap::<u32, u32>::new();
+    for (ip, agg) in &aggs {
+        if let Some(sk) = subnetkey(ip) {
+            subnetcounts.entry(sk).ordefault() += agg.count;
+        }
+    }
+
+    self.flushaggregates(aggs, subnetcounts, totalevents);
+}
+`
+
+Move the body of flushbatch() into flushaggregates(). This removes the expensive expansion from aggregates back into events.
+
+Event and byte counters can overflow
+
+IpAgg::absorb() uses plain addition:
+
+`rust
+self.count += 1;
+self.bytes += ev.bytes;
+`
+
+Use saturating operations for attacker-controlled volumes:
+
+`rust
+self.count = self.count.saturatingadd(1);
+self.bytes = self.bytes.saturatingadd(ev.bytes);
+self.statusdist[bucket] = self.statusdist[bucket].saturatingadd(1);
+`
+
+Bloom filter can panic with zero bits
+
+BloomFilter::new(0) creates zero words and later performs modulo zero. Validation currently rejects only values below 100,000, but direct construction remains unsafe.
+
+`rust
+pub fn new(bitcount: usize) -> Self {
+    let words = bitcount.max(64).divceil(64);
+    Self {
+        bits: vec![0; words],
+        size: words  64,
+    }
+}
+`
+
+Poisoned RwLock panics the detection thread
+
+These calls panic after lock poisoning:
+
+`rust
+self.bloom.read().unwrap()
+self.bloom.write().unwrap()
+`
+
+Prefer parkinglot::RwLock, or recover explicitly:
+
+`rust
+let bloomhit = self
+    .bloom
+    .read()
+    .unwraporelse(|e| e.intoinner())
+    .contains(ip);
+`
+
+Worker count is ignored
+
+spawnworkers(self, n: usize) always starts exactly one batch processor. Either rename/remove the parameter or implement the configured worker model. Given the single shared pre-aggregation map, one aggregator thread is reasonable, but the configuration should not claim otherwise.
+
+Thread spawn uses expect
+
+Production comments emphasize no panics, but:
+
+`rust
+.spawn(...)
+.expect("spawn batch processor");
+`
+
+Return a Result from spawnworkers and propagate it:
+
+`rust
+pub fn spawnworkers(self: Arc<Self>) -> std::io::Result<()> {
+    let eng = self.clone();
+    std::thread::Builder::new()
+        .name("rs-batch".into())
+        .spawn(move || eng.batchprocessorloop())?;
+    // ...
+    Ok(())
+}
+`
+
+Subnet blocking still performs a full-store scan
+
+A reverse index was implemented in Store, but it is never populated in mergerecord() and never used by subnetbatchloop().
+
+After storing an IP record:
+
+`rust
+self.store.updatesubnetindex(
+    &key,
+    subnetkey(ip),
+    false,
+);
+`
+
+Then replace:
+
+`rust
+for e in self.store.inner().iter() {
+`
+
+with:
+
+`rust
+for key in self.store.getipsinsubnet(sk) {
+    let Some(Value::IpRecord(rec)) = self.store.get(&key) else {
+        continue;
+    };
+    // block rec.ip
+}
+`
+
+Update the index on removal and expiry as well, or it will accumulate stale keys.
+
+Subnet counters are accumulated, not windowed
+
+mergesubnetwindow() adds to totalrps forever until a subnet is blocked and reset. The field is not RPS and not reliably a window. A low, steady rate eventually reaches the threshold.
+
+Store a window start or use per-interval replacement:
+
+`rust
+pub struct SubnetRecord {
+    // ...
+    pub windowevents: u64,
+    pub windowstartedns: u64,
+}
+`
+
+Reset based on ratewindowsecs, not only after blocking.
+
+Rate calculation uses record lifetime, then halves count
+
+The instantaneous rate is:
+
+`rust
+requestcount / (now - firstseen)
+`
+
+Afterward, if the window expired, count is halved and firstseen is reset. This mixes lifetime averaging with an approximate window and produces unstable results.
+
+Calculate batch/window rate from aggregate timestamps:
+
+`rust
+let elapsedns = agg.lasttsns.saturatingsub(agg.firsttsns).max(1);
+let samplerps = agg.count as f64  1000000000.0 / elapsedns as f64;
+rec.ewmarps = ewma(rec.ewmarps, samplerps);
+`
+
+For events sharing one timestamp, use the configured batch window as the minimum denominator.
+
+First timestamps can be zero
+
+Because pre-aggregation fails to initialize firsttsns, a new record may start at epoch zero, making elapsed time enormous and RPS nearly zero. Fixing aggregate preservation resolves this.
+
+Shutdown and lifecycle
+Engine shutdown is not shared with detection
+
+Engine has:
+
+`rust
+shutdown: AtomicBool
+`
+
+But detection receives a new independent value:
+
+`rust
+Arc::new(AtomicBool::new(false))
+`
+
+Therefore engine.shutdown() never stops the detection worker.
+
+Change the engine field to shared state:
+
+`rust
+pub struct Engine {
+    // ...
+    shutdown: Arc<AtomicBool>,
+}
+
+impl Engine {
+    pub fn new(...) -> Self {
+        Self {
+            // ...
+            shutdown: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+`
+
+Then pass:
+
+`rust
+engine.shutdown.clone()
+`
+
+Forecasting has no shutdown path
+
+Forecaster::run() loops forever. Add a cancellation signal, preferably tokioutil::sync::CancellationToken:
+
+`rust
+pub async fn run(self: Arc<Self>, shutdown: CancellationToken) {
+    let mut t1 = tokio::time::interval(Duration::fromsecs(1));
+    let mut t5 = tokio::time::interval(Duration::fromsecs(5));
+
+    loop {
+        tokio::select! {
+             = shutdown.cancelled() => break,
+             = t1.tick() => self.tickhw(&mut hw, &mut history).await,
+             = t5.tick() => self.tickentropy().await,
+        }
+    }
+}
+`
+
+The dashboard, uptime task, TTL wheel, alerting task, and IPC server should use the same cancellation mechanism.
+
+Main shutdown loop always waits until timeout
+
+After calling:
+
+`rust
+engine.shutdown();
+`
+
+this condition remains true forever:
+
+`rust
+while engine.isshuttingdown() && now < deadline
+`
+
+isshuttingdown() reports a requested state, not completion. Track task handles and await completion instead.
+
+A better engine API is:
+
+`rust
+pub struct EngineHandle {
+    joins: Vec<tokio::task::JoinHandle<()>>,
+    shutdown: CancellationToken,
+}
+
+impl EngineHandle {
+    pub async fn shutdown(self) {
+        self.shutdown.cancel();
+        for join in self.joins {
+            let  = join.await;
+        }
+    }
+}
+`
+
+Cache evictor is detached and sleeps for five seconds
+
+Dropping Cache signals shutdown but does not join the thread. The captured Arc<DashMap> keeps storage alive until the sleeper wakes. Store the JoinHandle and use a condition variable or channel for prompt shutdown.
+
+Also, the documented statement "Cache<K,V> is Send + Sync" is fine, but "all operations are lock-free at the DashMap shard level" is inaccurate. DashMap uses sharded locking.
+
+Store and memory accounting
+Replacement RAM accounting is wrong
+
+Current logic:
+
+`rust
+let netgrowth = entrysize.saturatingsub(oldsize);
+self.rambytes.fetchadd(netgrowth, Ordering::Relaxed);
+`
+
+If an entry shrinks, the counter is not reduced. Worse, capacity enforcement only rolls back net-new entries:
+
+`rust
+if oldsize == 0 && current + netgrowth > ramlimitbytes
+`
+
+A larger replacement can exceed the RAM limit.
+
+Use signed adjustment and restore the old entry on failure:
+
+`rust
+pub fn insert(
+    &self,
+    key: String,
+    value: Value,
+    ttlsecs: Option<u64>,
+    ramlimitbytes: usize,
+) -> Result<()> {
+    let expiresat = ttlsecs.map(|s| Instant::now() + Duration::fromsecs(s));
+    let newentry = Entry {
+        value,
+        expiresat,
+        version: 0,
+    };
+
+    let keybytes = key.len();
+    let newsize =
+        keybytes + std::mem::sizeof::<Entry>() + newentry.value.heapbytes();
+
+    let old = self.inner.insert(key.clone(), newentry);
+    let oldsize = old.asref().mapor(0, |entry| {
+        keybytes + std::mem::sizeof::<Entry>() + entry.value.heapbytes()
+    });
+
+    let current = self.rambytes.load(Ordering::Acquire);
+    let projected = current
+        .saturatingsub(oldsize)
+        .saturatingadd(newsize);
+
+    if projected > ramlimitbytes {
+        match old {
+            Some(oldentry) => {
+                self.inner.insert(key, oldentry);
+            }
+            None => {
+                self.inner.remove(&key);
+            }
+        }
+        return Err(RsError::CapacityExceeded {
+            limitmb: ramlimitbytes / (1024  1024),
+        });
+    }
+
+    self.rambytes.store(projected, Ordering::Release);
+    self.totalinserts.fetchadd(1, Ordering::Relaxed);
+    Ok(())
+}
+`
+
+For strict correctness under concurrent inserts, this requires reservation via fetchupdate, a mutex around budget accounting, or a permit-based allocator. The load/store version can lose updates.
+
+increment() bypasses all accounting and limits
+
+increment() creates entries without increasing rambytes, without honoring TTL or capacity, and without incrementing totalinserts.
+
+Route all creation through a consistent accounting path, or document increment() as internal and include its storage in the budget.
+
+Lazy expiration does not remove entries
+
+Store::get() returns None for expired entries but leaves them in the map and RAM count:
+
+`rust
+if entry.isexpired() {
+    return None;
+}
+`
+
+Remove atomically:
+
+`rust
+pub fn get(&self, key: &str) -> Option<Value> {
+    if let Some(entry) = self.inner.get(key) {
+        if !entry.isexpired() {
+            return Some(entry.value.clone());
+        }
+    }
+
+    if let Some((k, entry)) =
+        self.inner.removeif(key, |, entry| entry.isexpired())
+    {
+        let freed =
+            k.len() + std::mem::sizeof::<Entry>() + entry.value.heapbytes();
+        self.rambytes.fetchsub(freed, Ordering::Relaxed);
+        self.totalevictions.fetchadd(1, Ordering::Relaxed);
+    }
+
+    None
+}
+`
+
+Cache count can underflow during concurrent expiry
+
+In Cache::get(), after dropping the map reference:
+
+`rust
+self.inner.remove(key);
+self.count.fetchsub(1, Ordering::Relaxed);
+`
+
+Another thread may already have removed the key. Decrement only when removal succeeds:
+
+`rust
+if self.inner.remove(key).issome() {
+    self.count.fetchsub(1, Ordering::Relaxed);
+}
+`
+
+The background evictor and clear() can also race, making the approximate counter wrap to a huge u64. If only approximate size is required, use inner.len(); otherwise update count through atomic removal paths with stronger invariants.
+
+Cache capacity is unused
+
+capacity is only exposed by an accessor. Inserts can grow without bound. Either rename it capacityhint, or enforce it.
+
+A simple policy:
+
+`rust
+if old.isnone() && self.inner.len() > self.capacity {
+    // Evict expired entries first, then reject or evict according to policy.
+}
+`
+
+For a real cache, choose and document an eviction strategy such as LRU, TinyLFU, or random sampling.
+
+Nanosecond epoch conversion truncates
+
+`rust
+d.asnanos() as u64
+`
+
+This wraps after the value exceeds u64. Current epoch nanoseconds fit, but a safe conversion is:
+
+`rust
+u64::tryfrom(d.asnanos()).unwrapor(u64::MAX)
+`
+
+A monotonic Instant is preferable for TTL calculations because wall-clock adjustments can cause premature or delayed expiration.
+
+Metrics and observability
+Detection blocks are double-accounted across paths
+
+flushbatch() calls recordblock() for each block and later recordbatch() increments blocksdetection by the batch block count. That is acceptable only because recordblock() currently updates the log but not counters. Meanwhile blockstotal and incblocks() are mostly unused.
+
+Define one canonical counter update point:
+
+`rust
+pub fn recordblock(&self, ip: &str, reason: &str, module: BlockModule) {
+    self.blockstotal.fetchadd(1, Ordering::Relaxed);
+    match module {
+        BlockModule::Detection => {
+            self.blocksdetection.fetchadd(1, Ordering::Relaxed);
+        }
+        BlockModule::Subnet => {
+            self.blockssubnet.fetchadd(1, Ordering::Relaxed);
+        }
+        BlockModule::Forecast => {
+            self.blocksforecast.fetchadd(1, Ordering::Relaxed);
+        }
+    }
+    // append log
+}
+`
+
+Then remove block counter increments from recordbatch() and forecasting/subnet call sites.
+
+Blocks are logged before they are applied
+
+The broadcast sends decisions, but no block consumer is shown. Detection logs and increments block metrics before any state change. Consequently:
+
+• blocksapplied rises.
+• StoreStats.blocked stays zero.
+• CheckIp reports unblocked.
+• Repeated decisions can be emitted.
+
+Add a block-applier task that consumes BlockDecision, updates IpRecord.blockstate, schedules TTL, appends WAL, and only then records an applied block.
+
+A clean flow is:
+
+`mermaid
+flowchart LR
+    A[Detection or forecasting] --> B[BlockDecision channel]
+    B --> C[Block applier]
+    C --> D[Store state]
+    C --> E[TTL wheel]
+    C --> F[WAL]
+    C --> G[Applied-block metrics]
+`
+
+Dashboard module statistics are placeholders
+
+Engine::getmodulestats() returns zeros despite Metrics::getmodulestatsdata() already existing. Replace it:
+
+`rust
+pub fn getmodulestats(&self) -> Vec<ModuleStats> {
+    let stats = self.store.getstats();
+    self.metrics.getmodulestatsdata(
+        stats.uptimesecs,
+        self.metrics.eventsingested.load(Ordering::Relaxed),
+        0,
+        stats.ipstracked,
+        stats.rambytes,
+        stats.ramlimitmb,
+    )
+}
+`
+
+Channel depth should be wired from detection rather than hardcoded to zero.
+
+System memory metric is mislabeled
+
+getsystemusage() returns total system memory:
+
+`rust
+let totalmemorymb = sys.totalmemory()
+`
+
+But the dashboard field is named memoryusagemb. Use process memory if supported by the selected sysinfo version, or rename it to systemmemorytotalmb.
+
+Health is always healthy
+
+dashboardsnapshot() hardcodes:
+
+`rust
+ishealthy: true,
+healthreason: "running".into(),
+`
+
+Health should consider:
+
+• Engine shutdown state.
+• IPC bind/start success.
+• Queue saturation.
+• Detection worker liveness.
+• Forecast task liveness.
+• RAM pressure.
+• WAL write failures.
+• Recent processing progress.
+
+Forecast input is not RPS
+
+eventslastsecond receives the latest flush's event count. Flushes are configured around 1 second currently, but can occur due to size or timing. Convert using measured interval:
+
+`rust
+rps = eventcount as f64 / elapsedseconds
+`
+
+Store both the count and the measurement duration, or maintain a rolling per-second counter.
+
+Alert entropy condition appears inverted
+
+Alerting warns when:
+
+`rust
+entropy >= entropyalertthreshold
+`
+
+Forecasting treats low entropy as suspicious:
+
+`rust
+if h < minentropy
+`
+
+Unless these are intentionally different alerts, alerting should likely check entropy <= threshold.
+
+Configuration and dashboard
+Runtime config updates skip validation
+
+apisetconfig() stores the patched configuration directly. Invalid shard counts, zero thresholds, or impossible timeouts can be introduced.
+
+Validate before storing and return a useful error. The response type needs an error field or separate error response:
+
+`rust
+#[derive(Serialize)]
+struct ConfigResponse {
+    ok: bool,
+    config: Option<Config>,
+    error: Option<String>,
+}
+`
+
+`rust
+if let Err(error) = cfg.validate() {
+    return (
+        StatusCode::BADREQUEST,
+        Json(ConfigResponse {
+            ok: false,
+            config: None,
+            error: Some(error.tostring()),
+        }),
+    );
+}
+
+eng.config.store(Arc::new(cfg.clone()));
+`
+
+Patches replace entire sections
+
+ConfigPatch uses complete EngineConfig, DetectionConfig, etc. A client changing one detection property must supply all required properties.
+
+Create dedicated patch structs with optional fields:
+
+`rust
+#[derive(Debug, Deserialize)]
+pub struct DetectionPatch {
+    pub rpsthreshold: Option<u64>,
+    pub blockttlsecs: Option<u64>,
+    pub promoteminevents: Option<u32>,
+}
+`
+
+Apply only provided fields.
+
+Live config does not reach the actual pipeline
+
+bootpipeline() creates a new independent handle:
+
+`rust
+let cfghandle = cfgsnapshot.clone().intohandle();
+`
+
+Dashboard updates engine.config, but detection reads the separate cfghandle. Therefore dashboard configuration changes appear successful but do not affect detection.
+
+Pass engine.config.clone() directly:
+
+`rust
+let detection = Arc::new(DetectionEngine::new(
+    store.clone(),
+    engine.config.clone(),
+    // ...
+));
+`
+
+Forecasting currently owns a static ForecastingConfig; make it read the shared config handle if live updates are advertised.
+
+IPC defaults behave inconsistently
+
+IpcConfig::default() sets optional limits to None, despite serde defaults producing Some(...) when fields are absent during deserialization. Thus:
+
+• Config::default() yields None.
+• Deserializing an empty [ipc] can yield Some(default).
+
+The server compensates with unwrapor, but serialized config differs depending on construction path. Set explicit defaults consistently:
+
+`rust
+maxconnectionbytes: defaultmaxconnectionbytes(),
+readtimeoutms: defaultreadtimeoutms(),
+writetimeoutms: defaultwritetimeoutms(),
+connectionidletimeoutms: defaultconnectionidletimeoutms(),
+`
+
+Better yet, make these non-optional values.
+
+Environment parsing silently ignores invalid values
+
+Silently retaining defaults can hide deployment mistakes. Return an error containing the variable name:
+
+`rust
+fn envparse<T>(name: &str) -> anyhow::Result<Option<T>>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match std::env::var(name) {
+        Ok(value) => value
+            .parse()
+            .map(Some)
+            .maperr(|e| anyhow::anyhow!("{name}={value:?}: {e}")),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+`
+
+Validate all denominator and wheel fields
+
+Missing validation includes:
+
+• ratewindowsecs > 0
+• ttlwheelresolutionms > 0
+• ttlwheelsize > 0
+• preaggsflushintervalms > 0
+• hwbeta and hwgamma in [0,1]
+• minentropy >= 0
+• IPC byte and timeout values greater than zero
+• WAL segment size greater than header size
+
+TtlWheel::new(0, 0) currently enables division or modulo by zero.
+
+Dashboard has DOM XSS exposure
+
+The frontend inserts API-controlled strings into innerHTML, including IP, reason, module, and labels:
+
+`javascript
+tb.innerHTML = blocks.map(b => ...${b.reason}...).join('');
+`
+
+Those values may originate from user-provided manual block reasons. Use DOM APIs and textContent, or escape HTML before interpolation.
+
+At minimum:
+
+`javascript
+const escapeHtml = value => String(value)
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;')
+  .replaceAll("'", '&#039;');
+`
+
+Then escape every interpolated string. DOM construction with textContent is safer.
+
+WAL, audit logs, and persistence
+WAL always opens segment zero
+
+On restart, Wal::open() appends to wal-00000000.rshw and initializes seg to zero even if later segments exist. It should discover the highest valid segment and append there.
+
+Also, segment rotation after writing means a record can exceed the configured maximum. Rotate before append when the current non-empty segment plus record size would exceed the limit.
+
+Segment sorting should be numeric
+
+Lexicographic sorting happens to work with eight-digit names until the index exceeds the width. Parse segment indices and sort numerically.
+
+WAL replay silently tolerates partial trailing headers
+
+The loop stops when fewer than HEADER bytes remain and reports success. This may be intentional crash recovery, but it conflicts with the corruption test expectation for arbitrary short garbage. Define policy explicitly:
+
+• Ignore only a trailing partial record in the final segment.
+• Reject malformed data in non-final segments.
+• Return replay warnings/repair metadata.
+
+Audit logging blocks async-adjacent execution
+
+AlertingEngine::writeauditlog() performs synchronous open and write for every alert. Although maybealert() itself is synchronous, it is called from an async task and can block the runtime.
+
+Use a dedicated writer task/channel, keep the file open, emit JSON Lines, and implement the promised rotation. The current module documentation says "audit log rotation", but no rotation exists.
+
+For compliance claims, also add:
+
+• Tamper evidence or signed hashes.
+• Restricted file permissions.
+• Retention policy.
+• Structured event IDs.
+• Actor and outcome fields.
+• Clock/source metadata.
+
+The comment "ISO 27001 compliant" should be removed; an enum cannot itself establish compliance.
+
+Blob store trusts handle lengths
+
+BlobStore::read() allocates compressedlen bytes directly. If handles can be loaded from untrusted persistence, enforce maximum compressed and original sizes and verify originallen against decompressed output.
+
+Forecasting, DNS, and learning
+Holt-Winters anomaly logic compares actual against updated forecast
+
+update(y) consumes the actual value and returns a forecast after incorporating it. The anomaly score then compares that same actual value to the post-update forecast, dampening anomalies.
+
+Forecast first, score residual, then update the model:
+
+`rust
+pub fn forecast(&self) -> f64 {
+    let seasonal = self.seasonal[self.tick % self.period];
+    (self.level + self.trend + seasonal).max(0.0)
+}
+`
+
+In the tick:
+
+`rust
+let forecast = hw.forecast();
+let z = hw.zscore(rps, forecast, hist.std().max(1.0));
+hw.update(rps);
+hist.push(rps);
+`
+
+History should preferably contain residuals, not raw RPS, for the z-score denominator.
+
+Disabled forecasting is ignored
+
+ForecastingConfig.enabled is validated and configurable, but bootpipeline() always starts the forecaster. Guard startup or let the task observe live configuration.
+
+Entropy data represents only the latest flush
+
+subnetwindow is replaced on each flush. If flush cadence varies, entropy samples are incomparable. Aggregate into a fixed time window.
+
+DNS pattern matching is overly broad
+
+This logic:
+
+`rust
+domain.contains("com")
+`
+
+classifies any string containing "com" as generic, including unrelated labels. Parse domain labels and public suffixes rather than substring matching.
+
+Likewise, "bot" in a legitimate domain automatically yields at least 0.9 threat. This is prone to false positives. Normalize case, handle internationalized names, and base scoring on labels and observed behavior.
+
+DNS recency score is always added
+
+lastseen is set to SystemTime::now() immediately before calculating the score, so the recent-activity +0.1 always applies. If that is intended, it is not a useful feature. Score inactivity relative to a previous timestamp before updating it.
+
+Pattern similarity is not meaningful sequence similarity
+
+This code:
+
+`rust
+a.iter().filter(|&x| b.contains(x)).count()
+`
+
+counts repeated bytes in a whenever each byte exists anywhere in b. It ignores order and frequency in b, and can produce misleadingly high similarity.
+
+For byte-pattern detection, consider:
+
+• Normalized edit distance.
+• N-gram Jaccard similarity.
+• Cosine similarity over byte-frequency vectors.
+• SimHash/MinHash for approximate matching.
+
+Also cap sourceips, bytepatterns, and entropyhistory; currently they can grow indefinitely.
+
+Threat averaging is biased
+
+For a new pattern:
+
+`rust
+threatlevel = (0.0 + threatlevel) / 2.0
+`
+
+The first observation is halved. Subsequent updates are an exponential average with fixed 0.5 weighting, not a true average.
+
+Use:
+
+`rust
+let previouscount = pattern.frequency;
+pattern.frequency += 1;
+pattern.threatlevel =
+    (pattern.threatlevel * previouscount as f32 + threatlevel)
+    / pattern.frequency as f32;
+`
+
+Stub modules should be clearly marked or removed
+
+These functions return constant zero:
+
+`rust
+engine::learning::score()
+learning::xgboost::score()
+`
+
+preprocess::normalize() returns input unchanged, and PredictionEngine::trainmodel() sets accuracy to 0.95 without training.
+
+Do not expose these as working ML features. Either implement them, feature-gate them as experimental, or return an explicit unsupported error.
+
+Smaller correctness and quality issues
+• BoundedVecDeque::new(0) is broken. push() sees length equal to capacity, pops nothing, then pushes and grows. Reject zero or make pushes no-op.
+• Duplicate cache documentation appears above get().
+• src/c.txt contains stray content and should be removed.
+• README is stale. It says storage is only foundational and Bloom integration is pending, while both exist. It also advertises port 7891 although dashboard defaults to 9999.
+• README claims zero allocation, but aggregation creates multiple maps/vectors and pre-aggregation reconstructs events.
+• main silently ignores unknown CLI arguments. Use clap for the daemon too.
+• canonicalize(...).tostr().unwrap() can panic on non-UTF-8 paths. Accept Path/PathBuf in config loading.
+• Panic hook is never installed. Call ramshield::installpanichook() at startup if desired.
+• Engine::start() is a misleading no-op. Remove it or rename it to reflect that it only logs.
+• startasync() uses a current-thread runtime, while spawning long-lived tasks and a server. This can work, but one accidental blocking operation stalls the whole pipeline.
+• DashboardSnapshot.channeldepth and pipeline values are hardcoded. Either populate them or omit them.
+• Hot subnets are unsorted and unbounded. Sort descending and cap the result.
+• Audit alert history uses Vec::remove(0), which is O(n). Use VecDeque.
+• Alert cooldown multiplication can overflow. Use saturatingmul(1000).
+• Status code bucketing is inconsistent between IpAgg::absorb() and pre-aggregation.
+• TTL zero semantics conflict. Cache uses zero as "never expire"; store uses zero as "expire immediately". Standardize or document clearly.
+• BlockState::Suspicious is treated inconsistently across code paths.
+• CORS should not be permissive on config mutation routes.
+• Google Fonts adds an external runtime dependency and may violate restricted-network deployments or privacy expectations.
+
+Recommended implementation order
+Phase 1: Make behavior truthful and safe
+Fix missing alerting types or remove the module.
+Reject invalid IP addresses.
+Implement actual block/unblock/flush operations.
+Add the block-applier consumer and update store state before metrics.
+Share one shutdown token across all workers.
+Validate dashboard config patches.
+Remove permissive CORS and add authentication.
+Replace blocking channel sends with trysend.
+
+Phase 2: Restore detection correctness
+Process IpAgg directly without event reconstruction.
+Preserve first timestamp, status distribution, bytes, and fingerprint.
+Replace lifetime-average RPS with fixed-window samples.
+Make subnet counters truly windowed.
+Populate and use the subnet reverse index.
+Fix forecasting input units and pre-update residual scoring.
+
+Phase 3: Fix memory and persistence
+Correct replacement RAM accounting.
+Remove expired entries on access.
+Bring increment() under accounting.
+Enforce or remove cache capacity.
+Join background threads during shutdown.
+Discover the latest WAL segment on startup.
+Add bounded allocation checks to WAL/blob replay.
+
+Phase 4: Align observability and product claims
+Centralize block metrics.
+Use real module statistics.
+Implement meaningful health checks.
+Mark ML and DNS heuristics as experimental.
+Update README architecture, ports, and performance claims.
+
+Essential regression tests
+
+Add tests for these exact cases:
+
+• Invalid IP requests return an error and never touch 0.0.0.0.
+• Manual block changes CheckIp, GetIpStats`, and store statistics.
+• Unblock reverses that state.
+• Detection shutdown terminates its OS thread.
+• Forecaster stops on cancellation.
+• Pre-aggregation preserves first/last timestamps and status buckets.
+• Store replacement with a smaller value reduces RAM usage.
+• Store replacement with a larger value respects the RAM limit and restores the old value on failure.
+• Concurrent lazy expiration never underflows counters.
+• Runtime config patch rejects invalid values.
+• Runtime config changes are observed by detection.
+• Oversized IPC batches are rejected rather than truncated.
+• Failed writes terminate a connection cleanly.
+• Subnet block lookup uses the reverse index.
+• WAL restart continues from the latest segment.
+• Dashboard renders hostile block reasons as text, not HTML.
+
+The most important architectural change is to make block decisions flow through one authoritative block-applier, and to make all pipeline components share one configuration handle and one shutdown token. Those changes resolve many of the current inconsistencies at once.

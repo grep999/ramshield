@@ -1,0 +1,38 @@
+[engine]
+shard_count = 256
+worker_threads = 4
+ram_limit_mb = 1024
+
+[storage]
+wal_enabled = true
+wal_sync = "none"
+wal_segment_bytes = 67108864
+wal_path = "/tmp/ramshield_debug_wal"
+wal_compress = true
+
+[detection]
+rps_threshold = 10
+rate_window_secs = 5
+subnet_batch_threshold = 2
+batch_block_enabled = true
+block_ttl_secs = 300
+ttl_wheel_resolution_ms = 100
+ttl_wheel_size = 36000
+bloom_bits = 1000000
+history_cap = 16
+pattern_similarity_threshold = 0.5
+batch_max_events = 1024
+batch_window_ms = 10
+promote_min_events = 2
+subnet_window_threshold = 50
+
+[forecasting]
+enabled = false
+
+[ipc]
+tcp_addr = "127.0.0.1:7890"
+max_connections = 128
+
+[dashboard]
+enabled = true
+http_addr = "127.0.0.1:9999"

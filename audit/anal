@@ -1,0 +1,114 @@
+Here is an analysis of the RamShield codebase, detailing its data flows, module interconnections, and proposed architectural improvements.
+
+## 1. Module Connections & Architecture
+
+The RamShield codebase is built as a highly modular, multi-crate Rust workspace designed for high-performance network threat mitigation.
+
+* **`ramshield-ipc` / `ramshield-xdp` (Ingestion & Enforcement):**
+* The IPC module acts as the userland entry point, accepting JSON payloads over TCP for connection events and control commands.
+
+
+* The XDP module (using Aya) acts as the kernel-level enforcement point, dropping packets at the network interface based on eBPF blocklists.
+
+
+
+
+* **`ramshield-detection` (Core Processing):**
+* Acts as the central router for traffic evaluation.
+
+
+* It maintains in-memory batch pre-aggregations (`DashMap<IpAddr, IpAgg>`) and a Bloom filter for fast path filtering.
+
+
+
+
+* **`ramshield-forecasting` & `ramshield-learning` (Intelligence):**
+* The forecasting module runs asynchronously, reading lightweight traffic counters from the storage layer to calculate Holt-Winters anomaly Z-scores and Shannon entropy without locking the main database.
+
+
+* The learning module processes payloads using byte-frequency cosine similarity to identify repeating attack signatures.
+
+
+
+
+* **`ramshield-storage` (State Management):**
+* A sharded, concurrent `DashMap` holding `IpRecord` and `SubnetRecord` states.
+
+
+* It integrates a Write-Ahead Log (WAL) for durability, a TTL wheel for lazy eviction, and strict RAM-limit enforcement logic.
+
+
+
+
+* **`ramshield-consensus` & `ramshield-compliance` (Enterprise Features):**
+* Consensus replicates block decisions across a distributed cluster using Raft.
+
+
+* Compliance maintains cryptographically verifiable Merkle-tree audit logs of blocks and handles GDPR erasure requests.
+
+
+
+
+
+---
+
+## 2. Core Data Flow: The Lifecycle of an Event
+
+The system prioritizes batching and lock-free concurrency to handle high request rates.
+
+1. **Ingestion:** A network agent sends a `ReportConnections` JSON batch to the `IpcServer` via a TCP socket.
+
+
+2. **Queueing:** The IPC server parses the batch and pushes individual `ConnectionEvent` structs into a `crossbeam_channel::bounded` queue.
+
+
+3. **Pre-Aggregation (Thread-Local):** A dedicated OS thread (`rs-batch`) drains the channel into a local `DashMap<IpAddr, IpAgg>`. This collapses thousands of raw requests from the same IP into a single aggregated counter (tracking bytes, status codes, and timestamps).
+
+
+4. **Promotion & Storage Merging:** When the batch window expires or size thresholds are met, the engine flushes the aggregates.
+
+
+* Events from IPs that do not meet the `promote_min_events` threshold (and are not in hot subnets or the Bloom filter) are dropped to save RAM ("cold skipped").
+
+
+* Promoted IPs are merged into the global `Store`, updating their Exponentially Weighted Moving Average (EWMA) RPS and threat scores.
+
+
+
+
+5. **Block Emitting:** If the EWMA RPS exceeds the configured threshold, or if the forecasting module detects an anomaly, a `BlockDecision` is generated. This decision is broadcast via a `tokio::sync::broadcast` channel to alerting, IPC, and XDP listeners.
+
+
+
+---
+
+## 3. Proposed Improvements
+
+While the architecture is highly scalable, several bottlenecks and structural gaps are present in the current implementation.
+
+### Performance & Memory Optimizations
+
+* **Remove String Allocations for IP Keys:** The `Store` uses `String` as the key for its `DashMap` (`pub fn ip_key(ip: IpAddr) -> String`). Converting `IpAddr` to a string on every lookup and insertion causes massive heap allocation overhead. **Improvement:** Change the key type to `std::net::IpAddr` or a packed `u128` integer.
+
+
+* **Binary IPC Protocol:** The `IpcServer` relies on parsing JSON for high-frequency events (`ReportConnection`). **Improvement:** Introduce a binary framing protocol (like Protobuf, Cap'n Proto, or `bincode`) over UDP or Unix Domain Sockets for the hot path.
+
+
+* **Asynchronous WAL I/O:** The Write-Ahead Log uses a blocking `BufWriter` with inline LZ4 compression on the main thread during insertions (`g.writer.write_all`). **Improvement:** Move WAL compression and disk synchronization to a dedicated asynchronous background thread to prevent latency spikes during high-load I/O flushes.
+
+
+
+### Structural & Logic Enhancements
+
+* **Wire the XDP Stub:** The `XdpManager` is initialized but the `sync_blocklist` function is marked as a stub (`tracing::debug!("Blocklist sync triggered (stub)");`). **Improvement:** Subscribe the `XdpManager` to the `block_tx` broadcast channel so that kernel eBPF maps are automatically populated when the detection engine issues a block.
+
+
+* **Fix Subnet Batch Concurrency Bug:** In `DetectionEngine::subnet_batch_loop`, the engine scans the reverse `subnet_index` to block IPs, but iterates over `ip_keys` while holding a read lock, potentially deadlocking if the main thread attempts to update the index simultaneously. **Improvement:** Clone the relevant IP keys before iterating, or use lock-free read-copy-update (RCU) mechanisms.
+
+
+* **Refine the Learning Module:** The `PatternLearner` limits itself to storing `MAX_PATTERNS` and uses a basic FNV-1a hash of the first 256 bytes for identity. Attack payloads often have variable paddings. **Improvement:** Implement rolling hashes (like Rabin-Karp) or fuzzy hashing (like ssdeep) for payload fingerprinting rather than strict byte prefixes.
+
+
+
+---
+

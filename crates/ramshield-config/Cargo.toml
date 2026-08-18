@@ -1,0 +1,14 @@
+[package]
+name = "ramshield-config"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ramshield-types = { path = "../ramshield-types" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+arc-swap = "1"
+anyhow = "1"
+
+[lints]
+workspace = true

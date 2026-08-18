@@ -3,10 +3,10 @@ pub mod batch;
 pub mod rate_tracker;
 
 use crate::config::{ConfigHandle, DetectionConfig};
-use crate::detection::batch::{aggregate, ip_in_subnet, subnet_key, subnet_prefix, IpAgg};
+use crate::detection::batch::{aggregate, subnet_key, subnet_prefix, IpAgg};
 use crate::detection::rate_tracker::{ewma, is_exceeded};
 use crate::metrics::Metrics;
-use crate::storage::{ip_key, BlockReason, BlockState, IpRecord, Store, Value};
+use crate::storage::{BlockReason, BlockState, IpRecord, Store, Value};
 use crate::util::BoundedVecDeque;
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use dashmap::DashMap;
@@ -360,8 +360,7 @@ impl DetectionEngine {
     }
 
     fn is_blocked(&self, ip: IpAddr) -> bool {
-        let key = ip_key(ip);
-        match self.store.get(&key) {
+        match self.store.get(&ip) {
             Some(Value::IpRecord(r)) => matches!(r.block_state, BlockState::Blocked { .. }),
             _ => false,
         }
@@ -376,8 +375,7 @@ impl DetectionEngine {
         ram_lim: usize,
         now: u64,
     ) -> (f64, f32, bool) {
-        let key = ip_key(ip);
-        let mut rec = match self.store.get(&key) {
+        let mut rec = match self.store.get(&ip) {
             Some(Value::IpRecord(r)) => r,
             _ => IpRecord {
                 ip,
@@ -431,9 +429,9 @@ impl DetectionEngine {
 
         if let Err(e) = self
             .store
-            .insert(key.clone(), Value::IpRecord(rec), None, ram_lim)
+            .insert(ip, Value::IpRecord(rec), None, ram_lim)
         {
-            warn!("Failed to insert IP record for {}: {}", key.clone(), e);
+            warn!("Failed to insert IP record for {}: {}", ip, e);
         }
         (ewma_rps, threat, block)
     }
@@ -472,27 +470,30 @@ impl DetectionEngine {
                     "Batch block /24 {:?}.{}.{} ({} events/window)",
                     prefix[0], prefix[1], prefix[2], count
                 );
-                for e in self.store.inner().iter() {
-                    let Value::IpRecord(ref r) = e.value().value else {
-                        continue;
-                    };
-                    if matches!(r.block_state, BlockState::Blocked { .. }) {
-                        continue;
+                let subnet_str = format!("{}.{}.{}.0/24", prefix[0], prefix[1], prefix[2]);
+                info!("Batch blocking subnet {}", subnet_str);
+                
+                // O(1) lookup for IPs in the hot subnet instead of full scan
+                let ips_in_subnet = self.store.get_ips_in_subnet(sk);
+                for key in ips_in_subnet {
+                    if let Some(e) = self.store.inner().get(&key) {
+                        if let Value::IpRecord(ref r) = e.value().value {
+                            if matches!(r.block_state, BlockState::Blocked { .. }) {
+                                continue;
+                            }
+
+                            // No need to check ip_in_subnet again, we know it is.
+                            let _ = self.block_tx.send(BlockDecision {
+                                ip: r.ip,
+                                reason: BlockReason::SubnetBatch,
+                                ttl_secs: Some(cfg.detection.block_ttl_secs),
+                                batch_subnet: Some(prefix),
+                            });
+                            self.metrics.record_block(&r.ip.to_string(), "subnet_batch", "detection");
+                            self.metrics.blocks_subnet.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
-                    if !ip_in_subnet(r.ip, prefix) {
-                        continue;
-                    }
-                    let _ = self.block_tx.send(BlockDecision {
-                        ip: r.ip,
-                        reason: BlockReason::SubnetBatch,
-                        ttl_secs: Some(cfg.detection.block_ttl_secs),
-                        batch_subnet: Some(prefix),
-                    });
-                    self.metrics
-                        .record_block(&r.ip.to_string(), "subnet_batch", "detection");
-                    self.metrics
-                        .blocks_subnet
-                        .fetch_add(1, Ordering::Relaxed);
+
                 }
                 self.store.reset_subnet_window(sk);
             }
@@ -542,7 +543,7 @@ mod tests {
             })
             .collect();
         eng.flush_batch(&events);
-        assert!(eng.store.get(&ip_key(ip)).is_some());
+        assert!(eng.store.get(&ip).is_some());
     }
 
     #[test]
@@ -556,6 +557,6 @@ mod tests {
             status_code: 200,
             proto_fingerprint: 0,
         }]);
-        assert!(eng.store.get(&ip_key(ip)).is_none());
+        assert!(eng.store.get(&ip).is_none());
     }
 }

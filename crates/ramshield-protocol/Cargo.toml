@@ -1,0 +1,18 @@
+[package]
+name = "ramshield-protocol"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ramshield_protocol"
+
+[dependencies]
+serde      = { version = "1", features = ["derive"] }
+bincode    = "1"
+crc32fast  = "1"
+
+[dev-dependencies]
+proptest   = "1"
+
+[lints]
+workspace = true

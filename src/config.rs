@@ -11,7 +11,8 @@ pub struct Config {
     #[serde(default)] pub storage:     StorageConfig,
     #[serde(default)] pub ipc:         IpcConfig,
     #[serde(default)] pub forecasting: ForecastingConfig,
-    #[serde(default)] pub dashboard:   DashboardConfig,
+    #[serde(default)] pub alerting: AlertingConfig,
+    #[serde(default)] pub dashboard: DashboardConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +141,23 @@ impl Default for ForecastingConfig {
             seasonality_period: 3_600, anomaly_zscore: 2.5, min_entropy: 2.0,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertingConfig {
+    #[serde(default)] pub enabled:                bool,
+    #[serde(default = "default_rps_alert_threshold")] pub rps_alert_threshold: u64,
+    #[serde(default = "default_entropy_alert_threshold")] pub entropy_alert_threshold: f64,
+    #[serde(default = "default_alert_cooldown_secs")] pub alert_cooldown_secs: u64,
+    #[serde(default)] pub audit_log_enabled:      bool,
+    #[serde(default = "default_audit_log_path")] pub audit_log_path: String,
+}
+fn default_rps_alert_threshold() -> u64 { 10_000 }
+fn default_entropy_alert_threshold() -> f64 { 4.0 }
+fn default_alert_cooldown_secs() -> u64 { 60 }
+fn default_audit_log_path() -> String { "./audit_log.jsonl".into() }
+impl Default for AlertingConfig {
+    fn default() -> Self { Self { enabled: false, rps_alert_threshold: default_rps_alert_threshold(), entropy_alert_threshold: default_entropy_alert_threshold(), alert_cooldown_secs: default_alert_cooldown_secs(), audit_log_enabled: false, audit_log_path: default_audit_log_path() } }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

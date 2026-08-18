@@ -45,8 +45,7 @@ fn bench_store_insert(c: &mut Criterion) {
         let ram_limit = 64 * 1024 * 1024;
         b.iter(|| {
             let ip = random_ip(i);
-            let key = ip.to_string();
-            let _ = store.insert(key, Value::from_bytes(&[0u8; 48]), None, ram_limit);
+            let _ = store.insert(ip, Value::from_bytes(&[0u8; 48]), None, ram_limit);
             i += 1;
             black_box(&store);
         });
@@ -56,14 +55,14 @@ fn bench_store_insert(c: &mut Criterion) {
         let store = Store::new(10_000_000);
         let ram_limit = 64 * 1024 * 1024;
         let _ = store.insert(
-            "1.2.3.4".into(),
+            "1.2.3.4".parse().unwrap(),
             Value::from_bytes(&[0u8; 48]),
             None,
             ram_limit,
         );
         b.iter(|| {
             let _ = store.insert(
-                "1.2.3.4".into(),
+                "1.2.3.4".parse().unwrap(),
                 Value::from_bytes(&[0u8; 48]),
                 None,
                 ram_limit,
@@ -76,7 +75,7 @@ fn bench_store_insert(c: &mut Criterion) {
         let mut i = 0usize;
         b.iter(|| {
             let ip = random_ip(i);
-            black_box(store.increment(&ip.to_string(), 1));
+            black_box(store.increment(ip, 1));
             i += 1;
         });
     });
@@ -87,7 +86,7 @@ fn bench_store_insert(c: &mut Criterion) {
             let store = Store::new(100);
             for i in 0..100 {
                 let _ = store.insert(
-                    format!("10.0.0.{}", i),
+                    random_ip(i),
                     Value::from_bytes(&[0u8; 48]),
                     None,
                     ram_limit,
@@ -95,7 +94,7 @@ fn bench_store_insert(c: &mut Criterion) {
             }
             // 101st insert should fail
             let res = store.insert(
-                "10.0.1.0".into(),
+                "10.0.1.0".parse().unwrap(),
                 Value::from_bytes(&[0u8; 48]),
                 None,
                 ram_limit,

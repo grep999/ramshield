@@ -55,6 +55,8 @@ pub enum Response {
     },
     Ok {
         message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        state: Option<String>,
     },
     BatchOk {
         accepted: u32,

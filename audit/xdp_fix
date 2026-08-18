@@ -1,0 +1,108 @@
+//! RamShield eBPF / XDP Data Plane Acceleration
+//!
+//! Kernel-level packet drop for known-bad IPs using XDP (eXpress Data Path).
+//! Uses Aya (Rust eBPF library) to load and manage XDP programs.
+
+use aya::{
+    maps::HashMap,
+    programs::Xdp,
+    Bpf,
+};
+use ramshield_storage::Store;
+use std::net::IpAddr;
+use std::sync::Arc;
+use thiserror::Error;
+
+/// XDP-related errors.
+#[derive(Debug, Error)]
+pub enum XdpError {
+    #[error("bpf error: {0}")]
+    Bpf(#[from] aya::BpfError),
+    #[error("map error: {0}")]
+    Map(String),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("verifier error: {0}")]
+    Verifier(String),
+}
+
+/// XDP blocklist key (IPv4 or IPv6 packed as u128 for BPF map).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BlocklistKey(pub u128);
+
+impl BlocklistKey {
+    pub fn from_ip(ip: IpAddr) -> Self {
+        match ip {
+            IpAddr::V4(v4) => Self(u128::from(u32::from(v4))),
+            IpAddr::V6(v6) => Self(u128::from_be_bytes(v6.octets())),
+        }
+    }
+}
+
+/// High-level XDP manager for loading/unloading programs and syncing blocklist.
+pub struct XdpManager {
+    bpf: Option<Bpf>,
+    iface: String,
+    store: Arc<Store>,
+}
+
+impl XdpManager {
+    /// Create new XDP manager for a network interface.
+    pub fn new(iface: String, store: Arc<Store>) -> Self {
+        Self {
+            bpf: None,
+            iface,
+            store,
+        }
+    }
+
+    /// Load and attach XDP program to interface.
+    pub fn load(&mut self) -> Result<(), XdpError> {
+        let mut bpf = Bpf::load(aya::include_bytes_aligned!(concat!(
+            env!("OUT_DIR"),
+            "/ramshield-xdp"
+        )))?;
+
+        let program: &mut Xdp = bpf.program_mut("ramshield_xdp").unwrap().try_into()?;
+        program.load()?;
+
+        program.attach(&self.iface, aya::programs::XdpFlags::default())
+            .map_err(|e| XdpError::Verifier(format!("attach failed: {e}")))?;
+
+        let mut blocklist: HashMap<_, BlocklistKey, u8> =
+            HashMap::try_from(bpf.take_map("BLOCKLIST").unwrap())?;
+        
+        self.sync_blocklist(&mut blocklist)?;
+
+        self.bpf = Some(bpf);
+        tracing::info!(iface = %self.iface, "XDP program loaded and attached");
+        Ok(())
+    }
+
+    /// Sync in-memory blocklist with storage layer directly into kernel eBPF map.
+    pub fn sync_blocklist(&self, blocklist: &mut HashMap<_, BlocklistKey, u8>) -> Result<(), XdpError> {
+        tracing::debug!("Starting blocklist sync to eBPF map");
+        for entry in self.store.inner().iter() {
+            if entry.value().value.is_blocked() {
+                if let ramshield_storage::Value::IpRecord(ref rec) = entry.value().value {
+                    let key = BlocklistKey::from_ip(rec.ip);
+                    // Insert into Aya kernel map (value is 1 indicating blocked, flag 0)
+                    if let Err(e) = blocklist.insert(key, 1, 0) {
+                        tracing::warn!("Failed to insert IP {} into XDP blocklist: {e}", rec.ip);
+                    }
+                }
+            }
+        }
+        tracing::info!("XDP kernel blocklist successfully synchronized");
+        Ok(())
+    }
+
+    /// Detach and unload XDP program.
+    pub fn unload(&mut self) -> Result<(), XdpError> {
+        if let Some(bpf) = self.bpf.take() {
+            drop(bpf); // Programs auto-detach on drop
+            tracing::info!(iface = %self.iface, "XDP program unloaded");
+        }
+        Ok(())
+    }
+}

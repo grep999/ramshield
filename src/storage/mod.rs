@@ -69,11 +69,7 @@ impl Default for TrafficCounters {
     }
 }
 
-/// Stable store key for an IP — computed once per flush, not per event.
-#[inline]
-pub fn ip_key(ip: IpAddr) -> String {
-    ip.to_string()
-}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value {
@@ -139,6 +135,16 @@ pub enum BlockState {
     Blocked { reason: BlockReason, since_ns: u64 },
 }
 
+impl BlockState {
+    /// Returns the since_ns timestamp if blocked, 0 otherwise.
+    pub fn since_ns(&self) -> u64 {
+        match self {
+            BlockState::Blocked { since_ns, .. } => *since_ns,
+            _ => 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum BlockReason {
     HighRps(u64),
@@ -184,11 +190,11 @@ impl Entry {
 }
 
 pub struct Store {
-    inner: Arc<DashMap<String, Entry>>,
+    inner: Arc<DashMap<IpAddr, Entry>>,
     subnet_table: Arc<DashMap<u32, SubnetRecord>>,
     /// Reverse index: subnet key -> list of IP strings for efficient subnet-based lookups.
     /// Maintained during batch flush to avoid O(store_size) scans.
-    subnet_index: Arc<Mutex<AHashMap<u32, AHashMap<String, ()>>>>,
+    subnet_index: Arc<Mutex<AHashMap<u32, AHashMap<IpAddr, ()>>>>,
     ram_bytes: Arc<AtomicUsize>,
     pub traffic: Arc<TrafficCounters>,
     pub total_inserts: Arc<AtomicU64>,
@@ -239,7 +245,7 @@ impl Store {
     /// allowing replacement of existing entries without triggering capacity errors.
     pub fn insert(
         &self,
-        key: String,
+        key: IpAddr,
         value: Value,
         ttl_secs: Option<u64>,
         ram_limit_bytes: usize,
@@ -255,11 +261,11 @@ impl Store {
             expires_at,
             version: 0,
         };
-        let entry_size = key.len() + std::mem::size_of::<Entry>() + new_entry.value.heap_bytes();
+        let entry_size = std::mem::size_of::<IpAddr>() + std::mem::size_of::<Entry>() + new_entry.value.heap_bytes();
 
         // Insert first, then check adjusted budget (replacement is free)
-        let old_size = self.inner.insert(key.clone(), new_entry).map_or(0, |old| {
-            std::mem::size_of::<Entry>() + old.value.heap_bytes() + key.len()
+        let old_size = self.inner.insert(key, new_entry).map_or(0, |old| {
+            std::mem::size_of::<Entry>() + old.value.heap_bytes() + std::mem::size_of::<IpAddr>()
         });
 
         let net_growth = entry_size.saturating_sub(old_size);
@@ -286,7 +292,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn get(&self, key: &str) -> Option<Value> {
+    pub fn get(&self, key: &IpAddr) -> Option<Value> {
         let entry = self.inner.get(key)?;
         if entry.is_expired() {
             return None;
@@ -294,8 +300,8 @@ impl Store {
         Some(entry.value.clone())
     }
 
-    pub fn increment(&self, key: &str, delta: u64) -> u64 {
-        let mut e = self.inner.entry(key.to_string()).or_insert_with(|| Entry {
+    pub fn increment(&self, key: IpAddr, delta: u64) -> u64 {
+        let mut e = self.inner.entry(key).or_insert_with(|| Entry {
             value: Value::Counter(0),
             expires_at: None,
             version: 0,
@@ -307,12 +313,12 @@ impl Store {
         0
     }
 
-    pub fn evict_batch(&self, keys: &[String]) {
+    pub fn evict_batch(&self, keys: &[IpAddr]) {
         for key in keys {
             let expired = self.inner.get(key).is_some_and(|e| e.is_expired());
             if expired {
-                if let Some((k, e)) = self.inner.remove(key) {
-                    let freed = k.len() + std::mem::size_of::<Entry>() + e.value.heap_bytes();
+                if let Some((_k, e)) = self.inner.remove(key) {
+                    let freed = std::mem::size_of::<IpAddr>() + std::mem::size_of::<Entry>() + e.value.heap_bytes();
                     self.ram_bytes.fetch_sub(freed, Ordering::Relaxed);
                     self.total_evictions.fetch_add(1, Ordering::Relaxed);
                 }
@@ -320,9 +326,9 @@ impl Store {
         }
     }
 
-    pub fn remove(&self, key: &str) -> Option<Value> {
-        self.inner.remove(key).map(|(k, e)| {
-            let freed = k.len() + std::mem::size_of::<Entry>() + e.value.heap_bytes();
+    pub fn remove(&self, key: &IpAddr) -> Option<Value> {
+        self.inner.remove(key).map(|(_k, e)| {
+            let freed = std::mem::size_of::<IpAddr>() + std::mem::size_of::<Entry>() + e.value.heap_bytes();
             self.ram_bytes.fetch_sub(freed, Ordering::Relaxed);
             self.total_evictions.fetch_add(1, Ordering::Relaxed);
             e.value
@@ -338,7 +344,7 @@ impl Store {
     pub fn ram_bytes(&self) -> usize {
         self.ram_bytes.load(Ordering::Relaxed)
     }
-    pub fn inner(&self) -> &DashMap<String, Entry> {
+    pub fn inner(&self) -> &DashMap<IpAddr, Entry> {
         &self.inner
     }
     pub fn subnet_table(&self) -> &DashMap<u32, SubnetRecord> {
@@ -367,13 +373,13 @@ impl Store {
     }
 
     /// Update the reverse index for subnet lookups. Call after inserting/updating an IP record.
-    pub fn update_subnet_index(&self, ip_key: &str, subnet_key: Option<u32>, is_removal: bool) {
+    pub fn update_subnet_index(&self, ip_key: IpAddr, subnet_key: Option<u32>, is_removal: bool) {
         let Some(sk) = subnet_key else { return };
 
         if let Ok(mut index) = self.subnet_index.lock() {
             if is_removal {
                 if let Some(subnet_ips) = index.get_mut(&sk) {
-                    subnet_ips.remove(ip_key);
+                    subnet_ips.remove(&ip_key);
                     if subnet_ips.is_empty() {
                         index.remove(&sk);
                     }
@@ -382,13 +388,13 @@ impl Store {
                 index
                     .entry(sk)
                     .or_insert_with(|| AHashMap::with_capacity(64))
-                    .insert(ip_key.to_string(), ());
+                    .insert(ip_key, ());
             }
         }
     }
 
     /// Get all IP keys in a given subnet using the reverse index (O(1) lookup).
-    pub fn get_ips_in_subnet(&self, subnet_key: u32) -> Vec<String> {
+    pub fn get_ips_in_subnet(&self, subnet_key: u32) -> Vec<IpAddr> {
         self.subnet_index
             .lock()
             .map(|index| {
@@ -431,27 +437,27 @@ mod tests {
     fn insert_get_remove() {
         let store = Store::new(16);
         store
-            .insert("k".into(), Value::Counter(1), None, 64 * 1024 * 1024)
+            .insert("127.0.0.1".parse().unwrap(), Value::Counter(1), None, 64 * 1024 * 1024)
             .unwrap();
-        assert!(store.get("k").is_some());
-        store.remove("k");
-        assert!(store.get("k").is_none());
+        assert!(store.get(&"127.0.0.1".parse().unwrap()).is_some());
+        store.remove(&"127.0.0.1".parse().unwrap());
+        assert!(store.get(&"127.0.0.1".parse().unwrap()).is_none());
     }
 
     #[test]
     fn increment_creates_and_adds() {
         let store = Store::new(16);
-        assert_eq!(store.increment("x", 5), 5);
-        assert_eq!(store.increment("x", 3), 8);
+        assert_eq!(store.increment("127.0.0.2".parse().unwrap(), 5), 5);
+        assert_eq!(store.increment("127.0.0.2".parse().unwrap(), 3), 8);
     }
 
     #[test]
     fn ttl_lazy_expiry() {
         let store = Store::new(16);
         store
-            .insert("x".into(), Value::Counter(1), Some(0), 64 * 1024 * 1024)
+            .insert("127.0.0.3".parse().unwrap(), Value::Counter(1), Some(0), 64 * 1024 * 1024)
             .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(2));
-        assert!(store.get("x").is_none());
+        assert!(store.get(&"127.0.0.3".parse().unwrap()).is_none());
     }
 }

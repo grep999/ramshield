@@ -1,0 +1,21 @@
+[package]
+name = "ramshield-xdp"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+ramshield-types = { path = "../ramshield-types" }
+ramshield-storage = { path = "../ramshield-storage" }
+ramshield-config = { path = "../ramshield-config" }
+aya = { version = "0.12", features = ["async_tokio"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+thiserror = "1"
+anyhow = "1"
+
+[build-dependencies]
+aya-build = "0.2"
+
+[lints]
+workspace = true

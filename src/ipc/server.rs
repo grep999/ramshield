@@ -283,8 +283,12 @@ fn process_request(
 ) -> Response {
     match req {
         Request::CheckIp { ip } => {
-            let key = crate::storage::ip_key(ip.parse().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)));
-            let status = store.get(&key);
+                let ip_addr = match ip.parse() {
+        Ok(addr) => addr,
+        Err(_) => return Response::Error { code: 400, message: format!("invalid ip address: {}", ip) },
+    };
+    
+            let status = store.get(&ip_addr);
             Response::IpStatus {
                 ip,
                 blocked: status.is_some_and(|v| matches!(v, crate::storage::Value::IpRecord(rec) if rec.block_state != crate::storage::BlockState::Clean)),
@@ -293,15 +297,60 @@ fn process_request(
                 reason: None,
             }
         },
-        Request::BlockIp { ip, reason, ttl_secs } => Response::Ok {
-            message: format!("blocked {} ttl={:?} reason={}", ip, ttl_secs, reason),
+        Request::BlockIp { ip, reason, ttl_secs } => {
+                let ip_addr = match ip.parse() {
+        Ok(addr) => addr,
+        Err(_) => return Response::Error { code: 400, message: format!("invalid ip address: {}", ip) },
+    };
+    
+            match store.get(&ip_addr) {
+                Some(crate::storage::Value::IpRecord(rec)) => {
+                    let state = if let Some(_ttl) = ttl_secs {
+                        crate::storage::BlockState::Blocked {
+                            reason: crate::storage::BlockReason::ManualBlock,
+                            since_ns: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_nanos() as u64)
+                                .unwrap_or(0),
+                        }
+                    } else {
+                        crate::storage::BlockState::Blocked {
+                            reason: crate::storage::BlockReason::ManualBlock,
+                            since_ns: rec.block_state.since_ns(),
+                        }
+                    };
+                    store.insert(ip_addr, crate::storage::Value::IpRecord(crate::storage::IpRecord {
+                        block_state: state.clone(),
+                        ..rec.clone()
+                    }), None, usize::MAX).ok();
+                    Response::Ok { message: format!("blocked {} ttl={:?} reason={}", ip, ttl_secs, reason), state: Some(format!("{:?}", state)) }
+                }
+                _ => Response::Error { code: 2, message: format!("unknown ip {}", ip) },
+            }
         },
-        Request::UnblockIp { ip } => Response::Ok {
-            message: format!("unblocked {}", ip),
+        Request::UnblockIp { ip } => {
+                let ip_addr = match ip.parse() {
+        Ok(addr) => addr,
+        Err(_) => return Response::Error { code: 400, message: format!("invalid ip address: {}", ip) },
+    };
+    
+            match store.get(&ip_addr) {
+                Some(crate::storage::Value::IpRecord(rec)) => {
+                    let mut updated = rec.clone();
+                    updated.block_state = crate::storage::BlockState::Clean;
+                    store.insert(ip_addr, crate::storage::Value::IpRecord(updated), None, usize::MAX).ok();
+                    Response::Ok { message: format!("unblocked {}", ip), state: Some("clean".into()) }
+                }
+                _ => Response::Error { code: 2, message: format!("unknown ip {}", ip) },
+            }
         },
         Request::GetIpStats { ip } => {
-            let key = crate::storage::ip_key(ip.parse().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)));
-            if let Some(crate::storage::Value::IpRecord(rec)) = store.get(&key) {
+                let ip_addr = match ip.parse() {
+        Ok(addr) => addr,
+        Err(_) => return Response::Error { code: 400, message: format!("invalid ip address: {}", ip) },
+    };
+    
+            if let Some(crate::storage::Value::IpRecord(rec)) = store.get(&ip_addr) {
                 Response::IpDetail(crate::ipc::IpDetail {
                     ip,
                     count: rec.request_count,
@@ -336,10 +385,13 @@ fn process_request(
                 evictions: stats.evictions,
             })
         },
-        Request::GetStatus => Response::Ok { message: "ok".into() },
+        Request::GetStatus => Response::Ok { message: "ok".into(), state: None },
         Request::ReportConnection { ip, bytes, status_code, proto_fp } => {
             let ev = ConnectionEvent {
-                ip: ip.parse().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
+                            ip: match ip.parse() {
+                Ok(addr) => addr,
+                Err(_) => return Response::Error { code: 400, message: format!("invalid ip address: {}", ip) },
+            },
                 timestamp_ns: epoch_ns(),
                 bytes,
                 status_code,
@@ -347,7 +399,7 @@ fn process_request(
             };
             let accepted = event_tx.send(ev).is_ok();
             if accepted {
-                Response::Ok { message: "accepted".into() }
+                Response::Ok { message: "accepted".into(), state: None }
             } else {
                 dropped_events.fetch_add(1, Ordering::Relaxed);
                 Response::BatchOk { accepted: 0, rejected: 1 }
@@ -359,7 +411,13 @@ fn process_request(
             let mut rejected = 0u32;
             for cr in events {
                 let ev = ConnectionEvent {
-                    ip: cr.ip.parse().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
+                                        ip: match cr.ip.parse() {
+                        Ok(addr) => addr,
+                        Err(_) => {
+                            rejected += 1;
+                            continue;
+                        }
+                    },
                     timestamp_ns: now,
                     bytes: cr.bytes,
                     status_code: cr.status_code,
@@ -380,6 +438,6 @@ fn process_request(
             debug!("report_connections: accepted={} rejected={}", accepted, rejected);
             Response::BatchOk { accepted, rejected }
         },
-        Request::Flush => Response::Ok { message: "flushed".into() },
+        Request::Flush => Response::Ok { message: "flushed".into(), state: None },
     }
 }

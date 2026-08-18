@@ -19,8 +19,8 @@ use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 use crate::config::AlertingConfig;
+use crate::error::RsError;
 use crate::metrics::Metrics;
-use crate::error::RamShieldError;
 
 /// Alert severity levels (ISO 27001 compliant)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -57,9 +57,9 @@ pub struct AlertingEngine {
     config: AlertingConfig,
     metrics: Arc<Metrics>,
     /// Last alert time per source (for cooldown)
-    last_alert_ms: Arc<parking_lot::Mutex<HashMap<String, u64>>>,
+    last_alert_ms: Arc<std::sync::Mutex<HashMap<String, u64>>>,
     /// Alert history (bounded)
-    alert_history: Arc<parking_lot::Mutex<Vec<AlertEvent>>>,
+    alert_history: Arc<std::sync::Mutex<Vec<AlertEvent>>>,
     /// Total alerts generated
     alerts_total: Arc<AtomicU64>,
     /// Critical alerts count
@@ -71,14 +71,14 @@ impl AlertingEngine {
         Self {
             config,
             metrics,
-            last_alert_ms: Arc::new(parking_lot::Mutex::new(HashMap::new())),
-            alert_history: Arc::new(parking_lot::Mutex::new(Vec::with_capacity(100))),
+            last_alert_ms: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            alert_history: Arc::new(std::sync::Mutex::new(Vec::with_capacity(100))),
             alerts_total: Arc::new(AtomicU64::new(0)),
             alerts_critical: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    pub async fn start(&self, mut shutdown_rx: broadcast::Receiver<()>) -> Result<(), RamShieldError> {
+    pub async fn start(&self, mut shutdown_rx: broadcast::Receiver<()>) -> Result<(), RsError> {
         if !self.config.enabled {
             info!("AlertingEngine: Disabled, skipping startup.");
             let _ = shutdown_rx.recv().await;
@@ -159,7 +159,7 @@ impl AlertingEngine {
         // Cooldown check
         let cooldown_ms = self.config.alert_cooldown_secs * 1000;
         let should_alert = {
-            let mut last = self.last_alert_ms.lock();
+            let mut last = self.last_alert_ms.lock().unwrap();
             if let Some(&last_ts) = last.get(source) {
                 if now_ms.saturating_sub(last_ts) < cooldown_ms {
                     return; // In cooldown
@@ -195,7 +195,7 @@ impl AlertingEngine {
 
         // Add to history
         {
-            let mut history = self.alert_history.lock();
+            let mut history = self.alert_history.lock().unwrap();
             if history.len() >= 100 {
                 history.remove(0);
             }
@@ -237,7 +237,7 @@ impl AlertingEngine {
 
     /// Get recent alerts for dashboard
     pub fn get_alerts(&self) -> Vec<AlertEvent> {
-        self.alert_history.lock().clone()
+        self.alert_history.lock().unwrap().clone()
     }
 
     pub fn alerts_count(&self) -> u64 {

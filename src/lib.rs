@@ -1,24 +1,40 @@
-pub use ramshield_types::*;
-pub use ramshield_config::*;
-pub use ramshield_storage::*;
-pub use ramshield_metrics::*;
-pub use ramshield_learning::*;
-pub use ramshield_forecasting::*;
-pub use ramshield_detection::*;
-
+pub mod alerting;
+pub mod cache;
+pub mod compliance;
 pub mod config;
-pub mod storage;
-// pub mod metrics;  // Removed: use ramshield_metrics crate instead
-pub mod learning;
-pub mod detection;
-pub mod forecasting;
-
-pub mod engine;
-pub use crate::engine::Engine;
-
-pub mod ipc;
 pub mod dashboard;
+pub mod detection;
 pub mod dns;
-pub mod prediction;
-pub mod util;
+pub mod engine;
 pub mod error;
+pub mod forecasting;
+pub mod ipc;
+pub mod learning;
+pub mod metrics;
+pub mod prediction;
+
+pub mod storage;
+pub mod util;
+
+pub use crate::util::BoundedVecDeque;
+pub use config::Config;
+pub use detection::{BlockDecision, ConnectionEvent, DetectionEngine};
+pub use engine::Engine;
+pub use error::RsError;
+
+/// Install panic hook that logs panics to stderr with ISO-8601 timestamp.
+/// Call once near `main` entry point.
+pub fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .unwrap_or(&"<non-string payload>");
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        eprintln!("{timestamp} PANIC at {location}: {payload}");
+    }));
+}
