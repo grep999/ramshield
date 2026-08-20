@@ -1,0 +1,101 @@
+Do these three changes only. They should deliver most of the available CPU savings.
+
+Never send per-connection events to enforcement
+
+Aggregate activity by IP for one second, then send one decision per IP. At 1M connections/s and 100k IPs, this can reduce userspace operations from roughly 1M/s to at most 100k/s, often much lower.
+
+``rust
+use std::{collections::HashMap, net::IpAddr};
+
+let mut counts: HashMap<IpAddr, u32> = HashMap::withcapacity(100000);
+let mut interval = tokio::time::interval(std::time::Duration::fromsecs(1));
+interval.setmissedtickbehavior(tokio::time::MissedTickBehavior::Skip);
+
+loop {
+    tokio::select! {
+        Some(ip) = ingressrx.recv() => {
+            *counts.entry(ip).ordefault() += 1;
+        }
+
+         = interval.tick() => {
+            for (ip, count) in counts.drain() {
+                if count >= BLOCKTHRESHOLD {
+                    let  = enforcetx.trysend(Command::Block(ip));
+                }
+            }
+        }
+
+        else => break,
+    }
+}
+`
+
+Better still, keep packet/connection counting in eBPF and read counters once per second.
+
+Coalesce block operations and update XDP only on state changes
+
+Make the enforcement worker own a HashSet. Duplicate blocks and unblocks then cost only a set lookup and cause no XDP syscall.
+
+`rust
+use std::collections::HashSet;
+use std::net::IpAddr;
+
+let mut blocked = HashSet::withcapacity(100000);
+
+while let Some(command) = enforcerx.recv().await {
+    match command {
+        Command::Block(ip) if blocked.insert(ip) => {
+            xdp.applyblock(ip)?;
+            store.saveblock(ip)?;
+        }
+
+        Command::Unblock(ip) if blocked.remove(&ip) => {
+            xdp.removeblock(ip)?;
+            store.removeblock(ip)?;
+        }
+
+        Command::Block() | Command::Unblock() => {
+            // Already in the requested state: do nothing.
+        }
+    }
+}
+`
+
+Use a bounded channel:
+
+`rust
+let (enforcetx, enforcerx) = tokio::sync::mpsc::channel(4096);
+`
+
+Do not use DashMap inside this single-owner worker. A regular HashSet or HashMap avoids locking and is cheaper.
+
+Stop running full XDP synchronization every second
+
+Use individual inserts/removes during normal operation:
+
+`rust
+xdp.applyblock(ip)?;
+xdp.removeblock(ip)?;
+`
+
+Run sync_blocklist() only:
+
+• At startup
+• After reattaching XDP
+• After an XDP update failure
+
+Do not iterate over all 100k blocked IPs during every one-second flush.
+
+Minimal target design
+
+`text
+Ingress
+   -> aggregate counts by IP for 1 second
+   -> bounded enforcement channel
+   -> one enforcement worker with HashSet
+   -> XDP insert/remove only when state changes
+``
+
+Skip compiler tuning, IPC conversion, custom allocators, timer wheels, and Tokio worker tuning for now. The highest-gain quick fix is simply:
+
+> Aggregate before the channel, deduplicate in one worker, and never perform full XDP syncs during steady-state operation.

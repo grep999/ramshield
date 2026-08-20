@@ -1,8 +1,21 @@
 [package]
 name = "ramshield-xdp-bpf"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+aya-ebpf = { version = "0.1", features = ["default"] }
+aya-ebpf-bindings = "0.1"
+network-types = "0.0.8"
 
 [workspace]
+
+[profile.dev]
+panic = "abort"
+opt-level = 3
+lto = true
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+lto = true

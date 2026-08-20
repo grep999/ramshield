@@ -9,7 +9,8 @@ use aya::{
     util::online_cpus,
     Bpf,
 };
-use ramshield_storage::{BlockDecision, Store};
+use ramshield_types::events::BlockDecision;
+use ramshield_storage::Store;
 use std::net::IpAddr;
 use std::sync::Arc;
 use thiserror::Error;
@@ -102,23 +103,35 @@ impl XdpManager {
         Ok(())
     }
 
-    /// Sync in-memory blocklist with storage layer.
+    /// Sync in-memory blocklist with storage layer (run once on startup).
     pub fn sync_blocklist(&self, blocklist: &mut HashMap<aya::maps::MapData, BlocklistKey, BlocklistValue>) -> Result<(), XdpError> {
-        for entry in self.store.inner().iter() {
-            if entry.value().value.is_blocked() {
-                if let ramshield_storage::Value::IpRecord(ref rec) = entry.value().value {
-                    let key = BlocklistKey::from_ip(rec.ip);
-                    blocklist.insert(key, BlocklistValue(1), 0).map_err(|e| XdpError::Map(e.to_string()))?;
-                }
-            }
+        let blocked_ips = self.store.get_all_blocked_ips();
+        for ip in blocked_ips {
+            let key = BlocklistKey::from_ip(ip);
+            blocklist.insert(key, BlocklistValue(1), 0)?;
         }
         Ok(())
     }
 
-    pub fn apply_decision(&mut self, decision: ramshield_storage::BlockDecision) -> Result<(), XdpError> {
-        let mut blocklist: HashMap<aya::maps::MapData, BlocklistKey, BlocklistValue> = HashMap::try_from(self.bpf.as_mut().unwrap().take_map("BLOCKLIST").unwrap())?;
-        let key = BlocklistKey::from_ip(decision.ip);
-        blocklist.insert(key, BlocklistValue(1), 0).map_err(|e| XdpError::Map(e.to_string()))?;
+    /// Apply a single block decision to the XDP map.
+    pub fn apply_block_decision(&mut self, ip: IpAddr) -> Result<(), XdpError> {
+        if let Some(bpf) = self.bpf.as_mut() {
+            let mut blocklist: HashMap<_, BlocklistKey, BlocklistValue> = 
+                HashMap::try_from(bpf.map_mut("BLOCKLIST").ok_or_else(|| XdpError::Map("BLOCKLIST not found".to_string()))?)?;
+            let key = BlocklistKey::from_ip(ip);
+            blocklist.insert(key, BlocklistValue(1), 0)?;
+        }
+        Ok(())
+    }
+
+    /// Remove a single IP from the XDP blocklist.
+    pub fn remove_block(&mut self, ip: IpAddr) -> Result<(), XdpError> {
+        if let Some(bpf) = self.bpf.as_mut() {
+            let mut blocklist: HashMap<_, BlocklistKey, BlocklistValue> = 
+                HashMap::try_from(bpf.map_mut("BLOCKLIST").ok_or_else(|| XdpError::Map("BLOCKLIST not found".to_string()))?)?;
+            let key = BlocklistKey::from_ip(ip);
+            blocklist.remove(&key)?;
+        }
         Ok(())
     }
 

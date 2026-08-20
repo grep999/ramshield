@@ -405,6 +405,15 @@ impl Store {
             })
             .unwrap_or_default()
     }
+
+    /// Get all currently blocked IPs for XDP reconciliation.
+    pub fn get_all_blocked_ips(&self) -> Vec<IpAddr> {
+        self.inner
+            .iter()
+            .filter(|e| e.value().value.is_blocked())
+            .map(|e| *e.key())
+            .collect()
+    }
 }
 
 #[derive(Debug)]

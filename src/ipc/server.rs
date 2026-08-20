@@ -128,6 +128,7 @@ impl IpcServer {
                 Ok(p) => p,
                 Err(_) => {
                     self.rejected_connections.fetch_add(1, Ordering::Relaxed);
+                    self.engine.metrics.inc_rejected(1);
                     warn!("Connection rejected from {}: semaphore exhausted ({})", remote, self.max_connections);
                     let _ = socket.shutdown().await;
                     continue;
@@ -397,12 +398,12 @@ fn process_request(
                 status_code,
                 proto_fingerprint: proto_fp,
             };
-            let accepted = event_tx.send(ev).is_ok();
-            if accepted {
-                Response::Ok { message: "accepted".into(), state: None }
-            } else {
-                dropped_events.fetch_add(1, Ordering::Relaxed);
-                Response::BatchOk { accepted: 0, rejected: 1 }
+            match event_tx.try_send(ev) {
+                Ok(()) => Response::Ok { message: "accepted".into(), state: None },
+                Err(_) => {
+                    dropped_events.fetch_add(1, Ordering::Relaxed);
+                    Response::BatchOk { accepted: 0, rejected: 1 }
+                }
             }
         },
         Request::ReportConnections { events } => {

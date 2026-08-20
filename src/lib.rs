@@ -6,6 +6,7 @@ pub mod dashboard;
 pub mod detection;
 pub mod dns;
 pub mod engine;
+pub mod enforcement;
 pub mod error;
 pub mod forecasting;
 pub mod ipc;
@@ -20,6 +21,7 @@ pub use crate::util::BoundedVecDeque;
 pub use config::Config;
 pub use detection::{BlockDecision, ConnectionEvent, DetectionEngine};
 pub use engine::Engine;
+pub use enforcement::{EnforceCommand, EnforceAction, EnforceResult, EnforcementService};
 pub use error::RsError;
 
 /// Install panic hook that logs panics to stderr with ISO-8601 timestamp.

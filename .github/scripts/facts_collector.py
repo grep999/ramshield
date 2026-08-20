@@ -212,51 +212,41 @@ def parse_review_status(review_md: str):
 
 def check_local_links():
     """Checks for dead local Markdown links in the docs/ directory."""
-    dead_links = []
     docs_path = Path(WORKSPACE) / "docs"
-    
-    if not docs_path.exists():
-        return dead_links
-        
+    if not docs_path.is_dir():
+        return []
+
     all_docs = {str(p.relative_to(docs_path)) for p in docs_path.rglob("*.md") if p.is_file()}
+    dead_links = set()
 
     for doc_file in docs_path.rglob("*.md"):
-        content = doc_file.read_text(encoding="utf-8", errors="ignore")
-        # Strip inline code spans so links inside backticks (e.g. checklist examples)
-        # are not treated as real markdown links. Use the same helper as
-        # health_check_repair.py so the two checkers stay consistent.
+        try:
+            content = doc_file.read_text(encoding="utf-8", errors="ignore")
+        except (IOError, OSError):
+            continue
+
         content_for_links = strip_inline_code_spans(content)
-        for match in re.finditer(r'\[.*?\]\((?!https?://)([^#)]*)(?:#.*?)?\)', content_for_links):
-            link_target = match.group(1).split('#')[0] # Remove anchors
-            if not link_target: # Anchor-only in-document link, e.g. [text](#section)
-                continue
-            if link_target.startswith('/'): # Absolute path
-                # Treat as relative to workspace, then relative to docs for check
-                abs_target_path = (Path(WORKSPACE) / link_target).resolve()
-                if abs_target_path.exists():
-                    try:
-                        relative_to_docs = str(abs_target_path.relative_to(docs_path))
-                        if relative_to_docs not in all_docs:
-                            # Might be a directory or non-.md file
-                            if not abs_target_path.is_file():
-                                dead_links.append(f"{doc_file.name}: Broken link to non-file '{link_target}'")
-                    except ValueError: # Link points outside docs/
-                         if not abs_target_path.exists():
-                             dead_links.append(f"{doc_file.name}: Broken external relative link '{link_target}'")
-                else:
-                    dead_links.append(f"{doc_file.name}: Broken link to absolute path '{link_target}'")
-            else: # Relative path
-                target_path = (doc_file.parent / link_target).resolve()
-                try:
-                    relative_to_docs = str(target_path.relative_to(docs_path))
-                    if relative_to_docs not in all_docs:
-                        if not target_path.is_file(): # Check if it's a file
-                            dead_links.append(f"{doc_file.name}: Broken link to '{link_target}'")
-                except ValueError: # Link points outside docs/, but relative
-                    if not target_path.exists():
-                        dead_links.append(f"{doc_file.name}: Broken relative link outside docs '{link_target}'")
+        
+        # Regex to find local links: [text](link) where link does not start with http/https
+        for match in re.finditer(r'\[.*?\]\((?!https?://)([^#)]+?)(?:#.*?)?\)', content_for_links):
+            link_target = match.group(1).strip()
             
-    return list(set(dead_links))
+            if not link_target:
+                # This was an anchor-only link like [text](#anchor). Skip it.
+                continue
+
+            if link_target.startswith('/'):
+                # Absolute path from workspace root
+                target_path = (Path(WORKSPACE) / link_target.lstrip('/')).resolve()
+            else:
+                # Relative path from the current doc's directory
+                target_path = (doc_file.parent / link_target).resolve()
+
+            # Now check if the resolved path is a valid, existing file
+            if not target_path.is_file():
+                dead_links.add(f"{doc_file.relative_to(WORKSPACE)}: Broken link to '{link_target}'")
+
+    return sorted(list(dead_links))
 
 def load_plan_review_worker_link():
     """Load existing plan/review/worker status/link report if any."""

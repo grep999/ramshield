@@ -28,6 +28,12 @@ subnet_window_threshold = 50
 
 [forecasting]
 enabled = false
+ewma_alpha = 0.3
+hw_beta = 0.1
+hw_gamma = 0.1
+seasonality_period = 3600
+anomaly_zscore = 2.5
+min_entropy = 2.0
 
 [ipc]
 tcp_addr = "127.0.0.1:7890"
