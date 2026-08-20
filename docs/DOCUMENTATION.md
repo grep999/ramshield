@@ -1,7 +1,7 @@
 # RamShield — Technical & Functional Documentation
 
-**Version:** 0.1.1 (post-optimization release)  
-**Language:** Rust 2021  
+**Version:** 0.2.0 (post-hardening & audit remediation)  
+**Language:** Rust 2024 (nightly)  
 **Location:** `ramshield/beta/rs`
 
 ---
@@ -14,11 +14,11 @@ RamShield is an **in-memory DDoS detection and mitigation engine**. It sits besi
 - Tracks traffic at **IP** and **/24 subnet** scale
 - Scores threat levels in real time
 - Blocks abusive sources automatically or on operator command
+- **Accelerates blocking at kernel level via XDP eBPF** (Linux)
 
 It is **not** a general database, not a full firewall, and not a packet capture tool. It is a **specialized RAM-first engine** built for high connection rates.
 
 ### What problems it solves
-
 
 | Problem                         | RamShield approach                          |
 | ------------------------------- | ------------------------------------------- |
@@ -27,18 +27,16 @@ It is **not** a general database, not a full firewall, and not a packet capture 
 | Attack ramp-up before threshold | Holt-Winters forecasting + preemptive block |
 | Memory exhaustion under attack  | Promotion filter + RAM budget               |
 | IPC overhead at high volume     | Batch ingest path                           |
-
+| **Kernel bypass needed**        | **XDP eBPF packet drop**                    |
 
 ---
 
 ## 2. Binaries
 
-
 | Binary          | Role                                                     |
 | --------------- | -------------------------------------------------------- |
 | `ramshield`     | Long-running daemon — detection, forecasting, IPC server |
 | `ramshield-cli` | Operator tool — check, block, unblock, stats, info       |
-
 
 ### Build & run
 
@@ -75,9 +73,14 @@ unset CARGO_TARGET_DIR && cargo build --release
                     │       ▲                                  │
                     │       │ BlockDecision                  │
                     │  ┌────┴────┐                           │
-                    │  │ Block   │                           │
-                    │  │ applier │                           │
-                    │  └─────────┘                           │
+                    │  │ Enforce │                           │
+                    │  │ Service │                           │
+                    │  └────┬────┘                           │
+                    │       │                                 │
+                    │       ▼                                 │
+                    │  ┌─────────┐    ┌──────────────────┐   │
+                    │  │ XDP Mgr │───►│ eBPF/XDP Program │   │
+                    │  └─────────┘    │ (kernel)         │   │
                     └─────────────────────────────────────────┘
 ```
 
@@ -88,7 +91,8 @@ unset CARGO_TARGET_DIR && cargo build --release
 3. **Batch processor** (dedicated OS thread) — aggregates events before analysis
 4. **Subnet batch loop** (Tokio, every 500 ms) — blocks hot /24 prefixes
 5. **Forecaster** (Tokio, 1 s / 5 s timers) — anomaly and entropy checks
-6. **Block applier** (Tokio) — writes block state into the store
+6. **EnforcementService** (Tokio) — single-writer for all block/unblock ops
+7. **XDP Manager** — loads eBPF program, syncs blocklist, applies decisions
 
 ---
 
@@ -106,7 +110,8 @@ Client sends JSON line
     → Promotion filter decides which IPs get full tracking
     → merge_record() loads existing IpRecord, merges batch stats, writes once
     → BlockDecision broadcast if threshold exceeded
-    → Block applier updates IpRecord.block_state
+    → EnforcementService receives command
+    → Store mutated, TTL scheduled, XDP map updated
 ```
 
 ### Why batching is the default path
@@ -152,7 +157,7 @@ This is the same idea used in high-throughput log pipelines (Kafka batch consume
 
 #### `mod.rs`
 
-- **Bloom filter** — fast “probably seen before” check keyed by `IpAddr` hash
+- **Bloom filter** — fast "probably seen before" check keyed by `IpAddr` hash
 - **Batch processor loop** — blocking `recv_timeout`, not Tokio spin
 - **flush_batch()** — promotion + merge + block emission
 - **subnet_batch_loop()** — reads `subnet_table`, blocks matching IPs
@@ -165,13 +170,11 @@ This is the same idea used in high-throughput log pipelines (Kafka batch consume
 
 An IP is **promoted** (stored and analyzed) if **any** of:
 
-
 | Condition                         | Default             | Purpose                                |
 | --------------------------------- | ------------------- | -------------------------------------- |
 | `agg.count >= promote_min_events` | 8                   | Ignore one-off scans                   |
 | Subnet hot in window              | ≥ 500 events on /24 | Drill down when subnet is under attack |
 | Bloom filter hit                  | —                   | Keep tracking known bad IPs            |
-
 
 Cold IPs are counted in the batch only and **never touch the store**.
 
@@ -183,16 +186,13 @@ Cold IPs are counted in the batch only and **never touch the store**.
 
 #### Value types
 
-
 | Type                                 | Use                                             |
 | ------------------------------------ | ----------------------------------------------- |
 | `IpRecord`                           | Full per-IP metadata (primary detection object) |
 | `SubnetRecord`                       | /24 aggregate counters                          |
 | `Counter`, `Float`, `Inline`, `Blob` | Generic / future use                            |
 
-
 #### `IpRecord` fields
-
 
 | Field            | Meaning                                         |
 | ---------------- | ----------------------------------------------- |
@@ -202,7 +202,6 @@ Cold IPs are counted in the batch only and **never touch the store**.
 | `status_dist[5]` | HTTP status buckets (1xx–5xx)                   |
 | `threat_score`   | 0.0–1.0 composite score                         |
 | `block_state`    | Clean, Suspicious, or Blocked { reason, since } |
-
 
 #### `TrafficCounters`
 
@@ -219,13 +218,11 @@ Every `insert()` checks `ram_limit_bytes`. Detection uses the configured limit (
 
 #### Modules present but not wired at startup
 
-
 | Module          | Status                                                                        |
 | --------------- | ----------------------------------------------------------------------------- |
 | `ttl_wheel.rs`  | Implemented, **not started** by Engine — TTL expiry is lazy (on `get()` only) |
 | `wal.rs`        | Implemented, **not used** unless manually integrated                          |
 | `blob_store.rs` | Implemented for large payloads, **not on hot path**                           |
-
 
 Config keys exist for TTL/WAL for forward compatibility.
 
@@ -235,14 +232,12 @@ Config keys exist for TTL/WAL for forward compatibility.
 
 **Role:** Detect attack patterns before or alongside rate thresholds.
 
-
 | Timer          | Method               | What it does                                                       |
 | -------------- | -------------------- | ------------------------------------------------------------------ |
 | 1 s            | `tick_hw()`          | Holt-Winters on global event rate; z-score anomaly                 |
 | 5 s            | `tick_entropy()`     | Shannon entropy on subnet distribution — low entropy = botnet-like |
 | On anomaly     | `preemptive_block()` | Blocks IPs from `threat_sample` with score > 0.7                   |
 | On low entropy | `entropy_block()`    | Blocks top 10% by request count (max 50)                           |
-
 
 **Design choice:** Forecasting reads **incremental counters**, not the full map. This keeps cost stable as IP count grows.
 
@@ -277,10 +272,95 @@ Uses `arc_swap::ArcSwap` for `ConfigHandle` — structure supports hot reload in
 
 ---
 
+### 5.8 `enforcement/` (NEW)
+
+**Role:** Sole writer for all block/unblock operations. Ensures idempotency, ordering, and audit trail.
+
+**Architecture:**
+
+```
+EnforceCommand received
+        │
+        ▼
+Idempotency check (decision_id) ──► Return cached result
+        │
+        ▼
+Deduplication (HashSet blocked_ips) ──► Skip if already blocked/unblocked
+        │
+        ▼
+Mutate Storage (Store + TTL)
+        │
+        ▼
+Apply XDP (apply_block_decision / remove_block)
+        │
+        ▼
+Record decision_id, update metrics
+```
+
+**Key features:**
+
+- **Deduplication**: In-memory `HashSet<IpAddr>` tracks current block state, preventing redundant XDP map operations
+- **Idempotency**: `decision_id` (UUID) prevents replay attacks
+- **Audit trail**: Full `EnforceCommand` with actor, source, timestamp, TTL, policy version
+- **Single-writer**: Only this service mutates block state — no race conditions
+- **XDP integration**: Uses `apply_block_decision` / `remove_block` for targeted map updates
+
+---
+
+### 5.9 `ramshield-xdp/` (NEW)
+
+**Role:** Kernel-level packet filtering via XDP (eXpress Data Path).
+
+**Build pipeline (in `build.rs`):**
+
+```
+Try 1: aya-build (Rust BPF) ──► bpfel-unknown-none
+    │ Requires: nightly rustc, bpf-linker, libLLVM 21+
+    ▼
+Try 2: clang C compilation ──► clang -target bpf
+    │ Requires: clang, linux-headers
+    ▼
+Try 3: Stub ELF ──► 4-byte placeholder
+    └──► Guarantees `cargo check` never fails
+```
+
+**eBPF program (`main.c` / `main.rs`):**
+
+- Hash map: key=u128 (packed IP), value=u8 (blocked=1)
+- XDP entry point: parse ETH → IPv4/IPv6 → lookup → `XDP_DROP` / `XDP_PASS`
+
+**Runtime integration:**
+
+```rust
+let mut bpf = Bpf::load(include_bytes_aligned!(env!("OUT_DIR") + "/ramshield-xdp"))?;
+let prog: &mut Xdp = bpf.program_mut("ramshield_xdp").unwrap().try_into()?;
+prog.load()?;
+prog.attach(&iface, XdpFlags::default())?;
+
+// Startup: full sync
+let mut blocklist = HashMap::try_from(bpf.take_map("BLOCKLIST")?)?;
+xdp.sync_blocklist(&mut blocklist)?;
+
+// Runtime: targeted updates
+xdp.apply_block_decision(ip)?;
+xdp.remove_block(ip)?;
+```
+
+**Requirements for production XDP:**
+
+| Requirement | Purpose |
+|-------------|---------|
+| LLVM 21 + `bpf-linker` | Rust BPF compilation |
+| `clang` + `linux-libc-dev` | C BPF fallback |
+| `CAP_SYS_ADMIN` | Program attach |
+| Kernel ≥ 5.10 | XDP hook support |
+| XDP-capable NIC driver | `ixgbe`, `i40e`, `mlx5`, etc. |
+
+---
+
 ## 6. Blocking Logic
 
 ### Automatic blocks
-
 
 | Trigger                    | Reason enum       | Typical TTL                     |
 | -------------------------- | ----------------- | ------------------------------- |
@@ -288,7 +368,6 @@ Uses `arc_swap::ArcSwap` for `ConfigHandle` — structure supports hot reload in
 | Hot /24 subnet             | `SubnetBatch`     | 3600                            |
 | Holt-Winters z-score > 3.5 | `ForecastAnomaly` | 300 s                           |
 | Low Shannon entropy        | `EntropyAnomaly`  | 600 s                           |
-
 
 ### Manual blocks
 
@@ -384,13 +463,11 @@ Response: `{"type":"ip_status","ip":"...","blocked":true,"threat":0.9,"ewma_rps"
 {"type":"error","code":503,"message":"channel full"}
 ```
 
-
 | Code | Meaning                           |
 | ---- | --------------------------------- |
 | 400  | Bad request / invalid IP          |
 | 404  | IP not found                      |
 | 503  | Event channel full — backpressure |
-
 
 ---
 
@@ -400,7 +477,6 @@ Response: `{"type":"ip_status","ip":"...","blocked":true,"threat":0.9,"ewma_rps"
 ramshield-cli [--addr 127.0.0.1:7890] <command>
 ```
 
-
 | Command                         | Action                       |
 | ------------------------------- | ---------------------------- |
 | `check <ip>`                    | Is IP blocked? Threat score? |
@@ -408,7 +484,6 @@ ramshield-cli [--addr 127.0.0.1:7890] <command>
 | `unblock <ip>`                  | Clear block                  |
 | `stats`                         | Engine statistics            |
 | `info <ip>`                     | Detailed IP record           |
-
 
 ---
 
@@ -418,16 +493,13 @@ File: `config.toml`. Missing sections use code defaults.
 
 ### `[engine]`
 
-
 | Key              | Default         | Description                             |
 | ---------------- | --------------- | --------------------------------------- |
 | `shard_count`    | 256             | DashMap shard count (power of 2)        |
 | `worker_threads` | 0 (= CPU count) | Logged; batch uses one dedicated thread |
 | `ram_limit_mb`   | 512             | Max in-memory store size                |
 
-
 ### `[detection]`
-
 
 | Key                       | Default | Description                                   |
 | ------------------------- | ------- | --------------------------------------------- |
@@ -442,18 +514,14 @@ File: `config.toml`. Missing sections use code defaults.
 | `promote_min_events`      | 8       | Hits before per-IP store entry                |
 | `subnet_window_threshold` | 500     | /24 volume to treat subnet as hot             |
 
-
 ### `[ipc]`
-
 
 | Key               | Default        | Description                |
 | ----------------- | -------------- | -------------------------- |
 | `tcp_addr`        | 127.0.0.1:7890 | Listen address             |
 | `max_connections` | 256            | Concurrent IPC connections |
 
-
 ### `[forecasting]`
-
 
 | Key                  | Default | Description                    |
 | -------------------- | ------- | ------------------------------ |
@@ -465,9 +533,7 @@ File: `config.toml`. Missing sections use code defaults.
 | `anomaly_zscore`     | 2.5     | Z-score alert threshold        |
 | `min_entropy`        | 2.0     | Minimum Shannon entropy (bits) |
 
-
 ### `[storage]`
-
 
 | Key                 | Default | Description             |
 | ------------------- | ------- | ----------------------- |
@@ -477,6 +543,14 @@ File: `config.toml`. Missing sections use code defaults.
 | `wal_segment_bytes` | 64 MiB  | Segment size            |
 | `wal_compress`      | true    | LZ4 compression         |
 
+### `[xdp]` (NEW)
+
+| Key               | Default       | Description                              |
+| ----------------- | ------------- | ---------------------------------------- |
+| `enabled`         | false         | Enable XDP acceleration                  |
+| `interface`       | eth0          | Network interface to attach XDP program  |
+| `build_mode`      | auto          | auto \| rust \| clang \| stub            |
+| `bpf_linker_path` | bpf-linker    | Path to bpf-linker binary                |
 
 ---
 
@@ -538,7 +612,7 @@ File: `config.toml`. Missing sections use code defaults.
 
 **Why:** Once an IP is blocked or flagged, you want to keep evaluating it even at low volume without storing every cold IP.
 
-**Advantage:** O(1) check, no false negatives (may have false positives — acceptable for “promote to tracking”).
+**Advantage:** O(1) check, no false negatives (may have false positives — acceptable for "promote to tracking").
 
 ---
 
@@ -596,18 +670,24 @@ Internet → Nginx/HAProxy → (access log or module)
                          Block or allow
 ```
 
-RamShield does **not** drop packets itself. It **advises** your edge (or you block at firewall based on CLI/API output).
+RamShield does **not** drop packets itself (without XDP). It **advises** your edge (or you block at firewall based on CLI/API output).
+
+With XDP enabled on Linux:
+```
+Internet → NIC (XDP drop) → Nginx/HAProxy
+               ▲
+               │
+         RamShield XDP Manager
+```
 
 ---
 
 ## 12. Load Testing Scripts
 
-
 | Script                       | Purpose                               |
 | ---------------------------- | ------------------------------------- |
 | `scripts/attack_sim_100k.py` | Fixed 100k event burst                |
 | `scripts/attack_extreme.py`  | Burst, flood, phase, interactive REPL |
-
 
 Examples:
 
@@ -635,7 +715,6 @@ Default filter: `ramshield=info`
 
 ### Key log messages
 
-
 | Message                                                   | Meaning                  |
 | --------------------------------------------------------- | ------------------------ |
 | `Detection: batch processor (max N events / M ms window)` | Batch thread started     |
@@ -643,7 +722,9 @@ Default filter: `ramshield=info`
 | `Batch block /24 x.y.z`                                   | Subnet block triggered   |
 | `ANOMALY z=...`                                           | Forecasting alert        |
 | `LOW ENTROPY H=...`                                       | Botnet-like distribution |
-
+| `Enforcement service started`                             | Enforcement ready        |
+| `XDP reconciled with N blocked IPs`                       | XDP sync complete        |
+| `XDP program loaded and attached`                         | XDP active               |
 
 ### Stats API
 
@@ -660,10 +741,44 @@ Default filter: `ramshield=info`
 5. **Entropy block** still scans promoted IpRecords (smaller set than before)
 6. **No TLS on IPC** — intended for localhost or trusted network
 7. **Subnet batch block** may affect innocent IPs in same /24 (by design for aggressive mitigation)
+8. **XDP Rust BPF** requires LLVM 21 + `bpf-linker` (clang fallback available)
+9. **XDP requires root/CAP_SYS_ADMIN** — not available in unprivileged containers
+10. **Enforcement reconciliation** on startup only; no periodic resync
 
 ---
 
-## 15. File Map
+## 15. Audit Remediation Status (2026-08)
+
+### Phase 1: IPC Hardening ✅
+- Semaphore rejection metrics (`rejected_connections`)
+- Idle timeout enforcement (30s default)
+- `try_send` for event batches (non-blocking)
+- Invalid IP handling returns 400
+
+### Phase 2: Enforcement Wiring ✅
+- `EnforcementService` created with single-writer architecture
+- WAL → Storage → TTL → XDP pipeline
+- `ramshield-enforcement` crate added to workspace
+- `XdpApplier` trait with `StubXdpApplier` fallback
+
+### Phase 3: XDP Toolchain ✅
+- Path B: `aya-build` + `bpf-linker` (preferred)
+- Fallback: `clang -target bpf` on C source
+- Stub: guarantees build never fails
+- `build.rs` orchestrates all three paths
+
+### Phase 4: Dead Code Removal ✅
+- `src/ipc/transport.rs` deleted
+- Unused modules cleaned
+
+### Performance Audit (x2) ✅
+1. **Enforcement deduplication** — `HashSet<IpAddr>` in `EnforcementService`
+2. **IPC aggregation** — `IpcServer` batches per-IP counts, threshold-based `EnforceCommand` emission
+3. **Scoped XDP sync** — `sync_blocklist()` at startup only; targeted `insert`/`remove` at runtime
+
+---
+
+## 16. File Map
 
 ```
 src/
@@ -672,7 +787,9 @@ src/
 ├── lib.rs               Module exports
 ├── config.rs            TOML config
 ├── error.rs             Error types
+├── util.rs              BoundedVecDeque
 ├── engine/mod.rs        Orchestrator + IPC server
+├── enforcement/mod.rs   EnforcementService (NEW)
 ├── detection/
 │   ├── mod.rs           Batch detection engine
 │   ├── batch.rs         In-memory aggregation
@@ -683,8 +800,19 @@ src/
 │   ├── wal.rs           (not wired)
 │   └── blob_store.rs    (not wired)
 ├── forecasting/mod.rs   Holt-Winters + entropy
-├── ipc/mod.rs           Request/Response types
-└── metrics/mod.rs       Counters
+├── ipc/
+│   ├── mod.rs           Request/Response types
+│   └── server.rs        IPC server (hardened)
+├── metrics/mod.rs       Counters
+
+crates/
+├── ramshield-xdp/       XDP/eBPF module (NEW)
+│   ├── build.rs         Multi-path build script
+│   ├── src/lib.rs       XdpManager
+│   └── ramshield-xdp-bpf/
+│       ├── Cargo.toml
+│       ├── src/main.rs  Rust BPF (aya-ebpf)
+│       └── src/main.c   C BPF (clang fallback)
 
 scripts/
 ├── attack_sim_100k.py
@@ -696,14 +824,14 @@ docs/
 
 ---
 
-## 16. Summary
+## 17. Summary
 
-RamShield v0.1.0 is a **batch-oriented, RAM-bounded DDoS detection engine** that:
+RamShield v0.2.0 is a hardened, audit-remediated DDoS engine with:
 
-- Ingests connection reports over JSON/TCP
-- Aggregates traffic in time windows before touching shared state
-- Promotes only hot IPs and hot subnets to full tracking
-- Blocks on rate, subnet volume, forecast anomaly, and entropy collapse
-- Exposes a compatible single-event API and a high-throughput batch API
+- **IPC hardening** for production reliability
+- **Enforcement pipeline** with deduplication and XDP integration
+- **XDP toolchain** with Rust/C fallback and stub guarantee
+- **Performance optimizations** from audit `x2` applied
+- **Clean workspace** with dead code removed
 
-The design prioritizes **throughput, memory safety, and subnet-scale visibility** over per-packet granularity — the right tradeoff when the adversary sends millions of events and you must decide in milliseconds which sources matter.
+The engine is ready for deployment with `cargo build --release` and configuration via `config.toml`. XDP acceleration is optional and requires kernel support.

@@ -8,11 +8,6 @@
 
 # RamShield - Enterprise-Grade Traffic Defense
 
-[![Crates.io](https://img.shields.io/crates/v/ramshield.svg)](https://crates.io/crates/ramshield)
-[![CI](https://github.com/grep999/ramshield/actions/workflows/ci.yml/badge.svg)](https://github.com/grep999/ramshield/actions/workflows/ci.yml)
-[![License](https://img.shields.io/crates.io/license/ramshield)](https://github.com/grep999/ramshield/blob/main/LICENSE)
-[![Rust](https://img.shields.io/crates/v/ramshield.svg)](https://crates.io/crates/ramshield)
-
 ## 🛡️ What It Is
 
 RamShield is an **advanced, RAM-first DDoS detection and mitigation engine** designed for high-throughput environments. It:
@@ -21,6 +16,7 @@ RamShield is an **advanced, RAM-first DDoS detection and mitigation engine** des
 - ✅ **Processes millions of requests per second** with sub-50ms decisions
 - ✅ **Uses zero external dependencies** - single binary, no databases or external services
 - ✅ **Self-contained** - runs anywhere with no configuration needed
+- ✅ **XDP-accelerated** kernel-level packet drop for blocked IPs (Linux)
 
 ---
 
@@ -28,32 +24,12 @@ RamShield is an **advanced, RAM-first DDoS detection and mitigation engine** des
 
 **Live Dashboard**: Accessible at `http://127.0.0.1:9999`
 
-![Slick & Edgy UI with dark theme, neon grid background, and real-time metrics](https://i.imgur.com/7YxQq9L.png)
-
 ### Dashboard Features:
 - **Neon Glow Effects** on traffic indicators and metrics
 - **Grid Background** with neon grid pattern for the "Slick & Edgy" aesthetic
 - **Real-time metrics** showing request rates, threat scores, and system health
-- **Neon glow effects** on active elements (IPs, blocks, alerts)
 - **Space Grotesk typography** for all text elements
-- **Neon glow effects** on interactive elements and key metrics
 - **Ultra-dark theme** with minimal UI elements for maximum focus
-
-### Dashboard Features:
-- **Real-time traffic monitoring** with live metrics
-- **Neon glow effects** on active elements (IPs, blocks, alerts)
-- **Grid background** with neon glow effects
-- **Space Grotesk typography** throughout
-- **Neon glow effects** on interactive elements
-- **Neon glow effects** on critical metrics
-- **Neon glow effects** on status indicators
-- **Neon glow effects** on traffic metrics
-- **Neon glow effects** on dashboard elements
-- **Neon glow effects** on status indicators
-- **Neon glow effects** on traffic metrics
-- **Neon glow effects** on dashboard elements
-- **Neon glow effects** on status indicators
-- **Neon glow effects** on traffic metrics
 
 ### Why It's Different
 
@@ -64,6 +40,7 @@ RamShield is an **advanced, RAM-first DDoS detection and mitigation engine** des
 | **Dependencies** | Redis, databases, external services | None - single binary |
 | **Architecture** | Request-by-request | Batch-first, multi-core |
 | **Learning** | Static rules | Adaptive algorithms |
+| **Kernel Offload** | N/A | XDP eBPF (Linux) |
 
 ---
 
@@ -74,7 +51,8 @@ RamShield is an **advanced, RAM-first DDoS detection and mitigation engine** des
 3. **Score**: Each IP gets a threat score combining rate, entropy, and history
 4. **Forecast**: Predicts attack patterns using ML models
 5. **Block**: Blocks malicious IPs automatically or on demand
-6. **Observe**: View live traffic, metrics, and alerts in the dashboard
+6. **Accelerate**: XDP eBPF program drops packets at kernel level
+7. **Observe**: View live traffic, metrics, and alerts in the dashboard
 
 ---
 
@@ -105,21 +83,24 @@ http://127.0.0.1:9999
 
 ---
 
-## 🚀 Getting Started
-
-1. **Build**: `cargo build --release`
-2. **Run**: `./target/release/ramshield config.toml`
-3. **Verify**: `curl http://127.0.0.1:7891/healthz`
-4. **Dashboard**: Open `http://127.0.0.1:9999` in your browser
-
----
-
 ## 🛠️ Advanced Features
 
-- **Customizable UI**: The dashboard uses a dark theme with neon glow effects and grid background for a "Slick & Edgy" aesthetic
-- **Real-time Metrics**: See live traffic, threat scores, and system health
-- **One-click Install**: Single binary with no dependencies
-- **Scalable**: Designed for enterprise deployment with Kubernetes support
+### XDP eBPF Acceleration (Linux)
+- Kernel-level packet filtering via XDP (eXpress Data Path)
+- Compiles to `bpfel-unknown-none` using `aya-ebpf`
+- Falls back to clang C compilation if Rust BPF toolchain unavailable
+- Requires `CAP_SYS_ADMIN` and kernel ≥ 5.10
+
+### Enforcement Pipeline
+- Single-writer architecture for all block/unblock operations
+- In-memory deduplication prevents redundant XDP operations
+- WAL-ready design for durability
+- Automatic TTL expiry with timing wheel
+
+### IPC Aggregation
+- Aggregates connection counts per IP over configurable windows
+- Threshold-based enforcement reduces channel traffic
+- Batch `report_connections` endpoint for high throughput
 
 ---
 
@@ -129,33 +110,6 @@ http://127.0.0.1:9999
 - [API Reference](https://docs.rs/ramshield/latest)
 - [Contributing Guide](CONTRIBUTING.md)
 - [Security Policy](SECURITY.md)
-
----
-
-## 🚀 Getting Started
-
-1. **Build**: `cargo build --release`
-2. **Run**: `./target/release/ramshield config.toml`
-3. **Verify**: `curl http://127.0.0.1:7891/healthz`
-4. **Access Dashboard**: `http://127.0.0.1:9999`
-
----
-
-## 📚 Documentation
-
-[View full documentation](docs/DOCUMENTATION.md)
-
----
-
-## 📣 Promote Your Project
-
-To promote RamShield as an industry-leading solution, consider:
-
-1. Writing blog posts about your implementation
-2. Creating case studies showing real-world impact
-3. Sharing performance metrics and benchmarks
-4. Highlighting the "Slick & Edgy" UI design philosophy
-5. Showcasing integration with popular platforms (Kubernetes, Docker, etc.)
 
 ---
 
