@@ -4,7 +4,7 @@
 
 We take the security of RamShield seriously. If you have discovered a security vulnerability, **please do not open a public issue.**
 
-Instead, please email **security@ramshield.dev** with details.
+Instead, please email **autodafeyolo@gmail.com** with details.
 
 We will aim to acknowledge your report within 48 hours and provide an update on the investigation and remediation steps.
 
