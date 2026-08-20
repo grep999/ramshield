@@ -306,10 +306,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 Dual-licensed under **MIT** or **Apache-2.0** at your option.
 
-```
-Copyright (c) 2024 NexusAI Polska
-```
-
 ---
 
 ## 🔗 Links
