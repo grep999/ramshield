@@ -14,26 +14,28 @@ Thank you for your interest in contributing! This document outlines the process 
 
 ### Prerequisites
 
-- Rust 1.70+ (2021 edition) — [rustup.rs](https://rustup.rs/)
+- Rust 1.80+ (2024 edition) — [rustup.rs](https://rustup.rs/)
 - Python 3.8+ — for attack simulators
+- Linux kernel ≥ 5.10 — for XDP eBPF development (optional)
 
 ### Clone & Build
 
 ```bash
 git clone https://github.com/grep999/ramshield.git
-cd ramshield/rs
+cd ramshield/beta/rs
 cargo build --all-targets
 cargo test
 ```
 
 ## Code Standards
 
-- **Edition**: Rust 2021
+- **Edition**: Rust 2024 (nightly)
 - **Formatting**: `cargo fmt --all`
 - **Linting**: `cargo clippy --all-targets -- -D warnings` (zero warnings)
 - **Error handling**: `thiserror` for library, `anyhow` for application
 - **Async**: Tokio full; never block in async context
 - **Concurrency**: Prefer atomics/channels over locks; short guard lifetimes
+- **YAGNI**: Delete before adding; stdlib first; fewest files possible
 
 ## Commit Messages
 
@@ -77,7 +79,22 @@ docs: update CLI reference
 cargo test
 
 # Attack simulation
-python3 scripts/attack_sim_100k.py --events 1000000 --workers 64
+python3 scripts/attack_extreme.py burst --events 1000000 --workers 64
+python3 scripts/attack_extreme.py flood --duration 60 --mode volumetric
+
+# IPC wiring tests
+cargo test --test ipc_wiring
+```
+
+## XDP Development (Optional)
+
+```bash
+# Install BPF toolchain
+sudo apt-get install -y clang llvm libelf-dev zlib1g-dev gcc-multilib
+cargo install bpf-linker
+
+# Build with XDP
+cargo build --all-targets --features xdp
 ```
 
 ## Security
