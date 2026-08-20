@@ -776,6 +776,8 @@ Default filter: `ramshield=info`
 2. **IPC aggregation** — `IpcServer` batches per-IP counts, threshold-based `EnforceCommand` emission
 3. **Scoped XDP sync** — `sync_blocklist()` at startup only; targeted `insert`/`remove` at runtime
 
+All audit items from `x2` are complete.
+
 ---
 
 ## 16. File Map
