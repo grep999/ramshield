@@ -2,7 +2,7 @@ pub mod network;
 pub mod raft_storage;
 pub mod types;
 
-use ramshield_storage::{BlockReason, Store};
+use ramshield_storage::Store;
 use std::sync::Arc;
 
 pub struct ConsensusService {

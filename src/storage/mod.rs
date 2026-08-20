@@ -37,12 +37,11 @@ pub struct TrafficCounters {
 
 impl TrafficCounters {
     pub fn new() -> Self {
-        const Z: AtomicU64 = AtomicU64::new(0);
         Self {
             events_last_second: AtomicU64::new(0),
             unique_ips_window: AtomicU64::new(0),
             promoted_ips: AtomicU64::new(0),
-            subnet_window: [Z; 256],
+            subnet_window: std::array::from_fn(|_| AtomicU64::new(0)),
             threat_sample: SegQueue::new(),
             ram_limit_mb: AtomicUsize::new(0),
             uptime_secs: AtomicU64::new(0),
@@ -330,13 +329,12 @@ impl Store {
     pub fn evict_batch(&self, keys: &[IpAddr]) {
         for key in keys {
             let expired = self.inner.get(key).is_some_and(|e| e.is_expired());
-            if expired {
-                if let Some((_k, e)) = self.inner.remove(key) {
+            if expired
+                && let Some((_k, e)) = self.inner.remove(key) {
                     let freed = std::mem::size_of::<IpAddr>() + std::mem::size_of::<Entry>() + e.value.heap_bytes();
                     self.ram_bytes.fetch_sub(freed, Ordering::Relaxed);
                     self.total_evictions.fetch_add(1, Ordering::Relaxed);
                 }
-            }
         }
     }
 

@@ -188,95 +188,81 @@ impl Config {
         let mut cfg = Self::from_toml_file(path)?;
 
         // Engine overrides
-        if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__RAM_LIMIT_MB") {
-            if let Ok(parsed) = v.parse::<usize>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__RAM_LIMIT_MB")
+            && let Ok(parsed) = v.parse::<usize>() {
                 cfg.engine.ram_limit_mb = parsed;
             }
-        }
-        if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__WORKER_THREADS") {
-            if let Ok(parsed) = v.parse::<usize>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__WORKER_THREADS")
+            && let Ok(parsed) = v.parse::<usize>() {
                 cfg.engine.worker_threads = parsed;
             }
-        }
-        if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__SHARD_COUNT") {
-            if let Ok(parsed) = v.parse::<usize>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__SHARD_COUNT")
+            && let Ok(parsed) = v.parse::<usize>() {
                 cfg.engine.shard_count = parsed.next_power_of_two();
             }
-        }
 
         // Detection overrides
-        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__RPS_THRESHOLD") {
-            if let Ok(parsed) = v.parse::<u64>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__RPS_THRESHOLD")
+            && let Ok(parsed) = v.parse::<u64>() {
                 cfg.detection.rps_threshold = parsed;
             }
-        }
-        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__PROMOTE_MIN_EVENTS") {
-            if let Ok(parsed) = v.parse::<u32>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__PROMOTE_MIN_EVENTS")
+            && let Ok(parsed) = v.parse::<u32>() {
                 cfg.detection.promote_min_events = parsed;
             }
-        }
-        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__BATCH_WINDOW_MS") {
-            if let Ok(parsed) = v.parse::<u64>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__BATCH_WINDOW_MS")
+            && let Ok(parsed) = v.parse::<u64>() {
                 cfg.detection.batch_window_ms = parsed;
             }
-        }
-        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__SUBNET_WINDOW_THRESHOLD") {
-            if let Ok(parsed) = v.parse::<u64>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__SUBNET_WINDOW_THRESHOLD")
+            && let Ok(parsed) = v.parse::<u64>() {
                 cfg.detection.subnet_window_threshold = parsed;
             }
-        }
-        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__BLOCK_TTL_SECS") {
-            if let Ok(parsed) = v.parse::<u64>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__BLOCK_TTL_SECS")
+            && let Ok(parsed) = v.parse::<u64>() {
                 cfg.detection.block_ttl_secs = parsed;
             }
-        }
-        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__HISTORY_CAP") {
-            if let Ok(parsed) = v.parse::<usize>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__HISTORY_CAP")
+            && let Ok(parsed) = v.parse::<usize>() {
                 cfg.detection.history_cap = parsed;
             }
-        }
-        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__PATTERN_SIMILARITY_THRESHOLD") {
-            if let Ok(parsed) = v.parse::<f32>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__PATTERN_SIMILARITY_THRESHOLD")
+            && let Ok(parsed) = v.parse::<f32>() {
                 cfg.detection.pattern_similarity_threshold = parsed;
             }
-        }
 
         // IPC overrides
         if let Ok(v) = std::env::var("RAMSHIELD_IPC__TCP_ADDR") {
             cfg.ipc.tcp_addr = v;
         }
-        if let Ok(v) = std::env::var("RAMSHIELD_IPC__MAX_CONNECTIONS") {
-            if let Ok(parsed) = v.parse::<usize>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_IPC__MAX_CONNECTIONS")
+            && let Ok(parsed) = v.parse::<usize>() {
                 cfg.ipc.max_connections = parsed;
             }
-        }
 
         // Dashboard overrides
-        if let Ok(v) = std::env::var("RAMSHIELD_DASHBOARD__ENABLED") {
-            if let Ok(parsed) = v.parse::<bool>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_DASHBOARD__ENABLED")
+            && let Ok(parsed) = v.parse::<bool>() {
                 cfg.dashboard.enabled = parsed;
             }
-        }
         if let Ok(v) = std::env::var("RAMSHIELD_DASHBOARD__HTTP_ADDR") {
             cfg.dashboard.http_addr = v;
         }
 
         // Storage overrides
-        if let Ok(v) = std::env::var("RAMSHIELD_STORAGE__WAL_ENABLED") {
-            if let Ok(parsed) = v.parse::<bool>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_STORAGE__WAL_ENABLED")
+            && let Ok(parsed) = v.parse::<bool>() {
                 cfg.storage.wal_enabled = parsed;
             }
-        }
         if let Ok(v) = std::env::var("RAMSHIELD_STORAGE__WAL_PATH") {
             cfg.storage.wal_path = v;
         }
 
         // Forecasting overrides
-        if let Ok(v) = std::env::var("RAMSHIELD_FORECASTING__ENABLED") {
-            if let Ok(parsed) = v.parse::<bool>() {
+        if let Ok(v) = std::env::var("RAMSHIELD_FORECASTING__ENABLED")
+            && let Ok(parsed) = v.parse::<bool>() {
                 cfg.forecasting.enabled = parsed;
             }
-        }
 
         cfg.validate()?;
         Ok(cfg)
@@ -379,7 +365,7 @@ mod tests {
             "RAMSHIELD_FORECASTING__ENABLED",
         ];
         for k in &keys {
-            std::env::remove_var(k);
+            unsafe { std::env::remove_var(k); }
         }
     }
 
@@ -393,7 +379,7 @@ mod tests {
     #[serial]
     fn env_var_override_ram_limit() {
         clear_env_vars();
-        std::env::set_var("RAMSHIELD_ENGINE__RAM_LIMIT_MB", "1024");
+        unsafe { std::env::set_var("RAMSHIELD_ENGINE__RAM_LIMIT_MB", "1024"); }
         let tmpfile = "/tmp/ramshield_test_config.toml";
         std::fs::write(tmpfile, "").unwrap();
         let cfg = Config::load(tmpfile).unwrap();
@@ -405,7 +391,7 @@ mod tests {
     #[serial]
     fn env_override_detection_rps() {
         clear_env_vars();
-        std::env::set_var("RAMSHIELD_DETECTION__RPS_THRESHOLD", "500");
+        unsafe { std::env::set_var("RAMSHIELD_DETECTION__RPS_THRESHOLD", "500"); }
         let tmpfile = "/tmp/ramshield_test_config.toml";
         std::fs::write(tmpfile, "").unwrap();
         let cfg = Config::load(tmpfile).unwrap();
@@ -418,7 +404,7 @@ mod tests {
     fn env_override_invalid_ignored() {
         use std::panic;
         clear_env_vars();
-        std::env::set_var("RAMSHIELD_ENGINE__RAM_LIMIT_MB", "not_a_number");
+        unsafe { std::env::set_var("RAMSHIELD_ENGINE__RAM_LIMIT_MB", "not_a_number"); }
         let tmpfile = "/tmp/ramshield_test_config.toml";
         std::fs::write(tmpfile, "").unwrap();
         

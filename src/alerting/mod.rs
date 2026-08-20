@@ -160,11 +160,10 @@ impl AlertingEngine {
         let cooldown_ms = self.config.alert_cooldown_secs * 1000;
         let should_alert = {
             let mut last = self.last_alert_ms.lock().unwrap();
-            if let Some(&last_ts) = last.get(source) {
-                if now_ms.saturating_sub(last_ts) < cooldown_ms {
+            if let Some(&last_ts) = last.get(source)
+                && now_ms.saturating_sub(last_ts) < cooldown_ms {
                     return; // In cooldown
                 }
-            }
             last.insert(source.to_string(), now_ms);
             true
         };

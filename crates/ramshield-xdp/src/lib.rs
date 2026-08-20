@@ -6,10 +6,8 @@
 use aya::{
     maps::HashMap,
     programs::Xdp,
-    util::online_cpus,
     Bpf,
 };
-use ramshield_types::events::BlockDecision;
 use ramshield_storage::Store;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -33,13 +31,13 @@ pub enum XdpError {
 }
 
 /// XDP blocklist key (IPv4 or IPv6 packed as u128 for BPF map).
-use aya::Pod;
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct BlocklistKey(pub u128);
 
+// Required by aya for eBPF map key types. Safe because BlocklistKey is #[repr(C)] and contains only POD data.
+#[allow(unsafe_code)]
 unsafe impl aya::Pod for BlocklistKey {}
 
 // XDP map entry value, needs to be Pod
@@ -47,6 +45,8 @@ unsafe impl aya::Pod for BlocklistKey {}
 #[repr(C)]
 pub struct BlocklistValue(pub u8);
 
+// Required by aya for eBPF map value types. Safe because BlocklistValue is #[repr(C)] and contains only POD data.
+#[allow(unsafe_code)]
 unsafe impl aya::Pod for BlocklistValue {}
 
 impl BlocklistKey {
@@ -143,5 +143,33 @@ impl XdpManager {
             tracing::info!(iface = %self._iface, "XDP program unloaded");
         }
         Ok(())
+    }
+}
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    #[ignore = "requires CAP_BPF and CAP_NET_ADMIN capabilities"]
+    fn test_bpf_object_loads() {
+        let bpf_path = concat!(env!("OUT_DIR"), "/ramshield-xdp");
+        let bytes = fs::read(bpf_path).expect("failed to read BPF object");
+        println!("Loaded {} bytes from BPF object", bytes.len());
+        
+        match Bpf::load(&bytes) {
+            Ok(bpf) => {
+                println!("✓ BPF object loaded successfully");
+                let programs: Vec<_> = bpf.programs().map(|(k,_)| k.clone()).collect();
+                let maps: Vec<_> = bpf.maps().map(|(k,_)| k.clone()).collect();
+                println!("Programs: {:?}", programs);
+                println!("Maps: {:?}", maps);
+                assert!(programs.iter().any(|p| *p == "ramshield_xdp"), "Missing ramshield_xdp program");
+                assert!(maps.iter().any(|m| *m == "BLOCKLIST"), "Missing BLOCKLIST map");
+            }
+            Err(e) => {
+                panic!("✗ Failed to load BPF object: {}", e);
+            }
+        }
     }
 }

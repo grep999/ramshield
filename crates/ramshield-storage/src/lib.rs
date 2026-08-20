@@ -1,8 +1,10 @@
 use anyhow::Result;
+use crossbeam_queue::SegQueue;
 use dashmap::DashMap;
-use ramshield_types::error::BlockReason;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::fmt;
+use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+pub use ramshield_types::error::BlockReason;
 
 pub mod atomic_ops;
 pub mod blob_store;
@@ -41,23 +43,40 @@ pub struct TrafficCounters {
     pub uptime_secs: AtomicU64,
     pub events_last_second: AtomicU64,
     pub unique_ips_window: AtomicU64,
-    pub subnet_window: std::sync::Mutex<Vec<u64>>,
-    pub threat_sample: std::sync::Mutex<Vec<(std::net::IpAddr, f32)>>,
+    /// Lock-free atomic array for concurrent reads/writes from detection and forecasting.
+    pub subnet_window: [AtomicU64; 256],
+    /// Lock-free unbounded MPMC queue.
+    pub threat_sample: SegQueue<(IpAddr, f32)>,
     pub blocked_count: AtomicU64,
 }
 
 impl TrafficCounters {
     pub fn new() -> Self {
+        const Z: AtomicU64 = AtomicU64::new(0);
         Self {
             ram_limit_mb: AtomicU64::new(0),
             used_bytes: AtomicU64::new(0),
             uptime_secs: AtomicU64::new(0),
             events_last_second: AtomicU64::new(0),
             unique_ips_window: AtomicU64::new(0),
-            subnet_window: std::sync::Mutex::new(Vec::with_capacity(256)),
-            threat_sample: std::sync::Mutex::new(Vec::with_capacity(128)),
+            subnet_window: [Z; 256],
+            threat_sample: SegQueue::new(),
             blocked_count: AtomicU64::new(0),
         }
+    }
+
+    pub fn push_threat_samples(&self, samples: Vec<(IpAddr, f32)>) {
+        for item in samples {
+            self.threat_sample.push(item);
+        }
+    }
+
+    pub fn drain_threat_sample(&self) -> Vec<(IpAddr, f32)> {
+        let mut sample = Vec::with_capacity(self.threat_sample.len());
+        while let Some(item) = self.threat_sample.pop() {
+            sample.push(item);
+        }
+        sample
     }
 }
 
@@ -173,6 +192,15 @@ impl Store {
         }
     }
 
+    /// Get all currently blocked IPs for XDP reconciliation.
+    pub fn get_all_blocked_ips(&self) -> Vec<std::net::IpAddr> {
+        self.inner
+            .iter()
+            .filter(|e| e.value().is_blocked)
+            .filter_map(|e| e.key().parse().ok())
+            .collect()
+    }
+
     pub fn subnet_table(&self) -> &SubnetTable {
         &self.subnet_table
     }
@@ -181,16 +209,16 @@ impl Store {
         self.traffic.events_last_second
             .store(total_events, Ordering::Relaxed);
         self.traffic.unique_ips_window.store(unique_ips, Ordering::Relaxed);
-        if let Ok(mut v) = self.traffic.subnet_window.lock() {
-            v.clear();
-            v.extend_from_slice(subnet_counts);
+        for (i, count) in subnet_counts.iter().enumerate() {
+            if i < 256 {
+                self.traffic.subnet_window[i].store(*count, Ordering::Relaxed);
+            }
         }
     }
 
     pub fn set_threat_sample(&self, sample: Vec<(std::net::IpAddr, f32)>) {
-        if let Ok(mut v) = self.traffic.threat_sample.lock() {
-            *v = sample;
-        }
+        while self.traffic.threat_sample.pop().is_some() {}
+        self.traffic.push_threat_samples(sample);
     }
 }
 

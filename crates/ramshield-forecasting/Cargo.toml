@@ -12,7 +12,7 @@ ramshield-learning = { path = "../ramshield-learning" }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 serde = { version = "1", features = ["derive"] }
-uuid = "1.11"
+uuid = { version = "1", features = ["v4"] }
 
 [lints]
 workspace = true

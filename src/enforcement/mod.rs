@@ -12,7 +12,7 @@ use crate::storage::{Store, Value, BlockState, BlockReason, IpRecord};
 use crate::metrics::Metrics;
 use crate::util::BoundedVecDeque;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -223,7 +223,7 @@ impl EnforcementService {
 
                 rec.block_state = BlockState::Blocked { reason: block_reason, since_ns: now_ns };
 
-                self.store.insert(key, Value::IpRecord(rec), ttl_secs, self.store.ram_bytes() as usize)
+                self.store.insert(key, Value::IpRecord(rec), ttl_secs, self.store.ram_bytes())
                     .map_err(|e| EnforcementError::Storage(e.to_string()))
             }
             EnforceAction::Unblock => {
@@ -236,7 +236,7 @@ impl EnforcementService {
                 
                 if let Some(Value::IpRecord(mut rec)) = self.store.get(&cmd.ip) {
                     rec.block_state = BlockState::Clean;
-                    self.store.insert(cmd.ip, Value::IpRecord(rec), None, self.store.ram_bytes() as usize)
+                    self.store.insert(cmd.ip, Value::IpRecord(rec), None, self.store.ram_bytes())
                         .map_err(|e| EnforcementError::Storage(e.to_string()))
                 } else {
                     Ok(()) // Not tracked = already unblocked

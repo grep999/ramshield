@@ -476,8 +476,8 @@ impl DetectionEngine {
                 // O(1) lookup for IPs in the hot subnet instead of full scan
                 let ips_in_subnet = self.store.get_ips_in_subnet(sk);
                 for key in ips_in_subnet {
-                    if let Some(e) = self.store.inner().get(&key) {
-                        if let Value::IpRecord(ref r) = e.value().value {
+                    if let Some(e) = self.store.inner().get(&key)
+                        && let Value::IpRecord(ref r) = e.value().value {
                             if matches!(r.block_state, BlockState::Blocked { .. }) {
                                 continue;
                             }
@@ -492,7 +492,6 @@ impl DetectionEngine {
                             self.metrics.record_block(&r.ip.to_string(), "subnet_batch", "detection");
                             self.metrics.blocks_subnet.fetch_add(1, Ordering::Relaxed);
                         }
-                    }
 
                 }
                 self.store.reset_subnet_window(sk);

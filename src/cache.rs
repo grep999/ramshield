@@ -130,14 +130,13 @@ where
         let now = now_ns();
         let entry = self.inner.get(key)?;
 
-        if let Some(exp) = entry.expire {
-            if now >= exp {
+        if let Some(exp) = entry.expire
+            && now >= exp {
                 drop(entry);
                 self.inner.remove(key);
                 self.count.fetch_sub(1, Ordering::Relaxed);
                 return None;
             }
-        }
         Some(entry)
     }
 

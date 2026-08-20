@@ -109,7 +109,10 @@ impl Wal {
         let bytes = file.metadata()?.len();
 
         // Discover highest LSN across all segments
-        let start_lsn = discover_max_lsn(dir)? + 1;
+        let start_lsn = match discover_max_lsn(dir)? {
+            Some(max) => max + 1,
+            None => 0,
+        };
 
         info!(
             "WAL opened {:?} ({} bytes, start_lsn={}, durability={:?})",
@@ -248,82 +251,92 @@ impl Wal {
         segs.sort();
 
         let mut out: Vec<(u64, WalEntry)> = Vec::new();
-        let mut quarantine_dir = PathBuf::from(dir).join(QUARANTINE_DIR);
+        let quarantine_dir = PathBuf::from(dir).join(QUARANTINE_DIR);
 
         for seg in &segs {
             let file = File::open(seg)?;
             let mut reader = BufReader::with_capacity(64 * 1024, file);
-            let mut hdr_buf = [0u8; HEADER];
             let mut payload_buf = vec![0u8; MAX_RECORD_SIZE];
             let mut corrupted = false;
 
             loop {
-                // Read header
-                if let Err(e) = reader.read_exact(&mut hdr_buf) {
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                        break; // normal end of segment
-                    }
-                    warn!("WAL read error in {:?}: {}", seg, e);
-                    corrupted = true;
-                    break;
-                }
-
-                let rh = RecordHeader::from_bytes(&hdr_buf);
-                if rh.magic != MAGIC {
-                    warn!("WAL bad magic at in {:?}", seg);
-                    corrupted = true;
-                    break;
-                }
-                if rh.version > FORMAT_VERSION {
-                    warn!("WAL future version {} in {:?}", rh.version, seg);
-                    corrupted = true;
-                    break;
-                }
-                if rh.payload_len as usize > MAX_RECORD_SIZE {
-                    warn!(
-                        "WAL record too large ({} bytes) in {:?}",
-                        rh.payload_len, seg
-                    );
-                    corrupted = true;
-                    break;
-                }
-
-                let plen = rh.payload_len as usize;
-                if plen > payload_buf.len() {
-                    payload_buf.resize(plen, 0);
-                }
-                if let Err(e) = reader.read_exact(&mut payload_buf[..plen]) {
-                    warn!("WAL truncated payload in {:?}: {}", seg, e);
-                    corrupted = true;
-                    break;
-                }
-
-                let payload = &payload_buf[..plen];
-                let mut h = Crc32::new();
-                h.update(payload);
-                if h.finalize() != rh.crc {
-                    warn!("WAL crc mismatch in {:?}", seg);
-                    corrupted = true;
-                    break;
-                }
-
-                let decoded: Vec<u8> = if rh.flags & 0x01 != 0 {
-                    match decompress_size_prepended(payload) {
-                        Ok(d) => d,
-                        Err(e) => {
-                            warn!("WAL decompress error in {:?}: {}", seg, e);
+                // Peek to see if there are any bytes left
+                let mut peek = [0u8; 1];
+                match reader.read(&mut peek) {
+                    Ok(0) => break, // Clean EOF
+                    Ok(_) => {
+                        // There's at least one byte, try to read the rest of the header
+                        let mut hdr_buf = [0u8; HEADER];
+                        hdr_buf[0] = peek[0];
+                        if let Err(e) = reader.read_exact(&mut hdr_buf[1..]) {
+                            warn!("WAL partial header in {:?}: {}", seg, e);
                             corrupted = true;
                             break;
                         }
-                    }
-                } else {
-                    payload.to_vec()
-                };
 
-                match serde_json::from_slice::<WalEntry>(&decoded) {
-                    Ok(entry) => out.push((rh.lsn, entry)),
+                        let rh = RecordHeader::from_bytes(&hdr_buf);
+                        if rh.magic != MAGIC {
+                            warn!("WAL bad magic at in {:?}", seg);
+                            corrupted = true;
+                            break;
+                        }
+                        if rh.version > FORMAT_VERSION {
+                            warn!("WAL future version {} in {:?}", rh.version, seg);
+                            corrupted = true;
+                            break;
+                        }
+                        if rh.payload_len as usize > MAX_RECORD_SIZE {
+                            warn!(
+                                "WAL record too large ({} bytes) in {:?}",
+                                rh.payload_len, seg
+                            );
+                            corrupted = true;
+                            break;
+                        }
+
+                        let plen = rh.payload_len as usize;
+                        if plen > payload_buf.len() {
+                            payload_buf.resize(plen, 0);
+                        }
+                        if let Err(e) = reader.read_exact(&mut payload_buf[..plen]) {
+                            warn!("WAL truncated payload in {:?}: {}", seg, e);
+                            corrupted = true;
+                            break;
+                        }
+
+                        let payload = &payload_buf[..plen];
+                        let mut h = Crc32::new();
+                        h.update(payload);
+                        if h.finalize() != rh.crc {
+                            warn!("WAL crc mismatch in {:?}", seg);
+                            corrupted = true;
+                            break;
+                        }
+
+                        let decoded: Vec<u8> = if rh.flags & 0x01 != 0 {
+                            match decompress_size_prepended(payload) {
+                                Ok(d) => d,
+                                Err(e) => {
+                                    warn!("WAL decompress error in {:?}: {}", seg, e);
+                                    corrupted = true;
+                                    break;
+                                }
+                            }
+                        } else {
+                            payload.to_vec()
+                        };
+
+                        match serde_json::from_slice::<WalEntry>(&decoded) {
+                            Ok(entry) => out.push((rh.lsn, entry)),
+                            Err(e) => {
+                                warn!("WAL deser error in {:?}: {}", seg, e);
+                                corrupted = true;
+                                break;
+                            }
+                        }
+                    }
                     Err(e) => {
-                        warn!("WAL deser error in {:?}: {}", seg, e);
+                        warn!("WAL read error in {:?}: {}", seg, e);
                         corrupted = true;
                         break;
                     }
@@ -382,17 +395,23 @@ fn discover_max_seg(dir: &str) -> u64 {
 }
 
 /// Scan all segments to find the highest LSN (for crash recovery).
-fn discover_max_lsn(dir: &str) -> Result<u64> {
+/// Returns None if no segments exist.
+fn discover_max_lsn(dir: &str) -> Result<Option<u64>> {
     let segs: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(rd) => rd
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|x| x == "rshw"))
             .collect(),
-        Err(_) => return Ok(0),
+        Err(_) => return Ok(None),
     };
 
+    if segs.is_empty() {
+        return Ok(None);
+    }
+
     let mut max_lsn: u64 = 0;
+    let mut found_any = false;
     for seg in &segs {
         let file = File::open(seg)?;
         let mut reader = BufReader::with_capacity(64 * 1024, file);
@@ -409,6 +428,7 @@ fn discover_max_lsn(dir: &str) -> Result<u64> {
             }
             if rh.lsn > max_lsn {
                 max_lsn = rh.lsn;
+                found_any = true;
             }
             let plen = rh.payload_len as usize;
             if plen > skip_buf.len() {
@@ -419,7 +439,7 @@ fn discover_max_lsn(dir: &str) -> Result<u64> {
             }
         }
     }
-    Ok(max_lsn)
+    Ok(if found_any { Some(max_lsn) } else { None })
 }
 
 fn seg_path(dir: &str, idx: u64) -> PathBuf {
@@ -553,7 +573,7 @@ mod tests {
             })
             .unwrap();
         {
-            use std::OpenOptions;
+            use std::fs::OpenOptions;
             let mut f = OpenOptions::new().append(true).open(&seg).unwrap();
             f.write_all(b"GARBAGE_DATA_HERE").unwrap();
         }

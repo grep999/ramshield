@@ -2,17 +2,15 @@ use ramshield_config::ForecastingConfig;
 use ramshield_learning::PatternLearner;
 use ramshield_metrics::Metrics;
 use ramshield_storage::Store;
-use ramshield_types::BlockReason;
-use ramshield_types::command::{Command, EnforcementCommand};
+use ramshield_types::command::Command;
+use ramshield_types::error::BlockReason;
 use std::collections::VecDeque;
+use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
-use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use std::collections::HashMap;
-use std::net::IpAddr;
 
 // ── Holt-Winters ──────────────────────────────────────────────────────────────
 
@@ -181,56 +179,95 @@ impl Forecaster {
             .iter()
             .map(|a| a.load(Ordering::Relaxed))
             .collect();
+        if counts.iter().all(|&c| c == 0) {
+            return;
+        }
         let total: u64 = counts.iter().sum();
-        if total == 0 { return }
-
+        if total < 100 {
+            return;
+        }
         let h = shannon_entropy(&counts, total);
-        self.metrics.set_forecast_entropy(h);
+        self.metrics.set_entropy(h);
+        debug!("entropy H={:.3} bits ({} subnets)", h, counts.len());
         if h < self.config.min_entropy {
-            warn!("LOW ENTROPY h={:.2}", h);
+            warn!("LOW ENTROPY H={:.3}", h);
             self.entropy_block().await;
         }
     }
 
-    async fn preemptive_block(&self) {
+    fn snapshot_threat_sample(&self) -> Vec<(IpAddr, f32)> {
         let sample = self.store.traffic.drain_threat_sample();
-        if sample.is_empty() { return }
+        for item in &sample {
+            self.store.traffic.threat_sample.push(*item);
+        }
+        sample
+    }
 
+    fn block_cmd(&self, ip: IpAddr, reason: BlockReason, ttl_seconds: u64) -> Command {
+        Command::Block(ramshield_types::command::EnforcementCommand {
+            decision_id: Uuid::new_v4(),
+            policy_version: 1,
+            source: "forecasting".into(),
+            actor: "forecaster".into(),
+            timestamp_utc: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+            ttl_seconds,
+            reason: format!("{reason:?}"),
+            ip,
+        })
+    }
+
+    async fn preemptive_block(&self) {
+        let sample = self.snapshot_threat_sample();
+        if sample.is_empty() {
+            return;
+        }
         let mut n = 0usize;
         for (ip, score) in sample {
-            if score > 0.9 {
-                let cmd = Command::Enforcement(EnforcementCommand::Block(BlockDecision {
-                    ip,
-                    reason: BlockReason::ForecastAnomaly,
-                    ttl_secs: 300, 
-                }));
-                if self.command_tx.send(cmd).await.is_ok() {
-                    n += 1;
-                }
+            if score <= 0.7 {
+                continue;
+            }
+            if self
+                .command_tx
+                .send(self.block_cmd(ip, BlockReason::ForecastAnomaly, 300))
+                .await
+                .is_ok()
+            {
+                self.metrics
+                    .record_block(&ip.to_string(), "forecast_anomaly", "forecasting");
+                n += 1;
             }
         }
         if n > 0 {
-            info!("Preemptively blocked {} high-threat IPs", n);
+            info!("pre-emptive blocks: {}", n);
         }
     }
-    
-    async fn entropy_block(&self) {
-        let sample = self.store.traffic.drain_threat_sample();
-        if sample.is_empty() { return }
 
-        let mut top: Vec<(IpAddr, f32)> = sample.into_iter().collect();
-        top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        
-        let n = (top.len() / 10).max(1); // Block top 10%
-        for (ip, _score) in top.iter().take(n) {
-            let cmd = Command::Enforcement(EnforcementCommand::Block(BlockDecision {
-                ip: *ip,
-                reason: BlockReason::EntropyAnomaly,
-                ttl_secs: 60,
-            }));
-            let _ = self.command_tx.send(cmd).await;
+    async fn entropy_block(&self) {
+        let mut top = self.snapshot_threat_sample();
+        if top.is_empty() {
+            return;
         }
-        info!("Blocked top {} IPs due to low entropy", n);
+        top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let cut = (top.len() / 10).clamp(1, 50);
+        let mut n = 0usize;
+        for (ip, _) in top.iter().take(cut) {
+            if self
+                .command_tx
+                .send(self.block_cmd(*ip, BlockReason::EntropyAnomaly, 600))
+                .await
+                .is_ok()
+            {
+                self.metrics
+                    .record_block(&ip.to_string(), "entropy_anomaly", "forecasting");
+                n += 1;
+            }
+        }
+        if n > 0 {
+            info!("entropy blocks: {}", n);
+        }
     }
 }
 

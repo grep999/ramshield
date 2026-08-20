@@ -1,0 +1,7 @@
+[package]
+name = "test_xdp_load"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aya = "0.12"

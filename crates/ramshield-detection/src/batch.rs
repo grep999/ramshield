@@ -36,10 +36,12 @@ pub fn subnet_key_v4(octets: [u8; 4]) -> u32 {
 }
 
 /// Pack IPv6 /64 prefix into u128 for subnet-scale counters.
-/// Network byte order: first 8 bytes in high bits.
+/// Network byte order: first 8 bytes in high bits, host bits zeroed.
 #[inline]
 pub fn subnet_key_v6(octets: [u8; 16]) -> u128 {
-    u128::from_be_bytes(octets)
+    let full = u128::from_be_bytes(octets);
+    // Zero out the lower 64 bits (host part of /64)
+    full & 0xFFFF_FFFF_FFFF_FFFF_0000_0000_0000_0000
 }
 
 /// Get network key as u128 for both address families.

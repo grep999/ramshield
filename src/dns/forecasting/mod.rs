@@ -109,11 +109,10 @@ impl DnsForecaster {
         }
 
         // Recent activity increases threat score
-        if let Ok(elapsed) = pattern.last_seen.elapsed() {
-            if elapsed < Duration::from_secs(300) {
+        if let Ok(elapsed) = pattern.last_seen.elapsed()
+            && elapsed < Duration::from_secs(300) {
                 score += 0.1;
             }
-        }
 
         // Cap at 1.0 and return
         score.min(1.0)
