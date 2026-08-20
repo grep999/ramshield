@@ -174,23 +174,63 @@ impl Forecaster {
     }
 
     async fn tick_entropy(&self) {
-        // Need to convert AtomicU64 to something iterable.
-        // Assuming the store has a method to get the raw counts, or I need to change how this is accessed.
-        // Since I cannot change Store freely, I'll assume for now I need to fetch the data differently
-        // or this module needs a fix. Given constraints, I will replace the lock() with load()
-        // but this won't work for Vec. This implies Store needs a better interface.
-        // I will stub this to compile for now and mark as todo.
-        warn!("Entropy tick skipped: API migration pending");
+        let counts: Vec<u64> = self
+            .store
+            .traffic
+            .subnet_window
+            .iter()
+            .map(|a| a.load(Ordering::Relaxed))
+            .collect();
+        let total: u64 = counts.iter().sum();
+        if total == 0 { return }
+
+        let h = shannon_entropy(&counts, total);
+        self.metrics.set_forecast_entropy(h);
+        if h < self.config.min_entropy {
+            warn!("LOW ENTROPY h={:.2}", h);
+            self.entropy_block().await;
+        }
     }
 
     async fn preemptive_block(&self) {
-        // Same issue here: threat_sample is AtomicU64, cannot lock() it.
-        // Marking as todo.
-        warn!("Preemptive block skipped: API migration pending");
-    }
+        let sample = self.store.traffic.drain_threat_sample();
+        if sample.is_empty() { return }
 
+        let mut n = 0usize;
+        for (ip, score) in sample {
+            if score > 0.9 {
+                let cmd = Command::Enforcement(EnforcementCommand::Block(BlockDecision {
+                    ip,
+                    reason: BlockReason::ForecastAnomaly,
+                    ttl_secs: 300, 
+                }));
+                if self.command_tx.send(cmd).await.is_ok() {
+                    n += 1;
+                }
+            }
+        }
+        if n > 0 {
+            info!("Preemptively blocked {} high-threat IPs", n);
+        }
+    }
+    
     async fn entropy_block(&self) {
-        warn!("Entropy block skipped: API migration pending");
+        let sample = self.store.traffic.drain_threat_sample();
+        if sample.is_empty() { return }
+
+        let mut top: Vec<(IpAddr, f32)> = sample.into_iter().collect();
+        top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        
+        let n = (top.len() / 10).max(1); // Block top 10%
+        for (ip, _score) in top.iter().take(n) {
+            let cmd = Command::Enforcement(EnforcementCommand::Block(BlockDecision {
+                ip: *ip,
+                reason: BlockReason::EntropyAnomaly,
+                ttl_secs: 60,
+            }));
+            let _ = self.command_tx.send(cmd).await;
+        }
+        info!("Blocked top {} IPs due to low entropy", n);
     }
 }
 

@@ -4,14 +4,13 @@ pub mod wal;
 
 use crate::error::{Result, RsError};
 use crate::util::BoundedVecDeque;
-use ahash::AHashMap;
 use crossbeam_queue::SegQueue;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 use std::time::{Duration, Instant};
 
@@ -61,14 +60,20 @@ impl TrafficCounters {
         }
     }
 
-    /// Replace threat sample with new entries. Drains old entries first.
-    pub fn set_threat_sample(&self, sample: Vec<(IpAddr, f32)>) {
-        // Drain existing entries
-        while self.threat_sample.pop().is_some() {}
-        // Push new entries
-        for item in sample {
+    /// Push multiple threat samples into the queue.
+    pub fn push_threat_samples(&self, samples: Vec<(IpAddr, f32)>) {
+        for item in samples {
             self.threat_sample.push(item);
         }
+    }
+
+    /// Atomically drain the threat sample queue.
+    pub fn drain_threat_sample(&self) -> Vec<(IpAddr, f32)> {
+        let mut sample = Vec::with_capacity(self.threat_sample.len());
+        while let Some(item) = self.threat_sample.pop() {
+            sample.push(item);
+        }
+        sample
     }
 }
 
@@ -203,7 +208,7 @@ pub struct Store {
     subnet_table: Arc<DashMap<u32, SubnetRecord>>,
     /// Reverse index: subnet key -> list of IP strings for efficient subnet-based lookups.
     /// Maintained during batch flush to avoid O(store_size) scans.
-    subnet_index: Arc<Mutex<AHashMap<u32, AHashMap<IpAddr, ()>>>>,
+    subnet_index: Arc<DashMap<u32, DashMap<IpAddr, ()>>>,
     ram_bytes: Arc<AtomicUsize>,
     pub traffic: Arc<TrafficCounters>,
     pub total_inserts: Arc<AtomicU64>,
@@ -217,7 +222,7 @@ impl Store {
         Self {
             inner: Arc::new(DashMap::with_shard_amount(shards)),
             subnet_table: Arc::new(DashMap::with_shard_amount(32)),
-            subnet_index: Arc::new(Mutex::new(AHashMap::with_capacity(256))),
+            subnet_index: Arc::new(DashMap::with_shard_amount(32)),
             ram_bytes: Arc::new(AtomicUsize::new(0)),
             traffic: Arc::new(TrafficCounters::new()),
             total_inserts: Arc::new(AtomicU64::new(0)),
@@ -385,33 +390,26 @@ impl Store {
     pub fn update_subnet_index(&self, ip_key: IpAddr, subnet_key: Option<u32>, is_removal: bool) {
         let Some(sk) = subnet_key else { return };
 
-        if let Ok(mut index) = self.subnet_index.lock() {
-            if is_removal {
-                if let Some(subnet_ips) = index.get_mut(&sk) {
-                    subnet_ips.remove(&ip_key);
-                    if subnet_ips.is_empty() {
-                        index.remove(&sk);
-                    }
+        if is_removal {
+            if let Some(subnet_ips) = self.subnet_index.get(&sk) {
+                subnet_ips.remove(&ip_key);
+                if subnet_ips.is_empty() {
+                    self.subnet_index.remove(&sk);
                 }
-            } else {
-                index
-                    .entry(sk)
-                    .or_insert_with(|| AHashMap::with_capacity(64))
-                    .insert(ip_key, ());
             }
+        } else {
+            self.subnet_index
+                .entry(sk)
+                .or_insert_with(|| DashMap::with_capacity(64))
+                .insert(ip_key, ());
         }
     }
 
     /// Get all IP keys in a given subnet using the reverse index (O(1) lookup).
     pub fn get_ips_in_subnet(&self, subnet_key: u32) -> Vec<IpAddr> {
         self.subnet_index
-            .lock()
-            .map(|index| {
-                index
-                    .get(&subnet_key)
-                    .map(|ips| ips.keys().cloned().collect())
-                    .unwrap_or_default()
-            })
+            .get(&subnet_key)
+            .map(|ips| ips.iter().map(|e| *e.key()).collect())
             .unwrap_or_default()
     }
 

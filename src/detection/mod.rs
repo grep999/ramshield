@@ -324,7 +324,7 @@ impl DetectionEngine {
 
         threat_sample.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         threat_sample.truncate(128);
-        self.store.traffic.set_threat_sample(threat_sample);
+        self.store.traffic.push_threat_samples(threat_sample);
         self.store.traffic.promoted_ips.store(
             self.store.len() as u64,
             Ordering::Relaxed,
