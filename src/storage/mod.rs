@@ -5,6 +5,7 @@ pub mod wal;
 use crate::error::{Result, RsError};
 use crate::util::BoundedVecDeque;
 use ahash::AHashMap;
+use crossbeam_queue::SegQueue;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
@@ -24,9 +25,11 @@ pub struct TrafficCounters {
     pub unique_ips_window: AtomicU64,
     pub promoted_ips: AtomicU64,
     /// Subnet event counts from the latest flush window (for entropy at scale).
-    pub subnet_window: Mutex<Vec<u64>>,
+    /// Lock-free atomic array for concurrent reads/writes from detection and forecasting.
+    pub subnet_window: [AtomicU64; 256],
     /// High-threat IPs from latest flush (bounded sample for preemptive block).
-    pub threat_sample: Mutex<Vec<(IpAddr, f32)>>,
+    /// Lock-free unbounded MPMC queue.
+    pub threat_sample: SegQueue<(IpAddr, f32)>,
     /// RAM limit in MB from config.
     pub ram_limit_mb: AtomicUsize,
     /// Process uptime in seconds.
@@ -35,12 +38,13 @@ pub struct TrafficCounters {
 
 impl TrafficCounters {
     pub fn new() -> Self {
+        const Z: AtomicU64 = AtomicU64::new(0);
         Self {
             events_last_second: AtomicU64::new(0),
             unique_ips_window: AtomicU64::new(0),
             promoted_ips: AtomicU64::new(0),
-            subnet_window: Mutex::new(Vec::with_capacity(256)),
-            threat_sample: Mutex::new(Vec::with_capacity(128)),
+            subnet_window: [Z; 256],
+            threat_sample: SegQueue::new(),
             ram_limit_mb: AtomicUsize::new(0),
             uptime_secs: AtomicU64::new(0),
         }
@@ -50,15 +54,20 @@ impl TrafficCounters {
         self.events_last_second
             .store(total_events, Ordering::Relaxed);
         self.unique_ips_window.store(unique_ips, Ordering::Relaxed);
-        if let Ok(mut v) = self.subnet_window.lock() {
-            v.clear();
-            v.extend_from_slice(subnet_counts);
+        for (i, count) in subnet_counts.iter().enumerate() {
+            if i < 256 {
+                self.subnet_window[i].store(*count, Ordering::Relaxed);
+            }
         }
     }
 
+    /// Replace threat sample with new entries. Drains old entries first.
     pub fn set_threat_sample(&self, sample: Vec<(IpAddr, f32)>) {
-        if let Ok(mut v) = self.threat_sample.lock() {
-            *v = sample;
+        // Drain existing entries
+        while self.threat_sample.pop().is_some() {}
+        // Push new entries
+        for item in sample {
+            self.threat_sample.push(item);
         }
     }
 }

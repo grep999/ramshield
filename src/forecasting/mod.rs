@@ -174,9 +174,9 @@ impl Forecaster {
             .store
             .traffic
             .subnet_window
-            .lock()
-            .map(|v| v.clone())
-            .unwrap_or_default();
+            .iter()
+            .map(|a| a.load(Ordering::Relaxed))
+            .collect();
 
         if counts.len() < 2 {
             return;
@@ -195,13 +195,16 @@ impl Forecaster {
     }
 
     async fn preemptive_block(&self) {
-        let sample = self
-            .store
-            .traffic
-            .threat_sample
-            .lock()
-            .map(|v| v.clone())
-            .unwrap_or_default();
+        // Drain lock-free SegQueue (no iter(), use pop+push-back pattern)
+        let mut sample = Vec::new();
+        while let Some(item) = self.store.traffic.threat_sample.pop() {
+            sample.push(item);
+        }
+        // Put them back so they remain visible to other consumers
+        for item in &sample {
+            self.store.traffic.threat_sample.push(*item);
+        }
+        if sample.is_empty() { return; }
 
         let mut n = 0usize;
         for (ip, threat) in sample {
@@ -225,21 +228,17 @@ impl Forecaster {
     }
 
     async fn entropy_block(&self) {
-        // Use bounded threat_sample instead of scanning the full store
-        // This maintains O(1) cost regardless of store size
-        let sample = self
-            .store
-            .traffic
-            .threat_sample
-            .lock()
-            .map(|v| v.clone())
-            .unwrap_or_default();
-
-        if sample.is_empty() {
-            return;
+        // Drain lock-free SegQueue
+        let mut sample = Vec::new();
+        while let Some(item) = self.store.traffic.threat_sample.pop() {
+            sample.push(item);
         }
+        // Put them back so they remain visible to other consumers
+        for item in &sample {
+            self.store.traffic.threat_sample.push(*item);
+        }
+        if sample.is_empty() { return; }
 
-        // Sort by request_count (desc) - use threat_score as available metric
         let mut top: Vec<(std::net::IpAddr, f32)> = sample.into_iter().collect();
         top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
