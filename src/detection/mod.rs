@@ -6,6 +6,7 @@ use crate::config::{ConfigHandle, DetectionConfig};
 use crate::detection::batch::{aggregate, subnet_key, subnet_prefix, IpAgg};
 use crate::detection::rate_tracker::{ewma, is_exceeded};
 use crate::metrics::Metrics;
+use crate::enforcement::{EnforceAction, EnforceCommand};
 use crate::storage::{BlockReason, BlockState, IpRecord, Store, Value};
 use crate::util::BoundedVecDeque;
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
@@ -18,8 +19,9 @@ use std::sync::{
     Arc, RwLock,
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct ConnectionEvent {
@@ -89,7 +91,7 @@ pub struct DetectionEngine {
     metrics: Arc<Metrics>,
     event_tx: Sender<ConnectionEvent>,
     event_rx: Arc<Receiver<ConnectionEvent>>,
-    block_tx: broadcast::Sender<BlockDecision>,
+    enforcement_tx: mpsc::Sender<EnforceCommand>,
     bloom: Arc<RwLock<BloomFilter>>,
     shutdown: Arc<AtomicBool>,
     #[allow(dead_code)]
@@ -103,7 +105,7 @@ impl DetectionEngine {
     pub fn new(
         store: Arc<Store>,
         config: ConfigHandle,
-        block_tx: broadcast::Sender<BlockDecision>,
+        enforcement_tx: mpsc::Sender<EnforceCommand>,
         metrics: Arc<Metrics>,
         pattern_learner: Arc<crate::learning::PatternLearner>,
         shutdown: Arc<AtomicBool>,
@@ -117,7 +119,7 @@ impl DetectionEngine {
             metrics,
             event_tx: tx,
             event_rx: Arc::new(rx),
-            block_tx,
+            enforcement_tx,
             bloom: Arc::new(RwLock::new(BloomFilter::new(bloom_bits))),
             shutdown,
             pattern_learner,
@@ -313,12 +315,7 @@ impl DetectionEngine {
 
             if should_block || is_exceeded(ewma_rps, det.rps_threshold) {
                 self.bloom.write().unwrap().insert(ip);
-                blocks.push(BlockDecision {
-                    ip,
-                    reason: BlockReason::HighRps(ewma_rps as u64),
-                    ttl_secs: (det.block_ttl_secs > 0).then_some(det.block_ttl_secs),
-                    batch_subnet: None,
-                });
+                blocks.push((ip, BlockReason::HighRps(ewma_rps as u64), if det.block_ttl_secs > 0 { Some(det.block_ttl_secs) } else { None }));
             }
         }
 
@@ -333,10 +330,25 @@ impl DetectionEngine {
         let block_count = blocks.len() as u32;
         for b in &blocks {
             self.metrics
-                .record_block(&b.ip.to_string(), &b.reason.to_string(), "detection");
+                .record_block(&b.0.to_string(), &b.1.to_string(), "detection");
         }
         for b in blocks {
-            let _ = self.block_tx.send(b);
+            let cmd = EnforceCommand {
+                decision_id: Uuid::new_v4(), policy_version: 1,
+                source: "detection".into(), actor: "system".into(),
+                timestamp_utc: (now / 1_000_000_000) as i64, ttl_seconds: b.2.unwrap_or(0),
+                reason: match b.1 {
+                    BlockReason::SubnetBatch => "subnet_burst".into(),
+                    BlockReason::ForecastAnomaly => "forecast_anomaly".into(),
+                    BlockReason::EntropyAnomaly => "entropy_anomaly".into(),
+                    BlockReason::HighRps(_) => "high_rps".into(),
+                    BlockReason::ManualBlock => "manual".into(),
+                },
+                ip: b.0, action: EnforceAction::Block,
+            };
+            if self.enforcement_tx.try_send(cmd).is_err() {
+                warn!(ip=%b.0, "enforcement queue full; block command rejected");
+            }
         }
 
         self.metrics.record_batch(crate::metrics::BatchRecord {
@@ -482,17 +494,19 @@ impl DetectionEngine {
                                 continue;
                             }
 
-                            // No need to check ip_in_subnet again, we know it is.
-                            let _ = self.block_tx.send(BlockDecision {
-                                ip: r.ip,
-                                reason: BlockReason::SubnetBatch,
-                                ttl_secs: Some(cfg.detection.block_ttl_secs),
-                                batch_subnet: Some(prefix),
-                            });
+                            let cmd = EnforceCommand {
+                                decision_id: Uuid::new_v4(), policy_version: 1,
+                                source: "detection".into(), actor: "system".into(),
+                                timestamp_utc: (now_ns() / 1_000_000_000) as i64,
+                                ttl_seconds: cfg.detection.block_ttl_secs, reason: "subnet_burst".into(),
+                                ip: r.ip, action: EnforceAction::Block,
+                            };
+                            if self.enforcement_tx.try_send(cmd).is_err() {
+                                warn!(ip=%r.ip, "enforcement queue full; subnet block rejected");
+                            }
                             self.metrics.record_block(&r.ip.to_string(), "subnet_batch", "detection");
                             self.metrics.blocks_subnet.fetch_add(1, Ordering::Relaxed);
                         }
-
                 }
                 self.store.reset_subnet_window(sk);
             }
@@ -518,13 +532,13 @@ mod tests {
         let cfg = Config::default().into_handle();
         let store = Arc::new(Store::new(16));
         let metrics = Arc::new(Metrics::new());
-        let (btx, _) = broadcast::channel(64);
+        let (etx, _erx) = mpsc::channel(64);
         let learner = Arc::new(crate::learning::PatternLearner::new(
             cfg.load().detection.pattern_similarity_threshold,
         ));
         let shutdown = Arc::new(AtomicBool::new(false));
         Arc::new(DetectionEngine::new(
-            store, cfg, btx, metrics, learner, shutdown,
+            store, cfg, etx, metrics, learner, shutdown,
         ))
     }
 

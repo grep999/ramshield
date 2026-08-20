@@ -8,11 +8,14 @@ use tracing::{debug, error, info, warn};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use crossbeam_channel::Sender;
+use tokio::sync::mpsc;
+use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::detection::ConnectionEvent;
 use crate::engine::Engine;
+use crate::enforcement::{EnforceAction, EnforceCommand};
 use crate::storage::Store;
 use super::{Request, Response};
 
@@ -49,6 +52,7 @@ pub struct IpcServer {
     engine: Arc<Engine>,
     event_tx: Sender<ConnectionEvent>,
     store: Arc<Store>,
+    enforcement_tx: mpsc::Sender<EnforceCommand>,
     semaphore: Arc<Semaphore>,
     max_connections: usize,
     max_connection_bytes: usize,
@@ -67,6 +71,7 @@ impl IpcServer {
         engine: Arc<Engine>,
         event_tx: Sender<ConnectionEvent>,
         store: Arc<Store>,
+        enforcement_tx: mpsc::Sender<EnforceCommand>,
     ) -> std::io::Result<Self> {
         let addr = config.ipc.tcp_addr.clone();
         info!("IPC server binding to {}", addr);
@@ -84,6 +89,7 @@ impl IpcServer {
             engine,
             event_tx,
             store,
+            enforcement_tx,
             semaphore: Arc::new(Semaphore::new(max_connections)),
             max_connections,
             max_connection_bytes,
@@ -141,6 +147,7 @@ impl IpcServer {
             let engine = self.engine.clone();
             let event_tx = self.event_tx.clone();
             let store = self.store.clone();
+            let enforcement_tx = self.enforcement_tx.clone();
             let config = ConnectionConfig::from_server(self);
             let active = self.active_connections.clone();
             let dropped = self.dropped_events.clone();
@@ -152,6 +159,7 @@ impl IpcServer {
                     engine,
                     event_tx,
                     store,
+                    enforcement_tx,
                     config,
                     dropped,
                 ).await {
@@ -198,6 +206,7 @@ async fn handle_connection(
     engine: Arc<Engine>,
     event_tx: Sender<ConnectionEvent>,
     store: Arc<Store>,
+    enforcement_tx: mpsc::Sender<EnforceCommand>,
     config: ConnectionConfig,
     dropped_events: Arc<AtomicU64>,
 ) -> Result<(), std::io::Error> {
@@ -251,7 +260,7 @@ async fn handle_connection(
             };
 
             engine.metrics.inc_requests();
-            let resp = process_request(req, &event_tx, &store, dropped_events.clone());
+            let resp = process_request(req, &event_tx, &store, &enforcement_tx, dropped_events.clone());
             if timeout(config.write_timeout, write_resp(&mut socket, &resp)).await.is_err() {
                 debug!("Write timeout");
                 return Ok(());
@@ -280,6 +289,7 @@ fn process_request(
     req: Request,
     event_tx: &Sender<ConnectionEvent>,
     store: &Store,
+    enforcement_tx: &mpsc::Sender<EnforceCommand>,
     dropped_events: Arc<AtomicU64>,
 ) -> Response {
     match req {
@@ -304,29 +314,14 @@ fn process_request(
         Err(_) => return Response::Error { code: 400, message: format!("invalid ip address: {}", ip) },
     };
     
-            match store.get(&ip_addr) {
-                Some(crate::storage::Value::IpRecord(rec)) => {
-                    let state = if let Some(_ttl) = ttl_secs {
-                        crate::storage::BlockState::Blocked {
-                            reason: crate::storage::BlockReason::ManualBlock,
-                            since_ns: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_nanos() as u64)
-                                .unwrap_or(0),
-                        }
-                    } else {
-                        crate::storage::BlockState::Blocked {
-                            reason: crate::storage::BlockReason::ManualBlock,
-                            since_ns: rec.block_state.since_ns(),
-                        }
-                    };
-                    store.insert(ip_addr, crate::storage::Value::IpRecord(crate::storage::IpRecord {
-                        block_state: state.clone(),
-                        ..rec.clone()
-                    }), None, usize::MAX).ok();
-                    Response::Ok { message: format!("blocked {} ttl={:?} reason={}", ip, ttl_secs, reason), state: Some(format!("{:?}", state)) }
-                }
-                _ => Response::Error { code: 2, message: format!("unknown ip {}", ip) },
+            let cmd = EnforceCommand {
+                decision_id: Uuid::new_v4(), policy_version: 1, source: "ipc".into(),
+                actor: "admin".into(), timestamp_utc: epoch_ns() as i64 / 1_000_000_000,
+                ttl_seconds: ttl_secs.unwrap_or(0), reason, ip: ip_addr, action: EnforceAction::Block,
+            };
+            match enforcement_tx.try_send(cmd) {
+                Ok(()) => Response::Ok { message: format!("block queued for {}", ip_addr), state: Some("pending".into()) },
+                Err(_) => Response::Error { code: 503, message: "enforcement queue full".into() },
             }
         },
         Request::UnblockIp { ip } => {
@@ -335,14 +330,14 @@ fn process_request(
         Err(_) => return Response::Error { code: 400, message: format!("invalid ip address: {}", ip) },
     };
     
-            match store.get(&ip_addr) {
-                Some(crate::storage::Value::IpRecord(rec)) => {
-                    let mut updated = rec.clone();
-                    updated.block_state = crate::storage::BlockState::Clean;
-                    store.insert(ip_addr, crate::storage::Value::IpRecord(updated), None, usize::MAX).ok();
-                    Response::Ok { message: format!("unblocked {}", ip), state: Some("clean".into()) }
-                }
-                _ => Response::Error { code: 2, message: format!("unknown ip {}", ip) },
+            let cmd = EnforceCommand {
+                decision_id: Uuid::new_v4(), policy_version: 1, source: "ipc".into(),
+                actor: "admin".into(), timestamp_utc: epoch_ns() as i64 / 1_000_000_000,
+                ttl_seconds: 0, reason: "manual_unblock".into(), ip: ip_addr, action: EnforceAction::Unblock,
+            };
+            match enforcement_tx.try_send(cmd) {
+                Ok(()) => Response::Ok { message: format!("unblock queued for {}", ip_addr), state: Some("pending".into()) },
+                Err(_) => Response::Error { code: 503, message: "enforcement queue full".into() },
             }
         },
         Request::GetIpStats { ip } => {

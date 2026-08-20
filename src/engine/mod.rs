@@ -2,13 +2,14 @@ pub mod learning;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tracing::info;
 use arc_swap::ArcSwap;
 
 use crate::config::Config;
 use crate::detection::DetectionEngine;
 use crate::forecasting::Forecaster;
+use crate::enforcement::{EnforceCommand, EnforcementService, StubXdpApplier};
 use crate::learning::PatternLearner;
 use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, Metrics, SubnetRow};
 use crate::storage::Store;
@@ -18,15 +19,20 @@ pub struct Engine {
     pub store: Arc<Store>,
     pub metrics: Arc<Metrics>,
     shutdown: AtomicBool,
+    enforcement_tx: mpsc::Sender<EnforceCommand>,
+    enforcement_rx: std::sync::Mutex<Option<mpsc::Receiver<EnforceCommand>>>,
 }
 
 impl Engine {
     pub fn new(cfg: Config, store: Arc<Store>, metrics: Arc<Metrics>) -> Self {
+        let (enforcement_tx, enforcement_rx) = mpsc::channel(4096);
         Self {
             config: Arc::new(ArcSwap::from_pointee(cfg)),
             store,
             metrics,
             shutdown: AtomicBool::new(false),
+            enforcement_tx,
+            enforcement_rx: std::sync::Mutex::new(Some(enforcement_rx)),
         }
     }
 
@@ -165,16 +171,35 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     let store = engine.store.clone();
     let metrics = engine.metrics.clone();
 
-    let (block_tx, _) = broadcast::channel::<crate::detection::BlockDecision>(1024);
+    // Take the enforcement receiver ONCE
+    let enforcement_rx = engine.enforcement_rx.lock().expect("enforcement receiver lock").take()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::AlreadyExists, "enforcement service already started"))?;
+    // The service follows the engine shutdown flag through a dedicated watcher.
+    let enforcement_shutdown = Arc::new(AtomicBool::new(false));
+    let enforcement = EnforcementService::new(
+        store.clone(), metrics.clone(), Box::new(StubXdpApplier), enforcement_shutdown.clone(),
+    );
+    let engine_for_shutdown = engine.clone();
+    tokio::spawn(async move {
+        loop {
+            if engine_for_shutdown.is_shutting_down() {
+                enforcement_shutdown.store(true, Ordering::Release);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    });
+    tokio::spawn(async move {
+        if let Err(e) = enforcement.run(enforcement_rx).await {
+            tracing::error!("enforcement service: {}", e);
+        }
+    });
+
     let learner = Arc::new(PatternLearner::new(cfg_snapshot.detection.pattern_similarity_threshold));
 
     let detection = Arc::new(DetectionEngine::new(
-        store.clone(),
-        cfg_handle.clone(),
-        block_tx.clone(),
-        metrics.clone(),
-        learner.clone(),
-        Arc::new(AtomicBool::new(false)),
+        store.clone(), cfg_handle.clone(), engine.enforcement_tx.clone(), metrics.clone(),
+        learner.clone(), Arc::new(AtomicBool::new(false)),
     ));
     let event_tx = detection.event_sender();
     detection.clone().spawn_workers(cfg_snapshot.engine.worker_threads);
@@ -182,13 +207,13 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     let forecaster = Arc::new(Forecaster::new(
         store.clone(),
         cfg_snapshot.forecasting.clone(),
-        block_tx.clone(),
+        engine.enforcement_tx.clone(),
         metrics.clone(),
         learner,
     ));
     tokio::spawn(async move { forecaster.run().await });
 
-    let server = crate::ipc::server::IpcServer::bind(&cfg_snapshot, engine.clone(), event_tx, store).await?;
+    let server = crate::ipc::server::IpcServer::bind(&cfg_snapshot, engine.clone(), event_tx, store, engine.enforcement_tx.clone()).await?;
     server.start().await;
     Ok(())
 }

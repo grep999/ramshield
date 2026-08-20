@@ -76,7 +76,7 @@ hex = "0.4"
 opentelemetry = { version = "0.21", optional = true }
 opentelemetry_sdk = { version = "0.21", optional = true, features = ["rt-tokio"] }
 tracing-opentelemetry = { version = "0.22", optional = true }
-uuid = { version = "1", features = ["v7", "serde"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
 async-trait = "0.1"
 
 [[bench]]

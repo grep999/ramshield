@@ -1,13 +1,15 @@
 use crate::config::ForecastingConfig;
-use crate::detection::BlockDecision;
 use crate::learning::PatternLearner;
 use crate::metrics::Metrics;
-use crate::storage::{BlockReason, Store};
+use crate::enforcement::{EnforceAction, EnforceCommand};
+use crate::storage::Store;
 use std::collections::VecDeque;
+use std::net::IpAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 // ── Holt-Winters ──────────────────────────────────────────────────────────────
 
@@ -99,7 +101,7 @@ impl RingBuffer {
 pub struct Forecaster {
     store: Arc<Store>,
     config: ForecastingConfig,
-    block_tx: broadcast::Sender<BlockDecision>,
+    enforcement_tx: mpsc::Sender<EnforceCommand>,
     metrics: Arc<Metrics>,
     hw: tokio::sync::Mutex<HoltWinters>,
     history: tokio::sync::Mutex<RingBuffer>,
@@ -112,7 +114,7 @@ impl Forecaster {
     pub fn new(
         store: Arc<Store>,
         config: ForecastingConfig,
-        block_tx: broadcast::Sender<BlockDecision>,
+        enforcement_tx: mpsc::Sender<EnforceCommand>,
         metrics: Arc<Metrics>,
         #[allow(dead_code)] pattern_learner: Arc<PatternLearner>,
     ) -> Self {
@@ -125,7 +127,7 @@ impl Forecaster {
         Self {
             store,
             config,
-            block_tx,
+            enforcement_tx,
             metrics,
             hw: tokio::sync::Mutex::new(hw),
             history: tokio::sync::Mutex::new(RingBuffer::new(60)),
@@ -208,23 +210,22 @@ impl Forecaster {
 
         let mut n = 0usize;
         for (ip, threat) in sample {
-            if threat <= 0.7 {
-                continue;
+            if threat <= 0.7 { continue; }
+            let cmd = EnforceCommand {
+                decision_id: Uuid::new_v4(), policy_version: 1,
+                source: "forecasting".into(), actor: "system".into(),
+                timestamp_utc: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0),
+                ttl_seconds: 300, reason: "forecast_anomaly".into(), ip, action: EnforceAction::Block,
+            };
+            if self.enforcement_tx.try_send(cmd).is_err() {
+                warn!(%ip, "enforcement queue full; forecast block rejected");
             }
-            let _ = self.block_tx.send(BlockDecision {
-                ip,
-                reason: BlockReason::ForecastAnomaly,
-                ttl_secs: Some(300),
-                batch_subnet: None,
-            });
             self.metrics
                 .record_block(&ip.to_string(), "forecast_anomaly", "forecasting");
             self.metrics.blocks_forecast.fetch_add(1, Ordering::Relaxed);
             n += 1;
         }
-        if n > 0 {
-            info!("pre-emptive blocks: {}", n);
-        }
+        if n > 0 { info!("pre-emptive blocks: {}", n); }
     }
 
     async fn entropy_block(&self) {
@@ -233,34 +234,33 @@ impl Forecaster {
         while let Some(item) = self.store.traffic.threat_sample.pop() {
             sample.push(item);
         }
-        // Put them back so they remain visible to other consumers
         for item in &sample {
             self.store.traffic.threat_sample.push(*item);
         }
         if sample.is_empty() { return; }
 
-        let mut top: Vec<(std::net::IpAddr, f32)> = sample.into_iter().collect();
+        let mut top: Vec<(IpAddr, f32)> = sample.into_iter().collect();
         top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         let cut = (top.len() / 10).clamp(1, 50);
         let mut n = 0usize;
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
 
         for (ip, _threat) in top.iter().take(cut) {
-            let _ = self.block_tx.send(BlockDecision {
-                ip: *ip,
-                reason: BlockReason::EntropyAnomaly,
-                ttl_secs: Some(600),
-                batch_subnet: None,
-            });
+            let cmd = EnforceCommand {
+                decision_id: Uuid::new_v4(), policy_version: 1,
+                source: "forecasting".into(), actor: "system".into(),
+                timestamp_utc: ts, ttl_seconds: 600, reason: "entropy_anomaly".into(), ip: *ip, action: EnforceAction::Block,
+            };
+            if self.enforcement_tx.try_send(cmd).is_err() {
+                warn!(%ip, "enforcement queue full; entropy block rejected");
+            }
             self.metrics
                 .record_block(&ip.to_string(), "entropy_anomaly", "forecasting");
             self.metrics.blocks_forecast.fetch_add(1, Ordering::Relaxed);
             n += 1;
         }
-
-        if n > 0 {
-            info!("entropy blocks: {}", n);
-        }
+        if n > 0 { info!("entropy blocks: {}", n); }
     }
 }
 
