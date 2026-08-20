@@ -1,4 +1,4 @@
-# RamShield
+# RamShield — Enterprise-Grade Traffic Defense
 
 [![Crates.io](https://img.shields.io/crates/v/ramshield.svg)](https://crates.io/crates/ramshield)
 [![CI](https://github.com/grep999/ramshield/actions/workflows/ci.yml/badge.svg)](https://github.com/grep999/ramshield/actions/workflows/ci.yml)
@@ -7,8 +7,6 @@
 [![License](https://img.shields.io/crates.io/l/ramshield)](https://github.com/grep999/ramshield/blob/main/LICENSE)
 [![Rust](https://img.shields.io/badge/rust-2024%2B-orange.svg)](https://www.rust-lang.org/)
 [![docs.rs](https://img.shields.io/docsrs/ramshield/latest)](https://docs.rs/ramshield/latest)
-
-# RamShield — Enterprise-Grade Traffic Defense
 
 > **RAM-first DDoS detection and mitigation engine** with optional XDP eBPF kernel acceleration.
 
