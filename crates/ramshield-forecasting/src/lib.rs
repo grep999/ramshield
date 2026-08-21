@@ -1,9 +1,11 @@
+//! Forecasting: Holt-Winters anomaly detection + entropy analysis.
+//! Unified: src engine semantics + crate's `drain_threat_sample` primitive
+//! (replaces racy pop+push-back) and all-zero counts guard.
+
 use ramshield_config::ForecastingConfig;
-use ramshield_learning::PatternLearner;
 use ramshield_metrics::Metrics;
 use ramshield_storage::Store;
 use ramshield_types::{EnforceAction, EnforceCommand};
-use ramshield_types::error::BlockReason;
 use std::collections::VecDeque;
 use std::net::IpAddr;
 use std::sync::atomic::Ordering;
@@ -102,21 +104,18 @@ impl RingBuffer {
 pub struct Forecaster {
     store: Arc<Store>,
     config: ForecastingConfig,
-    command_tx: mpsc::Sender<EnforceCommand>,
+    enforcement_tx: mpsc::Sender<EnforceCommand>,
     metrics: Arc<Metrics>,
     hw: tokio::sync::Mutex<HoltWinters>,
     history: tokio::sync::Mutex<RingBuffer>,
-    #[allow(dead_code)]
-    pattern_learner: Arc<PatternLearner>,
 }
 
 impl Forecaster {
     pub fn new(
         store: Arc<Store>,
         config: ForecastingConfig,
-        command_tx: mpsc::Sender<EnforceCommand>,
+        enforcement_tx: mpsc::Sender<EnforceCommand>,
         metrics: Arc<Metrics>,
-        #[allow(dead_code)] pattern_learner: Arc<PatternLearner>,
     ) -> Self {
         let hw = HoltWinters::new(
             config.ewma_alpha,
@@ -127,11 +126,10 @@ impl Forecaster {
         Self {
             store,
             config,
-            command_tx,
+            enforcement_tx,
             metrics,
             hw: tokio::sync::Mutex::new(hw),
             history: tokio::sync::Mutex::new(RingBuffer::new(60)),
-            pattern_learner,
         }
     }
 
@@ -179,6 +177,8 @@ impl Forecaster {
             .iter()
             .map(|a| a.load(Ordering::Relaxed))
             .collect();
+
+        // All-zero window ⇒ nothing to measure (crate guard — more precise than len<2).
         if counts.iter().all(|&c| c == 0) {
             return;
         }
@@ -188,87 +188,64 @@ impl Forecaster {
         }
         let h = shannon_entropy(&counts, total);
         self.metrics.set_entropy(h);
-        debug!("entropy H={:.3} bits ({} subnets)", h, counts.len());
+        debug!("entropy H={:.3} bits", h);
         if h < self.config.min_entropy {
             warn!("LOW ENTROPY H={:.3}", h);
             self.entropy_block().await;
         }
     }
 
-    fn snapshot_threat_sample(&self) -> Vec<(IpAddr, f32)> {
-        let sample = self.store.traffic.drain_threat_sample();
-        for item in &sample {
-            self.store.traffic.threat_sample.push(*item);
-        }
-        sample
-    }
-
-    fn block_cmd(&self, ip: IpAddr, _reason: BlockReason, ttl_seconds: u64) -> EnforceCommand {
-        EnforceCommand {
-            decision_id: Uuid::new_v4(),
-            policy_version: 1,
-            source: "forecasting".into(),
-            actor: "forecaster".into(),
-            timestamp_utc: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
-            ttl_seconds,
-            reason: "forecast_anomaly".into(),
-            ip,
-            action: EnforceAction::Block,
-        }
-    }
-
     async fn preemptive_block(&self) {
-        let sample = self.snapshot_threat_sample();
-        if sample.is_empty() {
-            return;
-        }
+        // Atomic drain (crate primitive) — no pop+push-back race with detection.
+        let sample = self.store.traffic.drain_threat_sample();
+        if sample.is_empty() { return; }
+
         let mut n = 0usize;
-        for (ip, score) in sample {
-            if score <= 0.7 {
-                continue;
+        for (ip, threat) in sample {
+            if threat <= 0.7 { continue; }
+            let cmd = EnforceCommand {
+                decision_id: Uuid::new_v4(), policy_version: 1,
+                source: "forecasting".into(), actor: "system".into(),
+                timestamp_utc: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0),
+                ttl_seconds: 300, reason: "forecast_anomaly".into(), ip, action: EnforceAction::Block,
+            };
+            if self.enforcement_tx.try_send(cmd).is_err() {
+                warn!(%ip, "enforcement queue full; forecast block rejected");
             }
-            if self
-                .command_tx
-                .send(self.block_cmd(ip, BlockReason::ForecastAnomaly, 300))
-                .await
-                .is_ok()
-            {
-                self.metrics
-                    .record_block(&ip.to_string(), "forecast_anomaly", "forecasting");
-                n += 1;
-            }
+            self.metrics
+                .record_block(&ip.to_string(), "forecast_anomaly", "forecasting");
+            self.metrics.blocks_forecast.fetch_add(1, Ordering::Relaxed);
+            n += 1;
         }
-        if n > 0 {
-            info!("pre-emptive blocks: {}", n);
-        }
+        if n > 0 { info!("pre-emptive blocks: {}", n); }
     }
 
     async fn entropy_block(&self) {
-        let mut top = self.snapshot_threat_sample();
-        if top.is_empty() {
-            return;
-        }
+        let sample = self.store.traffic.drain_threat_sample();
+        if sample.is_empty() { return; }
+
+        let mut top: Vec<(IpAddr, f32)> = sample.into_iter().collect();
         top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
         let cut = (top.len() / 10).clamp(1, 50);
         let mut n = 0usize;
-        for (ip, _) in top.iter().take(cut) {
-            if self
-                .command_tx
-                .send(self.block_cmd(*ip, BlockReason::EntropyAnomaly, 600))
-                .await
-                .is_ok()
-            {
-                self.metrics
-                    .record_block(&ip.to_string(), "entropy_anomaly", "forecasting");
-                n += 1;
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+
+        for (ip, _threat) in top.iter().take(cut) {
+            let cmd = EnforceCommand {
+                decision_id: Uuid::new_v4(), policy_version: 1,
+                source: "forecasting".into(), actor: "system".into(),
+                timestamp_utc: ts, ttl_seconds: 600, reason: "entropy_anomaly".into(), ip: *ip, action: EnforceAction::Block,
+            };
+            if self.enforcement_tx.try_send(cmd).is_err() {
+                warn!(%ip, "enforcement queue full; entropy block rejected");
             }
+            self.metrics
+                .record_block(&ip.to_string(), "entropy_anomaly", "forecasting");
+            self.metrics.blocks_forecast.fetch_add(1, Ordering::Relaxed);
+            n += 1;
         }
-        if n > 0 {
-            info!("entropy blocks: {}", n);
-        }
+        if n > 0 { info!("entropy blocks: {}", n); }
     }
 }
 
@@ -302,5 +279,16 @@ mod tests {
             hw.update(1000.0);
         }
         assert!(hw.level > 900.0);
+    }
+
+    #[test]
+    fn all_zero_window_skipped() {
+        let store = Arc::new(Store::new(4));
+        let cfg = ForecastingConfig::default();
+        let (tx, _rx) = mpsc::channel(8);
+        let fc = Forecaster::new(store.clone(), cfg, tx, Arc::new(Metrics::new()));
+        // Must not panic / must early-return on all-zero subnet_window.
+        let rt = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        rt.block_on(fc.tick_entropy());
     }
 }

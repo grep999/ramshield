@@ -10,5 +10,8 @@ toml = "0.8"
 arc-swap = "1"
 anyhow = "1"
 
+[dev-dependencies]
+serial_test = "3"
+
 [lints]
 workspace = true

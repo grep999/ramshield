@@ -6,60 +6,50 @@ pub type ConfigHandle = Arc<ArcSwap<Config>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
-    #[serde(default)]
-    pub engine: EngineConfig,
-    #[serde(default)]
-    pub detection: DetectionConfig,
-    #[serde(default)]
-    pub storage: StorageConfig,
-    #[serde(default)]
-    pub ipc: IpcConfig,
-    #[serde(default)]
-    pub forecasting: ForecastingConfig,
-    #[serde(default)]
-    pub dashboard: DashboardConfig,
+    #[serde(default)] pub engine:      EngineConfig,
+    #[serde(default)] pub detection:   DetectionConfig,
+    #[serde(default)] pub xdp:         XdpConfig,
+    #[serde(default)] pub ipc:         IpcConfig,
+    #[serde(default)] pub forecasting: ForecastingConfig,
+    #[serde(default)] pub dashboard:   DashboardConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineConfig {
     pub worker_threads: usize,
-    pub ram_limit_mb: usize,
-    pub shard_count: usize,
+    pub ram_limit_mb:   usize,
+    pub shard_count:    usize,
 }
 impl Default for EngineConfig {
-    fn default() -> Self {
-        Self {
-            worker_threads: 0,
-            ram_limit_mb: 512,
-            shard_count: 256,
-        }
-    }
+    fn default() -> Self { Self { worker_threads: 0, ram_limit_mb: 512, shard_count: 256 } }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectionConfig {
-    pub rps_threshold: u64,
-    pub rate_window_secs: u64,
-    pub subnet_batch_threshold: usize,
-    pub batch_block_enabled: bool,
-    pub block_ttl_secs: u64,
-    pub ttl_wheel_resolution_ms: u64,
-    pub ttl_wheel_size: usize,
-    pub bloom_bits: usize,
-    pub history_cap: usize,
-    pub pattern_similarity_threshold: f32,
+    pub rps_threshold:           u64,
+    pub rate_window_secs:        u64,
+    pub subnet_batch_threshold:  usize,
+    pub batch_block_enabled:     bool,
+    pub block_ttl_secs:          u64,
+    pub bloom_bits:              usize,
+    /// Max events accumulated before a forced flush (high-traffic batching).
     #[serde(default = "default_batch_max_events")]
-    pub batch_max_events: usize,
+    pub batch_max_events:        usize,
+    /// Max wait (ms) before flushing a partial batch.
     #[serde(default = "default_batch_window_ms")]
     pub batch_window_ms: u64,
+    /// Max wait (ms) before flushing the pre-aggregation buffer.
     #[serde(default = "default_pre_aggs_flush_interval_ms")]
     pub pre_aggs_flush_interval_ms: u64,
+    /// Per-IP hits required in one window before full IpRecord tracking.
     #[serde(default = "default_promote_min")]
-    pub promote_min_events: u32,
+    pub promote_min_events:      u32,
+    /// /24 event count in one window that lowers promotion threshold for that subnet.
     #[serde(default = "default_subnet_window_threshold")]
     pub subnet_window_threshold: u64,
+    /// Max unique IPs in the pre-aggregation buffer before flushing to main store.
     #[serde(default = "default_pre_aggs_max_size")]
-    pub pre_aggs_max_size: usize,
+    pub pre_aggs_max_size:       usize,
 }
 
 fn default_batch_max_events() -> usize { 4096 }
@@ -68,31 +58,13 @@ fn default_promote_min() -> u32 { 8 }
 fn default_subnet_window_threshold() -> u64 { 500 }
 fn default_pre_aggs_max_size() -> usize { 1_000_000 }
 fn default_pre_aggs_flush_interval_ms() -> u64 { 1000 }
-fn default_history_cap() -> usize { 32 }
-fn default_pattern_similarity_threshold() -> f32 { 0.8 }
-
-/// Memory budget constants for capacity calculations
-const BLOOM_BITS_MIN: usize = 65_536;       // 8 KB minimum
-const BLOOM_BITS_MAX: usize = 128_000_000;  // 16 MB maximum
-const PRE_AGGS_MAX_CEIL: usize = 2_000_000; // hard cap regardless of budget
-const EVENT_CHANNEL_BYTES_PER_ENTRY: usize = 96; // ConnectionEvent size estimate
-const EVENT_CHANNEL_BUDGET_PCT: f64 = 0.10; // 10% of RAM budget for event queue
-const PRE_AGGS_BYTES_PER_ENTRY: usize = 128; // IpAgg + DashMap overhead estimate
-const PRE_AGGS_BUDGET_PCT: f64 = 0.15;       // 15% of RAM budget for pre-aggs
 
 impl Default for DetectionConfig {
     fn default() -> Self {
         Self {
-            rps_threshold: 1_000,
-            rate_window_secs: 10,
-            subnet_batch_threshold: 5,
-            batch_block_enabled: true,
-            block_ttl_secs: 3_600,
-            ttl_wheel_resolution_ms: 100,
-            ttl_wheel_size: 36_000,
+            rps_threshold: 1_000, rate_window_secs: 10, subnet_batch_threshold: 5,
+            batch_block_enabled: true, block_ttl_secs: 3_600,
             bloom_bits: 8_000_000,
-            history_cap: default_history_cap(),
-            pattern_similarity_threshold: default_pattern_similarity_threshold(),
             batch_max_events: default_batch_max_events(),
             batch_window_ms: default_batch_window_ms(),
             promote_min_events: default_promote_min(),
@@ -104,28 +76,23 @@ impl Default for DetectionConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StorageConfig {
-    pub wal_enabled: bool,
-    pub wal_path: String,
-    pub wal_sync: String,
-    pub wal_segment_bytes: u64,
-    pub wal_compress: bool,
+pub struct XdpConfig {
+    /// Attach the XDP kernel program. When false, enforcement is in-band only.
+    #[serde(default)] pub enabled: bool,
+    /// Interface to attach to (e.g. "eth0", "lo").
+    #[serde(default = "default_xdp_iface")] pub interface: String,
+    /// "skb" (generic, works everywhere) or "drv" (native, production NICs).
+    #[serde(default = "default_xdp_mode")] pub mode: String,
 }
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self {
-            wal_enabled: false,
-            wal_path: "./wal".into(),
-            wal_sync: "none".into(),
-            wal_segment_bytes: 64 * 1024 * 1024,
-            wal_compress: true,
-        }
-    }
+impl Default for XdpConfig {
+    fn default() -> Self { Self { enabled: false, interface: default_xdp_iface(), mode: default_xdp_mode() } }
 }
+fn default_xdp_iface() -> String { "eth0".into() }
+fn default_xdp_mode() -> String { "skb".into() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcConfig {
-    pub tcp_addr: String,
+    pub tcp_addr:        String,
     pub max_connections: usize,
     #[serde(default = "default_max_connection_bytes")]
     pub max_connection_bytes: Option<usize>,
@@ -140,53 +107,40 @@ pub struct IpcConfig {
 fn default_max_connection_bytes() -> Option<usize> { Some(1_048_576) }
 fn default_read_timeout_ms() -> Option<u64> { Some(5000) }
 fn default_write_timeout_ms() -> Option<u64> { Some(5000) }
-fn default_connection_idle_timeout_ms() -> Option<u64> { Some(30_000) }
+fn default_connection_idle_timeout_ms() -> Option<u64> { Some(30_000)
+}
 impl Default for IpcConfig {
-    fn default() -> Self {
-        Self {
-            tcp_addr: "127.0.0.1:7890".into(),
-            max_connections: 256,
-            max_connection_bytes: None,
-            read_timeout_ms: None,
-            write_timeout_ms: None,
-            connection_idle_timeout_ms: None,
-        }
-    }
+    fn default() -> Self { Self { tcp_addr: "127.0.0.1:7890".into(), max_connections: 256, max_connection_bytes: None, read_timeout_ms: None, write_timeout_ms: None, connection_idle_timeout_ms: None } }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForecastingConfig {
-    pub enabled: bool,
-    pub ewma_alpha: f64,
-    pub hw_beta: f64,
-    pub hw_gamma: f64,
+    pub enabled:            bool,
+    pub ewma_alpha:         f64,
+    pub hw_beta:            f64,
+    pub hw_gamma:           f64,
     pub seasonality_period: usize,
-    pub anomaly_zscore: f64,
-    pub min_entropy: f64,
+    pub anomaly_zscore:     f64,
+    pub min_entropy:        f64,
 }
 impl Default for ForecastingConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
-            ewma_alpha: 0.3,
-            hw_beta: 0.1,
-            hw_gamma: 0.1,
-            seasonality_period: 3_600,
-            anomaly_zscore: 2.5,
-            min_entropy: 2.0,
+            enabled: true, ewma_alpha: 0.3, hw_beta: 0.1, hw_gamma: 0.1,
+            seasonality_period: 3_600, anomaly_zscore: 2.5, min_entropy: 2.0,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardConfig {
-    pub enabled: bool,
+    pub enabled:   bool,
     pub http_addr: String,
 }
 impl Default for DashboardConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled:   true,
             http_addr: "127.0.0.1:9999".into(),
         }
     }
@@ -200,91 +154,215 @@ impl Config {
         Ok(cfg)
     }
 
+    /// Load config from file then apply environment variable overrides.
+    /// Env vars take precedence: RAMSHIELD_ENGINE__RAM_LIMIT_MB=1024
     pub fn load(path: &str) -> anyhow::Result<Self> {
-        let cfg = Self::from_toml_file(path)?;
-        // ... (Environment variable overrides truncated for brevity but preserved)
+        let mut cfg = Self::from_toml_file(path)?;
+
+        // Engine overrides
+        if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__RAM_LIMIT_MB")
+            && let Ok(parsed) = v.parse::<usize>() {
+                cfg.engine.ram_limit_mb = parsed;
+            }
+        if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__WORKER_THREADS")
+            && let Ok(parsed) = v.parse::<usize>() {
+                cfg.engine.worker_threads = parsed;
+            }
+        if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__SHARD_COUNT")
+            && let Ok(parsed) = v.parse::<usize>() {
+                cfg.engine.shard_count = parsed.next_power_of_two();
+            }
+
+        // Detection overrides
+        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__RPS_THRESHOLD")
+            && let Ok(parsed) = v.parse::<u64>() {
+                cfg.detection.rps_threshold = parsed;
+            }
+        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__PROMOTE_MIN_EVENTS")
+            && let Ok(parsed) = v.parse::<u32>() {
+                cfg.detection.promote_min_events = parsed;
+            }
+        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__BATCH_WINDOW_MS")
+            && let Ok(parsed) = v.parse::<u64>() {
+                cfg.detection.batch_window_ms = parsed;
+            }
+        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__SUBNET_WINDOW_THRESHOLD")
+            && let Ok(parsed) = v.parse::<u64>() {
+                cfg.detection.subnet_window_threshold = parsed;
+            }
+        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__BLOCK_TTL_SECS")
+            && let Ok(parsed) = v.parse::<u64>() {
+                cfg.detection.block_ttl_secs = parsed;
+            }
+
+        // IPC overrides
+        if let Ok(v) = std::env::var("RAMSHIELD_IPC__TCP_ADDR") {
+            cfg.ipc.tcp_addr = v;
+        }
+        if let Ok(v) = std::env::var("RAMSHIELD_IPC__MAX_CONNECTIONS")
+            && let Ok(parsed) = v.parse::<usize>() {
+                cfg.ipc.max_connections = parsed;
+            }
+
+        // Dashboard overrides
+        if let Ok(v) = std::env::var("RAMSHIELD_DASHBOARD__ENABLED")
+            && let Ok(parsed) = v.parse::<bool>() {
+                cfg.dashboard.enabled = parsed;
+            }
+        if let Ok(v) = std::env::var("RAMSHIELD_DASHBOARD__HTTP_ADDR") {
+            cfg.dashboard.http_addr = v;
+        }
+
+        // Forecasting overrides
+        if let Ok(v) = std::env::var("RAMSHIELD_FORECASTING__ENABLED")
+            && let Ok(parsed) = v.parse::<bool>() {
+                cfg.forecasting.enabled = parsed;
+            }
+
         cfg.validate()?;
         Ok(cfg)
     }
 
+    /// Validate configuration with sensible bounds and error messages.
     pub fn validate(&self) -> anyhow::Result<()> {
-        // Engine bounds
-        anyhow::ensure!(self.engine.ram_limit_mb >= 64, "ram_limit_mb must be >= 64 MB");
-        anyhow::ensure!(self.engine.ram_limit_mb <= 65536, "ram_limit_mb must be <= 65536 MB");
-        anyhow::ensure!(self.engine.shard_count >= 1, "shard_count must be >= 1");
-        anyhow::ensure!(self.engine.shard_count <= 4096, "shard_count must be <= 4096");
+        // Engine config validation
+        if self.engine.ram_limit_mb < 64 {
+            anyhow::bail!("engine.ram_limit_mb must be at least 64 MB");
+        }
+        if self.engine.shard_count == 0 || !self.engine.shard_count.is_power_of_two() {
+            anyhow::bail!("engine.shard_count must be a power of 2");
+        }
 
-        // Detection bounds
-        let ram_bytes = self.engine.ram_limit_mb as u64 * 1024 * 1024;
+        // Detection config validation
+        if self.detection.rps_threshold == 0 {
+            anyhow::bail!("detection.rps_threshold must be > 0");
+        }
+        if self.detection.promote_min_events == 0 {
+            anyhow::bail!("detection.promote_min_events must be > 0");
+        }
+        if self.detection.bloom_bits < 100_000 {
+            anyhow::bail!("detection.bloom_bits should be at least 100,000 for low false positive rate");
+        }
+        if self.detection.batch_max_events == 0 || self.detection.batch_max_events > 65536 {
+            anyhow::bail!("detection.batch_max_events must be between 1 and 65536");
+        }
+        if self.detection.batch_window_ms == 0 || self.detection.batch_window_ms > 500 {
+            anyhow::bail!("detection.batch_window_ms must be between 1 and 500 ms");
+        }
+        if self.detection.subnet_window_threshold < 10 {
+            anyhow::bail!("detection.subnet_window_threshold should be at least 10");
+        }
+        if self.detection.pre_aggs_max_size == 0 {
+            anyhow::bail!("detection.pre_aggs_max_size must be > 0");
+        }
 
-        // Bloom filter bounds
-        anyhow::ensure!(
-            self.detection.bloom_bits >= BLOOM_BITS_MIN,
-            "bloom_bits must be >= {} (got {})", BLOOM_BITS_MIN, self.detection.bloom_bits
-        );
-        anyhow::ensure!(
-            self.detection.bloom_bits <= BLOOM_BITS_MAX,
-            "bloom_bits must be <= {} (got {})", BLOOM_BITS_MAX, self.detection.bloom_bits
-        );
+        // IPC config validation
+        if self.ipc.max_connections == 0 {
+            anyhow::bail!("ipc.max_connections must be > 0");
+        }
+        if self.ipc.max_connections > 1_000_000 {
+            anyhow::bail!("ipc.max_connections should not exceed 1,000,000");
+        }
 
-        // Pre-aggs bounds
-        let budgeted_pre_aggs = ((ram_bytes as f64 * PRE_AGGS_BUDGET_PCT) / PRE_AGGS_BYTES_PER_ENTRY as f64) as usize;
-        let effective_pre_aggs = self.detection.pre_aggs_max_size.min(budgeted_pre_aggs).min(PRE_AGGS_MAX_CEIL);
-        anyhow::ensure!(effective_pre_aggs >= 1000, "effective pre_aggs_max_size too small after budget clamping");
+        // Forecasting config validation
+        if self.forecasting.enabled {
+            if !(0.0..=1.0).contains(&self.forecasting.ewma_alpha) {
+                anyhow::bail!("forecasting.ewma_alpha must be in range [0.0, 1.0]");
+            }
+            if self.forecasting.seasonality_period == 0 {
+                anyhow::bail!("forecasting.seasonality_period must be > 0");
+            }
+            if self.forecasting.anomaly_zscore < 1.0 {
+                anyhow::bail!("forecasting.anomaly_zscore should be at least 1.0");
+            }
+        }
 
-        // Event channel bounds
-        let budgeted_channel = ((ram_bytes as f64 * EVENT_CHANNEL_BUDGET_PCT) / EVENT_CHANNEL_BYTES_PER_ENTRY as f64) as usize;
-        anyhow::ensure!(budgeted_channel >= 1024, "event channel capacity too small for RAM budget");
-
-        // History cap bounds
-        anyhow::ensure!(self.detection.history_cap >= 4, "history_cap must be >= 4");
-        anyhow::ensure!(self.detection.history_cap <= 1024, "history_cap must be <= 1024");
-
-        // Batch bounds
-        anyhow::ensure!(self.detection.batch_max_events >= 64, "batch_max_events must be >= 64");
-        anyhow::ensure!(self.detection.batch_max_events <= 65536, "batch_max_events must be <= 65536");
-        anyhow::ensure!(self.detection.batch_window_ms >= 10, "batch_window_ms must be >= 10");
-        anyhow::ensure!(self.detection.batch_window_ms <= 10000, "batch_window_ms must be <= 10000");
-
-        // Pattern similarity threshold
-        anyhow::ensure!(
-            (0.0..=1.0).contains(&self.detection.pattern_similarity_threshold),
-            "pattern_similarity_threshold must be in [0.0, 1.0]"
-        );
-
-        // Forecasting bounds
-        anyhow::ensure!(
-            (0.0..=1.0).contains(&self.forecasting.ewma_alpha),
-            "ewma_alpha must be in [0.0, 1.0]"
-        );
-        anyhow::ensure!(
-            (0.0..=1.0).contains(&self.forecasting.hw_beta),
-            "hw_beta must be in [0.0, 1.0]"
-        );
-        anyhow::ensure!(
-            (0.0..=1.0).contains(&self.forecasting.hw_gamma),
-            "hw_gamma must be in [0.0, 1.0]"
-        );
-        anyhow::ensure!(self.forecasting.seasonality_period >= 1, "seasonality_period must be >= 1");
+        // Dashboard config validation
+        if self.dashboard.http_addr.is_empty() {
+            anyhow::bail!("dashboard.http_addr must not be empty");
+        }
 
         Ok(())
     }
 
-    /// Calculate event channel capacity from memory budget.
-    pub fn event_channel_capacity(&self) -> usize {
-        let ram_bytes = self.engine.ram_limit_mb as u64 * 1024 * 1024;
-        let budgeted = ((ram_bytes as f64 * EVENT_CHANNEL_BUDGET_PCT) / EVENT_CHANNEL_BYTES_PER_ENTRY as f64) as usize;
-        budgeted.clamp(1024, 4_000_000)
-    }
-
-    /// Calculate effective pre-aggs max size from memory budget.
-    pub fn effective_pre_aggs_max_size(&self) -> usize {
-        let ram_bytes = self.engine.ram_limit_mb as u64 * 1024 * 1024;
-        let budgeted = ((ram_bytes as f64 * PRE_AGGS_BUDGET_PCT) / PRE_AGGS_BYTES_PER_ENTRY as f64) as usize;
-        self.detection.pre_aggs_max_size.min(budgeted).min(PRE_AGGS_MAX_CEIL)
-    }
-
     pub fn into_handle(self) -> ConfigHandle {
         Arc::new(ArcSwap::from_pointee(self))
+    }
+}
+
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+
+    #[cfg(test)]
+    fn clear_env_vars() {
+        let keys = [
+            "RAMSHIELD_ENGINE__RAM_LIMIT_MB",
+            "RAMSHIELD_ENGINE__WORKER_THREADS",
+            "RAMSHIELD_ENGINE__SHARD_COUNT",
+            "RAMSHIELD_DETECTION__RPS_THRESHOLD",
+            "RAMSHIELD_DETECTION__PROMOTE_MIN_EVENTS",
+            "RAMSHIELD_DETECTION__BATCH_WINDOW_MS",
+            "RAMSHIELD_DETECTION__SUBNET_WINDOW_THRESHOLD",
+            "RAMSHIELD_DETECTION__BLOCK_TTL_SECS",
+            "RAMSHIELD_IPC__TCP_ADDR",
+            "RAMSHIELD_IPC__MAX_CONNECTIONS",
+            "RAMSHIELD_DASHBOARD__ENABLED",
+            "RAMSHIELD_DASHBOARD__HTTP_ADDR",
+            "RAMSHIELD_FORECASTING__ENABLED",
+        ];
+        for k in &keys {
+            unsafe { std::env::remove_var(k); }
+        }
+    }
+
+    #[test]
+    fn default_config_validates() {
+        let cfg = Config::default();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn env_var_override_ram_limit() {
+        clear_env_vars();
+        unsafe { std::env::set_var("RAMSHIELD_ENGINE__RAM_LIMIT_MB", "1024"); }
+        let tmpfile = "/tmp/ramshield_test_config.toml";
+        std::fs::write(tmpfile, "").unwrap();
+        let cfg = Config::load(tmpfile).unwrap();
+        assert_eq!(cfg.engine.ram_limit_mb, 1024);
+        clear_env_vars();
+    }
+
+    #[test]
+    #[serial]
+    fn env_override_detection_rps() {
+        clear_env_vars();
+        unsafe { std::env::set_var("RAMSHIELD_DETECTION__RPS_THRESHOLD", "500"); }
+        let tmpfile = "/tmp/ramshield_test_config.toml";
+        std::fs::write(tmpfile, "").unwrap();
+        let cfg = Config::load(tmpfile).unwrap();
+        assert_eq!(cfg.detection.rps_threshold, 500);
+        clear_env_vars();
+    }
+
+    #[test]
+    #[serial]
+    fn env_override_invalid_ignored() {
+        use std::panic;
+        clear_env_vars();
+        unsafe { std::env::set_var("RAMSHIELD_ENGINE__RAM_LIMIT_MB", "not_a_number"); }
+        let tmpfile = "/tmp/ramshield_test_config.toml";
+        std::fs::write(tmpfile, "").unwrap();
+        
+        // Should not panic; invalid env var is silently ignored
+        let result = panic::catch_unwind(|| {
+            Config::load(tmpfile).unwrap()
+        });
+        assert!(result.is_ok(), "Config::load should not panic on invalid env var");
+        assert_eq!(result.unwrap().engine.ram_limit_mb, 512); // default preserved
+        clear_env_vars();
     }
 }
