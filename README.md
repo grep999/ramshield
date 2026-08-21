@@ -158,7 +158,7 @@ max_connections = 256
 [wal]                      # Crash-durable block state (off by default)
 enabled = true
 dir = "/var/lib/ramshield/wal"
-durability = "Flush"       # None | Flush | Fsync | GroupCommit
+durability = "Flush"       # None | Flush | Fsync | GroupCommit (currently = Fsync; single-writer actor has nothing to batch)
 compress = true            # LZ4 records > 64B
 seg_max_bytes = 67108864   # 64 MB segment rotation
 retention_max_bytes = 536870912  # 512 MB total cap; oldest pruned (0 = unlimited)
