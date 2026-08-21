@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 ramshield-types = { path = "../ramshield-types" }
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1"
 arc-swap = "1"
 anyhow = "1"
 
