@@ -2,7 +2,7 @@ use ramshield_config::ForecastingConfig;
 use ramshield_learning::PatternLearner;
 use ramshield_metrics::Metrics;
 use ramshield_storage::Store;
-use ramshield_types::command::Command;
+use ramshield_types::{EnforceAction, EnforceCommand};
 use ramshield_types::error::BlockReason;
 use std::collections::VecDeque;
 use std::net::IpAddr;
@@ -102,7 +102,7 @@ impl RingBuffer {
 pub struct Forecaster {
     store: Arc<Store>,
     config: ForecastingConfig,
-    command_tx: mpsc::Sender<Command>,
+    command_tx: mpsc::Sender<EnforceCommand>,
     metrics: Arc<Metrics>,
     hw: tokio::sync::Mutex<HoltWinters>,
     history: tokio::sync::Mutex<RingBuffer>,
@@ -114,7 +114,7 @@ impl Forecaster {
     pub fn new(
         store: Arc<Store>,
         config: ForecastingConfig,
-        command_tx: mpsc::Sender<Command>,
+        command_tx: mpsc::Sender<EnforceCommand>,
         metrics: Arc<Metrics>,
         #[allow(dead_code)] pattern_learner: Arc<PatternLearner>,
     ) -> Self {
@@ -203,8 +203,8 @@ impl Forecaster {
         sample
     }
 
-    fn block_cmd(&self, ip: IpAddr, reason: BlockReason, ttl_seconds: u64) -> Command {
-        Command::Block(ramshield_types::command::EnforcementCommand {
+    fn block_cmd(&self, ip: IpAddr, _reason: BlockReason, ttl_seconds: u64) -> EnforceCommand {
+        EnforceCommand {
             decision_id: Uuid::new_v4(),
             policy_version: 1,
             source: "forecasting".into(),
@@ -214,9 +214,10 @@ impl Forecaster {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0),
             ttl_seconds,
-            reason: format!("{reason:?}"),
+            reason: "forecast_anomaly".into(),
             ip,
-        })
+            action: EnforceAction::Block,
+        }
     }
 
     async fn preemptive_block(&self) {

@@ -19,15 +19,40 @@ pub enum RsError {
 
 pub type Result<T> = std::result::Result<T, RsError>;
 
+/// Canonical block-reason vocabulary. Wire format shared by IPC + WAL.
+/// (src shape — the one live constructors use; crate's 7-variant draft deleted.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BlockReason {
-    Ddos,
-    Scan,
-    Manual,
+    HighRps,
+    SubnetBatch,
     ForecastAnomaly,
     EntropyAnomaly,
-    SubnetBatch,
-    HighRps(u64),
+    ManualBlock,
+}
+
+impl BlockReason {
+    /// Stable wire token used in EnforceCommand.reason / WalEntry.reason strings.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BlockReason::HighRps => "high_rps",
+            BlockReason::SubnetBatch => "subnet_burst",
+            BlockReason::ForecastAnomaly => "forecast_anomaly",
+            BlockReason::EntropyAnomaly => "entropy_anomaly",
+            BlockReason::ManualBlock => "manual",
+        }
+    }
+
+    /// Inverse of `as_str`; mirrors src/enforcement parse_reason mapping.
+    pub fn from_reason_str(r: &str) -> Option<Self> {
+        match r {
+            "high_rps" | "syn_flood" | "volumetric" | "slowloris" => Some(BlockReason::HighRps),
+            "subnet_burst" => Some(BlockReason::SubnetBatch),
+            "forecast_anomaly" => Some(BlockReason::ForecastAnomaly),
+            "entropy_anomaly" | "anomaly" => Some(BlockReason::EntropyAnomaly),
+            "manual" | "manual_unblock" | "manual_block" => Some(BlockReason::ManualBlock),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

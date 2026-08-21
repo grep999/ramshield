@@ -320,15 +320,8 @@ impl<X: XdpApplier> EnforcementService<X> {
 
 /// Convert reason string to BlockReason enum
 fn reason_str_to_blockreason(reason: &str) -> BlockReason {
-    match reason.to_lowercase().as_str() {
-        s if s.contains("ddos") => BlockReason::Ddos,
-        s if s.contains("scan") => BlockReason::Scan,
-        s if s.contains("manual") => BlockReason::Manual,
-        s if s.contains("forecast") => BlockReason::ForecastAnomaly,
-        s if s.contains("entropy") => BlockReason::EntropyAnomaly,
-        s if s.contains("subnet") => BlockReason::SubnetBatch,
-        _ => BlockReason::Manual,
-    }
+    // ponytail: interim mapping; superseded by types::BlockReason::from_reason_str in Phase 3 merge
+    BlockReason::from_reason_str(&reason.to_lowercase()).unwrap_or(BlockReason::ManualBlock)
 }
 
 #[cfg(test)]
