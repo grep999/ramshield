@@ -244,7 +244,7 @@ function render(d) {
   setBar($('g-cpu'), d.cpu_usage || 0);
   const rssMb = d.memory_usage_mb || 0;
   $('g-rss-v').textContent = fmt(rssMb) + ' MB';
-  setBar($('g-rss'), rssMb / 32768 * 100); // vs 32GB reference
+  setBar($('g-rss'), rssMb / Math.max(1, d.total_ram_mb || 32768) * 100);
 }
 
 function renderModules(mods) {

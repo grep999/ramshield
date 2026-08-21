@@ -79,7 +79,7 @@ impl Engine {
         let store = &self.store;
         let metrics = &self.metrics;
         let stats = store.get_stats();
-        let (cpu_usage, _total_ram_mb, memory_usage_mb) = crate::metrics::get_system_usage();
+        let (cpu_usage, total_ram_mb, memory_usage_mb) = crate::metrics::get_system_usage();
 
         let ram_pct = if stats.ram_limit_mb > 0 {
             (stats.ram_bytes as f64 / (stats.ram_limit_mb as f64 * 1048576.0) * 100.0).min(100.0)
@@ -111,6 +111,7 @@ impl Engine {
             ram_pct,
             cpu_usage,
             memory_usage_mb,
+            total_ram_mb,
             ipc_requests: metrics.requests_total.load(Ordering::Relaxed),
             events_ingested: ingested,
             events_rejected: metrics.events_rejected.load(Ordering::Relaxed),
