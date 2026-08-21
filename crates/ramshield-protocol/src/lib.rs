@@ -34,6 +34,6 @@
 pub mod codec;
 pub mod message;
 
-pub use codec::{decode, encode, DecodeError, MAGIC, MAX_PAYLOAD_LEN};
+pub use codec::{DecodeError, MAGIC, MAX_PAYLOAD_LEN, decode, encode};
 pub use message::PROTOCOL_VERSION;
 pub use message::*;
