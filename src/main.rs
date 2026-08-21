@@ -11,6 +11,7 @@ fn init_otel() -> opentelemetry_sdk::trace::TracerProvider {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    ramshield::install_panic_hook();
     // Atomic P0: --version flag (BACKLOG #8) — checked before tracing init
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {

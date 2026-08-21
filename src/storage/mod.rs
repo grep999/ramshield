@@ -47,6 +47,11 @@ impl TrafficCounters {
         self.events_last_second
             .store(total_events, Ordering::Relaxed);
         self.unique_ips_window.store(unique_ips, Ordering::Relaxed);
+        // Snapshot semantics: this flush's counts fully replace the previous
+        // window. Zero stale slots first so entropy never blends old windows.
+        for slot in &self.subnet_window {
+            slot.store(0, Ordering::Relaxed);
+        }
         for (i, count) in subnet_counts.iter().enumerate() {
             if i < 256 {
                 self.subnet_window[i].store(*count, Ordering::Relaxed);
@@ -214,7 +219,10 @@ impl Store {
     }
 
     /// Merge subnet-scale counters from a batch flush (O(subnets in batch)).
+    /// Windowed: entries older than `window_ns` reset before adding, so a /24
+    /// can't accumulate across windows and false-positive the batch blocker.
     pub fn merge_subnet_window(&self, key: u32, prefix: [u8; 3], events: u32, now_ns: u64) {
+        const WINDOW_NS: u64 = 2 * 1_000_000_000; // ponytail: fixed 2s window vs config plumbing — matches pre_aggs flush cadence; add per-subnet window cfg when justified.
         let mut rec = self
             .subnet_table
             .get(&key)
@@ -224,6 +232,9 @@ impl Store {
                 total_rps: 0,
                 last_updated_ns: now_ns,
             });
+        if now_ns.saturating_sub(rec.last_updated_ns) > WINDOW_NS {
+            rec.total_rps = 0;
+        }
         rec.total_rps = rec.total_rps.saturating_add(events as u64);
         rec.last_updated_ns = now_ns;
         self.subnet_table.insert(key, rec);
