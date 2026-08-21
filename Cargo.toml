@@ -42,7 +42,7 @@ path = "src/lib.rs"
 default = []
 otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
 full = ["tokio/full", "tracing-subscriber/env-filter", "tracing-subscriber/fmt", "tower-http/cors", "clap/derive", "otel", "xdp"]
-xdp = ["dep:aya", "dep:ramshield-xdp"]
+xdp = ["dep:aya", "dep:ramshield-xdp", "ramshield-enforcement/xdp"]
 
 [dependencies]
 tokio             = { version = "1", features = ["full"] }
