@@ -4,11 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ramshield-config = { path = "../ramshield-config" }
 ramshield-storage = { path = "../ramshield-storage" }
 ramshield-types = { path = "../ramshield-types" }
 ramshield-metrics = { path = "../ramshield-metrics" }
 anyhow = "1.0"
-uuid = { version = "1.11", features = ["v4"] }
+dashmap = "5"
+uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 crossbeam-channel = "0.5"
 tokio = { version = "1", features = ["sync"] }

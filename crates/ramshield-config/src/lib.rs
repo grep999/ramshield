@@ -274,7 +274,7 @@ impl Config {
     pub fn event_channel_capacity(&self) -> usize {
         let ram_bytes = self.engine.ram_limit_mb as u64 * 1024 * 1024;
         let budgeted = ((ram_bytes as f64 * EVENT_CHANNEL_BUDGET_PCT) / EVENT_CHANNEL_BYTES_PER_ENTRY as f64) as usize;
-        budgeted.max(1024).min(4_000_000)
+        budgeted.clamp(1024, 4_000_000)
     }
 
     /// Calculate effective pre-aggs max size from memory budget.
