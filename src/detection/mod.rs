@@ -196,6 +196,9 @@ impl DetectionEngine {
         let mut entry = self.pre_aggs.entry(ev.ip).or_default();
         let agg = entry.value_mut();
         agg.count += 1;
+        if agg.count == 1 {
+            agg.first_ts_ns = ev.timestamp_ns;
+        }
         agg.bytes += ev.bytes;
         agg.last_ts_ns = ev.timestamp_ns;
         // ponytail: table lookup replaces per-event /100 - 600B const table.
@@ -498,6 +501,7 @@ impl DetectionEngine {
         {
             warn!("Failed to insert IP record for {}: {}", ip, e);
         }
+        self.store.update_subnet_index(ip, subnet_key(ip), false);
         (ewma_rps, threat, block, false)
     }
 
