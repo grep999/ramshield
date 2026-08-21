@@ -5,8 +5,8 @@ use tracing::{info, debug}; // Add debug
 use tracing_subscriber::EnvFilter;
 
 #[cfg(feature = "otel")]
-fn init_otel() -> opentelemetry_sdk::trace::TracerProvider {
-    opentelemetry_sdk::trace::TracerProvider::default()
+fn init_otel() -> opentelemetry_sdk::trace::SdkTracerProvider {
+    opentelemetry_sdk::trace::SdkTracerProvider::builder().build()
 }
 
 #[tokio::main]
@@ -24,7 +24,7 @@ async fn main() -> Result<()> {
 
     #[cfg(feature = "otel")]
     {
-        use opentelemetry::trace::TracerProvider;
+        use opentelemetry::trace::TracerProvider as _;
         let provider = init_otel();
         let _tracer = provider.tracer("ramshield");
         tracing_subscriber::fmt().with_env_filter(env_filter).init();

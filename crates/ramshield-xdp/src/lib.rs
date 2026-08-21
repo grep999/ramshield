@@ -8,11 +8,11 @@
 pub static BPF_ELF: &[u8] = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/ramshield-xdp"));
 
 #[cfg(feature = "manager")]
-use aya::{
-    maps::HashMap,
-    programs::Xdp,
-    Bpf,
-};
+use aya::{maps::HashMap, programs::Xdp, Bpf};
+#[cfg(feature = "manager")]
+use std::net::IpAddr;
+#[cfg(feature = "manager")]
+use std::sync::Arc;
 #[cfg(feature = "manager")]
 use ramshield_storage::Store;
 use thiserror::Error;
@@ -167,12 +167,12 @@ mod runtime_tests {
         match Bpf::load(&bytes) {
             Ok(bpf) => {
                 println!("✓ BPF object loaded successfully");
-                let programs: Vec<_> = bpf.programs().map(|(k,_)| k.clone()).collect();
-                let maps: Vec<_> = bpf.maps().map(|(k,_)| k.clone()).collect();
+                let programs: Vec<_> = bpf.programs().map(|(k, _)| k).collect();
+                let maps: Vec<_> = bpf.maps().map(|(k, _)| k).collect();
                 println!("Programs: {:?}", programs);
                 println!("Maps: {:?}", maps);
-                assert!(programs.iter().any(|p| *p == "ramshield_xdp"), "Missing ramshield_xdp program");
-                assert!(maps.iter().any(|m| *m == "BLOCKLIST"), "Missing BLOCKLIST map");
+                assert!(programs.contains(&"ramshield_xdp"), "Missing ramshield_xdp program");
+                assert!(maps.contains(&"BLOCKLIST"), "Missing BLOCKLIST map");
             }
             Err(e) => {
                 panic!("✗ Failed to load BPF object: {}", e);
