@@ -79,12 +79,6 @@ tracing-opentelemetry = { version = "0.22", optional = true }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 async-trait = "0.1"
 
-[[bench]]
-name = "score_bench"
-path = "benches/score_bench.rs"
-harness = false
-
 [dev-dependencies]
 serial_test = "3"
 proptest = "1"
-criterion = "0.5"

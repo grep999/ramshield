@@ -10,7 +10,6 @@ use crate::config::Config;
 use crate::detection::DetectionEngine;
 use crate::forecasting::Forecaster;
 use crate::enforcement::{EnforceCommand, EnforcementService, StubXdpApplier};
-use crate::learning::PatternLearner;
 use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, Metrics, SubnetRow};
 use crate::storage::Store;
 
@@ -195,11 +194,9 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
         }
     });
 
-    let learner = Arc::new(PatternLearner::new(cfg_snapshot.detection.pattern_similarity_threshold));
-
     let detection = Arc::new(DetectionEngine::new(
-        store.clone(), cfg_handle.clone(), engine.enforcement_tx.clone(), metrics.clone(),
-        learner.clone(), Arc::new(AtomicBool::new(false)),
+        store.clone(), cfg_handle.clone(), engine.enforcement_tx.clone(),
+        metrics.clone(), Arc::new(AtomicBool::new(false)),
     ));
     let event_tx = detection.event_sender();
     detection.clone().spawn_workers(cfg_snapshot.engine.worker_threads);
@@ -209,7 +206,6 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
         cfg_snapshot.forecasting.clone(),
         engine.enforcement_tx.clone(),
         metrics.clone(),
-        learner,
     ));
     tokio::spawn(async move { forecaster.run().await });
 

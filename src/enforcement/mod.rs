@@ -7,7 +7,6 @@
 use anyhow::Result;
 use crate::storage::{Store, Value, BlockState, BlockReason, IpRecord};
 use crate::metrics::Metrics;
-use crate::util::BoundedVecDeque;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::net::IpAddr;
@@ -184,12 +183,11 @@ impl EnforcementService {
             EnforceAction::Block => {
                 let reason = reason_to_block_reason(&cmd.reason);
                 let rec = self.store.get(&cmd.ip)
-                    .and_then(|v| if let Value::IpRecord(r) = v { Some(r) } else { None })
-                    .unwrap_or_else(|| IpRecord {
-                        ip: cmd.ip, request_count: 0, ewma_rps: 0.0, baseline_rps: 0.0, baseline_threat: 0.0,
-                        behavior_history_rps: BoundedVecDeque::new(10), behavior_history_threat: BoundedVecDeque::new(10),
+                    .and_then(|v| match v { Value::IpRecord(r) => Some(r), _ => None })
+                    .unwrap_or(IpRecord {
+                        ip: cmd.ip, request_count: 0, ewma_rps: 0.0,
                         first_seen_ns: now_ns, last_seen_ns: now_ns, bytes_in: 0, status_dist: [0; 5],
-                        proto_fingerprint: 0, country: [0; 2], threat_score: 0.0, block_state: BlockState::Clean, asn: 0,
+                        proto_fingerprint: 0, threat_score: 0.0, block_state: BlockState::Clean,
                     });
                 let mut updated = rec;
                 updated.block_state = BlockState::Blocked { reason, since_ns: now_ns };

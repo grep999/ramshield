@@ -1,9 +1,4 @@
-pub mod blob_store;
-pub mod ttl_wheel;
-pub mod wal;
-
 use crate::error::{Result, RsError};
-use crate::util::BoundedVecDeque;
 use crossbeam_queue::SegQueue;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -87,7 +82,6 @@ impl Default for TrafficCounters {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Value {
     Counter(u64),
-    Float(f64),
     /// Small payloads stored as Vec<u8>.
     /// Note: we intentionally avoid [u8; 64] because serde only auto-derives
     /// fixed arrays up to [T; 32]. Vec<u8> is serde-compatible at any size.
@@ -126,19 +120,13 @@ pub struct IpRecord {
     pub ip: IpAddr,
     pub request_count: u64,
     pub ewma_rps: f64,
-    pub baseline_rps: f64,    // New field
-    pub baseline_threat: f32, // New field
-    pub behavior_history_rps: BoundedVecDeque<f64>,
-    pub behavior_history_threat: BoundedVecDeque<f32>,
     pub first_seen_ns: u64,
     pub last_seen_ns: u64,
     pub bytes_in: u64,
     pub status_dist: [u32; 5],
     pub proto_fingerprint: u32,
-    pub country: [u8; 2],
     pub threat_score: f32,
     pub block_state: BlockState,
-    pub asn: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -182,10 +170,7 @@ impl std::fmt::Display for BlockReason {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubnetRecord {
     pub prefix: [u8; 3],
-    pub active_ips: u32,
-    pub blocked_ips: u32,
     pub total_rps: u64,
-    pub threat_score: f32,
     pub last_updated_ns: u64,
 }
 
@@ -193,7 +178,6 @@ pub struct SubnetRecord {
 pub struct Entry {
     pub value: Value,
     pub expires_at: Option<Instant>,
-    pub version: u64,
 }
 
 impl Entry {
@@ -237,10 +221,7 @@ impl Store {
             .map(|e| e.value().clone())
             .unwrap_or(SubnetRecord {
                 prefix,
-                active_ips: 0,
-                blocked_ips: 0,
                 total_rps: 0,
-                threat_score: 0.0,
                 last_updated_ns: now_ns,
             });
         rec.total_rps = rec.total_rps.saturating_add(events as u64);
@@ -272,7 +253,6 @@ impl Store {
         let new_entry = Entry {
             value,
             expires_at,
-            version: 0,
         };
         let entry_size = std::mem::size_of::<IpAddr>() + std::mem::size_of::<Entry>() + new_entry.value.heap_bytes();
 
@@ -311,19 +291,6 @@ impl Store {
             return None;
         }
         Some(entry.value.clone())
-    }
-
-    pub fn increment(&self, key: IpAddr, delta: u64) -> u64 {
-        let mut e = self.inner.entry(key).or_insert_with(|| Entry {
-            value: Value::Counter(0),
-            expires_at: None,
-            version: 0,
-        });
-        if let Value::Counter(ref mut c) = e.value {
-            *c += delta;
-            return *c;
-        }
-        0
     }
 
     pub fn evict_batch(&self, keys: &[IpAddr]) {
@@ -456,13 +423,6 @@ mod tests {
         assert!(store.get(&"127.0.0.1".parse().unwrap()).is_some());
         store.remove(&"127.0.0.1".parse().unwrap());
         assert!(store.get(&"127.0.0.1".parse().unwrap()).is_none());
-    }
-
-    #[test]
-    fn increment_creates_and_adds() {
-        let store = Store::new(16);
-        assert_eq!(store.increment("127.0.0.2".parse().unwrap(), 5), 5);
-        assert_eq!(store.increment("127.0.0.2".parse().unwrap(), 3), 8);
     }
 
     #[test]

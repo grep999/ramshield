@@ -8,7 +8,6 @@ use crate::detection::rate_tracker::{ewma, is_exceeded};
 use crate::metrics::Metrics;
 use crate::enforcement::{EnforceAction, EnforceCommand};
 use crate::storage::{BlockReason, BlockState, IpRecord, Store, Value};
-use crate::util::BoundedVecDeque;
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use dashmap::DashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -135,8 +134,6 @@ pub struct DetectionEngine {
     enforcement_tx: mpsc::Sender<EnforceCommand>,
     bloom: Arc<RwLock<BloomFilter>>,
     shutdown: Arc<AtomicBool>,
-    #[allow(dead_code)]
-    pattern_learner: Arc<crate::learning::PatternLearner>,
     /// Pre-aggregation buffer — DashMap is internally thread-safe, no Arc needed
     pre_aggs: DashMap<IpAddr, IpAgg>,
     last_pre_aggs_flush_ns: AtomicU64,
@@ -148,7 +145,6 @@ impl DetectionEngine {
         config: ConfigHandle,
         enforcement_tx: mpsc::Sender<EnforceCommand>,
         metrics: Arc<Metrics>,
-        pattern_learner: Arc<crate::learning::PatternLearner>,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         let bloom_bits = config.load().detection.bloom_bits;
@@ -163,7 +159,6 @@ impl DetectionEngine {
             enforcement_tx,
             bloom: Arc::new(RwLock::new(BloomFilter::new(bloom_bits))),
             shutdown,
-            pattern_learner,
             pre_aggs: DashMap::with_shard_amount(shard_count),
             last_pre_aggs_flush_ns: AtomicU64::new(now_ns()),
         }
@@ -171,10 +166,6 @@ impl DetectionEngine {
 
     pub fn event_sender(&self) -> Sender<ConnectionEvent> {
         self.event_tx.clone()
-    }
-
-    pub fn queue_depth(&self) -> usize {
-        self.event_tx.len()
     }
 
     /// Submit many events in one channel send (amortises IPC / edge overhead).
@@ -449,19 +440,13 @@ impl DetectionEngine {
                 ip,
                 request_count: 0,
                 ewma_rps: 0.0,
-                baseline_rps: 0.0,
-                baseline_threat: 0.0,
-                behavior_history_rps: BoundedVecDeque::new(det.history_cap),
-                behavior_history_threat: BoundedVecDeque::new(det.history_cap),
                 first_seen_ns: agg.first_ts_ns,
                 last_seen_ns: agg.last_ts_ns,
                 bytes_in: 0,
                 status_dist: [0; 5],
                 proto_fingerprint: agg.proto_fp,
-                country: [0; 2],
                 threat_score: 0.0,
                 block_state: BlockState::Clean,
-                asn: 0,
             },
         };
 
@@ -590,12 +575,9 @@ mod tests {
         let store = Arc::new(Store::new(16));
         let metrics = Arc::new(Metrics::new());
         let (etx, _erx) = mpsc::channel(64);
-        let learner = Arc::new(crate::learning::PatternLearner::new(
-            cfg.load().detection.pattern_similarity_threshold,
-        ));
         let shutdown = Arc::new(AtomicBool::new(false));
         Arc::new(DetectionEngine::new(
-            store, cfg, etx, metrics, learner, shutdown,
+            store, cfg, etx, metrics, shutdown,
         ))
     }
 

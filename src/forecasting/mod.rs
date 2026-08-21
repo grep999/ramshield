@@ -1,5 +1,4 @@
 use crate::config::ForecastingConfig;
-use crate::learning::PatternLearner;
 use crate::metrics::Metrics;
 use crate::enforcement::{EnforceAction, EnforceCommand};
 use crate::storage::Store;
@@ -105,9 +104,6 @@ pub struct Forecaster {
     metrics: Arc<Metrics>,
     hw: tokio::sync::Mutex<HoltWinters>,
     history: tokio::sync::Mutex<RingBuffer>,
-    /// Pattern learner for attack detection
-    #[allow(dead_code)]
-    pattern_learner: Arc<PatternLearner>,
 }
 
 impl Forecaster {
@@ -116,7 +112,6 @@ impl Forecaster {
         config: ForecastingConfig,
         enforcement_tx: mpsc::Sender<EnforceCommand>,
         metrics: Arc<Metrics>,
-        #[allow(dead_code)] pattern_learner: Arc<PatternLearner>,
     ) -> Self {
         let hw = HoltWinters::new(
             config.ewma_alpha,
@@ -131,7 +126,6 @@ impl Forecaster {
             metrics,
             hw: tokio::sync::Mutex::new(hw),
             history: tokio::sync::Mutex::new(RingBuffer::new(60)),
-            pattern_learner,
         }
     }
 
