@@ -134,7 +134,10 @@ impl DetectionEngine {
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         let bloom_bits = config.load().detection.bloom_bits;
-        let (tx, rx) = bounded::<ConnectionEvent>(2_000_000);
+        // 256k events ≈ 25s of peak ingest buffered — backpressure kicks in
+        // long before RAM blowout (2M cap cost ~200MB RSS headroom for no
+        // throughput gain; BATCH_MAX 1M still fits).
+        let (tx, rx) = bounded::<ConnectionEvent>(256_000);
         let shard_count = (bloom_bits / 1024).max(1).next_power_of_two();
         Self {
             store,

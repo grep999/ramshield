@@ -48,7 +48,10 @@ impl Engine {
         std::thread::Builder::new()
             .name("rs-engine".into())
             .spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread()
+                // Multi-thread: IPC accept loop serves every connection's
+                // read/write on this runtime; current_thread starved under
+                // attack load (5s read timeouts during subnet floods).
+                let rt = match tokio::runtime::Builder::new_multi_thread()
                     .enable_io()
                     .enable_time()
                     .build()
