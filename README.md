@@ -155,11 +155,24 @@ min_entropy = 2.0          # Shannon entropy floor (bits)
 tcp_addr = "127.0.0.1:7890"
 max_connections = 256
 
+[wal]                      # Crash-durable block state (off by default)
+enabled = true
+dir = "/var/lib/ramshield/wal"
+durability = "Flush"       # None | Flush | Fsync | GroupCommit
+compress = true            # LZ4 records > 64B
+seg_max_bytes = 67108864   # 64 MB segment rotation
+
 [xdp]                      # Optional kernel acceleration
 enabled = false
 interface = "eth0"
 build_mode = "auto"        # auto | rust | clang | stub
 ```
+
+**WAL crash recovery:** with `[wal].enabled = true`, every block/unblock is
+journaled before state mutation (WAL-first). On restart the WAL is replayed:
+live blocks are restored into the store and re-armed in XDP by reconciliation;
+TTL-expired blocks are skipped; unblocks cancel earlier blocks. Verified
+end-to-end: block → kill → restart → `restored N live blocks` in the log.
 
 **Environment overrides** (prefix `RAMSHIELD_`):
 ```bash
