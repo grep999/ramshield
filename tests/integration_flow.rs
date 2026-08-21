@@ -24,7 +24,7 @@ async fn detection_tracks_ip_through_engine_pipeline() {
         Arc::new(AtomicBool::new(false)),
     ));
     detection.clone().spawn_workers(2);
-    let event_tx = detection.event_sender();
+    let _event_tx = detection.event_sender();
     let target = std::net::IpAddr::from([10, 1, 2, 3]);
     // 200 events > promote_min_events(8); flush_events is the synchronous
     // test/IPC entry — no worker timing dependence.
