@@ -1,13 +1,10 @@
 [workspace]
 members = [
     ".",
-    "crates/ramshield-compliance",
     "crates/ramshield-config",
-    "crates/ramshield-consensus",
     "crates/ramshield-detection",
     "crates/ramshield-enforcement",
     "crates/ramshield-forecasting",
-    "crates/ramshield-learning",
     "crates/ramshield-metrics",
     "crates/ramshield-protocol",
     "crates/ramshield-storage",
