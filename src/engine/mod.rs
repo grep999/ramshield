@@ -249,6 +249,7 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
             cfg_snapshot.wal.compress,
             cfg_snapshot.wal.durability,
             cfg_snapshot.wal.seg_max_bytes,
+            cfg_snapshot.wal.retention_max_bytes,
         ) {
             Ok(wal) => {
                 let wal = Arc::new(wal);

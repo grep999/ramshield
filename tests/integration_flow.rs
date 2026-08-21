@@ -67,6 +67,7 @@ async fn enforcement_wal_replay_roundtrip() {
             false,
             ramshield_types::Durability::None,
             64 * 1024 * 1024,
+            0,
         )
         .unwrap(),
     );

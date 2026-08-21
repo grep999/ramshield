@@ -87,6 +87,8 @@ pub struct Wal {
     compress: bool,
     durability: Durability,
     seg_max: u64,
+    /// Total-bytes cap across segments; oldest deleted first. 0 = unlimited.
+    retention_max: u64,
     base_dir: String,
     lsn_counter: AtomicU64,
 }
@@ -98,9 +100,16 @@ struct Inner {
 }
 
 impl Wal {
-    pub fn open(dir: &str, compress: bool, durability: Durability, seg_bytes: u64) -> Result<Self> {
+    pub fn open(
+        dir: &str,
+        compress: bool,
+        durability: Durability,
+        seg_bytes: u64,
+        retention_max: u64,
+    ) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
         fsync_dir(dir)?;
+        enforce_retention(dir, retention_max);
 
         // Discover highest segment to resume from
         let max_seg = discover_max_seg(dir);
@@ -129,6 +138,7 @@ impl Wal {
             compress,
             durability,
             seg_max: seg_bytes,
+            retention_max,
             base_dir: dir.to_string(),
             lsn_counter: AtomicU64::new(start_lsn),
         })
@@ -207,6 +217,9 @@ impl Wal {
             g.bytes = 0;
             fsync_dir(&self.base_dir)?;
             info!("WAL rotated → {:?}", path);
+        }
+        if self.retention_max > 0 {
+            enforce_retention(&self.base_dir, self.retention_max);
         }
         Ok(lsn)
     }
@@ -452,6 +465,50 @@ fn seg_path(dir: &str, idx: u64) -> PathBuf {
     PathBuf::from(dir).join(format!("wal-{:08}.rshw", idx))
 }
 
+/// Delete oldest segments until total .rshw bytes fit the cap. Never touches
+/// the newest segment. Best-effort: delete failures are logged, not fatal.
+fn enforce_retention(dir: &str, max_bytes: u64) {
+    if max_bytes == 0 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut segs: Vec<(u64, u64)> = rd // (seg_idx, size)
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name();
+            let s = name.to_string_lossy();
+            let idx = s
+                .strip_prefix("wal-")?
+                .strip_suffix(".rshw")?
+                .parse::<u64>()
+                .ok()?;
+            Some((idx, e.metadata().ok()?.len()))
+        })
+        .collect();
+    segs.sort_unstable_by_key(|&(idx, _)| idx);
+
+    let total: u64 = segs.iter().map(|&(_, sz)| sz).sum();
+    if total <= max_bytes {
+        return;
+    }
+    let mut over = total - max_bytes;
+    for &(idx, sz) in &segs[..segs.len().saturating_sub(1)] {
+        if over == 0 {
+            break;
+        }
+        let path = seg_path(dir, idx);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                warn!("WAL retention: deleted {:?} ({} bytes)", path, sz);
+                over = over.saturating_sub(sz);
+            }
+            Err(e) => warn!("WAL retention delete {:?} failed: {}", path, e),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,7 +525,7 @@ mod tests {
     #[test]
     fn wal_roundtrip() {
         let dir = tmp("rs_wal_rt2");
-        let wal = Wal::open(&dir, true, Durability::None, 64 * 1024 * 1024).unwrap();
+        let wal = Wal::open(&dir, true, Durability::None, 64 * 1024 * 1024, 0).unwrap();
         let lsn = wal
             .append(&WalEntry::BlockIp {
                 ip: "1.2.3.4".into(),
@@ -488,7 +545,7 @@ mod tests {
     #[test]
     fn wal_lsn_monotonic() {
         let dir = tmp("rs_wal_lsn");
-        let wal = Wal::open(&dir, false, Durability::None, 64 * 1024 * 1024).unwrap();
+        let wal = Wal::open(&dir, false, Durability::None, 64 * 1024 * 1024, 0).unwrap();
         let a = wal
             .append(&WalEntry::BlockIp {
                 ip: "1.1.1.1".into(),
@@ -520,7 +577,7 @@ mod tests {
     #[test]
     fn wal_replay_after_restart() {
         let dir = tmp("rs_wal_restart");
-        let wal = Wal::open(&dir, true, Durability::None, 64 * 1024 * 1024).unwrap();
+        let wal = Wal::open(&dir, true, Durability::None, 64 * 1024 * 1024, 0).unwrap();
         wal.append(&WalEntry::BlockIp {
             ip: "10.0.0.1".into(),
             reason: "ddos".into(),
@@ -536,7 +593,7 @@ mod tests {
         drop(wal);
 
         // Reopen — should discover LSN and continue
-        let wal2 = Wal::open(&dir, true, Durability::None, 64 * 1024 * 1024).unwrap();
+        let wal2 = Wal::open(&dir, true, Durability::None, 64 * 1024 * 1024, 0).unwrap();
         let lsn = wal2
             .append(&WalEntry::Insert {
                 key: "k".into(),
@@ -556,7 +613,7 @@ mod tests {
     #[test]
     fn wal_corrupt_tail_quarantine() {
         let dir = tmp("rs_wal_quar");
-        let wal = Wal::open(&dir, false, Durability::None, 64 * 1024 * 1024).unwrap();
+        let wal = Wal::open(&dir, false, Durability::None, 64 * 1024 * 1024, 0).unwrap();
         wal.append(&WalEntry::BlockIp {
             ip: "10.0.0.1".into(),
             reason: "ok".into(),
@@ -607,7 +664,7 @@ mod tests {
     #[test]
     fn wal_uncompressed_roundtrip() {
         let dir = tmp("rs_wal_uncomp2");
-        let wal = Wal::open(&dir, false, Durability::None, 64 * 1024 * 1024).unwrap();
+        let wal = Wal::open(&dir, false, Durability::None, 64 * 1024 * 1024, 0).unwrap();
         wal.append(&WalEntry::Delete {
             key: "delete_me".into(),
             ts_ns: 1,
@@ -623,7 +680,7 @@ mod tests {
     #[test]
     fn wal_segment_rotation() {
         let dir = tmp("rs_wal_seg2");
-        let wal = Wal::open(&dir, false, Durability::None, 128).unwrap();
+        let wal = Wal::open(&dir, false, Durability::None, 128, 0).unwrap();
         for i in 0..100 {
             wal.append(&WalEntry::BlockIp {
                 ip: format!("10.0.0.{}", i),
@@ -639,10 +696,51 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Retention deletes oldest segments first; the newest (live) segment and
+    /// its records always survive.
+    #[test]
+    fn wal_retention_deletes_oldest_segments() {
+        let dir = tmp("rs_wal_ret");
+        // Tiny segments (~1 record each), 600-byte total cap.
+        let wal = Wal::open(&dir, false, Durability::None, 128, 600).unwrap();
+        for i in 0..40 {
+            wal.append(&WalEntry::BlockIp {
+                ip: format!("10.9.{}.{}.{}", i >> 8 & 255, i >> 4 & 15, i & 15),
+                reason: "retention_test".into(),
+                ttl_secs: None,
+                ts_ns: i as u64,
+            })
+            .unwrap();
+        }
+        drop(wal);
+
+        let segs: Vec<(std::path::PathBuf, u64)> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "rshw"))
+            .map(|e| {
+                let p = e.path();
+                let sz = p.metadata().unwrap().len();
+                (p, sz)
+            })
+            .collect();
+        let total: u64 = segs.iter().map(|&(_, sz)| sz).sum();
+        assert!(
+            total <= 600 + 300, // cap + newest-segment slack
+            "retention should prune: {} bytes across {} segments",
+            total,
+            segs.len()
+        );
+        // Newest segment's records must still replay.
+        let entries = Wal::replay(&dir).unwrap();
+        assert!(!entries.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn wal_record_too_large() {
         let dir = tmp("rs_wal_big");
-        let wal = Wal::open(&dir, false, Durability::None, 64 * 1024 * 1024).unwrap();
+        let wal = Wal::open(&dir, false, Durability::None, 64 * 1024 * 1024, 0).unwrap();
         let big_val = "x".repeat(MAX_RECORD_SIZE + 1);
         let result = wal.append(&WalEntry::Insert {
             key: "k".into(),
@@ -657,7 +755,7 @@ mod tests {
     #[test]
     fn wal_durability_fsync() {
         let dir = tmp("rs_wal_fsync");
-        let wal = Wal::open(&dir, false, Durability::Fsync, 64 * 1024 * 1024).unwrap();
+        let wal = Wal::open(&dir, false, Durability::Fsync, 64 * 1024 * 1024, 0).unwrap();
         wal.append(&WalEntry::BlockIp {
             ip: "10.0.0.1".into(),
             reason: "test".into(),
@@ -674,7 +772,7 @@ mod tests {
     #[test]
     fn wal_checkpoint_atomic() {
         let dir = tmp("rs_wal_ckpt");
-        let wal = Wal::open(&dir, false, Durability::Fsync, 64 * 1024 * 1024).unwrap();
+        let wal = Wal::open(&dir, false, Durability::Fsync, 64 * 1024 * 1024, 0).unwrap();
         let lsn = wal.checkpoint("/tmp/snap.bin").unwrap();
         assert!(lsn > 0);
         // Manifest should exist
@@ -689,7 +787,7 @@ mod tests {
     #[test]
     fn wal_replay_idempotent() {
         let dir = tmp("rs_wal_idem");
-        let wal = Wal::open(&dir, false, Durability::None, 64 * 1024 * 1024).unwrap();
+        let wal = Wal::open(&dir, false, Durability::None, 64 * 1024 * 1024, 0).unwrap();
         wal.append(&WalEntry::BlockIp {
             ip: "10.0.0.1".into(),
             reason: "a".into(),

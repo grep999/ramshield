@@ -205,6 +205,8 @@ pub struct WalConfig {
     pub compress: bool,
     /// Segment rotation threshold in bytes.
     pub seg_max_bytes: u64,
+    /// Max total WAL size on disk. Oldest segments deleted first. 0 = unlimited.
+    pub retention_max_bytes: u64,
 }
 impl Default for WalConfig {
     fn default() -> Self {
@@ -214,6 +216,7 @@ impl Default for WalConfig {
             durability: ramshield_types::Durability::Flush,
             compress: true,
             seg_max_bytes: 64 * 1024 * 1024,
+            retention_max_bytes: 512 * 1024 * 1024,
         }
     }
 }

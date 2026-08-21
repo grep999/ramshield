@@ -495,6 +495,7 @@ mod tests {
                 false,
                 ramshield_types::Durability::None,
                 64 * 1024 * 1024,
+                0,
             )
             .unwrap(),
         ))
@@ -669,6 +670,7 @@ mod tests {
                 false,
                 ramshield_types::Durability::None,
                 64 * 1024 * 1024,
+                0,
             )
             .unwrap(),
         );
@@ -703,6 +705,7 @@ mod tests {
                 false,
                 ramshield_types::Durability::None,
                 64 * 1024 * 1024,
+                0,
             )
             .unwrap(),
         );
@@ -724,6 +727,7 @@ mod tests {
             false,
             ramshield_types::Durability::None,
             64 * 1024 * 1024,
+            0,
         )
         .unwrap();
         wal.append(&WalEntry::BlockIp {
@@ -742,6 +746,7 @@ mod tests {
                 false,
                 ramshield_types::Durability::None,
                 64 * 1024 * 1024,
+                0,
             )
             .unwrap(),
         );
