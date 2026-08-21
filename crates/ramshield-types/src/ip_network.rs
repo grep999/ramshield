@@ -57,6 +57,29 @@ impl IpNetwork {
         }
     }
 
+    /// First three significant octets for display/aggregation metadata.
+    /// v4: octets[0..3]; v6: first 3 bytes of the /64 network prefix.
+    pub fn prefix_octets(&self) -> [u8; 3] {
+        match self.addr {
+            IpAddr::V4(v4) => {
+                let o = v4.octets();
+                [o[0], o[1], o[2]]
+            }
+            IpAddr::V6(v6) => {
+                let o = v6.octets();
+                [o[0], o[1], o[2]]
+            }
+        }
+    }
+
+    /// Canonical subnet for any IP: v4 → /24, v6 → /64.
+    pub fn of_ip(ip: IpAddr) -> Self {
+        match ip {
+            IpAddr::V4(v4) => Self::ipv4_subnet(v4),
+            IpAddr::V6(v6) => Self::ipv6_subnet(v6),
+        }
+    }
+
     /// Check if an IP address is within this network.
     pub fn contains(&self, ip: IpAddr) -> bool {
         if self.family()
@@ -136,7 +159,7 @@ impl IpNetwork {
             IpAddr::V6(v6) => {
                 let o = v6.octets();
                 // Return bytes up to prefix_len / 8 (rounded up)
-                let byte_len = ((self.prefix_len as usize) + 7) / 8;
+                let byte_len = (self.prefix_len as usize).div_ceil(8);
                 o[..byte_len.min(16)].to_vec()
             }
         }

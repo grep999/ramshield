@@ -26,6 +26,9 @@ impl<T> BoundedVecDeque<T> {
     pub fn len(&self) -> usize {
         self.inner.len()
     }
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.inner.iter()
     }

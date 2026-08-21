@@ -21,7 +21,7 @@ pub type Result<T> = std::result::Result<T, RsError>;
 
 /// Canonical block-reason vocabulary. Wire format shared by IPC + WAL.
 /// (src shape — the one live constructors use; crate's 7-variant draft deleted.)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlockReason {
     HighRps,
     SubnetBatch,

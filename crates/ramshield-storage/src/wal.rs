@@ -580,7 +580,7 @@ mod tests {
         }
 
         // Replay should succeed with valid entries, quarantine corrupt segment
-        let entries = Wal::replay(&dir).unwrap();
+        let _entries = Wal::replay(&dir).unwrap();
         // Valid entry survives (it was before the corrupt tail)
         // But since the entire segment gets quarantined on first corruption...
         // The valid records before corruption are lost since we quarantine the whole segment
