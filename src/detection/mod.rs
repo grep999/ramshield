@@ -12,6 +12,7 @@ use crate::util::BoundedVecDeque;
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use dashmap::DashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
 use std::sync::{
@@ -57,18 +58,21 @@ impl BloomFilter {
     }
 
     fn slots(ip: IpAddr) -> (usize, usize) {
-        let mut h1 = DefaultHasher::new();
-        ip.hash(&mut h1);
-        let a = h1.finish() as usize;
-        let mut h2 = DefaultHasher::new();
-        (a as u64).hash(&mut h2);
-        ip.hash(&mut h2);
-        let b = h2.finish() as usize;
+        let mut h = DefaultHasher::new();
+        ip.hash(&mut h);
+        let x = h.finish();
+        let a = x as usize;
+        let b = (x.rotate_left(17) as usize).wrapping_mul(2_654_435_761);
         (a, b)
     }
 
-    pub fn insert(&mut self, ip: IpAddr) {
-        let (a, b) = Self::slots(ip);
+    pub fn contains_hashed(&self, a: usize, b: usize) -> bool {
+        let a = a % self.size;
+        let b = b % self.size;
+        (self.bits[a / 64] >> (a % 64)) & 1 == 1 && (self.bits[b / 64] >> (b % 64)) & 1 == 1
+    }
+
+    pub fn insert_hashed(&mut self, a: usize, b: usize) {
         let a = a % self.size;
         let b = b % self.size;
         self.bits[a / 64] |= 1u64 << (a % 64);
@@ -77,11 +81,48 @@ impl BloomFilter {
 
     pub fn contains(&self, ip: IpAddr) -> bool {
         let (a, b) = Self::slots(ip);
-        let a = a % self.size;
-        let b = b % self.size;
-        (self.bits[a / 64] >> (a % 64)) & 1 == 1 && (self.bits[b / 64] >> (b % 64)) & 1 == 1
+        self.contains_hashed(a, b)
+    }
+
+    pub fn insert(&mut self, ip: IpAddr) {
+        let (a, b) = Self::slots(ip);
+        self.insert_hashed(a, b);
     }
 }
+
+// ── Status-code → bucket table (600 B, L1-resident; kills per-event /100) ──────
+/// ponytail: derive /24 counts from already-aggregated IpAggs instead of re-scanning
+/// raw events. One pass, no second HashMap allocation.
+fn subnet_counts_of(aggs: &[(IpAddr, IpAgg)]) -> HashMap<u32, u32> {
+    let mut subnets: HashMap<u32, u32> = HashMap::with_capacity(aggs.len().min(512));
+    for (ip, agg) in aggs {
+        if let Some(sk) = subnet_key(*ip) {
+            *subnets.entry(sk).or_insert(0) += agg.count;
+        }
+    }
+    subnets
+}
+
+/// ponytail: status → bucket helper kept in detection/mod.rs because the const
+/// table lives next to its only consumer. Single L1 lookup; replaces per-event /100.
+const fn status_bucket(code: u16) -> u8 {
+    if code >= 100 && code < 600 {
+        (code / 100 - 1) as u8
+    } else {
+        255 // invalid
+    }
+}
+// ponytail: const-eval'd table, upgrade path = none needed (600 B, one lookup).
+#[rustfmt::skip]
+const STATUS_BUCKET: [u8; 600] = {
+    let mut t = [255u8; 600];
+    let mut i = 0;
+    while i < 600 {
+        t[i] = status_bucket(i as u16);
+        i += 1;
+    }
+    t
+};
 
 // ── Detection engine — batch-first, subnet-scale diagnosis ───────────────────
 
@@ -146,11 +187,9 @@ impl DetectionEngine {
         Ok(())
     }
 
-    fn pre_aggs_needs_flush_due_to_timeout(&self) -> bool {
-        let det = &self.config.load().detection;
+    fn pre_aggs_needs_flush_due_to_timeout(&self, interval_ms: u64) -> bool {
         let last_flush = self.last_pre_aggs_flush_ns.load(Ordering::Relaxed);
-        now_ns().saturating_sub(last_flush)
-            >= det.pre_aggs_flush_interval_ms * 1_000_000
+        now_ns().saturating_sub(last_flush) >= interval_ms * 1_000_000
     }
 
     fn process_event_into_pre_aggs(&self, ev: ConnectionEvent) {
@@ -159,8 +198,12 @@ impl DetectionEngine {
         agg.count += 1;
         agg.bytes += ev.bytes;
         agg.last_ts_ns = ev.timestamp_ns;
-        if ev.status_code >= 100 && ev.status_code < 600 {
-            agg.status_dist[(ev.status_code / 100 - 1) as usize] += 1;
+        // ponytail: table lookup replaces per-event /100 - 600B const table.
+        if ev.status_code < 600 {
+            let b = STATUS_BUCKET[ev.status_code as usize];
+            if b != 255 {
+                agg.status_dist[b as usize] += 1;
+            }
         }
     }
 
@@ -182,20 +225,11 @@ impl DetectionEngine {
         let total_events: u64 = aggs.iter().map(|a| a.1.count as u64).sum();
         self.metrics.inc_ingested(total_events);
 
-        // Reconstruct events for existing flush_batch logic
-        let events: Vec<ConnectionEvent> = aggs
-            .into_iter()
-            .flat_map(|(ip, agg)| {
-                (0..agg.count).map(move |_| ConnectionEvent {
-                    ip,
-                    timestamp_ns: agg.last_ts_ns,
-                    bytes: agg.bytes / agg.count.max(1) as u64,
-                    status_code: 0,
-                    proto_fingerprint: 0,
-                })
-            })
-            .collect();
-        self.flush_batch(&events);
+        let subnet_counts = subnet_counts_of(&aggs);
+        // ponytail: pass aggs straight through — reconstructing per-event
+        // ConnectionEvents and re-aggregating was O(N) allocs + lost the real
+        // status distribution. Upgrade path: none.
+        self.flush_batch(&aggs, &subnet_counts, total_events);
     }
 
     pub fn spawn_workers(self: Arc<Self>, _n: usize) {
@@ -215,14 +249,13 @@ impl DetectionEngine {
         }
 
         let eng = self.clone();
-        tokio::spawn(async move {
-            eng.subnet_batch_loop().await;
-        });
+        std::thread::Builder::new()
+            .name("rs-subnet".into())
+            .spawn(move || eng.subnet_batch_loop())
+            .expect("spawn subnet batch loop");
     }
 
     fn batch_processor_loop(&self) {
-        let window = Duration::from_millis(self.config.load().detection.batch_window_ms);
-        let max = self.config.load().detection.batch_max_events;
         let rx = self.event_rx.clone();
 
         loop {
@@ -230,6 +263,11 @@ impl DetectionEngine {
                 info!("Batch processor shutting down");
                 break;
             }
+
+            // Load config once per iteration (interval is fixed for process lifetime).
+            let cfg = self.config.load();
+            let window = Duration::from_millis(cfg.detection.batch_window_ms);
+            let max = cfg.detection.batch_max_events;
 
             // Drain events from channel into pre_aggs
             match rx.recv_timeout(window) {
@@ -247,31 +285,35 @@ impl DetectionEngine {
             }
 
             // Flush pre_aggs to main store when size or timeout threshold hit
-            let cfg = self.config.load();
             if self.pre_aggs.len() >= cfg.detection.pre_aggs_max_size
-                || self.pre_aggs_needs_flush_due_to_timeout()
+                || self.pre_aggs_needs_flush_due_to_timeout(cfg.detection.pre_aggs_flush_interval_ms)
             {
                 self.flush_pre_aggs_to_store();
             }
         }
     }
 
-    /// Single pass: aggregate in memory, then touch store only for promoted IPs.
-    fn flush_batch(&self, events: &[ConnectionEvent]) {
+    /// Test/IPC entry: aggregate raw events, then flush.
+    pub fn flush_events(&self, events: &[ConnectionEvent]) {
+        let (ip_aggs, subnet_counts) = aggregate(events);
+        let aggs: Vec<(IpAddr, IpAgg)> = ip_aggs.into_iter().collect();
+        self.flush_batch(&aggs, &subnet_counts, events.len() as u64);
+    }
+
+    /// Single pass over aggregates: promote, merge, emit blocks. No store access for cold IPs.
+    fn flush_batch(&self, ip_aggs: &[(IpAddr, IpAgg)], subnet_counts: &HashMap<u32, u32>, total_events: u64) {
         let cfg = self.config.load();
         let det = &cfg.detection;
         let ram_lim = cfg.engine.ram_limit_mb * 1024 * 1024;
         let now = now_ns();
 
-        let (ip_aggs, subnet_counts) = aggregate(events);
-
         // Incremental counters for forecasting (no full-store scan).
         let subnet_vals: Vec<u64> = subnet_counts.values().map(|&c| c as u64).collect();
         self.store
             .traffic
-            .record_flush(events.len() as u64, ip_aggs.len() as u64, &subnet_vals);
+            .record_flush(total_events, ip_aggs.len() as u64, &subnet_vals);
 
-        for (&sk, &count) in &subnet_counts {
+        for (&sk, &count) in subnet_counts {
             self.store
                 .merge_subnet_window(sk, subnet_prefix(sk), count, now);
         }
@@ -286,13 +328,14 @@ impl DetectionEngine {
         let unique_ips = ip_aggs.len();
         let hot_subnets = subnet_counts.len();
 
-        for (ip, agg) in ip_aggs {
+        for &(ip, ref agg) in ip_aggs {
             let subnet_hot = subnet_key(ip)
                 .and_then(|sk| subnet_counts.get(&sk).copied())
                 .map(|c| c as u64 >= det.subnet_window_threshold)
                 .unwrap_or(false);
 
-            let bloom_hit = self.bloom.read().unwrap().contains(ip);
+            let (a, b) = BloomFilter::slots(ip);
+            let bloom_hit = self.bloom.read().unwrap().contains_hashed(a, b);
 
             if agg.count < det.promote_min_events && !subnet_hot && !bloom_hit {
                 cold_skipped += 1;
@@ -300,21 +343,23 @@ impl DetectionEngine {
                 continue;
             }
 
-            if self.is_blocked(ip) {
+            // ponytail: merge_record does the single store lookup (is_blocked check
+            // was a second DashMap hit on the same key).
+            let (ewma_rps, threat, should_block, was_blocked) =
+                self.merge_record(ip, agg, det, ram_lim, now);
+            if was_blocked {
                 continue;
             }
 
             promoted += 1;
             promoted_events += agg.count;
 
-            let (ewma_rps, threat, should_block) = self.merge_record(ip, &agg, det, ram_lim, now);
-
             if threat > 0.5 {
                 threat_sample.push((ip, threat));
             }
 
             if should_block || is_exceeded(ewma_rps, det.rps_threshold) {
-                self.bloom.write().unwrap().insert(ip);
+                self.bloom.write().unwrap().insert_hashed(a, b);
                 blocks.push((ip, BlockReason::HighRps(ewma_rps as u64), if det.block_ttl_secs > 0 { Some(det.block_ttl_secs) } else { None }));
             }
         }
@@ -332,6 +377,10 @@ impl DetectionEngine {
             self.metrics
                 .record_block(&b.0.to_string(), &b.1.to_string(), "detection");
         }
+        // ponytail: warn once per 1024 rejections — log churn kills throughput
+        // under sustained queue pressure. Upgrade: sliding-window rate limiter
+        // if ops needs exact rejection counts (metric already tracks blocks).
+        let mut rejected = 0u32;
         for b in blocks {
             let cmd = EnforceCommand {
                 decision_id: Uuid::new_v4(), policy_version: 1,
@@ -347,13 +396,16 @@ impl DetectionEngine {
                 ip: b.0, action: EnforceAction::Block,
             };
             if self.enforcement_tx.try_send(cmd).is_err() {
-                warn!(ip=%b.0, "enforcement queue full; block command rejected");
+                rejected += 1;
+                if rejected & 0x3FF == 1 {
+                    warn!(ip=%b.0, rejected, "enforcement queue full; dropping {} block commands (sampled warn)", rejected);
+                }
             }
         }
 
         self.metrics.record_batch(crate::metrics::BatchRecord {
             ts_ms: now / 1_000_000,
-            events: events.len() as u32,
+            events: total_events as u32,
             unique_ips: unique_ips as u32,
             promoted,
             cold_skipped,
@@ -365,20 +417,15 @@ impl DetectionEngine {
 
         debug!(
             "batch flush: {} events, {} unique IPs, {} hot subnets",
-            events.len(),
+            total_events,
             unique_ips,
             hot_subnets,
         );
     }
 
-    fn is_blocked(&self, ip: IpAddr) -> bool {
-        match self.store.get(&ip) {
-            Some(Value::IpRecord(r)) => matches!(r.block_state, BlockState::Blocked { .. }),
-            _ => false,
-        }
-    }
-
-    /// Load existing IpRecord once, merge batch aggregate, write once — reuse prior state.
+    /// ponytail: returns the 4-tuple `(ewma_rps, threat, should_block, was_blocked)`.
+    /// `was_blocked` is set true if the IP already had a BlockState, so callers can
+    /// skip the extra store.get() they used to do.
     fn merge_record(
         &self,
         ip: IpAddr,
@@ -386,8 +433,14 @@ impl DetectionEngine {
         det: &DetectionConfig,
         ram_lim: usize,
         now: u64,
-    ) -> (f64, f32, bool) {
-        let mut rec = match self.store.get(&ip) {
+    ) -> (f64, f32, bool, bool) {
+        let existing = self.store.get(&ip);
+        if let Some(Value::IpRecord(ref r)) = existing
+            && matches!(r.block_state, BlockState::Blocked { .. })
+        {
+            return (r.ewma_rps, r.threat_score, false, true);
+        }
+        let mut rec = match existing {
             Some(Value::IpRecord(r)) => r,
             _ => IpRecord {
                 ip,
@@ -445,18 +498,18 @@ impl DetectionEngine {
         {
             warn!("Failed to insert IP record for {}: {}", ip, e);
         }
-        (ewma_rps, threat, block)
+        (ewma_rps, threat, block, false)
     }
 
     /// Subnet-scale batch block — reads subnet_table only, not full store key scan.
-    async fn subnet_batch_loop(&self) {
-        let mut tick = tokio::time::interval(Duration::from_millis(500));
+    fn subnet_batch_loop(self: Arc<Self>) {
+        let tick = std::time::Duration::from_millis(500);
         loop {
             if self.shutdown.load(Ordering::Acquire) {
                 info!("Subnet batch loop shutting down");
                 break;
             }
-            tick.tick().await;
+            std::thread::sleep(tick);
             let cfg = self.config.load();
             if !cfg.detection.batch_block_enabled {
                 continue;
@@ -555,7 +608,7 @@ mod tests {
                 proto_fingerprint: 0,
             })
             .collect();
-        eng.flush_batch(&events);
+        eng.flush_events(&events);
         assert!(eng.store.get(&ip).is_some());
     }
 
@@ -563,7 +616,7 @@ mod tests {
     fn cold_ip_not_stored() {
         let eng = engine();
         let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
-        eng.flush_batch(&[ConnectionEvent {
+        eng.flush_events(&[ConnectionEvent {
             ip,
             timestamp_ns: 1,
             bytes: 1,
@@ -571,5 +624,27 @@ mod tests {
             proto_fingerprint: 0,
         }]);
         assert!(eng.store.get(&ip).is_none());
+    }
+
+    #[test]
+    fn flush_preserves_status_dist() {
+        // The old reconstruct-events path zeroed status_code, so 5xx never
+        // reached threat scoring. One assert that the real distribution survives.
+        let eng = engine();
+        let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 9, 9));
+        let events: Vec<_> = (0..20)
+            .map(|i| ConnectionEvent {
+                ip,
+                timestamp_ns: i,
+                bytes: 64,
+                status_code: 500,
+                proto_fingerprint: 0,
+            })
+            .collect();
+        eng.flush_events(&events);
+        match eng.store.get(&ip) {
+            Some(Value::IpRecord(r)) => assert!(r.status_dist[4] >= 20, "5xx bucket lost: {:?}", r.status_dist),
+            other => panic!("expected IpRecord, got {other:?}"),
+        }
     }
 }
