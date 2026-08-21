@@ -74,9 +74,9 @@ chrono = { version = "0.4", features = ["serde"] }
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
-opentelemetry = { version = "0.21", optional = true }
-opentelemetry_sdk = { version = "0.21", optional = true, features = ["rt-tokio"] }
-tracing-opentelemetry = { version = "0.22", optional = true }
+opentelemetry = { version = "0.32", optional = true }
+opentelemetry_sdk = { version = "0.32", optional = true, features = ["rt-tokio"] }
+tracing-opentelemetry = { version = "0.33", optional = true }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 async-trait = "0.1"
 aya = { version = "0.14", optional = true }
