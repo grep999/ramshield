@@ -22,6 +22,6 @@ anomaly_zscore = 3.0
 min_entropy = 4.5
 
 [xdp]
-enabled = false
+enabled = true
 interface = "lo"
 mode = "skb"

@@ -7,9 +7,9 @@ use tracing::info;
 use arc_swap::ArcSwap;
 
 use crate::config::Config;
+use crate::enforcement::{EnforceCommand, EnforcementService, StubXdpApplier, XdpApplier};
 use crate::detection::DetectionEngine;
 use crate::forecasting::Forecaster;
-use crate::enforcement::{EnforceCommand, EnforcementService, StubXdpApplier};
 use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, Metrics, SubnetRow};
 use crate::storage::Store;
 
@@ -178,8 +178,37 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::AlreadyExists, "enforcement service already started"))?;
     // The service follows the engine shutdown flag through a dedicated watcher.
     let enforcement_shutdown = Arc::new(AtomicBool::new(false));
+    // Dataplane: real aya XDP when [xdp].enabled, else in-band-only stub.
+    // Load failure is not fatal — daemon runs degraded (in-band enforcement
+    // still works) and logs loudly. See plans/2026-08-22_enforcement-production.md.
+    let xdp_box: Box<dyn XdpApplier> = if cfg_snapshot.xdp.enabled {
+        #[cfg(feature = "xdp")]
+        {
+            let mut applier = crate::enforcement::xdp::AyaXdpApplier::new(
+                &cfg_snapshot.xdp.interface,
+                &cfg_snapshot.xdp.mode,
+            );
+            match applier.load_and_attach() {
+                Ok(()) => {
+                    tracing::info!(iface = %cfg_snapshot.xdp.interface, mode = %cfg_snapshot.xdp.mode, "XDP dataplane active");
+                    Box::new(applier)
+                }
+                Err(e) => {
+                    tracing::error!("XDP load/attach failed ({}): {} — falling back to in-band enforcement", cfg_snapshot.xdp.interface, e);
+                    Box::new(StubXdpApplier)
+                }
+            }
+        }
+        #[cfg(not(feature = "xdp"))]
+        {
+            tracing::warn!("[xdp].enabled=true but binary built without 'xdp' feature — in-band enforcement only");
+            Box::new(StubXdpApplier)
+        }
+    } else {
+        Box::new(StubXdpApplier)
+    };
     let enforcement = EnforcementService::new(
-        store.clone(), metrics.clone(), Box::new(StubXdpApplier), enforcement_shutdown.clone(),
+        store.clone(), metrics.clone(), xdp_box, enforcement_shutdown.clone(),
     );
     let engine_for_shutdown = engine.clone();
     tokio::spawn(async move {

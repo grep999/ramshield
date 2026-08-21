@@ -3,14 +3,18 @@
 //! Kernel-level packet drop for known-bad IPs using XDP (eXpress Data Path).
 //! Uses Aya (Rust eBPF library) to load and manage XDP programs.
 
+/// Compiled BPF ELF produced by this crate's build.rs (clang fallback path).
+/// Consumers embed this instead of reaching for their own OUT_DIR.
+pub static BPF_ELF: &[u8] = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/ramshield-xdp"));
+
+#[cfg(feature = "manager")]
 use aya::{
     maps::HashMap,
     programs::Xdp,
     Bpf,
 };
+#[cfg(feature = "manager")]
 use ramshield_storage::Store;
-use std::net::IpAddr;
-use std::sync::Arc;
 use thiserror::Error;
 
 /// XDP-related errors.
@@ -49,6 +53,7 @@ pub struct BlocklistValue(pub u8);
 #[allow(unsafe_code)]
 unsafe impl aya::Pod for BlocklistValue {}
 
+#[cfg(feature = "manager")]
 impl BlocklistKey {
     pub fn from_ip(ip: IpAddr) -> Self {
         match ip {
@@ -59,12 +64,14 @@ impl BlocklistKey {
 }
 
 /// High-level XDP manager for loading/unloading programs and syncing blocklist.
+#[cfg(feature = "manager")]
 pub struct XdpManager {
     bpf: Option<Bpf>,
     _iface: String,
     store: Arc<Store>,
 }
 
+#[cfg(feature = "manager")]
 impl XdpManager {
     /// Create new XDP manager for a network interface.
     pub fn new(iface: String, store: Arc<Store>) -> Self {
@@ -145,7 +152,7 @@ impl XdpManager {
         Ok(())
     }
 }
-#[cfg(test)]
+#[cfg(all(test, feature = "manager"))]
 mod runtime_tests {
     use super::*;
     use std::fs;

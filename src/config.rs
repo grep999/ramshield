@@ -8,11 +8,10 @@ pub type ConfigHandle = Arc<ArcSwap<Config>>;
 pub struct Config {
     #[serde(default)] pub engine:      EngineConfig,
     #[serde(default)] pub detection:   DetectionConfig,
-    #[serde(default)] pub storage:     StorageConfig,
+    #[serde(default)] pub xdp:         XdpConfig,
     #[serde(default)] pub ipc:         IpcConfig,
     #[serde(default)] pub forecasting: ForecastingConfig,
-    #[serde(default)] pub alerting: AlertingConfig,
-    #[serde(default)] pub dashboard: DashboardConfig,
+    #[serde(default)] pub dashboard:   DashboardConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,21 +76,19 @@ impl Default for DetectionConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StorageConfig {
-    pub wal_enabled:       bool,
-    pub wal_path:          String,
-    pub wal_sync:          String,
-    pub wal_segment_bytes: u64,
-    pub wal_compress:      bool,
+pub struct XdpConfig {
+    /// Attach the XDP kernel program. When false, enforcement is in-band only.
+    #[serde(default)] pub enabled: bool,
+    /// Interface to attach to (e.g. "eth0", "lo").
+    #[serde(default = "default_xdp_iface")] pub interface: String,
+    /// "skb" (generic, works everywhere) or "drv" (native, production NICs).
+    #[serde(default = "default_xdp_mode")] pub mode: String,
 }
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self {
-            wal_enabled: false, wal_path: "./wal".into(), wal_sync: "none".into(),
-            wal_segment_bytes: 64 * 1024 * 1024, wal_compress: true,
-        }
-    }
+impl Default for XdpConfig {
+    fn default() -> Self { Self { enabled: false, interface: default_xdp_iface(), mode: default_xdp_mode() } }
 }
+fn default_xdp_iface() -> String { "eth0".into() }
+fn default_xdp_mode() -> String { "skb".into() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcConfig {
@@ -133,23 +130,6 @@ impl Default for ForecastingConfig {
             seasonality_period: 3_600, anomaly_zscore: 2.5, min_entropy: 2.0,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AlertingConfig {
-    #[serde(default)] pub enabled:                bool,
-    #[serde(default = "default_rps_alert_threshold")] pub rps_alert_threshold: u64,
-    #[serde(default = "default_entropy_alert_threshold")] pub entropy_alert_threshold: f64,
-    #[serde(default = "default_alert_cooldown_secs")] pub alert_cooldown_secs: u64,
-    #[serde(default)] pub audit_log_enabled:      bool,
-    #[serde(default = "default_audit_log_path")] pub audit_log_path: String,
-}
-fn default_rps_alert_threshold() -> u64 { 10_000 }
-fn default_entropy_alert_threshold() -> f64 { 4.0 }
-fn default_alert_cooldown_secs() -> u64 { 60 }
-fn default_audit_log_path() -> String { "./audit_log.jsonl".into() }
-impl Default for AlertingConfig {
-    fn default() -> Self { Self { enabled: false, rps_alert_threshold: default_rps_alert_threshold(), entropy_alert_threshold: default_entropy_alert_threshold(), alert_cooldown_secs: default_alert_cooldown_secs(), audit_log_enabled: false, audit_log_path: default_audit_log_path() } }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,15 +211,6 @@ impl Config {
             }
         if let Ok(v) = std::env::var("RAMSHIELD_DASHBOARD__HTTP_ADDR") {
             cfg.dashboard.http_addr = v;
-        }
-
-        // Storage overrides
-        if let Ok(v) = std::env::var("RAMSHIELD_STORAGE__WAL_ENABLED")
-            && let Ok(parsed) = v.parse::<bool>() {
-                cfg.storage.wal_enabled = parsed;
-            }
-        if let Ok(v) = std::env::var("RAMSHIELD_STORAGE__WAL_PATH") {
-            cfg.storage.wal_path = v;
         }
 
         // Forecasting overrides
@@ -339,8 +310,6 @@ mod tests {
             "RAMSHIELD_IPC__MAX_CONNECTIONS",
             "RAMSHIELD_DASHBOARD__ENABLED",
             "RAMSHIELD_DASHBOARD__HTTP_ADDR",
-            "RAMSHIELD_STORAGE__WAL_ENABLED",
-            "RAMSHIELD_STORAGE__WAL_PATH",
             "RAMSHIELD_FORECASTING__ENABLED",
         ];
         for k in &keys {
