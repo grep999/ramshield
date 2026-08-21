@@ -2,10 +2,10 @@
 //! Proves the unified crates compose: events in, blocks out, WAL durable.
 
 use ramshield_config::Config;
-use ramshield_storage::{wal::Wal, BlockState, Value};
+use ramshield_storage::{BlockState, Value, wal::Wal};
 use ramshield_types::{EnforceAction, EnforceCommand};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 #[tokio::test]
