@@ -43,8 +43,8 @@ impl ConnectionConfig {
 const DEFAULT_MAX_CONNECTION_BYTES: usize = 1_048_576; // 1MB per connection
 const DEFAULT_READ_TIMEOUT_MS: u64 = 5000;
 const DEFAULT_WRITE_TIMEOUT_MS: u64 = 5000;
-const BATCH_MAX: usize = 4096;
-const MAX_LINE_LENGTH: usize = 1_048_576; // 1MB max single line
+const BATCH_MAX: usize = 1_000_000; // channel holds 2M; try_send backpressure is the real limiter
+const MAX_LINE_LENGTH: usize = 33_554_432; // 32MB max single line (batch reports)
 const CONNECTION_IDLE_TIMEOUT_MS: u64 = 30_000; // 30s idle
 
 pub struct IpcServer {

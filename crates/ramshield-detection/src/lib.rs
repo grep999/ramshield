@@ -304,8 +304,17 @@ impl DetectionEngine {
 
         for (&sk, &count) in subnet_counts {
             let net = networks.get(&sk).copied().unwrap_or_else(|| {
-                // ponytail: unreachable in practice — aggregate() fills networks for every key.
-                IpNetwork::of_ip(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
+                // pre-agg path passes no networks map — reconstruct the /24
+                // (v4) or /64 (v6) network from the subnet key itself.
+                // ponytail: v6 keys carry the full /64 in low 64 bits; a
+                // from_key constructor on IpNetwork would avoid this branch.
+                if sk <= 0xFFFF_FFFF {
+                    let o = [(sk >> 24) as u8, (sk >> 16) as u8, (sk >> 8) as u8, sk as u8];
+                    IpNetwork::ipv4_subnet(std::net::Ipv4Addr::from(o))
+                } else {
+                    let net = IpNetwork::ipv6_subnet(std::net::Ipv6Addr::from(sk));
+                    net
+                }
             });
             self.store.merge_subnet_window(sk, net, count, now);
         }
