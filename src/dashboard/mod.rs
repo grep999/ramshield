@@ -25,6 +25,9 @@ pub async fn serve(engine: Arc<Engine>, addr: &str) -> Result<(), String> {
         .route("/api/status/modules", get(api_status_modules))
         .route("/api/config", get(api_get_config).post(api_set_config))
         .with_state(engine)
+        // ponytail: permissive CORS is CSRF-open on /api/config; tighten to
+        // same-origin when dashboard gets auth. Upgrade: tower-http CorsLayer
+        // with allowed_origin from config.
         .layer(CorsLayer::permissive());
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -122,6 +125,15 @@ async fn api_set_config(
     }
     if let Some(v) = patch.dashboard {
         cfg.dashboard = v;
+    }
+    if cfg.validate().is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ConfigResponse {
+                ok: false,
+                config: eng.config.load().as_ref().clone(),
+            }),
+        );
     }
     eng.config.store(Arc::new(cfg.clone()));
     (

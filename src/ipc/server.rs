@@ -300,12 +300,24 @@ fn process_request(
     };
     
             let status = store.get(&ip_addr);
+            let (blocked, threat, ewma_rps, reason) = match status {
+                Some(crate::storage::Value::IpRecord(rec)) => (
+                    rec.block_state != crate::storage::BlockState::Clean,
+                    rec.threat_score,
+                    rec.ewma_rps,
+                    match rec.block_state {
+                        crate::storage::BlockState::Blocked { ref reason, .. } => Some(reason.to_string()),
+                        _ => None,
+                    },
+                ),
+                _ => (false, 0.0, 0.0, None),
+            };
             Response::IpStatus {
                 ip,
-                blocked: status.is_some_and(|v| matches!(v, crate::storage::Value::IpRecord(rec) if rec.block_state != crate::storage::BlockState::Clean)),
-                threat: 0.0,
-                ewma_rps: 0.0,
-                reason: None,
+                blocked,
+                threat,
+                ewma_rps,
+                reason,
             }
         },
         Request::BlockIp { ip, reason, ttl_secs } => {
@@ -403,6 +415,7 @@ fn process_request(
         },
         Request::ReportConnections { events } => {
             let now = epoch_ns();
+            let total = events.len() as u32;
             let mut accepted = 0u32;
             let mut rejected = 0u32;
             for cr in events {
@@ -427,13 +440,16 @@ fn process_request(
                         debug!("tx full: {:?}", e);
                     }
                 }
-                if accepted + rejected >= BATCH_MAX as u32 {
+                if accepted + rejected >= BATCH_MAX as u32 && total > accepted + rejected {
+                    let dropped = total - accepted - rejected;
+                    rejected += dropped;
+                    dropped_events.fetch_add(dropped as u64, Ordering::Relaxed);
                     break;
                 }
             }
             debug!("report_connections: accepted={} rejected={}", accepted, rejected);
             Response::BatchOk { accepted, rejected }
         },
-        Request::Flush => Response::Ok { message: "flushed".into(), state: None },
+        Request::Flush => Response::Ok { message: "no-op: flush is automatic (pre_aggs window)".into(), state: None },
     }
 }

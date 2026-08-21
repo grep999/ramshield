@@ -32,11 +32,7 @@ pub struct DetectionConfig {
     pub subnet_batch_threshold:  usize,
     pub batch_block_enabled:     bool,
     pub block_ttl_secs:          u64,
-    pub ttl_wheel_resolution_ms: u64,
-    pub ttl_wheel_size:          usize,
     pub bloom_bits:              usize,
-    pub history_cap:             usize,
-    pub pattern_similarity_threshold: f32,
     /// Max events accumulated before a forced flush (high-traffic batching).
     #[serde(default = "default_batch_max_events")]
     pub batch_max_events:        usize,
@@ -63,17 +59,13 @@ fn default_promote_min() -> u32 { 8 }
 fn default_subnet_window_threshold() -> u64 { 500 }
 fn default_pre_aggs_max_size() -> usize { 1_000_000 }
 fn default_pre_aggs_flush_interval_ms() -> u64 { 1000 }
-fn default_history_cap() -> usize { 32 }
-fn default_pattern_similarity_threshold() -> f32 { 0.8 }
 
 impl Default for DetectionConfig {
     fn default() -> Self {
         Self {
             rps_threshold: 1_000, rate_window_secs: 10, subnet_batch_threshold: 5,
             batch_block_enabled: true, block_ttl_secs: 3_600,
-            ttl_wheel_resolution_ms: 100, ttl_wheel_size: 36_000, bloom_bits: 8_000_000,
-            history_cap: default_history_cap(),
-            pattern_similarity_threshold: default_pattern_similarity_threshold(),
+            bloom_bits: 8_000_000,
             batch_max_events: default_batch_max_events(),
             batch_window_ms: default_batch_window_ms(),
             promote_min_events: default_promote_min(),
@@ -222,14 +214,6 @@ impl Config {
             && let Ok(parsed) = v.parse::<u64>() {
                 cfg.detection.block_ttl_secs = parsed;
             }
-        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__HISTORY_CAP")
-            && let Ok(parsed) = v.parse::<usize>() {
-                cfg.detection.history_cap = parsed;
-            }
-        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__PATTERN_SIMILARITY_THRESHOLD")
-            && let Ok(parsed) = v.parse::<f32>() {
-                cfg.detection.pattern_similarity_threshold = parsed;
-            }
 
         // IPC overrides
         if let Ok(v) = std::env::var("RAMSHIELD_IPC__TCP_ADDR") {
@@ -300,9 +284,6 @@ impl Config {
         if self.detection.pre_aggs_max_size == 0 {
             anyhow::bail!("detection.pre_aggs_max_size must be > 0");
         }
-        if !(0.0..=1.0).contains(&self.detection.pattern_similarity_threshold) {
-            anyhow::bail!("detection.pattern_similarity_threshold must be in range [0.0, 1.0]");
-        }
 
         // IPC config validation
         if self.ipc.max_connections == 0 {
@@ -354,8 +335,6 @@ mod tests {
             "RAMSHIELD_DETECTION__BATCH_WINDOW_MS",
             "RAMSHIELD_DETECTION__SUBNET_WINDOW_THRESHOLD",
             "RAMSHIELD_DETECTION__BLOCK_TTL_SECS",
-            "RAMSHIELD_DETECTION__HISTORY_CAP",
-            "RAMSHIELD_DETECTION__PATTERN_SIMILARITY_THRESHOLD",
             "RAMSHIELD_IPC__TCP_ADDR",
             "RAMSHIELD_IPC__MAX_CONNECTIONS",
             "RAMSHIELD_DASHBOARD__ENABLED",

@@ -205,7 +205,7 @@ impl EnforcementService {
                     Ok(()) => true,
                     Err(e) => { warn!(ip=%cmd.ip, "XDP block failed: {}", e); false }
                 };
-                self.processed_decisions.insert(cmd.decision_id);
+                self.remember_decision(cmd.decision_id);
                 self.metrics.inc_blocks();
                 Ok(EnforceResult { decision_id: cmd.decision_id, committed: true, applied: true, wal_lsn: None, xdp_applied, error: None })
             }
