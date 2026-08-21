@@ -6,24 +6,22 @@ pub mod batch;
 pub mod rate_tracker;
 
 use anyhow::Result;
+use batch::{IpAgg, aggregate, subnet_key};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded};
 use dashmap::DashMap;
 use ramshield_config::{ConfigHandle, DetectionConfig};
 use ramshield_metrics::Metrics;
-use ramshield_storage::{
-    subnet_key_u128, BlockState, IpRecord, Store, SubnetKey, Value,
-};
+use ramshield_storage::{BlockState, IpRecord, Store, SubnetKey, Value, subnet_key_u128};
 use ramshield_types::BlockReason;
 use ramshield_types::{ConnectionEvent, EnforceAction, EnforceCommand, IpNetwork};
-use batch::{aggregate, subnet_key, IpAgg};
-use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 use rate_tracker::{ewma, is_exceeded};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, RwLock,
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -190,7 +188,8 @@ impl DetectionEngine {
     }
 
     fn flush_pre_aggs_to_store(&self) {
-        self.last_pre_aggs_flush_ns.store(now_ns(), Ordering::Relaxed);
+        self.last_pre_aggs_flush_ns
+            .store(now_ns(), Ordering::Relaxed);
 
         if self.pre_aggs.is_empty() {
             return;
@@ -269,7 +268,8 @@ impl DetectionEngine {
 
             // Flush pre_aggs to main store when size or timeout threshold hit
             if self.pre_aggs.len() >= cfg.detection.pre_aggs_max_size
-                || self.pre_aggs_needs_flush_due_to_timeout(cfg.detection.pre_aggs_flush_interval_ms)
+                || self
+                    .pre_aggs_needs_flush_due_to_timeout(cfg.detection.pre_aggs_flush_interval_ms)
             {
                 self.flush_pre_aggs_to_store();
             }
@@ -359,10 +359,10 @@ impl DetectionEngine {
         threat_sample.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         threat_sample.truncate(128);
         self.store.traffic.push_threat_samples(threat_sample);
-        self.store.traffic.promoted_ips.store(
-            self.store.len() as u64,
-            Ordering::Relaxed,
-        );
+        self.store
+            .traffic
+            .promoted_ips
+            .store(self.store.len() as u64, Ordering::Relaxed);
 
         let block_count = blocks.len() as u32;
         for b in &blocks {
@@ -375,12 +375,15 @@ impl DetectionEngine {
         let mut rejected = 0u32;
         for b in blocks {
             let cmd = EnforceCommand {
-                decision_id: Uuid::new_v4(), policy_version: 1,
-                source: "detection".into(), actor: "system".into(),
+                decision_id: Uuid::new_v4(),
+                policy_version: 1,
+                source: "detection".into(),
+                actor: "system".into(),
                 timestamp_utc: (now / 1_000_000_000) as i64,
                 ttl_seconds: b.2,
                 reason: b.1.as_str().into(),
-                ip: b.0, action: EnforceAction::Block,
+                ip: b.0,
+                action: EnforceAction::Block,
             };
             if self.enforcement_tx.try_send(cmd).is_err() {
                 rejected += 1;
@@ -404,9 +407,7 @@ impl DetectionEngine {
 
         debug!(
             "batch flush: {} events, {} unique IPs, {} hot subnets",
-            total_events,
-            unique_ips,
-            hot_subnets,
+            total_events, unique_ips, hot_subnets,
         );
     }
 
@@ -473,13 +474,11 @@ impl DetectionEngine {
         let threat = rec.threat_score;
         let block = is_exceeded(ewma_rps, det.rps_threshold);
 
-        if let Err(e) = self
-            .store
-            .insert(ip, Value::IpRecord(rec), None, ram_lim)
-        {
+        if let Err(e) = self.store.insert(ip, Value::IpRecord(rec), None, ram_lim) {
             warn!("Failed to insert IP record for {}: {}", ip, e);
         }
-        self.store.update_subnet_index(ip, subnet_key_u128(ip), false);
+        self.store
+            .update_subnet_index(ip, subnet_key_u128(ip), false);
         (ewma_rps, threat, block, false)
     }
 
@@ -530,16 +529,21 @@ impl DetectionEngine {
                         }
 
                         let cmd = EnforceCommand {
-                            decision_id: Uuid::new_v4(), policy_version: 1,
-                            source: "detection".into(), actor: "system".into(),
+                            decision_id: Uuid::new_v4(),
+                            policy_version: 1,
+                            source: "detection".into(),
+                            actor: "system".into(),
                             timestamp_utc: (now_ns() / 1_000_000_000) as i64,
-                            ttl_seconds: cfg.detection.block_ttl_secs, reason: "subnet_burst".into(),
-                            ip: r.ip, action: EnforceAction::Block,
+                            ttl_seconds: cfg.detection.block_ttl_secs,
+                            reason: "subnet_burst".into(),
+                            ip: r.ip,
+                            action: EnforceAction::Block,
                         };
                         if self.enforcement_tx.try_send(cmd).is_err() {
                             warn!(ip=%r.ip, "enforcement queue full; subnet block rejected");
                         }
-                        self.metrics.record_block(&r.ip.to_string(), "subnet_batch", "detection");
+                        self.metrics
+                            .record_block(&r.ip.to_string(), "subnet_batch", "detection");
                         self.metrics.blocks_subnet.fetch_add(1, Ordering::Relaxed);
                     }
                 }
@@ -568,9 +572,7 @@ mod tests {
         let metrics = Arc::new(Metrics::new());
         let (etx, _erx) = mpsc::channel(64);
         let shutdown = Arc::new(AtomicBool::new(false));
-        Arc::new(DetectionEngine::new(
-            store, cfg, etx, metrics, shutdown,
-        ))
+        Arc::new(DetectionEngine::new(store, cfg, etx, metrics, shutdown))
     }
 
     #[test]
@@ -621,7 +623,11 @@ mod tests {
             .collect();
         eng.flush_events(&events);
         match eng.store.get(&ip) {
-            Some(Value::IpRecord(r)) => assert!(r.status_dist[4] >= 20, "5xx bucket lost: {:?}", r.status_dist),
+            Some(Value::IpRecord(r)) => assert!(
+                r.status_dist[4] >= 20,
+                "5xx bucket lost: {:?}",
+                r.status_dist
+            ),
             other => panic!("expected IpRecord, got {other:?}"),
         }
     }

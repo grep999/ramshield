@@ -1,11 +1,11 @@
 use crate::config::Config;
 use crate::engine::Engine;
 use axum::{
+    Router,
     extract::State,
     http::StatusCode,
     response::{Html, Json},
     routing::get,
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -149,14 +149,18 @@ async fn api_set_config(
 mod tests {
     use super::*;
     use crate::Config;
-    use axum::{body::Body, http::Request, routing::get, Router};
+    use axum::{Router, body::Body, http::Request, routing::get};
     use std::sync::Arc;
     use tower::ServiceExt;
 
     fn test_engine() -> Arc<Engine> {
         use crate::metrics::Metrics;
         use crate::storage::Store;
-        Arc::new(Engine::new(Config::default(), Arc::new(Store::new(16)), Arc::new(Metrics::new())))
+        Arc::new(Engine::new(
+            Config::default(),
+            Arc::new(Store::new(16)),
+            Arc::new(Metrics::new()),
+        ))
     }
 
     #[tokio::test]

@@ -11,15 +11,17 @@
 use anyhow::Result;
 use ramshield_metrics::Metrics;
 use ramshield_storage::{
-    wal::{Wal, WalEntry},
     BlockState, IpRecord, Store, Value,
+    wal::{Wal, WalEntry},
 };
-use ramshield_types::{BlockReason, EnforceAction, EnforceCommand, EnforceResult, EnforcementError};
+use ramshield_types::{
+    BlockReason, EnforceAction, EnforceCommand, EnforceResult, EnforcementError,
+};
 use std::collections::{HashSet, VecDeque};
 use std::net::IpAddr;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -40,7 +42,10 @@ pub struct ReconciliationState {
 pub trait XdpApplier: Send + Sync {
     fn apply_block(&mut self, ip: IpAddr, decision_id: Uuid) -> Result<(), EnforcementError>;
     fn apply_unblock(&mut self, ip: IpAddr, decision_id: Uuid) -> Result<(), EnforcementError>;
-    fn reconcile(&mut self, expected_blocks: &[IpAddr]) -> Result<ReconciliationState, EnforcementError>;
+    fn reconcile(
+        &mut self,
+        expected_blocks: &[IpAddr],
+    ) -> Result<ReconciliationState, EnforcementError>;
 }
 
 pub struct StubXdpApplier;
@@ -55,7 +60,10 @@ impl XdpApplier for StubXdpApplier {
         info!(%ip, "XDP unblock (stub)");
         Ok(())
     }
-    fn reconcile(&mut self, _expected_blocks: &[IpAddr]) -> Result<ReconciliationState, EnforcementError> {
+    fn reconcile(
+        &mut self,
+        _expected_blocks: &[IpAddr],
+    ) -> Result<ReconciliationState, EnforcementError> {
         Ok(ReconciliationState::default())
     }
 }
@@ -83,9 +91,15 @@ impl EnforcementService {
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         Self {
-            store, metrics, xdp, wal: None,
-            processed_decisions: HashSet::new(), processed_order: VecDeque::with_capacity(65_536),
-            blocked_ips: HashSet::new(), expirations: Vec::new(), shutdown,
+            store,
+            metrics,
+            xdp,
+            wal: None,
+            processed_decisions: HashSet::new(),
+            processed_order: VecDeque::with_capacity(65_536),
+            blocked_ips: HashSet::new(),
+            expirations: Vec::new(),
+            shutdown,
         }
     }
 
@@ -118,7 +132,9 @@ impl EnforcementService {
                 }
                 else => break,
             }
-            if self.shutdown.load(Ordering::Acquire) { break; }
+            if self.shutdown.load(Ordering::Acquire) {
+                break;
+            }
         }
         info!("Enforcement service stopped");
         Ok(())
@@ -128,16 +144,28 @@ impl EnforcementService {
         let now = Instant::now();
         let mut due = Vec::new();
         self.expirations.retain(|(at, ip)| {
-            if *at <= now { due.push(*ip); false } else { true }
+            if *at <= now {
+                due.push(*ip);
+                false
+            } else {
+                true
+            }
         });
         for ip in due {
             let cmd = EnforceCommand {
-                decision_id: Uuid::new_v4(), policy_version: 0,
-                source: "ttl".into(), actor: "system".into(),
-                timestamp_utc: epoch_seconds(), ttl_seconds: 0,
-                reason: "ttl_expired".into(), ip, action: EnforceAction::Unblock,
+                decision_id: Uuid::new_v4(),
+                policy_version: 0,
+                source: "ttl".into(),
+                actor: "system".into(),
+                timestamp_utc: epoch_seconds(),
+                ttl_seconds: 0,
+                reason: "ttl_expired".into(),
+                ip,
+                action: EnforceAction::Unblock,
             };
-            if let Err(e) = self.enforce(cmd).await { warn!(%ip, "TTL unblock failed: {}", e); }
+            if let Err(e) = self.enforce(cmd).await {
+                warn!(%ip, "TTL unblock failed: {}", e);
+            }
         }
     }
 
@@ -155,17 +183,32 @@ impl EnforcementService {
     /// Execute one command. Order: WAL append → storage mutation → local/XDP
     /// indexes. A failed storage mutation must not leave a phantom block; a
     /// failed WAL append aborts before any state change (durable-first).
-    pub async fn enforce(&mut self, cmd: EnforceCommand) -> Result<EnforceResult, EnforcementError> {
+    pub async fn enforce(
+        &mut self,
+        cmd: EnforceCommand,
+    ) -> Result<EnforceResult, EnforcementError> {
         if self.processed_decisions.contains(&cmd.decision_id) {
-            return Ok(EnforceResult { decision_id: cmd.decision_id, committed: true, applied: true, wal_lsn: None, xdp_applied: true, error: None });
+            return Ok(EnforceResult {
+                decision_id: cmd.decision_id,
+                committed: true,
+                applied: true,
+                wal_lsn: None,
+                xdp_applied: true,
+                error: None,
+            });
         }
         if cmd.ip.is_unspecified() {
-            return Err(EnforcementError::InvalidCommand("unspecified IP is not blockable".into()));
+            return Err(EnforcementError::InvalidCommand(
+                "unspecified IP is not blockable".into(),
+            ));
         }
 
         // Step 1: commit intent to WAL (durable) — before any state change.
         let wal_lsn = if let Some(ref wal) = self.wal {
-            let now_ns = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+            let now_ns = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0);
             let entry = match cmd.action {
                 EnforceAction::Block => WalEntry::BlockIp {
                     ip: cmd.ip.to_string(),
@@ -178,28 +221,55 @@ impl EnforcementService {
                     ts_ns: now_ns,
                 },
             };
-            Some(wal.append(&entry).map_err(|e| EnforcementError::Wal(e.to_string()))?)
+            Some(
+                wal.append(&entry)
+                    .map_err(|e| EnforcementError::Wal(e.to_string()))?,
+            )
         } else {
             None
         };
 
         // Step 2: storage mutation.
-        let now_ns = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
+        let now_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
         match cmd.action {
             EnforceAction::Block => {
                 let reason = reason_to_block_reason(&cmd.reason);
-                let rec = self.store.get(&cmd.ip)
-                    .and_then(|v| match v { Value::IpRecord(r) => Some(r), _ => None })
+                let rec = self
+                    .store
+                    .get(&cmd.ip)
+                    .and_then(|v| match v {
+                        Value::IpRecord(r) => Some(r),
+                        _ => None,
+                    })
                     .unwrap_or(IpRecord {
-                        ip: cmd.ip, request_count: 0, ewma_rps: 0.0,
-                        first_seen_ns: now_ns, last_seen_ns: now_ns, bytes_in: 0, status_dist: [0; 5],
-                        proto_fingerprint: 0, threat_score: 0.0, block_state: BlockState::Clean,
+                        ip: cmd.ip,
+                        request_count: 0,
+                        ewma_rps: 0.0,
+                        first_seen_ns: now_ns,
+                        last_seen_ns: now_ns,
+                        bytes_in: 0,
+                        status_dist: [0; 5],
+                        proto_fingerprint: 0,
+                        threat_score: 0.0,
+                        block_state: BlockState::Clean,
                     });
                 let mut updated = rec;
-                updated.block_state = BlockState::Blocked { reason, since_ns: now_ns };
+                updated.block_state = BlockState::Blocked {
+                    reason,
+                    since_ns: now_ns,
+                };
 
                 // Do not let Store's passive expiry hide a still-blocked record.
-                self.store.insert(cmd.ip, Value::IpRecord(updated), None, self.store.traffic.ram_limit_mb.load(Ordering::Relaxed) * 1024 * 1024)
+                self.store
+                    .insert(
+                        cmd.ip,
+                        Value::IpRecord(updated),
+                        None,
+                        self.store.traffic.ram_limit_mb.load(Ordering::Relaxed) * 1024 * 1024,
+                    )
                     .map_err(|e| EnforcementError::Storage(e.to_string()))?;
 
                 self.blocked_ips.insert(cmd.ip);
@@ -207,7 +277,10 @@ impl EnforcementService {
                 // inherit a stale TTL from a previous block/unblock cycle.
                 if cmd.ttl_seconds > 0 {
                     self.expirations.retain(|(_, existing)| *existing != cmd.ip);
-                    self.expirations.push((Instant::now() + Duration::from_secs(cmd.ttl_seconds), cmd.ip));
+                    self.expirations.push((
+                        Instant::now() + Duration::from_secs(cmd.ttl_seconds),
+                        cmd.ip,
+                    ));
                 } else {
                     self.expirations.retain(|(_, existing)| *existing != cmd.ip);
                 }
@@ -215,16 +288,32 @@ impl EnforcementService {
                 // Step 3: dataplane.
                 let xdp_applied = match self.xdp.apply_block(cmd.ip, cmd.decision_id) {
                     Ok(()) => true,
-                    Err(e) => { warn!(ip=%cmd.ip, "XDP block failed: {}", e); false }
+                    Err(e) => {
+                        warn!(ip=%cmd.ip, "XDP block failed: {}", e);
+                        false
+                    }
                 };
                 self.remember_decision(cmd.decision_id);
                 self.metrics.inc_blocks();
-                Ok(EnforceResult { decision_id: cmd.decision_id, committed: true, applied: true, wal_lsn, xdp_applied, error: None })
+                Ok(EnforceResult {
+                    decision_id: cmd.decision_id,
+                    committed: true,
+                    applied: true,
+                    wal_lsn,
+                    xdp_applied,
+                    error: None,
+                })
             }
             EnforceAction::Unblock => {
                 if let Some(Value::IpRecord(mut rec)) = self.store.get(&cmd.ip) {
                     rec.block_state = BlockState::Clean;
-                    self.store.insert(cmd.ip, Value::IpRecord(rec), None, self.store.traffic.ram_limit_mb.load(Ordering::Relaxed) * 1024 * 1024)
+                    self.store
+                        .insert(
+                            cmd.ip,
+                            Value::IpRecord(rec),
+                            None,
+                            self.store.traffic.ram_limit_mb.load(Ordering::Relaxed) * 1024 * 1024,
+                        )
                         .map_err(|e| EnforcementError::Storage(e.to_string()))?;
                 }
                 self.blocked_ips.remove(&cmd.ip);
@@ -232,10 +321,20 @@ impl EnforcementService {
                 self.expirations.retain(|(_, existing)| *existing != cmd.ip);
                 let xdp_applied = match self.xdp.apply_unblock(cmd.ip, cmd.decision_id) {
                     Ok(()) => true,
-                    Err(e) => { warn!(ip=%cmd.ip, "XDP unblock failed: {}", e); false }
+                    Err(e) => {
+                        warn!(ip=%cmd.ip, "XDP unblock failed: {}", e);
+                        false
+                    }
                 };
                 self.remember_decision(cmd.decision_id);
-                Ok(EnforceResult { decision_id: cmd.decision_id, committed: true, applied: true, wal_lsn, xdp_applied, error: None })
+                Ok(EnforceResult {
+                    decision_id: cmd.decision_id,
+                    committed: true,
+                    applied: true,
+                    wal_lsn,
+                    xdp_applied,
+                    error: None,
+                })
             }
         }
     }
@@ -246,7 +345,10 @@ fn reason_to_block_reason(reason: &str) -> BlockReason {
 }
 
 fn epoch_seconds() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -260,19 +362,30 @@ mod tests {
         log: std::sync::Mutex<Vec<(String, IpAddr)>>,
     }
     impl RecordingApplier {
-        fn new() -> Self { Self { log: std::sync::Mutex::new(Vec::new()) } }
+        fn new() -> Self {
+            Self {
+                log: std::sync::Mutex::new(Vec::new()),
+            }
+        }
         #[allow(dead_code)]
-        fn ops(&self) -> Vec<(String, IpAddr)> { self.log.lock().unwrap().clone() }
+        fn ops(&self) -> Vec<(String, IpAddr)> {
+            self.log.lock().unwrap().clone()
+        }
     }
     #[async_trait::async_trait]
     impl XdpApplier for RecordingApplier {
         fn apply_block(&mut self, ip: IpAddr, _d: Uuid) -> Result<(), EnforcementError> {
-            self.log.lock().unwrap().push(("block".into(), ip)); Ok(())
+            self.log.lock().unwrap().push(("block".into(), ip));
+            Ok(())
         }
         fn apply_unblock(&mut self, ip: IpAddr, _d: Uuid) -> Result<(), EnforcementError> {
-            self.log.lock().unwrap().push(("unblock".into(), ip)); Ok(())
+            self.log.lock().unwrap().push(("unblock".into(), ip));
+            Ok(())
         }
-        fn reconcile(&mut self, _expected: &[IpAddr]) -> Result<ReconciliationState, EnforcementError> {
+        fn reconcile(
+            &mut self,
+            _expected: &[IpAddr],
+        ) -> Result<ReconciliationState, EnforcementError> {
             Ok(ReconciliationState::default())
         }
     }
@@ -289,25 +402,47 @@ mod tests {
     }
 
     fn svc_with_wal(xdp: Box<dyn XdpApplier>, dir: &str) -> EnforcementService {
-        svc(xdp).with_wal(Arc::new(Wal::open(dir, false, ramshield_types::Durability::None, 64 * 1024 * 1024).unwrap()))
+        svc(xdp).with_wal(Arc::new(
+            Wal::open(
+                dir,
+                false,
+                ramshield_types::Durability::None,
+                64 * 1024 * 1024,
+            )
+            .unwrap(),
+        ))
     }
 
     fn block_cmd(ip: IpAddr, ttl: u64) -> EnforceCommand {
         EnforceCommand {
-            decision_id: Uuid::new_v4(), policy_version: 1, source: "test".into(),
-            actor: "test".into(), timestamp_utc: 0, ttl_seconds: ttl,
-            reason: "high_rps".into(), ip, action: EnforceAction::Block,
+            decision_id: Uuid::new_v4(),
+            policy_version: 1,
+            source: "test".into(),
+            actor: "test".into(),
+            timestamp_utc: 0,
+            ttl_seconds: ttl,
+            reason: "high_rps".into(),
+            ip,
+            action: EnforceAction::Block,
         }
     }
     fn unblock_cmd(ip: IpAddr) -> EnforceCommand {
         EnforceCommand {
-            decision_id: Uuid::new_v4(), policy_version: 1, source: "test".into(),
-            actor: "test".into(), timestamp_utc: 0, ttl_seconds: 0,
-            reason: "manual".into(), ip, action: EnforceAction::Unblock,
+            decision_id: Uuid::new_v4(),
+            policy_version: 1,
+            source: "test".into(),
+            actor: "test".into(),
+            timestamp_utc: 0,
+            ttl_seconds: 0,
+            reason: "manual".into(),
+            ip,
+            action: EnforceAction::Unblock,
         }
     }
 
-    fn ip(a: [u8; 4]) -> IpAddr { IpAddr::from(a) }
+    fn ip(a: [u8; 4]) -> IpAddr {
+        IpAddr::from(a)
+    }
 
     #[tokio::test]
     async fn block_then_unblock_reaches_dataplane_once() {
@@ -386,12 +521,17 @@ mod tests {
         let store = Arc::new(Store::new(16));
         store.traffic.ram_limit_mb.store(512, Ordering::Relaxed);
         let mut s = EnforcementService::new(
-            store.clone(), Arc::new(Metrics::new()), Box::new(FailingApplier),
+            store.clone(),
+            Arc::new(Metrics::new()),
+            Box::new(FailingApplier),
             Arc::new(AtomicBool::new(false)),
         );
         let target = ip([9, 9, 9, 5]);
         let res = s.enforce(block_cmd(target, 0)).await.unwrap();
-        assert!(!res.xdp_applied, "xdp_applied must be false on dataplane failure");
+        assert!(
+            !res.xdp_applied,
+            "xdp_applied must be false on dataplane failure"
+        );
         let rec = store.get(&target).expect("record must exist");
         match rec {
             Value::IpRecord(r) => assert!(matches!(r.block_state, BlockState::Blocked { .. })),

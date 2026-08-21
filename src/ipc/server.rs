@@ -1,23 +1,23 @@
+use crossbeam_channel::Sender;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::mpsc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::Semaphore,
-    time::{timeout, Duration, Instant},
+    time::{Duration, Instant, timeout},
 };
 use tracing::{debug, error, info, warn};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use crossbeam_channel::Sender;
-use tokio::sync::mpsc;
 use uuid::Uuid;
-use serde::{Deserialize, Serialize};
 
-use crate::config::Config;
-use ramshield_types::ConnectionEvent;
-use crate::engine::Engine;
-use ramshield_types::{EnforceAction, EnforceCommand};
-use crate::storage::Store;
 use super::{Request, Response};
+use crate::config::Config;
+use crate::engine::Engine;
+use crate::storage::Store;
+use ramshield_types::ConnectionEvent;
+use ramshield_types::{EnforceAction, EnforceCommand};
 
 /// Connection handling configuration
 #[derive(Clone)]
@@ -79,10 +79,22 @@ impl IpcServer {
         info!("IPC server bound to {}", addr);
 
         let max_connections = config.ipc.max_connections.max(1);
-        let max_connection_bytes = config.ipc.max_connection_bytes.unwrap_or(DEFAULT_MAX_CONNECTION_BYTES);
-        let read_timeout_ms = config.ipc.read_timeout_ms.unwrap_or(DEFAULT_READ_TIMEOUT_MS);
-        let write_timeout_ms = config.ipc.write_timeout_ms.unwrap_or(DEFAULT_WRITE_TIMEOUT_MS);
-        let connection_idle_timeout_ms = config.ipc.connection_idle_timeout_ms.unwrap_or(CONNECTION_IDLE_TIMEOUT_MS);
+        let max_connection_bytes = config
+            .ipc
+            .max_connection_bytes
+            .unwrap_or(DEFAULT_MAX_CONNECTION_BYTES);
+        let read_timeout_ms = config
+            .ipc
+            .read_timeout_ms
+            .unwrap_or(DEFAULT_READ_TIMEOUT_MS);
+        let write_timeout_ms = config
+            .ipc
+            .write_timeout_ms
+            .unwrap_or(DEFAULT_WRITE_TIMEOUT_MS);
+        let connection_idle_timeout_ms = config
+            .ipc
+            .connection_idle_timeout_ms
+            .unwrap_or(CONNECTION_IDLE_TIMEOUT_MS);
 
         Ok(Self {
             listener,
@@ -104,7 +116,10 @@ impl IpcServer {
     }
 
     pub async fn start(&self) {
-        info!("IPC server listening (max_connections={}, max_bytes/conn={})", self.max_connections, self.max_connection_bytes);
+        info!(
+            "IPC server listening (max_connections={}, max_bytes/conn={})",
+            self.max_connections, self.max_connection_bytes
+        );
         let mut backoff = Duration::from_millis(100);
         loop {
             if self.engine.is_shutting_down() {
@@ -113,11 +128,7 @@ impl IpcServer {
                 info!("IPC server shut down complete");
                 break;
             }
-            let accept = timeout(
-                Duration::from_secs(1),
-                self.listener.accept(),
-            )
-            .await;
+            let accept = timeout(Duration::from_secs(1), self.listener.accept()).await;
             let (mut socket, remote) = match accept {
                 Ok(Ok(pair)) => pair,
                 Ok(Err(e)) => {
@@ -135,7 +146,10 @@ impl IpcServer {
                 Err(_) => {
                     self.rejected_connections.fetch_add(1, Ordering::Relaxed);
                     self.engine.metrics.inc_rejected(1);
-                    warn!("Connection rejected from {}: semaphore exhausted ({})", remote, self.max_connections);
+                    warn!(
+                        "Connection rejected from {}: semaphore exhausted ({})",
+                        remote, self.max_connections
+                    );
                     let _ = socket.shutdown().await;
                     continue;
                 }
@@ -162,7 +176,9 @@ impl IpcServer {
                     enforcement_tx,
                     config,
                     dropped,
-                ).await {
+                )
+                .await
+                {
                     debug!("conn {} closed: {}", remote, e);
                 }
                 active.fetch_sub(1, Ordering::Relaxed);
@@ -174,7 +190,10 @@ impl IpcServer {
         let start = Instant::now();
         while self.active_connections.load(Ordering::Relaxed) > 0 {
             if start.elapsed() > Duration::from_secs(30) {
-                warn!("Shutdown timeout: {} connections still active", self.active_connections.load(Ordering::Relaxed));
+                warn!(
+                    "Shutdown timeout: {} connections still active",
+                    self.active_connections.load(Ordering::Relaxed)
+                );
                 break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -235,7 +254,9 @@ async fn handle_connection(
             }
         };
 
-        if n == 0 { return Ok(()); }
+        if n == 0 {
+            return Ok(());
+        }
 
         total_bytes_read += n;
         last_activity = Instant::now();
@@ -243,15 +264,24 @@ async fn handle_connection(
 
         while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
             if pos > MAX_LINE_LENGTH {
-                warn!("Line exceeds max length ({}), dropping connection", MAX_LINE_LENGTH);
+                warn!(
+                    "Line exceeds max length ({}), dropping connection",
+                    MAX_LINE_LENGTH
+                );
                 return Ok(());
             }
             let line: Vec<u8> = buf.drain(..=pos).collect();
             let req: Request = match serde_json::from_slice(&line) {
                 Ok(r) => r,
                 Err(e) => {
-                    let resp = Response::Error { code: 1, message: format!("parse: {}", e) };
-                    if timeout(config.write_timeout, write_resp(&mut socket, &resp)).await.is_err() {
+                    let resp = Response::Error {
+                        code: 1,
+                        message: format!("parse: {}", e),
+                    };
+                    if timeout(config.write_timeout, write_resp(&mut socket, &resp))
+                        .await
+                        .is_err()
+                    {
                         debug!("Write timeout on error response");
                         return Ok(());
                     }
@@ -260,8 +290,17 @@ async fn handle_connection(
             };
 
             engine.metrics.inc_requests();
-            let resp = process_request(req, &event_tx, &store, &enforcement_tx, dropped_events.clone());
-            if timeout(config.write_timeout, write_resp(&mut socket, &resp)).await.is_err() {
+            let resp = process_request(
+                req,
+                &event_tx,
+                &store,
+                &enforcement_tx,
+                dropped_events.clone(),
+            );
+            if timeout(config.write_timeout, write_resp(&mut socket, &resp))
+                .await
+                .is_err()
+            {
                 debug!("Write timeout");
                 return Ok(());
             }
@@ -270,9 +309,8 @@ async fn handle_connection(
 }
 
 async fn write_resp(socket: &mut TcpStream, resp: &Response) -> Result<(), std::io::Error> {
-    let bytes = serde_json::to_vec(resp).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-    })?;
+    let bytes = serde_json::to_vec(resp)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     socket.write_all(&bytes).await?;
     socket.write_all(b"\n").await?;
     Ok(())
@@ -294,11 +332,16 @@ fn process_request(
 ) -> Response {
     match req {
         Request::CheckIp { ip } => {
-                let ip_addr = match ip.parse() {
-        Ok(addr) => addr,
-        Err(_) => return Response::Error { code: 400, message: format!("invalid ip address: {}", ip) },
-    };
-    
+            let ip_addr = match ip.parse() {
+                Ok(addr) => addr,
+                Err(_) => {
+                    return Response::Error {
+                        code: 400,
+                        message: format!("invalid ip address: {}", ip),
+                    };
+                }
+            };
+
             let status = store.get(&ip_addr);
             let (blocked, threat, ewma_rps, reason) = match status {
                 Some(crate::storage::Value::IpRecord(rec)) => (
@@ -306,7 +349,9 @@ fn process_request(
                     rec.threat_score,
                     rec.ewma_rps,
                     match rec.block_state {
-                        crate::storage::BlockState::Blocked { ref reason, .. } => Some(reason.as_str().to_string()),
+                        crate::storage::BlockState::Blocked { ref reason, .. } => {
+                            Some(reason.as_str().to_string())
+                        }
                         _ => None,
                     },
                 ),
@@ -319,45 +364,88 @@ fn process_request(
                 ewma_rps,
                 reason,
             }
-        },
-        Request::BlockIp { ip, reason, ttl_secs } => {
-                let ip_addr = match ip.parse() {
-        Ok(addr) => addr,
-        Err(_) => return Response::Error { code: 400, message: format!("invalid ip address: {}", ip) },
-    };
-    
+        }
+        Request::BlockIp {
+            ip,
+            reason,
+            ttl_secs,
+        } => {
+            let ip_addr = match ip.parse() {
+                Ok(addr) => addr,
+                Err(_) => {
+                    return Response::Error {
+                        code: 400,
+                        message: format!("invalid ip address: {}", ip),
+                    };
+                }
+            };
+
             let cmd = EnforceCommand {
-                decision_id: Uuid::new_v4(), policy_version: 1, source: "ipc".into(),
-                actor: "admin".into(), timestamp_utc: epoch_ns() as i64 / 1_000_000_000,
-                ttl_seconds: ttl_secs.unwrap_or(0), reason, ip: ip_addr, action: EnforceAction::Block,
+                decision_id: Uuid::new_v4(),
+                policy_version: 1,
+                source: "ipc".into(),
+                actor: "admin".into(),
+                timestamp_utc: epoch_ns() as i64 / 1_000_000_000,
+                ttl_seconds: ttl_secs.unwrap_or(0),
+                reason,
+                ip: ip_addr,
+                action: EnforceAction::Block,
             };
             match enforcement_tx.try_send(cmd) {
-                Ok(()) => Response::Ok { message: format!("block queued for {}", ip_addr), state: Some("pending".into()) },
-                Err(_) => Response::Error { code: 503, message: "enforcement queue full".into() },
+                Ok(()) => Response::Ok {
+                    message: format!("block queued for {}", ip_addr),
+                    state: Some("pending".into()),
+                },
+                Err(_) => Response::Error {
+                    code: 503,
+                    message: "enforcement queue full".into(),
+                },
             }
-        },
+        }
         Request::UnblockIp { ip } => {
-                let ip_addr = match ip.parse() {
-        Ok(addr) => addr,
-        Err(_) => return Response::Error { code: 400, message: format!("invalid ip address: {}", ip) },
-    };
-    
+            let ip_addr = match ip.parse() {
+                Ok(addr) => addr,
+                Err(_) => {
+                    return Response::Error {
+                        code: 400,
+                        message: format!("invalid ip address: {}", ip),
+                    };
+                }
+            };
+
             let cmd = EnforceCommand {
-                decision_id: Uuid::new_v4(), policy_version: 1, source: "ipc".into(),
-                actor: "admin".into(), timestamp_utc: epoch_ns() as i64 / 1_000_000_000,
-                ttl_seconds: 0, reason: "manual_unblock".into(), ip: ip_addr, action: EnforceAction::Unblock,
+                decision_id: Uuid::new_v4(),
+                policy_version: 1,
+                source: "ipc".into(),
+                actor: "admin".into(),
+                timestamp_utc: epoch_ns() as i64 / 1_000_000_000,
+                ttl_seconds: 0,
+                reason: "manual_unblock".into(),
+                ip: ip_addr,
+                action: EnforceAction::Unblock,
             };
             match enforcement_tx.try_send(cmd) {
-                Ok(()) => Response::Ok { message: format!("unblock queued for {}", ip_addr), state: Some("pending".into()) },
-                Err(_) => Response::Error { code: 503, message: "enforcement queue full".into() },
+                Ok(()) => Response::Ok {
+                    message: format!("unblock queued for {}", ip_addr),
+                    state: Some("pending".into()),
+                },
+                Err(_) => Response::Error {
+                    code: 503,
+                    message: "enforcement queue full".into(),
+                },
             }
-        },
+        }
         Request::GetIpStats { ip } => {
-                let ip_addr = match ip.parse() {
-        Ok(addr) => addr,
-        Err(_) => return Response::Error { code: 400, message: format!("invalid ip address: {}", ip) },
-    };
-    
+            let ip_addr = match ip.parse() {
+                Ok(addr) => addr,
+                Err(_) => {
+                    return Response::Error {
+                        code: 400,
+                        message: format!("invalid ip address: {}", ip),
+                    };
+                }
+            };
+
             if let Some(crate::storage::Value::IpRecord(rec)) = store.get(&ip_addr) {
                 Response::IpDetail(crate::ipc::IpDetail {
                     ip,
@@ -381,7 +469,7 @@ fn process_request(
                     last_seen_s: 0,
                 })
             }
-        },
+        }
         Request::GetStats => {
             let stats = store.get_stats();
             Response::Stats(crate::ipc::Stats {
@@ -392,27 +480,46 @@ fn process_request(
                 uptime_secs: stats.uptime_secs,
                 evictions: stats.evictions,
             })
+        }
+        Request::GetStatus => Response::Ok {
+            message: "ok".into(),
+            state: None,
         },
-        Request::GetStatus => Response::Ok { message: "ok".into(), state: None },
-        Request::ReportConnection { ip, bytes, status_code, proto_fp } => {
+        Request::ReportConnection {
+            ip,
+            bytes,
+            status_code,
+            proto_fp,
+        } => {
             let ev = ConnectionEvent {
-                            ip: match ip.parse() {
-                Ok(addr) => addr,
-                Err(_) => return Response::Error { code: 400, message: format!("invalid ip address: {}", ip) },
-            },
+                ip: match ip.parse() {
+                    Ok(addr) => addr,
+                    Err(_) => {
+                        return Response::Error {
+                            code: 400,
+                            message: format!("invalid ip address: {}", ip),
+                        };
+                    }
+                },
                 timestamp_ns: epoch_ns(),
                 bytes,
                 status_code,
                 proto_fingerprint: proto_fp,
             };
             match event_tx.try_send(ev) {
-                Ok(()) => Response::Ok { message: "accepted".into(), state: None },
+                Ok(()) => Response::Ok {
+                    message: "accepted".into(),
+                    state: None,
+                },
                 Err(_) => {
                     dropped_events.fetch_add(1, Ordering::Relaxed);
-                    Response::BatchOk { accepted: 0, rejected: 1 }
+                    Response::BatchOk {
+                        accepted: 0,
+                        rejected: 1,
+                    }
                 }
             }
-        },
+        }
         Request::ReportConnections { events } => {
             let now = epoch_ns();
             let total = events.len() as u32;
@@ -420,7 +527,7 @@ fn process_request(
             let mut rejected = 0u32;
             for cr in events {
                 let ev = ConnectionEvent {
-                                        ip: match cr.ip.parse() {
+                    ip: match cr.ip.parse() {
                         Ok(addr) => addr,
                         Err(_) => {
                             rejected += 1;
@@ -447,9 +554,15 @@ fn process_request(
                     break;
                 }
             }
-            debug!("report_connections: accepted={} rejected={}", accepted, rejected);
+            debug!(
+                "report_connections: accepted={} rejected={}",
+                accepted, rejected
+            );
             Response::BatchOk { accepted, rejected }
+        }
+        Request::Flush => Response::Ok {
+            message: "no-op: flush is automatic (pre_aggs window)".into(),
+            state: None,
         },
-        Request::Flush => Response::Ok { message: "no-op: flush is automatic (pre_aggs window)".into(), state: None },
     }
 }

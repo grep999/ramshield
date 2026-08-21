@@ -8,7 +8,6 @@ use sysinfo::System;
 const HISTORY: usize = 80;
 const BLOCK_LOG: usize = 40;
 
-
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

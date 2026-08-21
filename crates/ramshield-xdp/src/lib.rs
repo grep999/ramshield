@@ -8,13 +8,13 @@
 pub static BPF_ELF: &[u8] = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/ramshield-xdp"));
 
 #[cfg(feature = "manager")]
-use aya::{maps::HashMap, programs::Xdp, Bpf};
+use aya::{Bpf, maps::HashMap, programs::Xdp};
+#[cfg(feature = "manager")]
+use ramshield_storage::Store;
 #[cfg(feature = "manager")]
 use std::net::IpAddr;
 #[cfg(feature = "manager")]
 use std::sync::Arc;
-#[cfg(feature = "manager")]
-use ramshield_storage::Store;
 use thiserror::Error;
 
 /// XDP-related errors.
@@ -95,13 +95,14 @@ impl XdpManager {
         program.load()?;
 
         // Attach to interface
-        program.attach(&self._iface, aya::programs::XdpFlags::default())
+        program
+            .attach(&self._iface, aya::programs::XdpFlags::default())
             .map_err(|e| XdpError::Verifier(format!("attach failed: {}", e)))?;
 
         // Initialize blocklist map
         let mut blocklist: HashMap<aya::maps::MapData, BlocklistKey, BlocklistValue> =
             HashMap::try_from(bpf.take_map("BLOCKLIST").unwrap())?;
-        
+
         // Pre-populate from store
         self.sync_blocklist(&mut blocklist)?;
 
@@ -111,7 +112,10 @@ impl XdpManager {
     }
 
     /// Sync in-memory blocklist with storage layer (run once on startup).
-    pub fn sync_blocklist(&self, blocklist: &mut HashMap<aya::maps::MapData, BlocklistKey, BlocklistValue>) -> Result<(), XdpError> {
+    pub fn sync_blocklist(
+        &self,
+        blocklist: &mut HashMap<aya::maps::MapData, BlocklistKey, BlocklistValue>,
+    ) -> Result<(), XdpError> {
         let blocked_ips = self.store.get_all_blocked_ips();
         for ip in blocked_ips {
             let key = BlocklistKey::from_ip(ip);
@@ -123,8 +127,10 @@ impl XdpManager {
     /// Apply a single block decision to the XDP map.
     pub fn apply_block_decision(&mut self, ip: IpAddr) -> Result<(), XdpError> {
         if let Some(bpf) = self.bpf.as_mut() {
-            let mut blocklist: HashMap<_, BlocklistKey, BlocklistValue> = 
-                HashMap::try_from(bpf.map_mut("BLOCKLIST").ok_or_else(|| XdpError::Map("BLOCKLIST not found".to_string()))?)?;
+            let mut blocklist: HashMap<_, BlocklistKey, BlocklistValue> = HashMap::try_from(
+                bpf.map_mut("BLOCKLIST")
+                    .ok_or_else(|| XdpError::Map("BLOCKLIST not found".to_string()))?,
+            )?;
             let key = BlocklistKey::from_ip(ip);
             blocklist.insert(key, BlocklistValue(1), 0)?;
         }
@@ -134,8 +140,10 @@ impl XdpManager {
     /// Remove a single IP from the XDP blocklist.
     pub fn remove_block(&mut self, ip: IpAddr) -> Result<(), XdpError> {
         if let Some(bpf) = self.bpf.as_mut() {
-            let mut blocklist: HashMap<_, BlocklistKey, BlocklistValue> = 
-                HashMap::try_from(bpf.map_mut("BLOCKLIST").ok_or_else(|| XdpError::Map("BLOCKLIST not found".to_string()))?)?;
+            let mut blocklist: HashMap<_, BlocklistKey, BlocklistValue> = HashMap::try_from(
+                bpf.map_mut("BLOCKLIST")
+                    .ok_or_else(|| XdpError::Map("BLOCKLIST not found".to_string()))?,
+            )?;
             let key = BlocklistKey::from_ip(ip);
             blocklist.remove(&key)?;
         }
@@ -163,7 +171,7 @@ mod runtime_tests {
         let bpf_path = concat!(env!("OUT_DIR"), "/ramshield-xdp");
         let bytes = fs::read(bpf_path).expect("failed to read BPF object");
         println!("Loaded {} bytes from BPF object", bytes.len());
-        
+
         match Bpf::load(&bytes) {
             Ok(bpf) => {
                 println!("✓ BPF object loaded successfully");
@@ -171,7 +179,10 @@ mod runtime_tests {
                 let maps: Vec<_> = bpf.maps().map(|(k, _)| k).collect();
                 println!("Programs: {:?}", programs);
                 println!("Maps: {:?}", maps);
-                assert!(programs.contains(&"ramshield_xdp"), "Missing ramshield_xdp program");
+                assert!(
+                    programs.contains(&"ramshield_xdp"),
+                    "Missing ramshield_xdp program"
+                );
                 assert!(maps.contains(&"BLOCKLIST"), "Missing BLOCKLIST map");
             }
             Err(e) => {

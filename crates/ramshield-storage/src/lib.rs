@@ -17,8 +17,8 @@ use ramshield_types::{BlockReason, IpNetwork, Result, RsError};
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::sync::{
-    atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::{Duration, Instant};
 
@@ -223,13 +223,7 @@ impl Store {
     /// Merge subnet-scale counters from a batch flush (O(subnets in batch)).
     /// Windowed: entries older than `window_ns` reset before adding, so a /24
     /// can't accumulate across windows and false-positive the batch blocker.
-    pub fn merge_subnet_window(
-        &self,
-        key: SubnetKey,
-        net: IpNetwork,
-        events: u32,
-        now_ns: u64,
-    ) {
+    pub fn merge_subnet_window(&self, key: SubnetKey, net: IpNetwork, events: u32, now_ns: u64) {
         const WINDOW_NS: u64 = 2 * 1_000_000_000; // ponytail: fixed 2s window vs config plumbing — matches pre_aggs flush cadence; add per-subnet window cfg when justified.
         let prefix = net.prefix_octets();
         let mut rec = self
@@ -272,12 +266,10 @@ impl Store {
             ram_limit_bytes
         );
         let expires_at = ttl_secs.map(|s| Instant::now() + Duration::from_secs(s));
-        let new_entry = Entry {
-            value,
-            expires_at,
-        };
-        let entry_size =
-            std::mem::size_of::<IpAddr>() + std::mem::size_of::<Entry>() + new_entry.value.heap_bytes();
+        let new_entry = Entry { value, expires_at };
+        let entry_size = std::mem::size_of::<IpAddr>()
+            + std::mem::size_of::<Entry>()
+            + new_entry.value.heap_bytes();
 
         // Insert first, then check adjusted budget (replacement is free)
         let old_size = self.inner.insert(key, new_entry).map_or(0, |old| {
@@ -322,11 +314,10 @@ impl Store {
     pub fn evict_batch(&self, keys: &[IpAddr]) {
         for key in keys {
             let expired = self.inner.get(key).is_some_and(|e| e.is_expired());
-            if expired
-                && let Some((_k, e)) = self.inner.remove(key)
-            {
-                let freed =
-                    std::mem::size_of::<IpAddr>() + std::mem::size_of::<Entry>() + e.value.heap_bytes();
+            if expired && let Some((_k, e)) = self.inner.remove(key) {
+                let freed = std::mem::size_of::<IpAddr>()
+                    + std::mem::size_of::<Entry>()
+                    + e.value.heap_bytes();
                 self.ram_bytes.fetch_sub(freed, Ordering::Relaxed);
                 self.traffic
                     .used_bytes
@@ -387,7 +378,12 @@ impl Store {
     }
 
     /// Update the reverse index for subnet lookups. Call after inserting/updating an IP record.
-    pub fn update_subnet_index(&self, ip_key: IpAddr, subnet_key: Option<SubnetKey>, is_removal: bool) {
+    pub fn update_subnet_index(
+        &self,
+        ip_key: IpAddr,
+        subnet_key: Option<SubnetKey>,
+        is_removal: bool,
+    ) {
         let Some(sk) = subnet_key else { return };
 
         if is_removal {
@@ -453,7 +449,12 @@ mod tests {
     fn insert_get_remove() {
         let store = Store::new(16);
         store
-            .insert("127.0.0.1".parse().unwrap(), Value::Counter(1), None, 64 * 1024 * 1024)
+            .insert(
+                "127.0.0.1".parse().unwrap(),
+                Value::Counter(1),
+                None,
+                64 * 1024 * 1024,
+            )
             .unwrap();
         assert!(store.get(&"127.0.0.1".parse().unwrap()).is_some());
         store.remove(&"127.0.0.1".parse().unwrap());
@@ -464,7 +465,12 @@ mod tests {
     fn ttl_lazy_expiry() {
         let store = Store::new(16);
         store
-            .insert("127.0.0.3".parse().unwrap(), Value::Counter(1), Some(0), 64 * 1024 * 1024)
+            .insert(
+                "127.0.0.3".parse().unwrap(),
+                Value::Counter(1),
+                Some(0),
+                64 * 1024 * 1024,
+            )
             .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(2));
         assert!(store.get(&"127.0.0.3".parse().unwrap()).is_none());
@@ -483,7 +489,12 @@ mod tests {
             .unwrap();
         // Net-new beyond limit fails
         let err = store
-            .insert("10.0.0.2".parse().unwrap(), Value::Blob(vec![0u8; 4096]), None, limit)
+            .insert(
+                "10.0.0.2".parse().unwrap(),
+                Value::Blob(vec![0u8; 4096]),
+                None,
+                limit,
+            )
             .unwrap_err();
         assert!(matches!(err, RsError::CapacityExceeded { .. }));
         assert!(store.get(&"10.0.0.2".parse().unwrap()).is_none());

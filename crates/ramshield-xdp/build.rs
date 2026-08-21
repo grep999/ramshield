@@ -29,12 +29,18 @@ fn main() {
         return;
     }
     write_stub(&dest);
-    println!("cargo:warning=XDP BPF object stubbed — bpf-linker/clang path failed. load() will fail at runtime.");
+    println!(
+        "cargo:warning=XDP BPF object stubbed — bpf-linker/clang path failed. load() will fail at runtime."
+    );
 }
 
 fn try_aya_build(dest: &Path) -> bool {
     // aya-build 0.2 expects a package name; skip if bpf-linker missing.
-    if Command::new("bpf-linker").arg("--version").output().is_err() {
+    if Command::new("bpf-linker")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         return false;
     }
     let manifest = Path::new("ramshield-xdp-bpf/Cargo.toml");
@@ -92,7 +98,9 @@ fn try_clang_c(dest: &Path) -> bool {
         ])
         .status();
     match status {
-        Ok(s) if s.success() && tmp.exists() => fs::rename(&tmp, dest).is_ok() || fs::copy(&tmp, dest).is_ok(),
+        Ok(s) if s.success() && tmp.exists() => {
+            fs::rename(&tmp, dest).is_ok() || fs::copy(&tmp, dest).is_ok()
+        }
         _ => false,
     }
 }

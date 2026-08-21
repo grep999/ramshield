@@ -36,7 +36,10 @@ pub fn atomic_insert(
             }
         }
         dashmap::mapref::entry::Entry::Vacant(v) => {
-            let current_bytes = store.traffic.used_bytes.load(std::sync::atomic::Ordering::Relaxed);
+            let current_bytes = store
+                .traffic
+                .used_bytes
+                .load(std::sync::atomic::Ordering::Relaxed);
             if current_bytes as usize + entry_size > ram_limit_bytes {
                 return Err(ramshield_types::RsError::CapacityExceeded {
                     limit_mb: ram_limit_bytes / (1024 * 1024),

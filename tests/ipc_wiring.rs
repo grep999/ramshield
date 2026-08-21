@@ -17,8 +17,7 @@ fn ipc_wiring_binds_and_accepts() {
     // Give the OS thread time to bind
     std::thread::sleep(Duration::from_secs(1));
 
-    let mut stream = TcpStream::connect("127.0.0.1:17890")
-        .expect("TCP connect to IPC server");
+    let mut stream = TcpStream::connect("127.0.0.1:17890").expect("TCP connect to IPC server");
 
     writeln!(stream, r#"{{"type":"get_status"}}"#).expect("write");
     let mut resp = String::new();

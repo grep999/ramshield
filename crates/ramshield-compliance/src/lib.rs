@@ -14,7 +14,9 @@ impl ComplianceManager {
     }
 
     pub fn log_block_decision(&mut self, decision: &BlockReason, actor: String) {
-        let prev_hash = self.audit_log.last()
+        let prev_hash = self
+            .audit_log
+            .last()
             .map(|e| e.entry_hash.clone())
             .unwrap_or_else(|| "0".repeat(64));
 
@@ -43,9 +45,37 @@ pub struct AuditEntry {
 }
 
 impl AuditEntry {
-    pub fn new(id: u64, event_type: AuditEventType, actor: String, target: Option<String>, metadata: serde_json::Value, prev_hash: String) -> Self {
-        let entry_hash = format!("{:x}", sha3::Sha3_256::digest(format!("{}{}{:?}{}{:?}{}", id, event_type as u8, actor, target.clone().unwrap_or_default(), metadata, prev_hash).as_bytes()));
-        Self { id, event_type, actor, target, metadata, entry_hash }
+    pub fn new(
+        id: u64,
+        event_type: AuditEventType,
+        actor: String,
+        target: Option<String>,
+        metadata: serde_json::Value,
+        prev_hash: String,
+    ) -> Self {
+        let entry_hash = format!(
+            "{:x}",
+            sha3::Sha3_256::digest(
+                format!(
+                    "{}{}{:?}{}{:?}{}",
+                    id,
+                    event_type as u8,
+                    actor,
+                    target.clone().unwrap_or_default(),
+                    metadata,
+                    prev_hash
+                )
+                .as_bytes()
+            )
+        );
+        Self {
+            id,
+            event_type,
+            actor,
+            target,
+            metadata,
+            entry_hash,
+        }
     }
 }
 

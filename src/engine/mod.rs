@@ -1,18 +1,20 @@
 pub mod learning;
 
+use arc_swap::ArcSwap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 use tracing::info;
-use arc_swap::ArcSwap;
 
 use crate::config::Config;
-use crate::enforcement::{EnforcementService, StubXdpApplier, XdpApplier};
-use ramshield_types::EnforceCommand;
 use crate::detection::DetectionEngine;
+use crate::enforcement::{EnforcementService, StubXdpApplier, XdpApplier};
 use crate::forecasting::Forecaster;
-use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, Metrics, SubnetRow};
+use crate::metrics::{
+    BatchRecord, BlockRecord, DashboardSnapshot, Metrics, ModuleStats, SubnetRow,
+};
 use crate::storage::Store;
+use ramshield_types::EnforceCommand;
 
 pub struct Engine {
     pub config: Arc<arc_swap::ArcSwap<Config>>,
@@ -139,17 +141,22 @@ impl Engine {
     }
 
     pub fn get_hot_subnets(&self) -> Vec<SubnetRow> {
-            let mut rows: Vec<SubnetRow> = self.store.subnet_table().iter().map(|e| {
+        let mut rows: Vec<SubnetRow> = self
+            .store
+            .subnet_table()
+            .iter()
+            .map(|e| {
                 let rec = e.value();
                 SubnetRow {
                     prefix: format!("{}.{}.{}", rec.prefix[0], rec.prefix[1], rec.prefix[2]),
                     events: rec.total_rps,
                 }
-            }).collect();
-            rows.sort_by_key(|r| std::cmp::Reverse(r.events));
-            rows.truncate(100);
-            rows
-        }
+            })
+            .collect();
+        rows.sort_by_key(|r| std::cmp::Reverse(r.events));
+        rows.truncate(100);
+        rows
+    }
 
     pub fn get_module_stats(&self) -> Vec<ModuleStats> {
         let stats = self.store.get_stats();
@@ -167,7 +174,7 @@ impl Engine {
 
 async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     let cfg_arc = engine.config.load(); // Arc<Config>
-    let cfg_snapshot = cfg_arc.as_ref().clone();  // owned Config clone
+    let cfg_snapshot = cfg_arc.as_ref().clone(); // owned Config clone
     let cfg_handle = cfg_snapshot.clone().into_handle(); // ConfigHandle
 
     // Use engine's shared store and metrics (shared with dashboard)
@@ -175,8 +182,17 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     let metrics = engine.metrics.clone();
 
     // Take the enforcement receiver ONCE
-    let enforcement_rx = engine.enforcement_rx.lock().expect("enforcement receiver lock").take()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::AlreadyExists, "enforcement service already started"))?;
+    let enforcement_rx = engine
+        .enforcement_rx
+        .lock()
+        .expect("enforcement receiver lock")
+        .take()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "enforcement service already started",
+            )
+        })?;
     // The service follows the engine shutdown flag through a dedicated watcher.
     let enforcement_shutdown = Arc::new(AtomicBool::new(false));
     // Dataplane: real aya XDP when [xdp].enabled, else in-band-only stub.
@@ -195,21 +211,30 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
                     Box::new(applier)
                 }
                 Err(e) => {
-                    tracing::error!("XDP load/attach failed ({}): {} — falling back to in-band enforcement", cfg_snapshot.xdp.interface, e);
+                    tracing::error!(
+                        "XDP load/attach failed ({}): {} — falling back to in-band enforcement",
+                        cfg_snapshot.xdp.interface,
+                        e
+                    );
                     Box::new(StubXdpApplier)
                 }
             }
         }
         #[cfg(not(feature = "xdp"))]
         {
-            tracing::warn!("[xdp].enabled=true but binary built without 'xdp' feature — in-band enforcement only");
+            tracing::warn!(
+                "[xdp].enabled=true but binary built without 'xdp' feature — in-band enforcement only"
+            );
             Box::new(StubXdpApplier)
         }
     } else {
         Box::new(StubXdpApplier)
     };
     let enforcement = EnforcementService::new(
-        store.clone(), metrics.clone(), xdp_box, enforcement_shutdown.clone(),
+        store.clone(),
+        metrics.clone(),
+        xdp_box,
+        enforcement_shutdown.clone(),
     );
     let engine_for_shutdown = engine.clone();
     tokio::spawn(async move {
@@ -228,11 +253,16 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     });
 
     let detection = Arc::new(DetectionEngine::new(
-        store.clone(), cfg_handle.clone(), engine.enforcement_tx.clone(),
-        metrics.clone(), Arc::new(AtomicBool::new(false)),
+        store.clone(),
+        cfg_handle.clone(),
+        engine.enforcement_tx.clone(),
+        metrics.clone(),
+        Arc::new(AtomicBool::new(false)),
     ));
     let event_tx = detection.event_sender();
-    detection.clone().spawn_workers(cfg_snapshot.engine.worker_threads);
+    detection
+        .clone()
+        .spawn_workers(cfg_snapshot.engine.worker_threads);
 
     let forecaster = Arc::new(Forecaster::new(
         store.clone(),
@@ -242,11 +272,17 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     ));
     tokio::spawn(async move { forecaster.run().await });
 
-    let server = crate::ipc::server::IpcServer::bind(&cfg_snapshot, engine.clone(), event_tx, store, engine.enforcement_tx.clone()).await?;
+    let server = crate::ipc::server::IpcServer::bind(
+        &cfg_snapshot,
+        engine.clone(),
+        event_tx,
+        store,
+        engine.enforcement_tx.clone(),
+    )
+    .await?;
     server.start().await;
     Ok(())
 }
-
 
 #[cfg(test)]
 mod startup_tests {
@@ -262,12 +298,20 @@ mod startup_tests {
 
     #[test]
     fn engine_constructs_with_default_config() {
-        let _engine = Engine::new(Config::default(), Arc::new(Store::new(16)), Arc::new(Metrics::new()));
+        let _engine = Engine::new(
+            Config::default(),
+            Arc::new(Store::new(16)),
+            Arc::new(Metrics::new()),
+        );
     }
 
     #[test]
     fn engine_start_then_snapshot_default_state() {
-        let engine = Engine::new(Config::default(), Arc::new(Store::new(16)), Arc::new(Metrics::new()));
+        let engine = Engine::new(
+            Config::default(),
+            Arc::new(Store::new(16)),
+            Arc::new(Metrics::new()),
+        );
         engine.start();
         let snap = engine.dashboard_snapshot();
         assert!(snap.is_healthy);
@@ -278,7 +322,11 @@ mod startup_tests {
 
     #[test]
     fn engine_module_stats_have_four_canonical_rows() {
-        let engine = Engine::new(Config::default(), Arc::new(Store::new(16)), Arc::new(Metrics::new()));
+        let engine = Engine::new(
+            Config::default(),
+            Arc::new(Store::new(16)),
+            Arc::new(Metrics::new()),
+        );
         engine.start();
         let stats = engine.get_module_stats();
         assert_eq!(stats.len(), 4);
@@ -291,7 +339,11 @@ mod startup_tests {
 
     #[test]
     fn engine_snapshot_unhealthy_when_shutting_down() {
-        let engine = Engine::new(Config::default(), Arc::new(Store::new(16)), Arc::new(Metrics::new()));
+        let engine = Engine::new(
+            Config::default(),
+            Arc::new(Store::new(16)),
+            Arc::new(Metrics::new()),
+        );
         engine.shutdown();
         let snap = engine.dashboard_snapshot();
         assert!(!snap.is_healthy);

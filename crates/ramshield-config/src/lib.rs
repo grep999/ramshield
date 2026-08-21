@@ -6,35 +6,47 @@ pub type ConfigHandle = Arc<ArcSwap<Config>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
-    #[serde(default)] pub engine:      EngineConfig,
-    #[serde(default)] pub detection:   DetectionConfig,
-    #[serde(default)] pub xdp:         XdpConfig,
-    #[serde(default)] pub ipc:         IpcConfig,
-    #[serde(default)] pub forecasting: ForecastingConfig,
-    #[serde(default)] pub dashboard:   DashboardConfig,
+    #[serde(default)]
+    pub engine: EngineConfig,
+    #[serde(default)]
+    pub detection: DetectionConfig,
+    #[serde(default)]
+    pub xdp: XdpConfig,
+    #[serde(default)]
+    pub ipc: IpcConfig,
+    #[serde(default)]
+    pub forecasting: ForecastingConfig,
+    #[serde(default)]
+    pub dashboard: DashboardConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineConfig {
     pub worker_threads: usize,
-    pub ram_limit_mb:   usize,
-    pub shard_count:    usize,
+    pub ram_limit_mb: usize,
+    pub shard_count: usize,
 }
 impl Default for EngineConfig {
-    fn default() -> Self { Self { worker_threads: 0, ram_limit_mb: 512, shard_count: 256 } }
+    fn default() -> Self {
+        Self {
+            worker_threads: 0,
+            ram_limit_mb: 512,
+            shard_count: 256,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectionConfig {
-    pub rps_threshold:           u64,
-    pub rate_window_secs:        u64,
-    pub subnet_batch_threshold:  usize,
-    pub batch_block_enabled:     bool,
-    pub block_ttl_secs:          u64,
-    pub bloom_bits:              usize,
+    pub rps_threshold: u64,
+    pub rate_window_secs: u64,
+    pub subnet_batch_threshold: usize,
+    pub batch_block_enabled: bool,
+    pub block_ttl_secs: u64,
+    pub bloom_bits: usize,
     /// Max events accumulated before a forced flush (high-traffic batching).
     #[serde(default = "default_batch_max_events")]
-    pub batch_max_events:        usize,
+    pub batch_max_events: usize,
     /// Max wait (ms) before flushing a partial batch.
     #[serde(default = "default_batch_window_ms")]
     pub batch_window_ms: u64,
@@ -43,27 +55,42 @@ pub struct DetectionConfig {
     pub pre_aggs_flush_interval_ms: u64,
     /// Per-IP hits required in one window before full IpRecord tracking.
     #[serde(default = "default_promote_min")]
-    pub promote_min_events:      u32,
+    pub promote_min_events: u32,
     /// /24 event count in one window that lowers promotion threshold for that subnet.
     #[serde(default = "default_subnet_window_threshold")]
     pub subnet_window_threshold: u64,
     /// Max unique IPs in the pre-aggregation buffer before flushing to main store.
     #[serde(default = "default_pre_aggs_max_size")]
-    pub pre_aggs_max_size:       usize,
+    pub pre_aggs_max_size: usize,
 }
 
-fn default_batch_max_events() -> usize { 4096 }
-fn default_batch_window_ms() -> u64 { 50 }
-fn default_promote_min() -> u32 { 8 }
-fn default_subnet_window_threshold() -> u64 { 500 }
-fn default_pre_aggs_max_size() -> usize { 1_000_000 }
-fn default_pre_aggs_flush_interval_ms() -> u64 { 1000 }
+fn default_batch_max_events() -> usize {
+    4096
+}
+fn default_batch_window_ms() -> u64 {
+    50
+}
+fn default_promote_min() -> u32 {
+    8
+}
+fn default_subnet_window_threshold() -> u64 {
+    500
+}
+fn default_pre_aggs_max_size() -> usize {
+    1_000_000
+}
+fn default_pre_aggs_flush_interval_ms() -> u64 {
+    1000
+}
 
 impl Default for DetectionConfig {
     fn default() -> Self {
         Self {
-            rps_threshold: 1_000, rate_window_secs: 10, subnet_batch_threshold: 5,
-            batch_block_enabled: true, block_ttl_secs: 3_600,
+            rps_threshold: 1_000,
+            rate_window_secs: 10,
+            subnet_batch_threshold: 5,
+            batch_block_enabled: true,
+            block_ttl_secs: 3_600,
             bloom_bits: 8_000_000,
             batch_max_events: default_batch_max_events(),
             batch_window_ms: default_batch_window_ms(),
@@ -78,21 +105,34 @@ impl Default for DetectionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XdpConfig {
     /// Attach the XDP kernel program. When false, enforcement is in-band only.
-    #[serde(default)] pub enabled: bool,
+    #[serde(default)]
+    pub enabled: bool,
     /// Interface to attach to (e.g. "eth0", "lo").
-    #[serde(default = "default_xdp_iface")] pub interface: String,
+    #[serde(default = "default_xdp_iface")]
+    pub interface: String,
     /// "skb" (generic, works everywhere) or "drv" (native, production NICs).
-    #[serde(default = "default_xdp_mode")] pub mode: String,
+    #[serde(default = "default_xdp_mode")]
+    pub mode: String,
 }
 impl Default for XdpConfig {
-    fn default() -> Self { Self { enabled: false, interface: default_xdp_iface(), mode: default_xdp_mode() } }
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interface: default_xdp_iface(),
+            mode: default_xdp_mode(),
+        }
+    }
 }
-fn default_xdp_iface() -> String { "eth0".into() }
-fn default_xdp_mode() -> String { "skb".into() }
+fn default_xdp_iface() -> String {
+    "eth0".into()
+}
+fn default_xdp_mode() -> String {
+    "skb".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcConfig {
-    pub tcp_addr:        String,
+    pub tcp_addr: String,
     pub max_connections: usize,
     #[serde(default = "default_max_connection_bytes")]
     pub max_connection_bytes: Option<usize>,
@@ -104,43 +144,64 @@ pub struct IpcConfig {
     pub connection_idle_timeout_ms: Option<u64>,
 }
 
-fn default_max_connection_bytes() -> Option<usize> { Some(1_048_576) }
-fn default_read_timeout_ms() -> Option<u64> { Some(5000) }
-fn default_write_timeout_ms() -> Option<u64> { Some(5000) }
-fn default_connection_idle_timeout_ms() -> Option<u64> { Some(30_000)
+fn default_max_connection_bytes() -> Option<usize> {
+    Some(1_048_576)
+}
+fn default_read_timeout_ms() -> Option<u64> {
+    Some(5000)
+}
+fn default_write_timeout_ms() -> Option<u64> {
+    Some(5000)
+}
+fn default_connection_idle_timeout_ms() -> Option<u64> {
+    Some(30_000)
 }
 impl Default for IpcConfig {
-    fn default() -> Self { Self { tcp_addr: "127.0.0.1:7890".into(), max_connections: 256, max_connection_bytes: None, read_timeout_ms: None, write_timeout_ms: None, connection_idle_timeout_ms: None } }
+    fn default() -> Self {
+        Self {
+            tcp_addr: "127.0.0.1:7890".into(),
+            max_connections: 256,
+            max_connection_bytes: None,
+            read_timeout_ms: None,
+            write_timeout_ms: None,
+            connection_idle_timeout_ms: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForecastingConfig {
-    pub enabled:            bool,
-    pub ewma_alpha:         f64,
-    pub hw_beta:            f64,
-    pub hw_gamma:           f64,
+    pub enabled: bool,
+    pub ewma_alpha: f64,
+    pub hw_beta: f64,
+    pub hw_gamma: f64,
     pub seasonality_period: usize,
-    pub anomaly_zscore:     f64,
-    pub min_entropy:        f64,
+    pub anomaly_zscore: f64,
+    pub min_entropy: f64,
 }
 impl Default for ForecastingConfig {
     fn default() -> Self {
         Self {
-            enabled: true, ewma_alpha: 0.3, hw_beta: 0.1, hw_gamma: 0.1,
-            seasonality_period: 3_600, anomaly_zscore: 2.5, min_entropy: 2.0,
+            enabled: true,
+            ewma_alpha: 0.3,
+            hw_beta: 0.1,
+            hw_gamma: 0.1,
+            seasonality_period: 3_600,
+            anomaly_zscore: 2.5,
+            min_entropy: 2.0,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardConfig {
-    pub enabled:   bool,
+    pub enabled: bool,
     pub http_addr: String,
 }
 impl Default for DashboardConfig {
     fn default() -> Self {
         Self {
-            enabled:   true,
+            enabled: true,
             http_addr: "127.0.0.1:9999".into(),
         }
     }
@@ -161,63 +222,74 @@ impl Config {
 
         // Engine overrides
         if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__RAM_LIMIT_MB")
-            && let Ok(parsed) = v.parse::<usize>() {
-                cfg.engine.ram_limit_mb = parsed;
-            }
+            && let Ok(parsed) = v.parse::<usize>()
+        {
+            cfg.engine.ram_limit_mb = parsed;
+        }
         if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__WORKER_THREADS")
-            && let Ok(parsed) = v.parse::<usize>() {
-                cfg.engine.worker_threads = parsed;
-            }
+            && let Ok(parsed) = v.parse::<usize>()
+        {
+            cfg.engine.worker_threads = parsed;
+        }
         if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__SHARD_COUNT")
-            && let Ok(parsed) = v.parse::<usize>() {
-                cfg.engine.shard_count = parsed.next_power_of_two();
-            }
+            && let Ok(parsed) = v.parse::<usize>()
+        {
+            cfg.engine.shard_count = parsed.next_power_of_two();
+        }
 
         // Detection overrides
         if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__RPS_THRESHOLD")
-            && let Ok(parsed) = v.parse::<u64>() {
-                cfg.detection.rps_threshold = parsed;
-            }
+            && let Ok(parsed) = v.parse::<u64>()
+        {
+            cfg.detection.rps_threshold = parsed;
+        }
         if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__PROMOTE_MIN_EVENTS")
-            && let Ok(parsed) = v.parse::<u32>() {
-                cfg.detection.promote_min_events = parsed;
-            }
+            && let Ok(parsed) = v.parse::<u32>()
+        {
+            cfg.detection.promote_min_events = parsed;
+        }
         if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__BATCH_WINDOW_MS")
-            && let Ok(parsed) = v.parse::<u64>() {
-                cfg.detection.batch_window_ms = parsed;
-            }
+            && let Ok(parsed) = v.parse::<u64>()
+        {
+            cfg.detection.batch_window_ms = parsed;
+        }
         if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__SUBNET_WINDOW_THRESHOLD")
-            && let Ok(parsed) = v.parse::<u64>() {
-                cfg.detection.subnet_window_threshold = parsed;
-            }
+            && let Ok(parsed) = v.parse::<u64>()
+        {
+            cfg.detection.subnet_window_threshold = parsed;
+        }
         if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__BLOCK_TTL_SECS")
-            && let Ok(parsed) = v.parse::<u64>() {
-                cfg.detection.block_ttl_secs = parsed;
-            }
+            && let Ok(parsed) = v.parse::<u64>()
+        {
+            cfg.detection.block_ttl_secs = parsed;
+        }
 
         // IPC overrides
         if let Ok(v) = std::env::var("RAMSHIELD_IPC__TCP_ADDR") {
             cfg.ipc.tcp_addr = v;
         }
         if let Ok(v) = std::env::var("RAMSHIELD_IPC__MAX_CONNECTIONS")
-            && let Ok(parsed) = v.parse::<usize>() {
-                cfg.ipc.max_connections = parsed;
-            }
+            && let Ok(parsed) = v.parse::<usize>()
+        {
+            cfg.ipc.max_connections = parsed;
+        }
 
         // Dashboard overrides
         if let Ok(v) = std::env::var("RAMSHIELD_DASHBOARD__ENABLED")
-            && let Ok(parsed) = v.parse::<bool>() {
-                cfg.dashboard.enabled = parsed;
-            }
+            && let Ok(parsed) = v.parse::<bool>()
+        {
+            cfg.dashboard.enabled = parsed;
+        }
         if let Ok(v) = std::env::var("RAMSHIELD_DASHBOARD__HTTP_ADDR") {
             cfg.dashboard.http_addr = v;
         }
 
         // Forecasting overrides
         if let Ok(v) = std::env::var("RAMSHIELD_FORECASTING__ENABLED")
-            && let Ok(parsed) = v.parse::<bool>() {
-                cfg.forecasting.enabled = parsed;
-            }
+            && let Ok(parsed) = v.parse::<bool>()
+        {
+            cfg.forecasting.enabled = parsed;
+        }
 
         cfg.validate()?;
         Ok(cfg)
@@ -241,7 +313,9 @@ impl Config {
             anyhow::bail!("detection.promote_min_events must be > 0");
         }
         if self.detection.bloom_bits < 100_000 {
-            anyhow::bail!("detection.bloom_bits should be at least 100,000 for low false positive rate");
+            anyhow::bail!(
+                "detection.bloom_bits should be at least 100,000 for low false positive rate"
+            );
         }
         if self.detection.batch_max_events == 0 || self.detection.batch_max_events > 65536 {
             anyhow::bail!("detection.batch_max_events must be between 1 and 65536");
@@ -314,7 +388,9 @@ mod tests {
             "RAMSHIELD_FORECASTING__ENABLED",
         ];
         for k in &keys {
-            unsafe { std::env::remove_var(k); }
+            unsafe {
+                std::env::remove_var(k);
+            }
         }
     }
 
@@ -328,7 +404,9 @@ mod tests {
     #[serial]
     fn env_var_override_ram_limit() {
         clear_env_vars();
-        unsafe { std::env::set_var("RAMSHIELD_ENGINE__RAM_LIMIT_MB", "1024"); }
+        unsafe {
+            std::env::set_var("RAMSHIELD_ENGINE__RAM_LIMIT_MB", "1024");
+        }
         let tmpfile = "/tmp/ramshield_test_config.toml";
         std::fs::write(tmpfile, "").unwrap();
         let cfg = Config::load(tmpfile).unwrap();
@@ -340,7 +418,9 @@ mod tests {
     #[serial]
     fn env_override_detection_rps() {
         clear_env_vars();
-        unsafe { std::env::set_var("RAMSHIELD_DETECTION__RPS_THRESHOLD", "500"); }
+        unsafe {
+            std::env::set_var("RAMSHIELD_DETECTION__RPS_THRESHOLD", "500");
+        }
         let tmpfile = "/tmp/ramshield_test_config.toml";
         std::fs::write(tmpfile, "").unwrap();
         let cfg = Config::load(tmpfile).unwrap();
@@ -353,15 +433,18 @@ mod tests {
     fn env_override_invalid_ignored() {
         use std::panic;
         clear_env_vars();
-        unsafe { std::env::set_var("RAMSHIELD_ENGINE__RAM_LIMIT_MB", "not_a_number"); }
+        unsafe {
+            std::env::set_var("RAMSHIELD_ENGINE__RAM_LIMIT_MB", "not_a_number");
+        }
         let tmpfile = "/tmp/ramshield_test_config.toml";
         std::fs::write(tmpfile, "").unwrap();
-        
+
         // Should not panic; invalid env var is silently ignored
-        let result = panic::catch_unwind(|| {
-            Config::load(tmpfile).unwrap()
-        });
-        assert!(result.is_ok(), "Config::load should not panic on invalid env var");
+        let result = panic::catch_unwind(|| Config::load(tmpfile).unwrap());
+        assert!(
+            result.is_ok(),
+            "Config::load should not panic on invalid env var"
+        );
         assert_eq!(result.unwrap().engine.ram_limit_mb, 512); // default preserved
         clear_env_vars();
     }

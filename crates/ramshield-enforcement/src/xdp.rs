@@ -8,10 +8,10 @@
 //!   from u32 v4 is byte-identical in the first 8 bytes.
 
 use crate::{EnforcementError, ReconciliationState, XdpApplier};
-use aya::maps::{HashMap, MapError};
-use aya::programs::xdp::XdpMode;
-use aya::programs::Xdp;
 use aya::Ebpf;
+use aya::maps::{HashMap, MapError};
+use aya::programs::Xdp;
+use aya::programs::xdp::XdpMode;
 use std::net::IpAddr;
 use uuid::Uuid;
 

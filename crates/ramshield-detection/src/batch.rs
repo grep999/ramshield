@@ -1,5 +1,5 @@
-use ramshield_types::events::ConnectionEvent;
 use ramshield_types::IpNetwork;
+use ramshield_types::events::ConnectionEvent;
 use std::collections::HashMap;
 use std::net::IpAddr;
 
