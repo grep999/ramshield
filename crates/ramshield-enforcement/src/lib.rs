@@ -121,16 +121,22 @@ impl EnforcementService {
         }
 
         let mut tick = tokio::time::interval(Duration::from_millis(250));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 _ = tick.tick() => {
                     self.expire_due().await;
                     if self.shutdown.load(Ordering::Acquire) { break; }
                 }
-                Some(cmd) = command_rx.recv() => {
-                    if let Err(e) = self.enforce(cmd).await { error!("Enforcement failed: {}", e); }
+                cmd = command_rx.recv() => {
+                    match cmd {
+                        Some(cmd) => {
+                            if let Err(e) = self.enforce(cmd).await { error!("Enforcement failed: {}", e); }
+                        }
+                        // All senders dropped — clean shutdown.
+                        None => break,
+                    }
                 }
-                else => break,
             }
             if self.shutdown.load(Ordering::Acquire) {
                 break;
