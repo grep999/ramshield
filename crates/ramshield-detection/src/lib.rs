@@ -309,11 +309,15 @@ impl DetectionEngine {
                 // ponytail: v6 keys carry the full /64 in low 64 bits; a
                 // from_key constructor on IpNetwork would avoid this branch.
                 if sk <= 0xFFFF_FFFF {
-                    let o = [(sk >> 24) as u8, (sk >> 16) as u8, (sk >> 8) as u8, sk as u8];
+                    let o = [
+                        (sk >> 24) as u8,
+                        (sk >> 16) as u8,
+                        (sk >> 8) as u8,
+                        sk as u8,
+                    ];
                     IpNetwork::ipv4_subnet(std::net::Ipv4Addr::from(o))
                 } else {
-                    let net = IpNetwork::ipv6_subnet(std::net::Ipv6Addr::from(sk));
-                    net
+                    IpNetwork::ipv6_subnet(std::net::Ipv6Addr::from(sk))
                 }
             });
             self.store.merge_subnet_window(sk, net, count, now);
