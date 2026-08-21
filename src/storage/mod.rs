@@ -153,7 +153,7 @@ impl BlockState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum BlockReason {
-    HighRps(u64),
+    HighRps,
     SubnetBatch,
     ForecastAnomaly,
     EntropyAnomaly,
@@ -163,7 +163,7 @@ pub enum BlockReason {
 impl std::fmt::Display for BlockReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BlockReason::HighRps(r) => write!(f, "high_rps:{}", r),
+            BlockReason::HighRps => write!(f, "high_rps"),
             BlockReason::SubnetBatch => write!(f, "subnet_batch"),
             BlockReason::ForecastAnomaly => write!(f, "forecast_anomaly"),
             BlockReason::EntropyAnomaly => write!(f, "entropy_anomaly"),

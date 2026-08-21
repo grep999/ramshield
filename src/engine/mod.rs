@@ -138,13 +138,16 @@ impl Engine {
     }
 
     pub fn get_hot_subnets(&self) -> Vec<SubnetRow> {
-            self.store.subnet_table().iter().map(|e| {
+            let mut rows: Vec<SubnetRow> = self.store.subnet_table().iter().map(|e| {
                 let rec = e.value();
                 SubnetRow {
                     prefix: format!("{}.{}.{}", rec.prefix[0], rec.prefix[1], rec.prefix[2]),
                     events: rec.total_rps,
                 }
-            }).collect()
+            }).collect();
+            rows.sort_by_key(|r| std::cmp::Reverse(r.events));
+            rows.truncate(100);
+            rows
         }
 
     pub fn get_module_stats(&self) -> Vec<ModuleStats> {

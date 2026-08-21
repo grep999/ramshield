@@ -229,7 +229,7 @@ impl EnforcementService {
 
 fn reason_to_block_reason(reason: &str) -> BlockReason {
     let r = reason.to_ascii_lowercase();
-    if r == "high_rps" || r == "syn_flood" || r == "volumetric" || r == "slowloris" { BlockReason::HighRps(0) }
+    if r == "high_rps" || r == "syn_flood" || r == "volumetric" || r == "slowloris" { BlockReason::HighRps }
     else if r == "subnet_burst" { BlockReason::SubnetBatch }
     else if r == "forecast_anomaly" { BlockReason::ForecastAnomaly }
     else if r == "entropy_anomaly" || r == "anomaly" { BlockReason::EntropyAnomaly }

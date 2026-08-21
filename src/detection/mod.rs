@@ -354,7 +354,7 @@ impl DetectionEngine {
 
             if should_block || is_exceeded(ewma_rps, det.rps_threshold) {
                 self.bloom.write().unwrap().insert_hashed(a, b);
-                blocks.push((ip, BlockReason::HighRps(ewma_rps as u64), if det.block_ttl_secs > 0 { Some(det.block_ttl_secs) } else { None }));
+                blocks.push((ip, BlockReason::HighRps, if det.block_ttl_secs > 0 { Some(det.block_ttl_secs) } else { None }));
             }
         }
 
@@ -384,7 +384,7 @@ impl DetectionEngine {
                     BlockReason::SubnetBatch => "subnet_burst".into(),
                     BlockReason::ForecastAnomaly => "forecast_anomaly".into(),
                     BlockReason::EntropyAnomaly => "entropy_anomaly".into(),
-                    BlockReason::HighRps(_) => "high_rps".into(),
+                    BlockReason::HighRps => "high_rps".into(),
                     BlockReason::ManualBlock => "manual".into(),
                 },
                 ip: b.0, action: EnforceAction::Block,

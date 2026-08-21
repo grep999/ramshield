@@ -40,21 +40,15 @@ enum Cmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let json = match &cli.cmd {
-        Cmd::Check { ip } => format!(r#"{{"type":"check_ip","ip":"{}"}}"#, ip),
-        Cmd::Block { ip, reason, ttl } => match ttl {
-            Some(t) => format!(
-                r#"{{"type":"block_ip","ip":"{}","reason":"{}","ttl_secs":{}}}"#,
-                ip, reason, t
-            ),
-            None => format!(
-                r#"{{"type":"block_ip","ip":"{}","reason":"{}","ttl_secs":null}}"#,
-                ip, reason
-            ),
-        },
-        Cmd::Unblock { ip } => format!(r#"{{"type":"unblock_ip","ip":"{}"}}"#, ip),
+        Cmd::Check { ip } => serde_json::json!({"type": "check_ip", "ip": ip}).to_string(),
+        Cmd::Block { ip, reason, ttl } => {
+            serde_json::json!({"type": "block_ip", "ip": ip, "reason": reason, "ttl_secs": ttl})
+                .to_string()
+        }
+        Cmd::Unblock { ip } => serde_json::json!({"type": "unblock_ip", "ip": ip}).to_string(),
         Cmd::Stats => r#"{"type":"get_stats"}"#.into(),
         Cmd::Status { .. } => r#"{"type":"get_status"}"#.into(),
-        Cmd::Info { ip } => format!(r#"{{"type":"get_ip_stats","ip":"{}"}}"#, ip),
+        Cmd::Info { ip } => serde_json::json!({"type": "get_ip_stats", "ip": ip}).to_string(),
     };
 
     let compact = matches!(&cli.cmd, Cmd::Status { json: true });
