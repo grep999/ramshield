@@ -55,3 +55,9 @@ pub enum AuditEventType {
 }
 
 use sha3::Digest;
+
+impl Default for ComplianceManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -7,7 +7,8 @@ use tracing::info;
 use arc_swap::ArcSwap;
 
 use crate::config::Config;
-use crate::enforcement::{EnforceCommand, EnforcementService, StubXdpApplier, XdpApplier};
+use crate::enforcement::{EnforcementService, StubXdpApplier, XdpApplier};
+use ramshield_types::EnforceCommand;
 use crate::detection::DetectionEngine;
 use crate::forecasting::Forecaster;
 use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, Metrics, SubnetRow};

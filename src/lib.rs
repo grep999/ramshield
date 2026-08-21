@@ -1,22 +1,42 @@
-pub mod config;
+//! RamShield library facade — thin re-export shell over workspace crates.
+//! Domain logic lives in crates/ramshield-*; this module exists so the
+//! binaries (main.rs, cli.rs) and glue (engine/, ipc/, dashboard/) keep
+//! short import paths.
+
+pub mod config {
+    pub use ramshield_config::*;
+}
 pub mod dashboard;
-pub mod detection;
+pub mod detection {
+    pub use ramshield_detection::*;
+}
 pub mod engine;
-pub mod enforcement;
-pub mod error;
-pub mod forecasting;
+pub mod enforcement {
+    pub use ramshield_enforcement::*;
+}
+pub mod forecasting {
+    pub use ramshield_forecasting::*;
+}
 pub mod ipc;
-pub mod metrics;
+pub mod metrics {
+    pub use ramshield_metrics::*;
+}
+pub mod storage {
+    pub use ramshield_storage::*;
+}
 
-pub mod storage;
-pub mod util;
-
-pub use crate::util::BoundedVecDeque;
-pub use config::Config;
-pub use detection::{BlockDecision, ConnectionEvent, DetectionEngine};
 pub use engine::Engine;
-pub use enforcement::{EnforceCommand, EnforceAction, EnforceResult, EnforcementService};
-pub use error::RsError;
+
+pub use ramshield_config::{Config, ConfigHandle};
+pub use ramshield_detection::DetectionEngine;
+pub use ramshield_forecasting::Forecaster;
+pub use ramshield_metrics::{
+    BatchRecord, BlockRecord, DashboardSnapshot, Metrics, ModuleStats, SubnetRow,
+};
+pub use ramshield_storage::Store;
+pub use ramshield_types::{
+    BlockDecision, BlockReason, ConnectionEvent, EnforceAction, EnforceCommand, EnforceResult,
+};
 
 /// Install panic hook that logs panics to stderr with ISO-8601 timestamp.
 /// Call once near `main` entry point.

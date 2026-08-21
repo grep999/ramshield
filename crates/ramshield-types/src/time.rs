@@ -164,8 +164,11 @@ mod tests {
 
     #[test]
     fn validate_rejects_far_future() {
+        // ponytail fix: original used now+skew+1 but validate() re-reads the
+        // clock, so any real clock advance (>1ns) made the check pass vacuously.
+        // 2×skew is deterministic regardless of inter-call drift.
         let now = EpochNanos::now();
-        let future = EpochNanos(now.0 + MAX_FUTURE_SKEW_NS + 1);
+        let future = EpochNanos(now.0 + 2 * MAX_FUTURE_SKEW_NS);
         assert_eq!(future.validate(), Err(TimestampError::TooFarFuture));
     }
 

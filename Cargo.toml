@@ -81,6 +81,13 @@ uuid = { version = "1", features = ["v4", "v7", "serde"] }
 async-trait = "0.1"
 aya = { version = "0.12", optional = true }
 ramshield-xdp = { path = "crates/ramshield-xdp", version = "0.1.0", default-features = false, features = ["elf"], optional = true }
+ramshield-types = { path = "crates/ramshield-types", version = "0.1.0" }
+ramshield-config = { path = "crates/ramshield-config", version = "0.1.0" }
+ramshield-storage = { path = "crates/ramshield-storage", version = "0.1.0" }
+ramshield-metrics = { path = "crates/ramshield-metrics", version = "0.1.0" }
+ramshield-detection = { path = "crates/ramshield-detection", version = "0.1.0" }
+ramshield-enforcement = { path = "crates/ramshield-enforcement", version = "0.1.0", default-features = false }
+ramshield-forecasting = { path = "crates/ramshield-forecasting", version = "0.1.0" }
 
 [dev-dependencies]
 serial_test = "3"

@@ -13,9 +13,9 @@ use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::detection::ConnectionEvent;
+use ramshield_types::ConnectionEvent;
 use crate::engine::Engine;
-use crate::enforcement::{EnforceAction, EnforceCommand};
+use ramshield_types::{EnforceAction, EnforceCommand};
 use crate::storage::Store;
 use super::{Request, Response};
 
@@ -306,7 +306,7 @@ fn process_request(
                     rec.threat_score,
                     rec.ewma_rps,
                     match rec.block_state {
-                        crate::storage::BlockState::Blocked { ref reason, .. } => Some(reason.to_string()),
+                        crate::storage::BlockState::Blocked { ref reason, .. } => Some(reason.as_str().to_string()),
                         _ => None,
                     },
                 ),

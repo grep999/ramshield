@@ -102,7 +102,7 @@ impl PatternLearner {
     /// ponytail: Heuristic similarity only.
     pub fn detect_pattern(&self, data: &[u8]) -> Option<AttackPattern> {
         let patterns = self.patterns.read().unwrap();
-        for (_, pattern) in patterns.iter() {
+        for pattern in patterns.values() {
             if self.calculate_similarity(data, &pattern.signature) > self.similarity_threshold {
                 return Some(pattern.clone());
             }
@@ -184,9 +184,9 @@ impl EvaluationMetrics {
     pub fn production_ready(&self) -> bool {
         !self.shadow_mode
             && self.calibrated
-            && self.false_positive_rate.map_or(false, |fpr| fpr <= 0.001)
-            && self.precision.map_or(false, |p| p >= 0.99)
-            && self.recall.map_or(false, |r| r >= 0.95)
+            && self.false_positive_rate.is_some_and(|fpr| fpr <= 0.001)
+            && self.precision.is_some_and(|p| p >= 0.99)
+            && self.recall.is_some_and(|r| r >= 0.95)
     }
 }
 

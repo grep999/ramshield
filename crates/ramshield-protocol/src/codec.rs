@@ -149,7 +149,7 @@ pub fn decode(buf: &[u8]) -> Result<(Message, usize), DecodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::{Body, Request, Response};
+    use crate::message::{Request, Response};
 
     #[test]
     fn roundtrip_get_status() {
