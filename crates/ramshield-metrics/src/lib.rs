@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use sysinfo::{CpuExt, System, SystemExt};
+use sysinfo::System;
 
 const HISTORY: usize = 80;
 const BLOCK_LOG: usize = 40;
@@ -31,8 +31,9 @@ where
 pub fn get_system_usage() -> (f32, usize) {
     with_system(|sys| {
         sys.refresh_all();
-        let cpu_usage = sys.global_cpu_info().cpu_usage();
-        let total_memory_mb = (sys.total_memory() as f64 / 1024.0 / 1024.0) as usize;
+        let cpu_usage = sys.global_cpu_usage();
+        // sysinfo 0.30+: total_memory() returns bytes (was KB before).
+        let total_memory_mb = (sys.total_memory() / (1024 * 1024)) as usize;
         (cpu_usage, total_memory_mb)
     })
 }
