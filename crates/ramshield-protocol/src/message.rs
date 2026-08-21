@@ -35,7 +35,10 @@ pub enum Body {
 }
 
 /// Client-to-server requests.
+/// Wire format: internally-tagged JSON (`{"type":"check_ip",...}`) — matches
+/// deployed CLIs. Field names are part of the contract.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
     CheckIp {
         ip: String,
@@ -66,7 +69,9 @@ pub enum Request {
 }
 
 /// Server-to-client responses.
+/// Wire format: internally-tagged JSON, same convention as Request.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     IpStatus {
         ip: String,
@@ -77,6 +82,9 @@ pub enum Response {
     },
     Ok {
         message: String,
+        /// Optional state payload (src addition — skip when absent).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state: Option<String>,
     },
     BatchOk {
         accepted: u32,

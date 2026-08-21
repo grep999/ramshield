@@ -88,6 +88,7 @@ ramshield-metrics = { path = "crates/ramshield-metrics", version = "0.1.0" }
 ramshield-detection = { path = "crates/ramshield-detection", version = "0.1.0" }
 ramshield-enforcement = { path = "crates/ramshield-enforcement", version = "0.1.0", default-features = false }
 ramshield-forecasting = { path = "crates/ramshield-forecasting", version = "0.1.0" }
+ramshield-protocol = { path = "crates/ramshield-protocol", version = "0.1.0" }
 
 [dev-dependencies]
 serial_test = "3"

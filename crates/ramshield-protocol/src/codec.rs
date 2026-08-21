@@ -52,7 +52,10 @@ impl std::error::Error for DecodeError {}
 ///
 /// Returns `[magic: u32 | version: u16 | len: u32 | payload | crc: u32]`.
 pub fn encode(msg: &Message) -> Result<Vec<u8>, DecodeError> {
-    let payload = bincode::serialize(msg).map_err(|e| DecodeError::Deserialize(e.to_string()))?;
+    // ponytail: JSON payload (not bincode) — internally-tagged enums need
+    // deserialize_any; also human-debuggable on the wire. Swap to bincode+variant
+    // enums only if frame size ever matters.
+    let payload = serde_json::to_vec(msg).map_err(|e| DecodeError::Deserialize(e.to_string()))?;
 
     let payload_len = payload.len() as u32;
     if payload_len as usize > MAX_PAYLOAD_LEN {
@@ -141,7 +144,7 @@ pub fn decode(buf: &[u8]) -> Result<(Message, usize), DecodeError> {
 
     // Deserialize payload
     let msg: Message =
-        bincode::deserialize(payload).map_err(|e| DecodeError::Deserialize(e.to_string()))?;
+        serde_json::from_slice(payload).map_err(|e| DecodeError::Deserialize(e.to_string()))?;
 
     Ok((msg, total_needed))
 }
@@ -177,6 +180,7 @@ mod tests {
     fn roundtrip_response_ok() {
         let msg = Message::response(Response::Ok {
             message: "ok".into(),
+            state: None,
         });
         let frame = encode(&msg).unwrap();
         let (decoded, consumed) = decode(&frame).unwrap();
