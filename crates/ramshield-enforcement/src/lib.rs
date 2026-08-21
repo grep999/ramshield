@@ -350,6 +350,87 @@ fn reason_to_block_reason(reason: &str) -> BlockReason {
     BlockReason::from_reason_str(&reason.to_ascii_lowercase()).unwrap_or(BlockReason::ManualBlock)
 }
 
+/// Replay WAL entries into the store: fold BlockIp/UnblockIp in LSN order to
+/// the final block set, skipping blocks whose TTL already elapsed. Returns the
+/// count of still-live blocks restored. Call before `run()` so the XDP
+/// reconciliation inside it picks the recovered state up.
+pub fn replay_wal_into_store(store: &Arc<Store>, wal: &Wal) -> anyhow::Result<usize> {
+    let entries = Wal::replay(&wal_dir(wal))?;
+    let now_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+
+    // Sequential fold: later entries win (unblock cancels earlier block).
+    let mut blocked: std::collections::HashMap<IpAddr, (BlockReason, u64, Option<u64>)> =
+        std::collections::HashMap::new();
+    for entry in entries {
+        match entry {
+            WalEntry::BlockIp {
+                ip,
+                reason,
+                ttl_secs,
+                ts_ns,
+            } => {
+                if let Ok(ip) = ip.parse() {
+                    blocked.insert(ip, (reason_to_block_reason(&reason), ts_ns, ttl_secs));
+                }
+            }
+            WalEntry::UnblockIp { ip, .. } => {
+                if let Ok(ip) = ip.parse() {
+                    blocked.remove(&ip);
+                }
+            }
+            _ => {} // Insert/Delete/Checkpoint: traffic data, not block state
+        }
+    }
+
+    let ram_lim = store.traffic.ram_limit_mb.load(Ordering::Relaxed).max(1) * 1024 * 1024;
+    let mut restored = 0usize;
+    for (ip, (reason, ts_ns, ttl_secs)) in blocked {
+        // Expired TTL → don't resurrect.
+        if let Some(ttl) = ttl_secs
+            && ts_ns + ttl.saturating_mul(1_000_000_000) <= now_ns
+        {
+            continue;
+        }
+        let rec = match store.get(&ip) {
+            Some(Value::IpRecord(mut r)) => {
+                r.block_state = BlockState::Blocked {
+                    reason,
+                    since_ns: ts_ns,
+                };
+                r
+            }
+            _ => IpRecord {
+                ip,
+                request_count: 0,
+                ewma_rps: 0.0,
+                first_seen_ns: ts_ns,
+                last_seen_ns: ts_ns,
+                bytes_in: 0,
+                status_dist: [0; 5],
+                proto_fingerprint: 0,
+                threat_score: 0.0,
+                block_state: BlockState::Blocked {
+                    reason,
+                    since_ns: ts_ns,
+                },
+            },
+        };
+        store
+            .insert(ip, Value::IpRecord(rec), None, ram_lim)
+            .map_err(|e| anyhow::anyhow!("WAL replay insert {ip}: {e}"))?;
+        restored += 1;
+    }
+    info!("WAL replay: restored {restored} live blocks");
+    Ok(restored)
+}
+
+fn wal_dir(wal: &Wal) -> String {
+    wal.base_dir().to_string()
+}
+
 fn epoch_seconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -565,6 +646,110 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert!(matches!(entries[0], WalEntry::BlockIp { .. }));
         assert!(matches!(entries[1], WalEntry::UnblockIp { .. }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Crash-recovery contract: block → "restart" (fresh store) → replay
+    /// restores the block into the store so XDP reconcile re-arms it.
+    #[tokio::test]
+    async fn replay_restores_block_into_fresh_store() {
+        let dir = std::env::temp_dir().join(format!("rs_wal_recov_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let mut s = svc_with_wal(Box::new(RecordingApplier::new()), dir.to_str().unwrap());
+        let target = ip([10, 77, 0, 5]);
+        s.enforce(block_cmd(target, 3600)).await.unwrap();
+        drop(s);
+
+        // "Restart": empty store, same WAL dir.
+        let fresh = Arc::new(Store::new(16));
+        let wal = Arc::new(
+            Wal::open(
+                dir.to_str().unwrap(),
+                false,
+                ramshield_types::Durability::None,
+                64 * 1024 * 1024,
+            )
+            .unwrap(),
+        );
+        let restored = replay_wal_into_store(&fresh, &wal).unwrap();
+        assert_eq!(restored, 1);
+        match fresh.get(&target) {
+            Some(Value::IpRecord(r)) => assert!(
+                matches!(r.block_state, BlockState::Blocked { .. }),
+                "replay must restore Blocked state"
+            ),
+            other => panic!("expected IpRecord after replay, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Unblock cancels a prior block across the restart boundary.
+    #[tokio::test]
+    async fn replay_unblock_cancels_block() {
+        let dir = std::env::temp_dir().join(format!("rs_wal_cancel_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let mut s = svc_with_wal(Box::new(RecordingApplier::new()), dir.to_str().unwrap());
+        let target = ip([10, 78, 0, 6]);
+        s.enforce(block_cmd(target, 3600)).await.unwrap();
+        s.enforce(unblock_cmd(target)).await.unwrap();
+        drop(s);
+
+        let fresh = Arc::new(Store::new(16));
+        let wal = Arc::new(
+            Wal::open(
+                dir.to_str().unwrap(),
+                false,
+                ramshield_types::Durability::None,
+                64 * 1024 * 1024,
+            )
+            .unwrap(),
+        );
+        assert_eq!(replay_wal_into_store(&fresh, &wal).unwrap(), 0);
+        assert!(fresh.get(&target).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Expired TTL blocks are not resurrected on restart.
+    #[tokio::test]
+    async fn replay_skips_expired_ttl_blocks() {
+        let dir = std::env::temp_dir().join(format!("rs_wal_ttl_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Hand-write an ancient block entry with ttl=1s.
+        let wal = Wal::open(
+            dir.to_str().unwrap(),
+            false,
+            ramshield_types::Durability::None,
+            64 * 1024 * 1024,
+        )
+        .unwrap();
+        wal.append(&WalEntry::BlockIp {
+            ip: "10.79.0.7".into(),
+            reason: "high_rps".into(),
+            ttl_secs: Some(1),
+            ts_ns: 1, // epoch + 1ns — long expired
+        })
+        .unwrap();
+        drop(wal);
+
+        let fresh = Arc::new(Store::new(16));
+        let wal2 = Arc::new(
+            Wal::open(
+                dir.to_str().unwrap(),
+                false,
+                ramshield_types::Durability::None,
+                64 * 1024 * 1024,
+            )
+            .unwrap(),
+        );
+        assert_eq!(replay_wal_into_store(&fresh, &wal2).unwrap(), 0);
+        assert!(
+            fresh.get(&"10.79.0.7".parse().unwrap()).is_none(),
+            "expired block must not resurrect"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

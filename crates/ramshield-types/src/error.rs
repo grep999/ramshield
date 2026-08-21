@@ -55,8 +55,9 @@ impl BlockReason {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum Durability {
+    #[default]
     None,
     Flush,
     Fsync,

@@ -368,6 +368,11 @@ impl Wal {
     pub fn current_lsn(&self) -> u64 {
         self.lsn_counter.load(Ordering::SeqCst)
     }
+
+    /// Directory this WAL was opened under (for replay).
+    pub fn base_dir(&self) -> &str {
+        &self.base_dir
+    }
 }
 
 /// fsync the directory to ensure directory entries (creates, renames) are durable.

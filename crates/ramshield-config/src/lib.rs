@@ -17,6 +17,8 @@ pub struct Config {
     #[serde(default)]
     pub forecasting: ForecastingConfig,
     #[serde(default)]
+    pub wal: WalConfig,
+    #[serde(default)]
     pub dashboard: DashboardConfig,
 }
 
@@ -189,6 +191,29 @@ impl Default for ForecastingConfig {
             seasonality_period: 3_600,
             anomaly_zscore: 2.5,
             min_entropy: 2.0,
+        }
+    }
+}
+
+/// WAL durability settings. Disabled by default — enable for crash-durable
+/// block state (survives restarts, replays into store + XDP reconcile).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalConfig {
+    pub enabled: bool,
+    pub dir: String,
+    pub durability: ramshield_types::Durability,
+    pub compress: bool,
+    /// Segment rotation threshold in bytes.
+    pub seg_max_bytes: u64,
+}
+impl Default for WalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dir: "/var/lib/ramshield/wal".into(),
+            durability: ramshield_types::Durability::Flush,
+            compress: true,
+            seg_max_bytes: 64 * 1024 * 1024,
         }
     }
 }

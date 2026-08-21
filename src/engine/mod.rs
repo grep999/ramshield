@@ -14,6 +14,7 @@ use crate::metrics::{
     BatchRecord, BlockRecord, DashboardSnapshot, Metrics, ModuleStats, SubnetRow,
 };
 use crate::storage::Store;
+use ramshield_storage::wal::Wal;
 use ramshield_types::EnforceCommand;
 
 pub struct Engine {
@@ -234,12 +235,44 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     } else {
         Box::new(StubXdpApplier)
     };
-    let enforcement = EnforcementService::new(
+    let mut enforcement = EnforcementService::new(
         store.clone(),
         metrics.clone(),
         xdp_box,
         enforcement_shutdown.clone(),
     );
+    // Crash-durable block state: open WAL, replay live blocks into the store
+    // BEFORE run() reconciles store → XDP.
+    if cfg_snapshot.wal.enabled {
+        match Wal::open(
+            &cfg_snapshot.wal.dir,
+            cfg_snapshot.wal.compress,
+            cfg_snapshot.wal.durability,
+            cfg_snapshot.wal.seg_max_bytes,
+        ) {
+            Ok(wal) => {
+                let wal = Arc::new(wal);
+                match ramshield_enforcement::replay_wal_into_store(&store, &wal) {
+                    Ok(n) => tracing::info!(
+                        "WAL enabled at {} — {} blocks restored",
+                        cfg_snapshot.wal.dir,
+                        n
+                    ),
+                    Err(e) => {
+                        tracing::error!("WAL replay failed: {} — starting with empty block set", e)
+                    }
+                }
+                enforcement = enforcement.with_wal(wal);
+            }
+            Err(e) => {
+                tracing::error!(
+                    "WAL open failed ({}): {} — running without durability",
+                    cfg_snapshot.wal.dir,
+                    e
+                );
+            }
+        }
+    }
     let engine_for_shutdown = engine.clone();
     tokio::spawn(async move {
         loop {
