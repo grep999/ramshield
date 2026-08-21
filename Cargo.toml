@@ -79,7 +79,7 @@ opentelemetry_sdk = { version = "0.21", optional = true, features = ["rt-tokio"]
 tracing-opentelemetry = { version = "0.22", optional = true }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 async-trait = "0.1"
-aya = { version = "0.12", optional = true }
+aya = { version = "0.14", optional = true }
 ramshield-xdp = { path = "crates/ramshield-xdp", version = "0.1.0", default-features = false, features = ["elf"], optional = true }
 ramshield-types = { path = "crates/ramshield-types", version = "0.1.0" }
 ramshield-config = { path = "crates/ramshield-config", version = "0.1.0" }

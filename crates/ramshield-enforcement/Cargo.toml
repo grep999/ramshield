@@ -8,7 +8,7 @@ ramshield-metrics = { path = "../ramshield-metrics" }
 ramshield-types = { path = "../ramshield-types" }
 ramshield-storage = { path = "../ramshield-storage" }
 ramshield-xdp = { path = "../ramshield-xdp", default-features = false, features = ["elf"], optional = true }
-aya = { version = "0.12", optional = true }
+aya = { version = "0.14", optional = true }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["full"] }
 tracing = "0.1"

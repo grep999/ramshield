@@ -9,8 +9,9 @@
 
 use crate::{EnforcementError, ReconciliationState, XdpApplier};
 use aya::maps::{HashMap, MapError};
-use aya::programs::{Xdp, XdpFlags};
-use aya::Bpf;
+use aya::programs::xdp::XdpMode;
+use aya::programs::Xdp;
+use aya::Ebpf;
 use std::net::IpAddr;
 use uuid::Uuid;
 
@@ -51,18 +52,18 @@ fn map_err(e: impl std::fmt::Display) -> EnforcementError {
 
 /// Owns the loaded Bpf object and attached program.
 pub struct AyaXdpApplier {
-    bpf: Option<Bpf>,
+    bpf: Option<Ebpf>,
     iface: String,
-    flags: XdpFlags,
+    flags: XdpMode,
 }
 
 impl AyaXdpApplier {
     /// Build the applier without loading. `load_and_attach` does the syscall work.
     pub fn new(interface: &str, mode: &str) -> Self {
         let flags = if mode.eq_ignore_ascii_case("drv") {
-            XdpFlags::DRV_MODE
+            XdpMode::Driver
         } else {
-            XdpFlags::SKB_MODE
+            XdpMode::Skb
         };
         Self {
             bpf: None,
@@ -73,7 +74,7 @@ impl AyaXdpApplier {
 
     /// Load ELF + attach + return. Errors surface verbatim for boot logging.
     pub fn load_and_attach(&mut self) -> Result<(), EnforcementError> {
-        let mut bpf = Bpf::load(ramshield_xdp::BPF_ELF).map_err(map_err)?;
+        let mut bpf = Ebpf::load(ramshield_xdp::BPF_ELF).map_err(map_err)?;
         let program: &mut Xdp = bpf
             .program_mut("ramshield_xdp")
             .ok_or_else(|| EnforcementError::Xdp("program ramshield_xdp missing".into()))?
