@@ -77,5 +77,15 @@
       "api_abuse"
     ],
     "chain_duration_sec": 45
+  },
+  "subnet_ddos_5min": {
+    "description": "Subnet DDoS: 30 unique /24s per 15s rotation, sustained saturation",
+    "mode": "subnet_rotation",
+    "proto_cluster": "tcp_syn",
+    "target_ip": "10.255.0.99",
+    "burst_multiplier": 2.0,
+    "workers": 32,
+    "batch_size": 1500,
+    "duration_sec": 300
   }
 }

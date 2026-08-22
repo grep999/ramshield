@@ -57,6 +57,10 @@ RFC5737 = [
     (192, 0, 2),
 ]
 
+# subnet_rotation: fresh set of unique /24s every N seconds (per worker).
+SUBNETS_PER_ROTATION = 30
+SUBNET_ROTATE_SECS = 15.0
+
 
 # ── Config & state ─────────────────────────────────────────────────────────────
 
@@ -173,6 +177,8 @@ class TrafficEngine:
         self._zipf_pool = list(range(1, len(self._botnet_pool) + 1))
         self._scan_octet = self.rng.randint(1, 254)
         self._burst_phase = self.rng.random()
+        self._subnet_pool: List[Tuple[int, int, int]] = []
+        self._subnet_rotate_at = 0.0
 
     def _rand_public_ip(self) -> str:
         while True:
@@ -184,7 +190,17 @@ class TrafficEngine:
             return f"{a}.{b}.{c}.{d}"
 
     def _pick_subnet_ip(self) -> str:
-        p = self.rng.choice(RFC5737)
+        # ponytail: subnet_rotation — 30 unique /24s per ROTATE_SECS, then new set.
+        # Ceiling: /16 granularity; upgrade path = full prefix rotation if needed.
+        now = time.monotonic()
+        if now >= self._subnet_rotate_at:
+            self._subnet_pool = [
+                (self.rng.randint(1, 223), self.rng.randint(0, 255),
+                 self.rng.randint(0, 255))
+                for _ in range(SUBNETS_PER_ROTATION)
+            ]
+            self._subnet_rotate_at = now + SUBNET_ROTATE_SECS
+        p = self.rng.choice(self._subnet_pool)
         return f"{p[0]}.{p[1]}.{p[2]}.{self.rng.randint(1, 254)}"
 
     def _pareto_hot_ip(self) -> str:
@@ -224,9 +240,8 @@ class TrafficEngine:
             return self.cfg.target_ip
         if m == "subnet":
             return self._pick_subnet_ip()
-        if m == "multi_subnet":
-            p = self.rng.choice(RFC5737 + [(100, 64, 0), (203, 0, 113)])
-            return f"{p[0]}.{p[1]}.{p[2]}.{self.rng.randint(1, 254)}"
+        if m in ("subnet_rotation", "multi_subnet"):
+            return self._pick_subnet_ip()
         if m == "botnet":
             return self._botnet_ip()
         if m == "synwave":
