@@ -1,45 +1,45 @@
-# Cron Job Status — 2026-08-22 12:10 UTC
+# Cron Job Status — 2026-08-22 14:00 UTC
 
 **Live snapshot from `hermes cron list`.** 29 jobs tracked. Updated every 5 minutes.
 
 | State | Count |
 | :--- | :--- |
-| OK | 7 |
-| Error | 15 |
+| OK | 2 |
+| Error | 9 |
 | Running | 1 |
 | Pending | 0 |
-| Scheduled | 6 |
+| Scheduled | 17 |
 
 | Job | Schedule | Status | Execution | Last Run |
 | :--- | :--- | :--- | :--- | :--- |
 | ramshield-backup | `0 2 * * *` | ✅ ok |  | 2026-08-22T02:00:49.469934+02:00 |
-| RamShield Promotion Agent | `0 9 * * *` | ❌ error | failed | 2026-08-22T09:00:27.611117+02:00 |
-| ramshield-helper-agent | `*/10 * * * *` | ❌ error | failed | 2026-08-22T14:10:19.642793+02:00 |
-| ramshield-facts-collector | `*/30 * * * *` | ✅ ok | completed | 2026-08-22T14:00:17.768048+02:00 |
+| RamShield Promotion Agent | `0 9 * * *` | ❌ error |  | 2026-08-22T09:00:27.611117+02:00 |
+| ramshield-helper-agent | `*/10 * * * *` | ❌ error | failed | 2026-08-22T16:00:36.449718+02:00 |
+| ramshield-facts-collector | `*/30 * * * *` | ✅ ok | completed | 2026-08-22T16:00:35.841404+02:00 |
 | ramshield-daily-planner | `0 1 * * *` | ❌ error |  | 2026-08-22T01:00:03.486957+02:00 |
 | ramshield-reviewer | `0 3 * * *` | ❌ error |  | 2026-08-22T03:00:24.327640+02:00 |
-| ramshield-cron-status | `*/5 * * * *` | 🏃 running | running | 2026-08-22T14:05:21.478564+02:00 |
-| ramshield-pulse | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-22T14:05:21.761961+02:00 |
-| ramshield-research-agent | `0 * * * *` | ❌ error | failed | 2026-08-22T14:00:22.569463+02:00 |
-| ramshield-health-loop | `*/15 * * * *` | ✅ ok | completed | 2026-08-22T14:00:53.342817+02:00 |
-| ramshield-health-repair | `0 * * * *` | ✅ ok | completed | 2026-08-22T14:01:24.675075+02:00 |
-| ramshield-git-automation | `*/15 * * * *` | ✅ ok | completed | 2026-08-22T14:01:25.114591+02:00 |
-| promo-qw-github-topics | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-22T14:05:22.044640+02:00 |
-| promo-qw-awesome-rust | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-22T14:05:22.315665+02:00 |
-| promo-qw-crates-io | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-22T14:05:22.599662+02:00 |
-| promo-fast-reddit | `*/10 * * * *` | 📅 scheduled | claimed | 2026-08-22T14:01:26.722184+02:00 |
-| promo-fast-x | `*/10 * * * *` | 📅 scheduled | claimed | 2026-08-22T14:01:27.215343+02:00 |
-| promo-std-devto | `*/15 * * * *` | ❌ error | failed | 2026-08-22T14:01:27.649081+02:00 |
-| promo-std-hn | `*/15 * * * *` | ❌ error | failed | 2026-08-22T14:01:28.006162+02:00 |
-| promo-deep-blog | `*/30 * * * *` | ❌ error | failed | 2026-08-22T14:01:28.443398+02:00 |
-| promo-deep-rust-weekly | `*/30 * * * *` | ❌ error | failed | 2026-08-22T14:01:28.884199+02:00 |
-| promo-strategic-plan | `0 * * * *` | ❌ error | failed | 2026-08-22T14:01:29.231979+02:00 |
-| promo-reviewer | `*/30 * * * *` | ✅ ok | completed | 2026-08-22T14:01:34.177063+02:00 |
+| ramshield-cron-status | `*/5 * * * *` | 🏃 running | running | 2026-08-22T15:55:37.877645+02:00 |
+| ramshield-pulse | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:55:38.128337+02:00 |
+| ramshield-research-agent | `0 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:00:30.112572+02:00 |
+| ramshield-health-loop | `*/15 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:46:02.672112+02:00 |
+| ramshield-health-repair | `0 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:01:18.144948+02:00 |
+| ramshield-git-automation | `*/15 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:46:02.957367+02:00 |
+| promo-qw-github-topics | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:55:38.426100+02:00 |
+| promo-qw-awesome-rust | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:55:38.711060+02:00 |
+| promo-qw-crates-io | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:55:38.959985+02:00 |
+| promo-fast-reddit | `*/10 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:50:38.510007+02:00 |
+| promo-fast-x | `*/10 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:50:38.878473+02:00 |
+| promo-std-devto | `*/15 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:46:04.082373+02:00 |
+| promo-std-hn | `*/15 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:46:04.343472+02:00 |
+| promo-deep-blog | `*/30 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:31:01.443326+02:00 |
+| promo-deep-rust-weekly | `*/30 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:31:01.735719+02:00 |
+| promo-strategic-plan | `0 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:01:21.087969+02:00 |
+| promo-reviewer | `*/30 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:31:03.853260+02:00 |
 | ramshield-dispatcher | `30 1 * * *` | ❌ error |  | 2026-08-22T01:30:39.699385+02:00 |
-| ramshield-error-healer | `*/30 * * * *` | ✅ ok | completed | 2026-08-22T14:01:34.570482+02:00 |
-| scalper-hourly | `0 * * * *` | ❌ error | failed | 2026-08-22T14:00:19.729784+02:00 |
+| ramshield-error-healer | `*/30 * * * *` | 📅 scheduled | claimed | 2026-08-22T15:31:04.162816+02:00 |
+| scalper-hourly | `0 * * * *` | ❌ error | failed | 2026-08-22T15:00:27.963298+02:00 |
 | scalper-daily-morning | `0 6 * * *` | ❌ error |  | 2026-08-22T06:00:55.923877+02:00 |
-| hourly_scalper_check | `*/1 * * * *` | ❌ error | failed | 2026-08-22T14:10:19.747805+02:00 |
+| hourly_scalper_check | `*/1 * * * *` | ❌ error | failed | 2026-08-22T16:00:36.647126+02:00 |
 | morning_scalper_check | `0 6 * * *` | ❌ error |  | 2026-08-22T06:00:56.065727+02:00 |
 
 ## Raw Output
@@ -68,28 +68,27 @@
     Skills:    hermes-agent
     Workdir:   /home/m/out/ramshield_promotion
     Last run:  2026-08-22T09:00:27.611117+02:00  error: RuntimeError: [drift_skip:silent] Skipped to prevent unintended spend: global inference config drifted since this job was created (model 'ram' -> 'zombobobo'), and this job is unpinned. No inference call was made. To run on the new config, pin it explicitly: `cronjob action=update job_id=18e3993ed6a0 provider=<provider> model=<model>` (or pin the original values to keep them). This alert is sent once; the job stays skipped until the config is pinned or restored. See #44585.
-    Execution: failed  7a5564fb1575467282efa3eedc1fce32
 
   e3652296ba99 [active]
     Name:      ramshield-helper-agent
     Schedule:  */10 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:20:00+02:00
+    Next run:  2026-08-22T16:10:00+02:00
     Deliver:   local
-    Last run:  2026-08-22T14:10:19.642793+02:00  error: RuntimeError: [drift_skip:silent] Skipped to prevent unintended spend: global inference config drifted since this job was created (model 'ram' -> 'zombobobo'), and this job is unpinned. No inference call was made. To run on the new config, pin it explicitly: `cronjob action=update job_id=e3652296ba99 provider=<provider> model=<model>` (or pin the original values to keep them). This alert is sent once; the job stays skipped until the config is pinned or restored. See #44585.
-    Execution: failed  48e8e317b7194420a5f21f86813d2fd2
+    Last run:  2026-08-22T16:00:36.449718+02:00  error: RuntimeError: [drift_skip:silent] Skipped to prevent unintended spend: global inference config drifted since this job was created (model 'ram' -> 'zombobobo'), and this job is unpinned. No inference call was made. To run on the new config, pin it explicitly: `cronjob action=update job_id=e3652296ba99 provider=<provider> model=<model>` (or pin the original values to keep them). This alert is sent once; the job stays skipped until the config is pinned or restored. See #44585.
+    Execution: failed  33613bf522654efdb1c17e729f91577c
 
   1cb5e490c826 [active]
     Name:      ramshield-facts-collector
     Schedule:  */30 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:30:00+02:00
+    Next run:  2026-08-22T16:30:00+02:00
     Deliver:   local
     Script:    /home/m/.hermes/scripts/facts_collector.py
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:00:17.768048+02:00  ok
-    Execution: completed  6e1bb426b39746819a43770389220e71
+    Last run:  2026-08-22T16:00:35.841404+02:00  ok
+    Execution: completed  7c2a0356ac2542fb8e60b5eccc911828
 
   cd22edb2d5f2 [active]
     Name:      ramshield-daily-planner
@@ -115,223 +114,223 @@
     Name:      ramshield-cron-status
     Schedule:  */5 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:15:00+02:00
+    Next run:  2026-08-22T16:05:00+02:00
     Deliver:   local
     Script:    cron_status_collector.py
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:05:21.478564+02:00  ok
-    Execution: running  28003ff96d384a60981a4c74a65bfe4d
+    Last run:  2026-08-22T15:55:37.877645+02:00  ok
+    Execution: running  a57c539f79704592bc09b7ab5c0e41b3
 
   076a9de35470 [active]
     Name:      ramshield-pulse
     Schedule:  */5 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:15:00+02:00
+    Next run:  2026-08-22T16:05:00+02:00
     Deliver:   local
     Script:    pulse_agent.py
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:05:21.761961+02:00  ok
-    Execution: claimed  cac0dd0bf1004b45805992371e293700
+    Last run:  2026-08-22T15:55:38.128337+02:00  ok
+    Execution: claimed  c8eb15e4e6ff44faadbf7a3965c34c38
 
   f270eaf2c891 [active]
     Name:      ramshield-research-agent
     Schedule:  0 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T15:00:00+02:00
+    Next run:  2026-08-22T17:00:00+02:00
     Deliver:   local
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:00:22.569463+02:00  error: RuntimeError: [drift_skip:silent] Skipped to prevent unintended spend: global inference config drifted since this job was created (model 'ram' -> 'zombobobo'), and this job is unpinned. No inference call was made. To run on the new config, pin it explicitly: `cronjob action=update job_id=f270eaf2c891 provider=<provider> model=<model>` (or pin the original values to keep them). This alert is sent once; the job stays skipped until the config is pinned or restored. See #44585.
-    Execution: failed  db0ff45a16dc4135a386a765f5367a57
+    Last run:  2026-08-22T15:00:30.112572+02:00  error: RuntimeError: [drift_skip:silent] Skipped to prevent unintended spend: global inference config drifted since this job was created (model 'ram' -> 'zombobobo'), and this job is unpinned. No inference call was made. To run on the new config, pin it explicitly: `cronjob action=update job_id=f270eaf2c891 provider=<provider> model=<model>` (or pin the original values to keep them). This alert is sent once; the job stays skipped until the config is pinned or restored. See #44585.
+    Execution: claimed  2709a1d3223c47669cfe839a0e27993b
 
   3bc0c27129c2 [active]
     Name:      ramshield-health-loop
     Schedule:  */15 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:15:00+02:00
+    Next run:  2026-08-22T16:15:00+02:00
     Deliver:   local
     Script:    health_check_repair.py
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:00:53.342817+02:00  ok
-    Execution: completed  36e38ce0020044649c5aacd925c0f247
+    Last run:  2026-08-22T15:46:02.672112+02:00  ok
+    Execution: claimed  c178487911e64984a5d1e0c2d3fc6aa9
 
   22f70c51ef6f [active]
     Name:      ramshield-health-repair
     Schedule:  0 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T15:00:00+02:00
+    Next run:  2026-08-22T17:00:00+02:00
     Deliver:   local
     Script:    health_check_repair.py
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:01:24.675075+02:00  ok
-    Execution: completed  079cc5f86f7d417bb2353a5abf2544be
+    Last run:  2026-08-22T15:01:18.144948+02:00  ok
+    Execution: claimed  2f3acaf23e8042c4a359a30db1211805
 
   51e8f561ed3e [active]
     Name:      ramshield-git-automation
     Schedule:  */15 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:15:00+02:00
+    Next run:  2026-08-22T16:15:00+02:00
     Deliver:   local
     Script:    git_automation.py
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:01:25.114591+02:00  ok
-    Execution: completed  c24218a64b5c459cb08e50a40dae943b
+    Last run:  2026-08-22T15:46:02.957367+02:00  ok
+    Execution: claimed  d0a74486f88347bc993562fcd7b7671b
 
   cdc99e8f0b2c [active]
     Name:      promo-qw-github-topics
     Schedule:  */5 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:15:00+02:00
+    Next run:  2026-08-22T16:05:00+02:00
     Deliver:   local
     Script:    promo_qw_github_topics.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:05:22.044640+02:00  error: Script exited with code 2
+    Last run:  2026-08-22T15:55:38.426100+02:00  error: Script exited with code 2
 stderr:
 python3: can't open file '/home/m/vehicle_of_rationalism/ramshield/beta/rs/promo_batch.py': [Errno 2] No such file or directory
-    Execution: claimed  03669cd7ef8f430599ae95fce78b4835
+    Execution: claimed  98e9e9fc53884e6aa50062bd1cd42b66
 
   4c68ff84646b [active]
     Name:      promo-qw-awesome-rust
     Schedule:  */5 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:15:00+02:00
+    Next run:  2026-08-22T16:05:00+02:00
     Deliver:   local
     Script:    promo_qw_awesome_rust.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:05:22.315665+02:00  error: Script exited with code 2
+    Last run:  2026-08-22T15:55:38.711060+02:00  error: Script exited with code 2
 stderr:
 python3: can't open file '/home/m/vehicle_of_rationalism/ramshield/beta/rs/promo_batch.py': [Errno 2] No such file or directory
-    Execution: claimed  59935366d1a94bf3840b3653417aeeb0
+    Execution: claimed  559d57556a964a2dbb1032b007a4afd5
 
   f192f20e812a [active]
     Name:      promo-qw-crates-io
     Schedule:  */5 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:15:00+02:00
+    Next run:  2026-08-22T16:05:00+02:00
     Deliver:   local
     Script:    promo_qw_crates_io.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:05:22.599662+02:00  error: Script exited with code 2
+    Last run:  2026-08-22T15:55:38.959985+02:00  error: Script exited with code 2
 stderr:
 python3: can't open file '/home/m/vehicle_of_rationalism/ramshield/beta/rs/promo_batch.py': [Errno 2] No such file or directory
-    Execution: claimed  c8f6da5378cd41d4b54c6943e4c9717d
+    Execution: claimed  875e2b3f119a4a51a264c1e9400ff372
 
   d758989bd22f [active]
     Name:      promo-fast-reddit
     Schedule:  */10 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:20:00+02:00
+    Next run:  2026-08-22T16:10:00+02:00
     Deliver:   local
     Script:    promo_fast_reddit.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:01:26.722184+02:00  error: Script exited with code 2
+    Last run:  2026-08-22T15:50:38.510007+02:00  error: Script exited with code 2
 stderr:
 python3: can't open file '/home/m/vehicle_of_rationalism/ramshield/beta/rs/promo_batch.py': [Errno 2] No such file or directory
-    Execution: claimed  0fa9c4069ded429086fdeeb3696e44c0
+    Execution: claimed  5a509c34f3ed4ebdbdf1a5cb2044ce2e
 
   22cb958d90ef [active]
     Name:      promo-fast-x
     Schedule:  */10 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:20:00+02:00
+    Next run:  2026-08-22T16:10:00+02:00
     Deliver:   local
     Script:    promo_fast_x.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:01:27.215343+02:00  error: Script exited with code 2
+    Last run:  2026-08-22T15:50:38.878473+02:00  error: Script exited with code 2
 stderr:
 python3: can't open file '/home/m/vehicle_of_rationalism/ramshield/beta/rs/promo_batch.py': [Errno 2] No such file or directory
-    Execution: claimed  c301b3e00386459fb7371d1e8ea9717c
+    Execution: claimed  5787c9206c0c45a9995013f7779006b3
 
   5d51ca4e9179 [active]
     Name:      promo-std-devto
     Schedule:  */15 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:15:00+02:00
+    Next run:  2026-08-22T16:15:00+02:00
     Deliver:   local
     Script:    promo_std_devto.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:01:27.649081+02:00  error: Script exited with code 2
+    Last run:  2026-08-22T15:46:04.082373+02:00  error: Script exited with code 2
 stderr:
 python3: can't open file '/home/m/vehicle_of_rationalism/ramshield/beta/rs/promo_batch.py': [Errno 2] No such file or directory
-    Execution: failed  152f846354de49828a9bb9da294f1537
+    Execution: claimed  d716d6797bb44cbebb73a54002482808
 
   c9aebd15e27c [active]
     Name:      promo-std-hn
     Schedule:  */15 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:15:00+02:00
+    Next run:  2026-08-22T16:15:00+02:00
     Deliver:   local
     Script:    promo_std_hn.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:01:28.006162+02:00  error: Script exited with code 2
+    Last run:  2026-08-22T15:46:04.343472+02:00  error: Script exited with code 2
 stderr:
 python3: can't open file '/home/m/vehicle_of_rationalism/ramshield/beta/rs/promo_batch.py': [Errno 2] No such file or directory
-    Execution: failed  12e8944031634851958cee508185bf76
+    Execution: claimed  e151452a91d141208a21ab27a8986bdf
 
   5275947fb767 [active]
     Name:      promo-deep-blog
     Schedule:  */30 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:30:00+02:00
+    Next run:  2026-08-22T16:30:00+02:00
     Deliver:   local
     Script:    promo_deep_blog.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:01:28.443398+02:00  error: Script exited with code 2
+    Last run:  2026-08-22T15:31:01.443326+02:00  error: Script exited with code 2
 stderr:
 python3: can't open file '/home/m/vehicle_of_rationalism/ramshield/beta/rs/promo_batch.py': [Errno 2] No such file or directory
-    Execution: failed  da4b344398704d14a72ab3afd8a83c98
+    Execution: claimed  29a2a8c7e95a4209aa2a047edcc4e7c1
 
   3c07c0e4bd8d [active]
     Name:      promo-deep-rust-weekly
     Schedule:  */30 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:30:00+02:00
+    Next run:  2026-08-22T16:30:00+02:00
     Deliver:   local
     Script:    promo_deep_rust_weekly.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:01:28.884199+02:00  error: Script exited with code 2
+    Last run:  2026-08-22T15:31:01.735719+02:00  error: Script exited with code 2
 stderr:
 python3: can't open file '/home/m/vehicle_of_rationalism/ramshield/beta/rs/promo_batch.py': [Errno 2] No such file or directory
-    Execution: failed  3207f2bdc02848ce9baa45066eaf4381
+    Execution: claimed  55403a9aa75a422aa4f33cf6f0bf3d04
 
   370fce9c910e [active]
     Name:      promo-strategic-plan
     Schedule:  0 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T15:00:00+02:00
+    Next run:  2026-08-22T17:00:00+02:00
     Deliver:   local
     Script:    promo_strategic_plan.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:01:29.231979+02:00  error: Script exited with code 2
+    Last run:  2026-08-22T15:01:21.087969+02:00  error: Script exited with code 2
 stderr:
 python3: can't open file '/home/m/vehicle_of_rationalism/ramshield/beta/rs/promo_batch.py': [Errno 2] No such file or directory
-    Execution: failed  bf8f15bd9d27462fa68aa36b05a67595
+    Execution: claimed  6a0f0eb6f2cf44d38836da15bcf6ea86
 
   d00b405982ca [active]
     Name:      promo-reviewer
     Schedule:  */30 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:30:00+02:00
+    Next run:  2026-08-22T16:30:00+02:00
     Deliver:   local
     Script:    promo_review.py
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:01:34.177063+02:00  ok
-    Execution: completed  192974176c034287bc1d219393352dd9
+    Last run:  2026-08-22T15:31:03.853260+02:00  ok
+    Execution: claimed  866fd112d7d044de8f5128e415d7a4a0
 
   c0d0d4bc8275 [active]
     Name:      ramshield-dispatcher
@@ -346,23 +345,23 @@ python3: can't open file '/home/m/vehicle_of_rationalism/ramshield/beta/rs/promo
     Name:      ramshield-error-healer
     Schedule:  */30 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:30:00+02:00
+    Next run:  2026-08-22T16:30:00+02:00
     Deliver:   local
     Script:    ramshield_error_healer.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-22T14:01:34.570482+02:00  ok
-    Execution: completed  707eebd9c1f24b6e999049c0e8ac1089
+    Last run:  2026-08-22T15:31:04.162816+02:00  ok
+    Execution: claimed  b779e78ee38349e9ab0a5af0968bc515
 
   eef10d21be44 [active]
     Name:      scalper-hourly
     Schedule:  0 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T15:00:00+02:00
+    Next run:  2026-08-22T17:00:00+02:00
     Deliver:   local
     Script:    scalper.py
-    Last run:  2026-08-22T14:00:19.729784+02:00  error: RuntimeError: [drift_skip:silent] Skipped to prevent unintended spend: global inference config drifted since this job was created (model 'ram' -> 'zombobobo'), and this job is unpinned. No inference call was made. To run on the new config, pin it explicitly: `cronjob action=update job_id=eef10d21be44 provider=<provider> model=<model>` (or pin the original values to keep them). This alert is sent once; the job stays skipped until the config is pinned or restored. See #44585.
-    Execution: failed  ad2ad2c747374f989b6858ea54666e03
+    Last run:  2026-08-22T16:00:37.241620+02:00  error: RuntimeError: [drift_skip:silent] Skipped to prevent unintended spend: global inference config drifted since this job was created (model 'ram' -> 'zombobobo'), and this job is unpinned. No inference call was made. To run on the new config, pin it explicitly: `cronjob action=update job_id=eef10d21be44 provider=<provider> model=<model>` (or pin the original values to keep them). This alert is sent once; the job stays skipped until the config is pinned or restored. See #44585.
+    Execution: failed  376fb019a5f84f6cacd794b3cb38f667
 
   77b73c6cddb4 [active]
     Name:      scalper-daily-morning
@@ -377,11 +376,11 @@ python3: can't open file '/home/m/vehicle_of_rationalism/ramshield/beta/rs/promo
     Name:      hourly_scalper_check
     Schedule:  */1 * * * *
     Repeat:    ∞
-    Next run:  2026-08-22T14:11:00+02:00
+    Next run:  2026-08-22T16:01:00+02:00
     Deliver:   local
     Script:    scalper.py --hourly-check
-    Last run:  2026-08-22T14:10:19.747805+02:00  error: RuntimeError: [drift_skip:silent] Skipped to prevent unintended spend: global inference config drifted since this job was created (model 'ram' -> 'zombobobo'), and this job is unpinned. No inference call was made. To run on the new config, pin it explicitly: `cronjob action=update job_id=8c6313d1be80 provider=<provider> model=<model>` (or pin the original values to keep them). This alert is sent once; the job stays skipped until the config is pinned or restored. See #44585.
-    Execution: failed  958b74a274b84ebba4d59045093e1a1a
+    Last run:  2026-08-22T16:00:36.647126+02:00  error: RuntimeError: [drift_skip:silent] Skipped to prevent unintended spend: global inference config drifted since this job was created (model 'ram' -> 'zombobobo'), and this job is unpinned. No inference call was made. To run on the new config, pin it explicitly: `cronjob action=update job_id=8c6313d1be80 provider=<provider> model=<model>` (or pin the original values to keep them). This alert is sent once; the job stays skipped until the config is pinned or restored. See #44585.
+    Execution: failed  e1b4c1b3118043c5a8ec0f051e32e630
 
   707cf752b0de [active]
     Name:      morning_scalper_check

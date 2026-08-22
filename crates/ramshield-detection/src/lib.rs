@@ -350,7 +350,14 @@ impl DetectionEngine {
                 .is_some_and(|&(ev, _)| ev as u64 >= det.subnet_window_threshold);
 
             let (a, b) = BloomFilter::slots(&ip);
-            let bloom_hit = self.bloom.read().unwrap().contains_hashed(a, b);
+            // ponytail: poison-recovery — bloom is advisory (false-positive
+            // cache); a panic mid-hold leaves valid data, so recover instead
+            // of panicking every future request. Upgrade: parking_lot.
+            let bloom_hit = self
+                .bloom
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_hashed(a, b);
 
             if agg.count < det.promote_min_events && !subnet_hot && !bloom_hit {
                 cold_skipped += 1;
@@ -374,7 +381,10 @@ impl DetectionEngine {
             }
 
             if should_block || is_exceeded(ewma_rps, det.rps_threshold) {
-                self.bloom.write().unwrap().insert_hashed(a, b);
+                self.bloom
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert_hashed(a, b);
                 blocks.push((ip, BlockReason::HighRps, det.block_ttl_secs));
             }
         }

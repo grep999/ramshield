@@ -62,7 +62,7 @@ impl AuthState {
         let token = hex::encode(token);
         self.sessions
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(token.clone(), Instant::now());
         Some(token)
     }
@@ -71,7 +71,12 @@ impl AuthState {
         if token.len() != 64 {
             return false;
         }
-        let mut map = self.sessions.lock().unwrap();
+        // ponytail: poison-recovery — session map data stays valid across a
+        // panicked holder; availability > strict poison semantics.
+        let mut map = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Opportunistic sweep of expired sessions.
         map.retain(|_, t| t.elapsed() < self.ttl);
         map.contains_key(token)
