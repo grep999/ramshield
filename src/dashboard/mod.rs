@@ -22,6 +22,7 @@ pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), 
         cfg.dashboard.admin_password_hash.clone(),
         cfg.dashboard.session_ttl_secs,
     );
+    let login = auth::router().with_state(auth.clone());
     let app = Router::new()
         .route("/", get(index))
         .route("/healthz", get(api_healthz))
@@ -31,6 +32,7 @@ pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), 
         .route("/api/traffic/subnets", get(api_traffic_subnets))
         .route("/api/status/modules", get(api_status_modules))
         .route("/api/config", get(api_get_config).post(api_set_config))
+        .merge(login)
         .with_state(engine)
         // ponytail: permissive CORS is CSRF-open on /api/config; tighten to
         // same-origin when dashboard gets auth. Upgrade: tower-http CorsLayer

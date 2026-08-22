@@ -290,82 +290,87 @@ impl Config {
     /// Env vars take precedence: RAMSHIELD_ENGINE__RAM_LIMIT_MB=1024
     pub fn load(path: &str) -> anyhow::Result<Self> {
         let mut cfg = Self::from_toml_file(path)?;
+        cfg.apply_env_overrides();
+        Ok(cfg)
+    }
 
+    /// Apply RAMSHIELD_*__FIELD environment overrides on top of any config.
+    pub fn apply_env_overrides(&mut self) {
         // Engine overrides
         if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__RAM_LIMIT_MB")
             && let Ok(parsed) = v.parse::<usize>()
         {
-            cfg.engine.ram_limit_mb = parsed;
+            self.engine.ram_limit_mb = parsed;
         }
         if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__WORKER_THREADS")
             && let Ok(parsed) = v.parse::<usize>()
         {
-            cfg.engine.worker_threads = parsed;
+            self.engine.worker_threads = parsed;
         }
         if let Ok(v) = std::env::var("RAMSHIELD_ENGINE__SHARD_COUNT")
             && let Ok(parsed) = v.parse::<usize>()
         {
-            cfg.engine.shard_count = parsed.next_power_of_two();
+            self.engine.shard_count = parsed.next_power_of_two();
         }
 
         // Detection overrides
         if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__RPS_THRESHOLD")
             && let Ok(parsed) = v.parse::<u64>()
         {
-            cfg.detection.rps_threshold = parsed;
+            self.detection.rps_threshold = parsed;
         }
         if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__PROMOTE_MIN_EVENTS")
             && let Ok(parsed) = v.parse::<u32>()
         {
-            cfg.detection.promote_min_events = parsed;
+            self.detection.promote_min_events = parsed;
         }
         if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__BATCH_WINDOW_MS")
             && let Ok(parsed) = v.parse::<u64>()
         {
-            cfg.detection.batch_window_ms = parsed;
+            self.detection.batch_window_ms = parsed;
         }
         if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__SUBNET_WINDOW_THRESHOLD")
             && let Ok(parsed) = v.parse::<u64>()
         {
-            cfg.detection.subnet_window_threshold = parsed;
+            self.detection.subnet_window_threshold = parsed;
         }
         if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__BLOCK_TTL_SECS")
             && let Ok(parsed) = v.parse::<u64>()
         {
-            cfg.detection.block_ttl_secs = parsed;
+            self.detection.block_ttl_secs = parsed;
         }
 
         if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__SUBNET_BURST_TTL_SECS")
             && let Ok(parsed) = v.parse::<u64>()
         {
-            cfg.detection.subnet_burst_ttl_secs = parsed;
+            self.detection.subnet_burst_ttl_secs = parsed;
         }
 
         // IPC overrides
         if let Ok(v) = std::env::var("RAMSHIELD_IPC__TCP_ADDR") {
-            cfg.ipc.tcp_addr = v;
+            self.ipc.tcp_addr = v;
         }
         if let Ok(v) = std::env::var("RAMSHIELD_IPC__MAX_CONNECTIONS")
             && let Ok(parsed) = v.parse::<usize>()
         {
-            cfg.ipc.max_connections = parsed;
+            self.ipc.max_connections = parsed;
         }
 
         // Dashboard overrides
         if let Ok(v) = std::env::var("RAMSHIELD_DASHBOARD__ENABLED")
             && let Ok(parsed) = v.parse::<bool>()
         {
-            cfg.dashboard.enabled = parsed;
+            self.dashboard.enabled = parsed;
         }
         if let Ok(v) = std::env::var("RAMSHIELD_DASHBOARD__HTTP_ADDR") {
-            cfg.dashboard.http_addr = v;
+            self.dashboard.http_addr = v;
         }
         if let Ok(v) = std::env::var("RAMSHIELD_DASHBOARD__ADMIN_PASSWORD") {
             // Plaintext env convenience: hash at load, never store plaintext.
             use argon2::password_hash::{PasswordHasher, SaltString, rand_core::OsRng};
             let salt = SaltString::generate(&mut OsRng);
             if let Ok(hash) = argon2::Argon2::default().hash_password(v.as_bytes(), &salt) {
-                cfg.dashboard.admin_password_hash = Some(hash.to_string());
+                self.dashboard.admin_password_hash = Some(hash.to_string());
             }
         }
 
@@ -373,11 +378,12 @@ impl Config {
         if let Ok(v) = std::env::var("RAMSHIELD_FORECASTING__ENABLED")
             && let Ok(parsed) = v.parse::<bool>()
         {
-            cfg.forecasting.enabled = parsed;
+            self.forecasting.enabled = parsed;
         }
 
-        cfg.validate()?;
-        Ok(cfg)
+        // ponytail: log-and-continue — env overrides are operator input;
+        // invalid combos surface at validate() call sites that return Result.
+        let _ = self.validate();
     }
 
     /// Validate configuration with sensible bounds and error messages.

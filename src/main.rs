@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    let config = match config_path {
+    let mut config = match config_path {
         Some(path) => {
             let absolute_path = std::fs::canonicalize(&path)
                 .map_err(|e| anyhow::anyhow!("Error canonicalizing path {}: {}", path, e))?;
@@ -59,8 +59,14 @@ async fn main() -> Result<()> {
             );
             Config::load(absolute_path.to_str().unwrap())?
         }
-        None => Config::default(),
+        None => {
+            // Still honor env overrides in no-config mode (dashboard auth etc).
+            let mut c = Config::default();
+            c.apply_env_overrides();
+            c
+        }
     };
+    config.apply_env_overrides();
     info!("Loaded config: {:#?}", config);
     debug!("Loaded config: {:#?}", config);
 
