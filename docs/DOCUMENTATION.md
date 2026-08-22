@@ -505,7 +505,8 @@ File: `config.toml`. Missing sections use code defaults.
 | ------------------------- | ------- | --------------------------------------------- |
 | `rps_threshold`           | 1000    | EWMA RPS block threshold                      |
 | `rate_window_secs`        | 10      | Sliding window for count decay                |
-| `subnet_batch_threshold`  | 5       | /24 events per window to trigger subnet block |
+| `subnet_batch_threshold`  | 50      | Distinct source IPs per /24 window to trigger subnet block |
+| `subnet_batch_min_events` | 100     | /24 event volume required alongside distinct-IP gate |
 | `batch_block_enabled`     | true    | Enable subnet batch blocking                  |
 | `block_ttl_secs`          | 3600    | Auto-block TTL                                |
 | `bloom_bits`              | 8000000 | Bloom filter size in bits                     |

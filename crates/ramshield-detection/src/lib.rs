@@ -78,11 +78,15 @@ impl BloomFilter {
 // ── Status-code → bucket table (600 B, L1-resident; kills per-event /100) ──────
 /// ponytail: derive /24 counts from already-aggregated IpAggs instead of re-scanning
 /// raw events. One pass, no second HashMap allocation.
-fn subnet_counts_of(aggs: &[(IpAddr, IpAgg)]) -> HashMap<SubnetKey, u32> {
-    let mut subnets: HashMap<SubnetKey, u32> = HashMap::with_capacity(aggs.len().min(512));
+/// Events + distinct member IPs per /24 (aggs are already per-IP-distinct).
+fn subnet_counts_of(aggs: &[(IpAddr, IpAgg)]) -> HashMap<SubnetKey, (u32, Vec<IpAddr>)> {
+    let mut subnets: HashMap<SubnetKey, (u32, Vec<IpAddr>)> =
+        HashMap::with_capacity(aggs.len().min(512));
     for (ip, agg) in aggs {
         if let Some(sk) = subnet_key_u128(*ip) {
-            *subnets.entry(sk).or_insert(0) += agg.count;
+            let e = subnets.entry(sk).or_insert((0, Vec::new()));
+            e.0 += agg.count;
+            e.1.push(*ip);
         }
     }
     subnets
@@ -281,16 +285,16 @@ impl DetectionEngine {
 
     /// Test/IPC entry: aggregate raw events, then flush.
     pub fn flush_events(&self, events: &[ConnectionEvent]) {
-        let (ip_aggs, subnet_counts, networks) = aggregate(events);
-        let aggs: Vec<(IpAddr, IpAgg)> = ip_aggs.into_iter().collect();
-        self.flush_batch(&aggs, &subnet_counts, &networks, events.len() as u64);
+        let a = aggregate(events);
+        let aggs: Vec<(IpAddr, IpAgg)> = a.ips.into_iter().collect();
+        self.flush_batch(&aggs, &a.subnets, &a.networks, events.len() as u64);
     }
 
     /// Single pass over aggregates: promote, merge, emit blocks. No store access for cold IPs.
     fn flush_batch(
         &self,
         ip_aggs: &[(IpAddr, IpAgg)],
-        subnet_counts: &HashMap<SubnetKey, u32>,
+        subnet_counts: &HashMap<SubnetKey, (u32, Vec<IpAddr>)>,
         networks: &HashMap<SubnetKey, IpNetwork>,
         total_events: u64,
     ) {
@@ -300,12 +304,12 @@ impl DetectionEngine {
         let now = now_ns();
 
         // Incremental counters for forecasting (no full-store scan).
-        let subnet_vals: Vec<u64> = subnet_counts.values().map(|&c| c as u64).collect();
+        let subnet_vals: Vec<u64> = subnet_counts.values().map(|&(ev, _)| ev as u64).collect();
         self.store
             .traffic
             .record_flush(total_events, ip_aggs.len() as u64, &subnet_vals);
 
-        for (&sk, &count) in subnet_counts {
+        for (&sk, &(count, ref members)) in subnet_counts.iter() {
             let net = networks.get(&sk).copied().unwrap_or_else(|| {
                 // pre-agg path passes no networks map — reconstruct the /24
                 // (v4) or /64 (v6) network from the subnet key itself.
@@ -323,7 +327,8 @@ impl DetectionEngine {
                     IpNetwork::ipv6_subnet(std::net::Ipv6Addr::from(sk))
                 }
             });
-            self.store.merge_subnet_window(sk, net, count, now);
+            self.store
+                .merge_subnet_window(sk, net, count, Some(members), now);
         }
 
         let mut blocks = Vec::new();
@@ -338,9 +343,8 @@ impl DetectionEngine {
 
         for &(ip, ref agg) in ip_aggs {
             let subnet_hot = subnet_key(ip)
-                .and_then(|(sk, _)| subnet_counts.get(&sk).copied())
-                .map(|c| c as u64 >= det.subnet_window_threshold)
-                .unwrap_or(false);
+                .and_then(|(sk, _)| subnet_counts.get(&sk))
+                .is_some_and(|&(ev, _)| ev as u64 >= det.subnet_window_threshold);
 
             let (a, b) = BloomFilter::slots(&ip);
             let bloom_hit = self.bloom.read().unwrap().contains_hashed(a, b);
@@ -511,26 +515,30 @@ impl DetectionEngine {
             if !cfg.detection.batch_block_enabled {
                 continue;
             }
-            let threshold = cfg.detection.subnet_batch_threshold as u64;
+            // Dual gate: unique-IP swarm signal AND raw event volume. Either
+            // alone mis-fires (single flood IP trips volume; slow drip from
+            // many IPs trips uniqueness).
+            let ip_threshold = cfg.detection.subnet_batch_threshold as u64;
+            let ev_threshold = cfg.detection.subnet_batch_min_events;
 
-            let hot: Vec<(SubnetKey, u64, [u8; 3])> = self
+            let hot: Vec<(SubnetKey, u64, u64, [u8; 3])> = self
                 .store
                 .subnet_table()
                 .iter()
                 .filter_map(|e| {
                     let r = e.value();
-                    if r.total_rps >= threshold {
-                        Some((*e.key(), r.total_rps, r.prefix))
+                    if r.unique_ips() >= ip_threshold && r.total_rps >= ev_threshold {
+                        Some((*e.key(), r.unique_ips(), r.total_rps, r.prefix))
                     } else {
                         None
                     }
                 })
                 .collect();
 
-            for (sk, count, prefix) in hot {
+            for (sk, uniq, count, prefix) in hot {
                 warn!(
-                    "Batch block subnet {:?}.{}.{} ({} events/window)",
-                    prefix[0], prefix[1], prefix[2], count
+                    "Batch block subnet {:?}.{}.{} ({} IPs / {} events in window)",
+                    prefix[0], prefix[1], prefix[2], uniq, count
                 );
                 info!("Batch blocking subnet key {:#x}", sk);
 
@@ -666,5 +674,105 @@ mod tests {
         // v6 /64 landed in subnet table
         let sk = subnet_key_u128(ip).unwrap();
         assert!(eng.store.subnet_table().contains_key(&sk));
+    }
+
+    fn ev_at(ip: IpAddr, ts: u64) -> ConnectionEvent {
+        ConnectionEvent {
+            ip,
+            timestamp_ns: ts,
+            bytes: 64,
+            status_code: 200,
+            proto_fingerprint: 0,
+        }
+    }
+
+    /// F1 regression: a single IP bursting 10 events must NOT batch-block its /24.
+    #[test]
+    fn single_ip_burst_does_not_block_subnet() {
+        let eng = engine();
+        let ip = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7));
+        let events: Vec<_> = (0..10).map(|i| ev_at(ip, i)).collect();
+        eng.flush_events(&events);
+        let sk = subnet_key_u128(ip).unwrap();
+        // DashMap guard must not be held across flush_events (write to same shard deadlocks)
+        let uniq = {
+            let rec = eng.store.subnet_table().get(&sk).unwrap();
+            rec.unique_ips()
+        };
+        assert_eq!(uniq, 1, "50 re-reports of ONE ip stay one distinct host");
+        // window counters accumulate, but the loop's dual gate (50 IPs AND 100
+        // events) can't fire from one IP no matter how hard it hammers.
+        for _ in 0..50 {
+            eng.flush_events(&(0..200).map(|i| ev_at(ip, i)).collect::<Vec<_>>());
+        }
+        eprintln!("loop done");
+        let r = eng.store.subnet_table().get(&sk).unwrap();
+        assert_eq!(
+            r.unique_ips(),
+            1,
+            "single-IP traffic never satisfies the unique gate no matter the volume"
+        );
+    }
+
+    /// F1: volume alone is insufficient — one flood IP at high event count stays unblocked.
+    #[test]
+    fn raw_volume_alone_insufficient_for_batch_block() {
+        let eng = engine();
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1));
+        // 5000 events, ONE unique IP — old code would block this /24 instantly.
+        eng.flush_events(&(0..5000).map(|i| ev_at(ip, i)).collect::<Vec<_>>());
+        let sk = subnet_key_u128(ip).unwrap();
+        let rec = eng.store.subnet_table().get(&sk).unwrap();
+        assert_eq!(
+            rec.unique_ips(),
+            1,
+            "one IP must count as one distinct source"
+        );
+        assert_eq!(rec.total_rps, 5000); // volume tracked but gated by uniqueness too
+    }
+
+    /// F1: swarm signal — many unique IPs × moderate volume satisfies both gates.
+    #[test]
+    fn distributed_swarm_satisfies_dual_gate() {
+        let eng = engine();
+        // 60 IPs in same /24, 3 events each = 60 uniq / 180 events ≥ (50, 100)
+        let events: Vec<_> = (0..60)
+            .flat_map(|o| {
+                let ip = IpAddr::V4(Ipv4Addr::new(45, 148, 10, o as u8 + 1));
+                (0..3).map(move |i| ev_at(ip, i))
+            })
+            .collect();
+        eng.flush_events(&events);
+        let any_ip = IpAddr::V4(Ipv4Addr::new(45, 148, 10, 5));
+        let sk = subnet_key_u128(any_ip).unwrap();
+        let rec = eng.store.subnet_table().get(&sk).unwrap();
+        assert_eq!(rec.unique_ips(), 60, "60 distinct hosts in bitmap");
+        assert_eq!(rec.total_rps, 180);
+        // dual-gate predicate (same as subnet_batch_loop) now true:
+        assert!(rec.unique_ips() >= 50 && rec.total_rps >= 100);
+    }
+
+    /// F1: window rollover de-arms — quiet subnet resets both counters.
+    #[test]
+    fn window_rollover_resets_counters() {
+        let store = Store::new(16);
+        let t0 = 1_000_000_000;
+        let mk = |o: u8| IpAddr::V4(Ipv4Addr::new(192, 0, 2, o));
+        let any = mk(9);
+        let net = crate::IpNetwork::of_ip(any);
+        let sk = subnet_key_u128(any).unwrap();
+        // 60 distinct hosts in one window
+        let hosts: Vec<std::net::IpAddr> = (1..=60u8).map(mk).collect();
+        store.merge_subnet_window(sk, net, 480, Some(&hosts), t0);
+        assert_eq!(store.subnet_table().get(&sk).unwrap().unique_ips(), 60);
+        // next window (>2s later): fresh attacker or benign traffic starts clean
+        store.merge_subnet_window(sk, net, 3, Some(&[mk(200)]), t0 + 3_000_000_000);
+        let rec = store.subnet_table().get(&sk).unwrap();
+        assert_eq!(
+            rec.unique_ips(),
+            1,
+            "stale swarm signal must not survive rollover"
+        );
+        assert_eq!(rec.total_rps, 3);
     }
 }

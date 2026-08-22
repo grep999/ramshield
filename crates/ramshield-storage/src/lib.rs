@@ -171,7 +171,30 @@ impl BlockState {
 pub struct SubnetRecord {
     pub prefix: [u8; 3],
     pub total_rps: u64,
+    /// Distinct-source signal for the current window (v4 only): 256-bit map of
+    /// seen host octets, 32 B flat. The real swarm signal — one abuser at 500
+    /// events is a single offender; 40 distinct IPs × 12 events is an attack.
+    /// v6 /64s are too large to bitmap; they report `unique_ips == 0` and rely
+    /// on per-IP EWMA + volume gates.
+    /// ponytail: 32B/24-bit-host ceiling; swap for HLL when v6 swarm detection
+    /// is actually needed.
+    pub host_bitmap: [u64; 4],
     pub last_updated_ns: u64,
+}
+
+impl SubnetRecord {
+    #[inline]
+    pub fn unique_ips(&self) -> u64 {
+        self.host_bitmap.iter().map(|w| w.count_ones() as u64).sum()
+    }
+
+    #[inline]
+    fn mark_host_v4(&mut self, ip: std::net::IpAddr) {
+        if let std::net::IpAddr::V4(v4) = ip {
+            let o = v4.octets()[3] as usize;
+            self.host_bitmap[o / 64] |= 1 << (o % 64);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -223,7 +246,14 @@ impl Store {
     /// Merge subnet-scale counters from a batch flush (O(subnets in batch)).
     /// Windowed: entries older than `window_ns` reset before adding, so a /24
     /// can't accumulate across windows and false-positive the batch blocker.
-    pub fn merge_subnet_window(&self, key: SubnetKey, net: IpNetwork, events: u32, now_ns: u64) {
+    pub fn merge_subnet_window(
+        &self,
+        key: SubnetKey,
+        net: IpNetwork,
+        events: u32,
+        members: Option<&[std::net::IpAddr]>,
+        now_ns: u64,
+    ) {
         const WINDOW_NS: u64 = 2 * 1_000_000_000; // ponytail: fixed 2s window vs config plumbing — matches pre_aggs flush cadence; add per-subnet window cfg when justified.
         let prefix = net.prefix_octets();
         let mut rec = self
@@ -233,12 +263,21 @@ impl Store {
             .unwrap_or(SubnetRecord {
                 prefix,
                 total_rps: 0,
+                host_bitmap: [0; 4],
                 last_updated_ns: now_ns,
             });
         if now_ns.saturating_sub(rec.last_updated_ns) > WINDOW_NS {
+            // Window rollover: reset counters + bitmap so a quiet subnet
+            // de-arms naturally instead of carrying stale swarm signals.
             rec.total_rps = 0;
+            rec.host_bitmap = [0; 4];
         }
         rec.total_rps = rec.total_rps.saturating_add(events as u64);
+        if let Some(members) = members {
+            for ip in members {
+                rec.mark_host_v4(*ip);
+            }
+        }
         rec.last_updated_ns = now_ns;
         self.subnet_table.insert(key, rec);
     }
@@ -246,6 +285,7 @@ impl Store {
     pub fn reset_subnet_window(&self, key: SubnetKey) {
         if let Some(mut e) = self.subnet_table.get_mut(&key) {
             e.total_rps = 0;
+            e.host_bitmap = [0; 4];
         }
     }
 
@@ -506,7 +546,7 @@ mod tests {
         let v6: IpAddr = "2001:db8::1".parse().unwrap();
         let key = subnet::subnet_key_u128(v6).unwrap();
         let net = IpNetwork::of_ip(v6);
-        store.merge_subnet_window(key, net, 5, 1_000_000_000);
+        store.merge_subnet_window(key, net, 5, Some(&[v6]), 1_000_000_000);
         assert_eq!(store.subnet_table().get(&key).unwrap().total_rps, 5);
         store.reset_subnet_window(key);
         assert_eq!(store.subnet_table().get(&key).unwrap().total_rps, 0);

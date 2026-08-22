@@ -42,7 +42,15 @@ impl Default for EngineConfig {
 pub struct DetectionConfig {
     pub rps_threshold: u64,
     pub rate_window_secs: u64,
+    /// Unique IPs per /24 in one window required for a subnet batch block.
+    /// Keyed on unique IPs (not raw events): one abuser at 500 events is a
+    /// single offender; 50 IPs × 12 events is a swarm. Old default of 5 events
+    /// blocked whole /24s on a single 10-event burst — CGNAT killer.
     pub subnet_batch_threshold: usize,
+    /// /24 event volume in the same window, secondary gate: block requires
+    /// BOTH unique_ips >= subnet_batch_threshold AND events >= this.
+    #[serde(default = "default_subnet_batch_min_events")]
+    pub subnet_batch_min_events: u64,
     pub batch_block_enabled: bool,
     pub block_ttl_secs: u64,
     pub bloom_bits: usize,
@@ -75,6 +83,9 @@ fn default_batch_window_ms() -> u64 {
 fn default_promote_min() -> u32 {
     8
 }
+fn default_subnet_batch_min_events() -> u64 {
+    100
+}
 fn default_subnet_window_threshold() -> u64 {
     500
 }
@@ -90,7 +101,8 @@ impl Default for DetectionConfig {
         Self {
             rps_threshold: 1_000,
             rate_window_secs: 10,
-            subnet_batch_threshold: 5,
+            subnet_batch_threshold: 50,
+            subnet_batch_min_events: default_subnet_batch_min_events(),
             batch_block_enabled: true,
             block_ttl_secs: 3_600,
             bloom_bits: 8_000_000,

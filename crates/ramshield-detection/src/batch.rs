@@ -79,28 +79,40 @@ pub fn subnet_prefix(key: u32) -> [u8; 3] {
 
 /// Aggregate a slice of connection events into IP and subnet maps in one pass.
 /// Returns:
-/// - Per-IP aggregation map
-/// - Subnet counters keyed by packed u128 (IPv4 in low 32, IPv6 full 128)
-/// - Network metadata for each subnet key (address family, prefix, CIDR)
-pub fn aggregate(
-    events: &[ConnectionEvent],
-) -> (
-    HashMap<IpAddr, IpAgg>,
-    HashMap<u128, u32>,
-    HashMap<u128, IpNetwork>,
-) {
+/// Per-flush aggregates: per-IP stats, per-/24 event + distinct-member counts,
+/// and the network (v4 /24, v6 /64) each key maps to.
+///
+/// (The old tuple return carried the same three fields; struct form keeps the
+/// complex type under clippy's complexity threshold.)
+pub struct FlushAggs {
+    pub ips: HashMap<IpAddr, IpAgg>,
+    pub subnets: HashMap<u128, (u32, Vec<IpAddr>)>, // (events, distinct member IPs)
+    pub networks: HashMap<u128, IpNetwork>,
+}
+
+pub fn aggregate(events: &[ConnectionEvent]) -> FlushAggs {
     let mut ips: HashMap<IpAddr, IpAgg> = HashMap::with_capacity(events.len().min(4096));
     let mut subnets = HashMap::new();
     let mut networks = HashMap::new();
     for ev in events {
-        ips.entry(ev.ip).or_default().absorb(ev);
+        let entry = ips.entry(ev.ip).or_default();
+        let first_for_ip = entry.count == 0;
+        entry.absorb(ev);
         if let Some((sk, net)) = subnet_key(ev.ip) {
-            *subnets.entry(sk).or_insert(0) += 1;
+            let e = subnets.entry(sk).or_insert((0, Vec::new()));
+            e.0 += 1;
+            if first_for_ip {
+                e.1.push(ev.ip); // once per distinct IP — bitmap input
+            }
             // Only store once per key (all IPs in same subnet → same network)
             networks.entry(sk).or_insert(net);
         }
     }
-    (ips, subnets, networks)
+    FlushAggs {
+        ips,
+        subnets,
+        networks,
+    }
 }
 
 #[cfg(test)]
@@ -144,11 +156,16 @@ mod tests {
             status_code: 200,
             proto_fingerprint: 0,
         };
-        let (ips, subnets, networks) = aggregate(&[ev(1), ev(2), ev(3)]);
-        assert_eq!(ips[&ip].count, 3);
+        let a = aggregate(&[ev(1), ev(2), ev(3)]);
+        assert_eq!(a.ips[&ip].count, 3);
         let sk = subnet_key(ip).unwrap().0;
-        assert_eq!(subnets[&sk], 3);
-        assert!(networks.contains_key(&sk));
+        assert_eq!(a.subnets[&sk].0, 3, "3 events");
+        assert_eq!(
+            a.subnets[&sk].1,
+            vec![ip],
+            "distinct member captured for bitmap"
+        );
+        assert!(a.networks.contains_key(&sk));
     }
 
     #[test]
@@ -162,7 +179,8 @@ mod tests {
             status_code: 200,
             proto_fingerprint: 0,
         };
-        let (ips, subnets, networks) = aggregate(&[ev(ipv4, 1), ev(ipv4, 2), ev(ipv6, 3)]);
+        let a = aggregate(&[ev(ipv4, 1), ev(ipv4, 2), ev(ipv6, 3)]);
+        let (ips, subnets, networks) = (&a.ips, &a.subnets, &a.networks);
         // Per-IP counts
         assert_eq!(ips[&ipv4].count, 2);
         assert_eq!(ips[&ipv6].count, 1);
