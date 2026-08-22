@@ -139,6 +139,15 @@ pub struct IpRecord {
     pub ip: IpAddr,
     pub request_count: u64,
     pub ewma_rps: f64,
+    /// P1 CUSUM accumulator (Page 1954) — sustained sub-threshold drift.
+    #[serde(default)]
+    pub cusum_s: f64,
+    /// Slow-EWMA baseline the CUSUM measures deviation from.
+    #[serde(default)]
+    pub baseline_rps: f64,
+    /// Debounce latch: previous sample was over threshold.
+    #[serde(default)]
+    pub prev_sample_hot: bool,
     pub first_seen_ns: u64,
     pub last_seen_ns: u64,
     pub bytes_in: u64,

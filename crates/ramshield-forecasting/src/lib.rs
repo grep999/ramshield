@@ -108,6 +108,58 @@ pub struct Forecaster {
     metrics: Arc<Metrics>,
     hw: tokio::sync::Mutex<HoltWinters>,
     history: tokio::sync::Mutex<RingBuffer>,
+    /// P2 SPOT-lite: peaks-over-threshold reservoir of (rps − mean)⁺ samples.
+    /// Extreme quantile estimated empirically instead of hand-tuned z cutoffs.
+    peaks: tokio::sync::Mutex<PeakReservoir>,
+}
+
+/// Bounded reservoir of positive deviations; `extreme_q` returns the value that
+/// exceeds (1 − 1/q_target) of observed peaks. Warm-up falls back to z-score.
+struct PeakReservoir {
+    vals: Vec<f64>,
+    cap: usize,
+    ticks: u64,
+}
+
+impl PeakReservoir {
+    const WARM_TICKS: u64 = 60;
+
+    fn new(cap: usize) -> Self {
+        Self {
+            vals: Vec::with_capacity(cap),
+            cap,
+            ticks: 0,
+        }
+    }
+
+    fn push(&mut self, dev: f64) {
+        self.ticks += 1;
+        if dev <= 0.0 {
+            return;
+        }
+        if self.vals.len() == self.cap {
+            // evict a random-ish old entry — reservoir sampling lite
+            let idx = (self.ticks as usize) % self.cap;
+            self.vals[idx] = dev;
+        } else {
+            self.vals.push(dev);
+        }
+    }
+
+    /// Empirical (1 − tail) quantile of observed peaks, e.g. tail=0.001 → q99.9.
+    fn extreme_quantile(&self, tail: f64) -> Option<f64> {
+        if self.ticks < Self::WARM_TICKS || self.vals.len() < 10 {
+            return None;
+        }
+        let mut sorted = self.vals.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let idx = ((sorted.len() as f64) * (1.0 - tail)).clamp(0.0, (sorted.len() - 1) as f64);
+        Some(sorted[idx as usize])
+    }
+
+    fn warm(&self) -> bool {
+        self.ticks >= Self::WARM_TICKS
+    }
 }
 
 impl Forecaster {
@@ -130,6 +182,7 @@ impl Forecaster {
             metrics,
             hw: tokio::sync::Mutex::new(hw),
             history: tokio::sync::Mutex::new(RingBuffer::new(60)),
+            peaks: tokio::sync::Mutex::new(PeakReservoir::new(512)),
         }
     }
 
@@ -149,19 +202,31 @@ impl Forecaster {
         let rps = traffic.events_last_second.load(Ordering::Relaxed) as f64;
         let n = traffic.unique_ips_window.load(Ordering::Relaxed);
 
-        let z = {
+        let (z, spot_alarm) = {
             let mut hw = self.hw.lock().await;
             let mut hist = self.history.lock().await;
             let f = hw.update(rps);
             let s = hist.std().max(1.0);
             let z = hw.zscore(rps, f, s);
             hist.push(rps);
+
+            // P2: feed deviation-above-forecast into the peak reservoir; alarm
+            // on empirical extreme quantile once warm, z-score before that.
+            let dev = (rps - f).max(0.0);
+            let spot_alarm = {
+                let mut pk = self.peaks.lock().await;
+                pk.push(dev);
+                match pk.extreme_quantile(0.001) {
+                    Some(q) if pk.warm() => dev > q,
+                    _ => z > self.config.anomaly_zscore,
+                }
+            };
             self.metrics.set_forecast_hw(rps, z, f);
-            z
+            (z, spot_alarm)
         };
 
         debug!("HW rps={:.1} z={:.2} unique_ips={}", rps, z, n);
-        if z > self.config.anomaly_zscore && n > 10 {
+        if spot_alarm && n > 10 {
             warn!("ANOMALY z={:.2} rps={:.1}", z, rps);
             if z > 3.5 {
                 self.preemptive_block().await;
@@ -306,6 +371,49 @@ mod tests {
             hw.update(1000.0);
         }
         assert!(hw.level > 900.0);
+    }
+
+    #[test]
+    fn reservoir_cold_returns_none() {
+        let mut pk = PeakReservoir::new(64);
+        for i in 0..30 {
+            pk.push(i as f64);
+        }
+        assert!(!pk.warm());
+        assert_eq!(
+            pk.extreme_quantile(0.001),
+            None,
+            "cold reservoir defers to z-score"
+        );
+    }
+
+    #[test]
+    fn reservoir_warm_extreme_quantile_above_typical() {
+        let mut pk = PeakReservoir::new(4096);
+        for _ in 0..1999 {
+            pk.push(10.0); // typical deviation
+        }
+        pk.push(5_000.0); // one extreme peak among 2000
+        assert!(pk.warm());
+        let q = pk.extreme_quantile(0.001).unwrap();
+        assert!((10.0..5_000.0).contains(&q), "q={}", q);
+        // typical dev does not alarm; the extreme does
+        assert!(q < 10.0 || (10.0f64).total_cmp(&q).is_le());
+        assert!(5_000.0f64.total_cmp(&q).is_gt());
+    }
+
+    #[test]
+    fn reservoir_negative_deviations_ignored_but_count_ticks() {
+        let mut pk = PeakReservoir::new(64);
+        for _ in 0..70 {
+            pk.push(-1.0);
+        }
+        assert!(pk.warm(), "ticks advance even on negative dev");
+        assert_eq!(
+            pk.extreme_quantile(0.001),
+            None,
+            "no positive peaks → no quantile"
+        );
     }
 
     #[test]

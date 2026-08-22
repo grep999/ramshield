@@ -14,7 +14,7 @@ use ramshield_metrics::Metrics;
 use ramshield_storage::{BlockState, IpRecord, Store, SubnetKey, Value, subnet_key_u128};
 use ramshield_types::BlockReason;
 use ramshield_types::{ConnectionEvent, EnforceAction, EnforceCommand, IpNetwork};
-use rate_tracker::{ewma, is_exceeded};
+use rate_tracker::{cusum_fired, cusum_step_capped, ewma, ewma_alpha_slow, is_exceeded};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -454,6 +454,9 @@ impl DetectionEngine {
                 ip,
                 request_count: 0,
                 ewma_rps: 0.0,
+                cusum_s: 0.0,
+                baseline_rps: 0.0,
+                prev_sample_hot: false,
                 first_seen_ns: agg.first_ts_ns,
                 last_seen_ns: agg.last_ts_ns,
                 bytes_in: 0,
@@ -471,13 +474,29 @@ impl DetectionEngine {
             rec.status_dist[i] = rec.status_dist[i].saturating_add(agg.status_dist[i]);
         }
 
-        let elapsed = (now.saturating_sub(rec.first_seen_ns)) as f64 / 1e9;
-        let inst_rps = if elapsed > 0.0 {
-            rec.request_count as f64 / elapsed
+        // P1: true instantaneous rate from the batch's own time span — NOT the
+        // cumulative count/elapsed-since-first-seen (sawtooth after window
+        // halving poisoned the EWMA sample).
+        let span_ns = agg.last_ts_ns.saturating_sub(agg.first_ts_ns);
+        let inst_rps = if span_ns > 0 {
+            agg.count as f64 / (span_ns as f64 / 1e9)
         } else {
-            0.0
+            // whole batch inside one clock tick: assume 1s granularity floor
+            agg.count as f64
         };
         rec.ewma_rps = ewma(rec.ewma_rps, inst_rps);
+
+        // P1: CUSUM companion (Page 1954) — catches sustained sub-threshold
+        // drift that absolute-EWMA can't see by construction.
+        let baseline = if rec.baseline_rps == 0.0 {
+            rec.baseline_rps = rec.ewma_rps;
+            rec.ewma_rps
+        } else {
+            rec.baseline_rps =
+                ewma_alpha_slow() * rec.ewma_rps + (1.0 - ewma_alpha_slow()) * rec.baseline_rps;
+            rec.baseline_rps
+        };
+        rec.cusum_s = cusum_step_capped(rec.cusum_s, inst_rps, baseline, det.rps_threshold as f64);
 
         let rps_score = (rec.ewma_rps / det.rps_threshold as f64).min(1.0);
         let total: u32 = rec.status_dist.iter().sum();
@@ -492,7 +511,12 @@ impl DetectionEngine {
 
         let ewma_rps = rec.ewma_rps;
         let threat = rec.threat_score;
-        let block = is_exceeded(ewma_rps, det.rps_threshold);
+        let over_threshold = is_exceeded(ewma_rps, det.rps_threshold);
+        // Debounce: single noisy sample must not block. Fire on EWMA over
+        // threshold twice in a row, or on accumulated CUSUM drift.
+        let hot = over_threshold && rec.prev_sample_hot;
+        rec.prev_sample_hot = over_threshold;
+        let block = hot || cusum_fired(rec.cusum_s, det.rps_threshold);
 
         if let Err(e) = self.store.insert(ip, Value::IpRecord(rec), None, ram_lim) {
             warn!("Failed to insert IP record for {}: {}", ip, e);
