@@ -171,7 +171,6 @@ dependencies = [
  "log",
  "object 0.32.2",
  "thiserror 1.0.69",
- "tokio",
 ]
 
 [[package]]
@@ -1335,7 +1334,6 @@ dependencies = [
  "crc32fast",
  "hex",
  "hmac",
- "proptest",
  "serde",
  "serde_json",
  "sha2",
@@ -1372,15 +1370,8 @@ dependencies = [
 name = "ramshield-xdp"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "aya 0.12.0",
  "aya-build",
- "ramshield-config",
- "ramshield-storage",
- "ramshield-types",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
 ]
 
 [[package]]

@@ -5,21 +5,14 @@ edition = "2024"
 build = "build.rs"
 
 [dependencies]
-ramshield-types = { path = "../ramshield-types", optional = true }
-ramshield-storage = { path = "../ramshield-storage", optional = true }
-ramshield-config = { path = "../ramshield-config", optional = true }
-aya = { version = "0.12", features = ["async_tokio"] }
-tokio = { version = "1", features = ["full"] }
-tracing = "0.1"
-thiserror = "1"
-anyhow = "1"
+# ponytail: aya is only needed for include_bytes_aligned!; the ELF build is the
+# crate's entire purpose. Manager/XdpManager path deleted — AyaXdpApplier in
+# ramshield-enforcement is the single live consumer of BPF_ELF.
+aya = { version = "0.12", default-features = false }
 
 [features]
 default = []
-# Legacy XdpManager path needs storage/config; BPF_ELF export needs only aya.
 elf = []
-manager = ["dep:ramshield-types", "dep:ramshield-storage", "dep:ramshield-config"]
-full = ["elf", "manager"]
 
 [build-dependencies]
 aya-build = "0.2"

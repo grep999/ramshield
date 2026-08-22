@@ -1,40 +1,20 @@
 //! # ramshield-protocol
 //!
-//! Shared, versioned wire protocol for RamShield IPC.
+//! Shared wire protocol for RamShield IPC.
 //!
 //! Every IPC peer (server, CLI, any future client) uses this crate so that the
-//! on-the-wire format can never drift between them. The format is a
-//! length-delimited, CRCs, version-tagged binary codec — no newline JSON, no
-//! raw bincode.
+//! on-the-wire format can never drift between them. The transport is
+//! newline-delimited JSON (`serde_json`) over TCP; the message schema lives in
+//! [`message`] (`Request`/`Response`, internally-tagged by `"type"`,
+//! `deny_unknown_fields` — field-name typos fail loudly).
 //!
-//! ## Wire layout (little-endian)
-//!
-//! ```text
-//! ┌────────────────┬───────────────┬───────────────────────────────┐
-//! │ magic: u32     │ version: u8   │ payload_len: u32               │
-//! │ 0x5253_4850    │               │ (bytes of `payload` only)      │
-//! │ "RSHP"         │               │                               │
-//! ├────────────────┴───────────────┼───────────────────────────────┤
-//! │ payload: bincode(Envelope<T>)  │ crc32: u32                     │
-//! │ (length == payload_len)        │ crc32 over the whole payload   │
-//! └────────────────────────────────┴───────────────────────────────┘
-//! ```
-//!
-//! Total frame size = 4 (magic) + 1 (version) + 4 (len) + payload_len + 4 (crc).
-//!
-//! # Compatibility
-//!
-//! `PROTOCOL_VERSION` is negotiated implicitly by the version byte in the
-//! frame header. A reader rejects a frame whose version byte is unknown with
-//! [`DecodeError::UnsupportedVersion`], so a newer client talking to an older
-//! server fails loudly instead of silently misparsing. The message body is
-//! `bincode`-encoded — versioned independently of the frame header, but kept in
-//! lockstep with it for now (see `ponytail:` notes).
+//! Frame authentication (HMAC-SHA256, optional per `[ipc] auth_keys`) lives in
+//! [`auth`]: senders wrap frames as
+//! `{"auth":{"key_id","ts_ms","sig"},"type":...}`; the server verifies,
+//! strips the envelope, then parses the inner `Request`.
 
 pub mod auth;
-pub mod codec;
 pub mod message;
 
-pub use codec::{DecodeError, MAGIC, MAX_PAYLOAD_LEN, decode, encode};
 pub use message::PROTOCOL_VERSION;
 pub use message::*;
