@@ -5,6 +5,18 @@ pub const fn ewma_alpha_slow() -> f64 {
     0.033
 }
 
+/// CUSUM allowance k: drift only accumulates beyond baseline + k. Sized so a
+/// benign cold-start ramp (EWMA converging from 0, baseline lagging) never
+/// reaches the barrier — simulated max S ≈ 170 for steady 400/s drip.
+pub const fn cusum_allowance(threshold: u64) -> f64 {
+    threshold as f64 * 0.2
+}
+
+/// Samples a record must observe before CUSUM arms — baseline warm-up guard.
+/// Cold-start transients (first EWMA seeds the baseline high/low) must not
+/// accumulate evidence.
+pub const CUSUM_WARMUP_SAMPLES: u8 = 6;
+
 /// One CUSUM step (Page 1954): accumulate positive deviation above baseline,
 /// clamped at zero — only upward drift matters for flooding.
 /// `cap` bounds per-sample accumulation so one huge burst can't arm the
@@ -78,17 +90,46 @@ mod tests {
     #[test]
     fn cusum_sustained_drift_fires_below_absolute_threshold() {
         // IP with quiet baseline 50 rps; sustained 600 rps — never crosses the
-        // absolute threshold but accumulates +550/sample of drift evidence.
+        // absolute threshold but drifts +350/sample past allowance k=200.
+        let k = cusum_allowance(1000);
         let mut s = 0.0f64;
         let mut fired = false;
         for _ in 0..10 {
-            s = cusum_step_capped(s, 600.0, 50.0, 1000.0);
+            s = cusum_step_capped(s, 600.0, 50.0 + k, 1000.0);
             if cusum_fired(s, 1000) {
                 fired = true;
                 break;
             }
         }
         assert!(fired, "cusum S={}", s);
+    }
+
+    #[test]
+    fn benign_cold_start_ramp_never_accumulates() {
+        // Regression: steady 400/s drip from cold — baseline lags EWMA during
+        // convergence; allowance must absorb the transient (max S was 9127 pre-fix).
+        let a_fast = ALPHA;
+        let a_slow = ewma_alpha_slow();
+        let k = cusum_allowance(1000);
+        let mut ewma_v = 0.0f64;
+        let mut bl = 0.0f64;
+        let mut s = 0.0f64;
+        let warmup = CUSUM_WARMUP_SAMPLES as usize;
+        for t in 0..200 {
+            ewma_v = a_fast * 400.0 + (1.0 - a_fast) * ewma_v;
+            if bl == 0.0 {
+                bl = ewma_v;
+            } else {
+                bl = a_slow * ewma_v + (1.0 - a_slow) * bl;
+            }
+            if t >= warmup {
+                s = cusum_step_capped(s, 400.0, bl + k, 1000.0);
+            }
+            assert!(
+                !cusum_fired(s, 1000),
+                "benign traffic fired at t={t}, S={s}"
+            );
+        }
     }
 
     #[test]

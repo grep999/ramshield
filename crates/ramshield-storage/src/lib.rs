@@ -148,6 +148,10 @@ pub struct IpRecord {
     /// Debounce latch: previous sample was over threshold.
     #[serde(default)]
     pub prev_sample_hot: bool,
+    /// Flush samples observed (saturating) — gates CUSUM warm-up. u8 is plenty:
+    /// 6 samples to arm, saturates long before overflow matters.
+    #[serde(default)]
+    pub sample_count: u8,
     pub first_seen_ns: u64,
     pub last_seen_ns: u64,
     pub bytes_in: u64,

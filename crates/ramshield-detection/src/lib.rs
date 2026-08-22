@@ -14,7 +14,10 @@ use ramshield_metrics::Metrics;
 use ramshield_storage::{BlockState, IpRecord, Store, SubnetKey, Value, subnet_key_u128};
 use ramshield_types::BlockReason;
 use ramshield_types::{ConnectionEvent, EnforceAction, EnforceCommand, IpNetwork};
-use rate_tracker::{cusum_fired, cusum_step_capped, ewma, ewma_alpha_slow, is_exceeded};
+use rate_tracker::{
+    CUSUM_WARMUP_SAMPLES, cusum_allowance, cusum_fired, cusum_step_capped, ewma, ewma_alpha_slow,
+    is_exceeded,
+};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -457,6 +460,7 @@ impl DetectionEngine {
                 cusum_s: 0.0,
                 baseline_rps: 0.0,
                 prev_sample_hot: false,
+                sample_count: 0,
                 first_seen_ns: agg.first_ts_ns,
                 last_seen_ns: agg.last_ts_ns,
                 bytes_in: 0,
@@ -496,7 +500,16 @@ impl DetectionEngine {
                 ewma_alpha_slow() * rec.ewma_rps + (1.0 - ewma_alpha_slow()) * rec.baseline_rps;
             rec.baseline_rps
         };
-        rec.cusum_s = cusum_step_capped(rec.cusum_s, inst_rps, baseline, det.rps_threshold as f64);
+        rec.sample_count = rec.sample_count.saturating_add(1);
+        if rec.sample_count >= CUSUM_WARMUP_SAMPLES {
+            let k = cusum_allowance(det.rps_threshold);
+            rec.cusum_s = cusum_step_capped(
+                rec.cusum_s,
+                inst_rps,
+                baseline + k,
+                det.rps_threshold as f64,
+            );
+        }
 
         let rps_score = (rec.ewma_rps / det.rps_threshold as f64).min(1.0);
         let total: u32 = rec.status_dist.iter().sum();
