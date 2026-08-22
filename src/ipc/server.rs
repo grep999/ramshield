@@ -242,6 +242,16 @@ async fn handle_connection(
 
         if total_bytes_read >= config.max_bytes {
             debug!("Connection exceeded max bytes ({})", config.max_bytes);
+            // F4: tell the client WHY instead of a bare TCP reset. Best-effort —
+            // client may already be gone; do not read past the cap to find a newline.
+            let resp = Response::Error {
+                code: 413,
+                message: format!(
+                    "connection exceeded max_connection_bytes ({})",
+                    config.max_bytes
+                ),
+            };
+            let _ = timeout(config.write_timeout, write_resp(&mut socket, &resp)).await;
             return Ok(());
         }
 
