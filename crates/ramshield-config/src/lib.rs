@@ -53,6 +53,11 @@ pub struct DetectionConfig {
     pub subnet_batch_min_events: u64,
     pub batch_block_enabled: bool,
     pub block_ttl_secs: u64,
+    /// TTL for subnet_burst blocks specifically. Shared egress /24s hold up to
+    /// 253 hosts; inheriting the 1h per-IP TTL locked out whole CGNAT ranges
+    /// for an hour. Short default — continued abuse re-fires from fresh events.
+    #[serde(default = "default_subnet_burst_ttl_secs")]
+    pub subnet_burst_ttl_secs: u64,
     pub bloom_bits: usize,
     /// Max events accumulated before a forced flush (high-traffic batching).
     #[serde(default = "default_batch_max_events")]
@@ -86,6 +91,9 @@ fn default_promote_min() -> u32 {
 fn default_subnet_batch_min_events() -> u64 {
     100
 }
+fn default_subnet_burst_ttl_secs() -> u64 {
+    120
+}
 fn default_subnet_window_threshold() -> u64 {
     500
 }
@@ -105,6 +113,7 @@ impl Default for DetectionConfig {
             subnet_batch_min_events: default_subnet_batch_min_events(),
             batch_block_enabled: true,
             block_ttl_secs: 3_600,
+            subnet_burst_ttl_secs: default_subnet_burst_ttl_secs(),
             bloom_bits: 8_000_000,
             batch_max_events: default_batch_max_events(),
             batch_window_ms: default_batch_window_ms(),
@@ -313,6 +322,12 @@ impl Config {
             cfg.detection.block_ttl_secs = parsed;
         }
 
+        if let Ok(v) = std::env::var("RAMSHIELD_DETECTION__SUBNET_BURST_TTL_SECS")
+            && let Ok(parsed) = v.parse::<u64>()
+        {
+            cfg.detection.subnet_burst_ttl_secs = parsed;
+        }
+
         // IPC overrides
         if let Ok(v) = std::env::var("RAMSHIELD_IPC__TCP_ADDR") {
             cfg.ipc.tcp_addr = v;
@@ -447,6 +462,22 @@ mod tests {
     fn default_config_validates() {
         let cfg = Config::default();
         cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn subnet_burst_ttl_default_is_short_and_serde_defaults_apply() {
+        // Regression: subnet batch blocks used to inherit block_ttl_secs (1h),
+        // locking out whole /24s of shared egress for an hour.
+        let cfg = Config::default();
+        assert_eq!(cfg.detection.subnet_burst_ttl_secs, 120);
+        assert!(cfg.detection.subnet_burst_ttl_secs < cfg.detection.block_ttl_secs);
+        // Old TOML without the field must still parse (serde default) —
+        // parse just the [detection] table; other tables have their own requireds.
+        let parsed: DetectionConfig = toml::from_str(
+            "rps_threshold = 100\nrate_window_secs = 10\nsubnet_batch_threshold = 50\nsubnet_batch_min_events = 100\nbatch_block_enabled = true\nblock_ttl_secs = 3600\nbloom_bits = 1000",
+        )
+        .unwrap();
+        assert_eq!(parsed.subnet_burst_ttl_secs, 120);
     }
 
     #[test]

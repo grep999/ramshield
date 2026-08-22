@@ -595,7 +595,9 @@ impl DetectionEngine {
                             source: "detection".into(),
                             actor: "system".into(),
                             timestamp_utc: (now_ns() / 1_000_000_000) as i64,
-                            ttl_seconds: cfg.detection.block_ttl_secs,
+                            // Subnet blocks cover up to 253 hosts of shared
+                            // egress — short TTL, re-fires on continued abuse.
+                            ttl_seconds: cfg.detection.subnet_burst_ttl_secs,
                             reason: "subnet_burst".into(),
                             ip: r.ip,
                             action: EnforceAction::Block,
