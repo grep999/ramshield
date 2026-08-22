@@ -94,7 +94,25 @@ python3 .github/scripts/html_dashboard_generator.py   # from repo root
 
 Also auto-regenerated hourly by `health-repair` when stale (>30 min).
 
-### 3.2 Tiny Console (`scripts/operator_console.py`)
+### 3.2 Live dashboard (`scripts/operator_server.py`)
+
+Web console at **http://127.0.0.1:9777** — loopback only, no auth needed locally.
+Run as a user service (survives reboot):
+
+```bash
+systemctl --user status ramshield-operator    # should be active
+journalctl --user -u ramshield-operator -f    # logs
+```
+
+Panels: fleet bar, job table with per-job [run] buttons + regen button,
+engine health (:9999 proxy), git state, promo output counts, last bench
+result, live OPERATOR_LOG stream (5s poll).
+
+API: `GET /api/{fleet,log,engine,git,promo,bench}`,
+`POST /api/run/<job_id>`, `POST /api/regen`.
+Stdlib-only server; POSTs are rejected from non-loopback addresses.
+
+### 3.3 Tiny Console (`scripts/operator_console.py`)
 
 Lightweight terminal window to talk to the agent and inspect operator state.
 No dependencies beyond Python stdlib.
