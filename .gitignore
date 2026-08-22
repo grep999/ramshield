@@ -24,6 +24,7 @@ diagnostic.log
 *.png
 *.gif
 screen*.jpg
+!docs/screenshots/*.png
 
 # Temporary/Session files
 *session*.txt

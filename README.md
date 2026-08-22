@@ -1,68 +1,62 @@
-# RamShield — Enterprise-Grade Traffic Defense
+<h1 align="center">🛡️ RamShield</h1>
 
-[![Crates.io](https://img.shields.io/crates/v/ramshield.svg)](https://crates.io/crates/ramshield)
-[![CI](https://github.com/grep999/ramshield/actions/workflows/ci.yml/badge.svg)](https://github.com/grep999/ramshield/actions/workflows/ci.yml)
-[![Clippy](https://github.com/grep999/ramshield/actions/workflows/clippy.yml/badge.svg)](https://github.com/grep999/ramshield/actions/workflows/clippy.yml)
-[![Coverage](https://img.shields.io/codecov/c/github/grep999/ramshield)](https://codecov.io/gh/grep999/ramshield)
-[![License](https://img.shields.io/crates.io/l/ramshield)](https://github.com/grep999/ramshield/blob/main/LICENSE)
-[![Rust](https://img.shields.io/badge/rust-2024%2B-orange.svg)](https://www.rust-lang.org/)
-[![docs.rs](https://img.shields.io/docsrs/ramshield/latest)](https://docs.rs/ramshield/latest)
+<p align="center">
+  <strong>RAM-first DDoS detection &amp; mitigation engine with kernel-space XDP enforcement.</strong><br>
+  Detect · Decide · Enforce — in under 50&nbsp;ms, from a single static binary.
+</p>
 
-> **RAM-first DDoS detection and mitigation engine** with optional XDP eBPF kernel acceleration.
-
-RamShield is a specialized in-memory engine that sits at your network edge and:
-- **Detects** volumetric, protocol, and application-layer attacks in real time
-- **Decides** on mitigation actions in < 50ms using adaptive algorithms
-- **Enforces** blocks via userspace IPC or kernel-level XDP packet drop
-- **Operates** with zero external dependencies — single binary deployment
-
----
-
-## 🏗️ Architecture
-
-```
-┌─────────────┐     ┌─────────────────────────────────────────────────┐
-│  Edge /     │     │              ramshield daemon                   │
-│  Proxies    │────►│                                                 │
-│  (nginx,    │     │  ┌──────────┐    ┌──────────────────────┐     │
-│   HAProxy,  │     │  │  Engine  │───►│  DetectionEngine     │     │
-│   Envoy)    │     │  └────┬─────┘    │  (batch processor)   │     │
-└─────────────┘     │       │         └──────────┬───────────┘     │
-                    │       │                    │                 │
-                    │       ▼                    ▼                 │
-                    │  ┌──────────┐    ┌──────────────────────┐     │
-                    │  │  Store   │◄───│  Forecaster          │     │
-                    │  │ (DashMap)│    │  (Holt-Winters +     │     │
-                    │  └──────────┘    │   Entropy)           │     │
-                    │       ▲          └──────────────────────┘     │
-                    │       │                    │                 │
-                    │       │    BlockDecision   │                 │
-                    │  ┌────┴────┐                │                 │
-                    │  │Enforce  │                │                 │
-                    │  │Service  │                │                 │
-                    │  └────┬────┘                │                 │
-                    │       │                     │                 │
-                    │       ▼                     │                 │
-                    │  ┌──────────┐    ┌──────────────────────┐     │
-                    │  │ XDP Mgr  │───►│  eBPF/XDP Program    │     │
-                    │  └──────────┘    │  (kernel space)      │     │
-                    └─────────────────────────────────────────────────┘
-```
-
-### Key Design Principles
-
-| Principle | Implementation |
-|-----------|----------------|
-| **RAM-first** | All hot-path data in sharded `DashMap`; configurable hard limit |
-| **Batch-first** | 50ms / 4096-event windows; amortizes hash+lock costs |
-| **Promotion filter** | Only IPs with ≥8 hits/window get full `IpRecord` tracking |
-| **Subnet-scale first** | /24 counters updated per batch; catches distributed floods early |
-| **Single-writer enforcement** | `EnforcementService` is sole mutator of block state |
-| **XDP offload (optional)** | Kernel-level drop via eBPF hash map; zero userspace copy |
+<p align="center">
+  <a href="https://crates.io/crates/ramshield"><img src="https://img.shields.io/crates/v/ramshield.svg" alt="Crates.io"></a>
+  <a href="https://github.com/grep999/ramshield/actions/workflows/ci.yml"><img src="https://github.com/grep999/ramshield/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/grep999/ramshield/actions/workflows/clippy.yml"><img src="https://github.com/grep999/ramshield/actions/workflows/clippy.yml/badge.svg" alt="Clippy -D warnings"></a>
+  <a href="https://codecov.io/gh/grep999/ramshield"><img src="https://img.shields.io/codecov/c/github/grep999/ramshield" alt="Coverage"></a>
+  <a href="https://github.com/grep999/ramshield/blob/main/LICENSE"><img src="https://img.shields.io/crates.io/l/ramshield" alt="License"></a>
+  <img src="https://img.shields.io/badge/rust-2024%2B-orange.svg" alt="Rust 2024">
+  <a href="https://docs.rs/ramshield/latest"><img src="https://img.shields.io/docsrs/ramshield/latest" alt="docs.rs"></a>
+</p>
 
 ---
 
-## ✨ Features
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="RamShield live operations dashboard — 14M+ events ingested, real-time block feed, pipeline flow" width="100%">
+</p>
+<p align="center"><sub><b>Live ops dashboard</b> — 14.3M events ingested across a 6-phase attack soak (L7 flood → volumetric SYN → slowloris → DNS amplification → botnet entropy → API abuse). Zero rejected events. Real-time block feed, pipeline flow, per-module health.</sub></p>
+
+## Why RamShield
+
+Edge proxies see attacks. They don't know what to *do* about them.
+RamShield is the decision point between your reverse proxy and your origin:
+
+- **Detects** volumetric, protocol and application-layer abuse in real time — EWMA rate tracking, /24 subnet correlation, Holt-Winters forecasting, payload-entropy analysis
+- **Decides** in &lt;50 ms using batched evaluation over sharded in-memory state
+- **Enforces** via IPC answers to your proxy — or drops packets **in the kernel** through an eBPF/XDP program before they ever reach userspace
+- **Survives** crashes: WAL-first commit log replays live blocks back into store + XDP on restart
+
+One binary. No external services. No GC pauses. Hard memory ceiling enforced by design.
+
+```
+nginx / HAProxy / Envoy ──batch──► RamShield ──check──► allow / deny
+                                      │
+                                      ▼ (optional, CAP_NET_ADMIN)
+                                XDP eBPF drop @ ~100 ns/packet
+```
+
+---
+
+## Highlights
+
+| | |
+|---|---|
+| **:zap: Sub-millisecond queries** | `check_ip` p50 **0.29 ms**, p99 **1.05 ms** under sustained flood |
+| **:chart_with_upwards_trend: High-throughput ingest** | 30–40k events/s sustained per driver set on a 4-core box; 1M+/s batch path ceiling; **0 rejections** across an 11.4M-event soak |
+| **:brain: Four detection engines** | EWMA rate · subnet batch · Holt-Winters anomaly · Shannon entropy — composite threat score |
+| **:nut_and_bolt: Kernel enforcement** | Optional aya-based XDP program drops blocked IPs at ~100 ns in kernel space |
+| **:floppy_disk: Crash-durable state** | WAL-first commit (append → mutate → XDP). Restart replays live blocks automatically; TTL-aware; segment retention with pruning |
+| **:package: Single binary** | Static build, zero runtime dependencies, JSON-over-TCP integration from any language |
+| **:bar_chart: Live observability** | Dark ops dashboard + Prometheus-compatible metrics export |
+
+<details>
+<summary><b>Full feature list</b></summary>
 
 ### Detection & Mitigation
 - **EWMA rate tracking** per IP with configurable thresholds
@@ -73,56 +67,54 @@ RamShield is a specialized in-memory engine that sits at your network edge and:
 
 ### Enforcement Pipeline
 - **Idempotent operations** — UUID `decision_id` prevents replay
-- **In-memory deduplication** — `HashSet<IpAddr>` skips redundant XDP ops
-- **WAL crash durability** — WAL-first commit (append→mutate→XDP), automatic startup replay restores live blocks, TTL-aware, segment retention with pruning (`[wal]` config, off by default)
+- **WAL crash durability** — WAL-first commit, startup replay restores live blocks into store + XDP, TTL-expired entries skipped, segment retention with oldest-first pruning
 - **TTL wheel** — automatic expiry without background scans
-- **XDP integration** — targeted `insert`/`remove` on BPF hash map
+- **XDP integration** — targeted insert/remove on BPF hash map, full sync at boot
 
-### IPC & Integration
-- **JSON over TCP** — simple integration from any language
+### Integration & Observability
+- **JSON over TCP** line protocol — integrate from nginx/Lua, Go, Python, anything
 - **Batch endpoint** — `report_connections` for high-throughput edge proxies
-- **Aggregation layer** — server-side per-IP count thresholding
-- **CLI tool** — `ramshield-cli` for operator actions
-
-### Observability
-- **HTTP dashboard** — real-time metrics at `:9999`
-- **Structured logging** — `RUST_LOG=ramshield=debug`
-- **Atomic counters** — requests, blocks, events, promotions
+- **HTTP dashboard** — real-time metrics, block feed, subnet heat
+- **Structured logging** — `tracing` with `RUST_LOG` filtering
 - **Prometheus-compatible** — `Metrics::emit_prometheus()`
+
+</details>
 
 ---
 
-## 🚀 Quick Start
-
-### Prerequisites
-- Rust 1.80+ (2024 edition)
-- Linux kernel ≥ 5.10 for XDP (optional)
-
-### Build & Run
+## Quick Start
 
 ```bash
-# Clone and build
 git clone https://github.com/grep999/ramshield
 cd ramshield/beta/rs
-cargo build --release
+cargo build --release -F full
 
-# Run with default config (512 MB RAM, 256 shards)
+# run (dashboard :9999, IPC :7890)
 ./target/release/ramshield config.toml
-
-# Run with production config (8 GB RAM, 1024 shards)
-./target/release/ramshield config.stress.toml
 ```
 
-### Verify
+```bash
+# report traffic from your edge proxy
+curl -s http://127.0.0.1:9999/healthz          # {"status":"ok"}
+
+# ask about an IP
+echo '{"type":"check_ip","ip":"203.0.113.7"}' | nc -q1 127.0.0.1 7890
+# → {"type":"ip_status","ip":"203.0.113.7","blocked":false,"threat":0.0,...}
+```
+
+### Drive it with the attack simulator
 
 ```bash
-# Health check
-curl http://127.0.0.1:7891/healthz
+python3 scripts/attack_nexus.py profiles list          # 6 attack classes + chain
+python3 scripts/attack_nexus.py run --profile l7_http_flood --duration 30
+python3 scripts/attack_nexus.py run --profile red_team_full   # 6-phase chain
+```
 
-# Dashboard
-open http://127.0.0.1:9999
+Watch blocks appear live at `http://localhost:9999`.
 
-# CLI
+### CLI
+
+```bash
 ./target/release/ramshield-cli stats
 ./target/release/ramshield-cli check 1.2.3.4
 ./target/release/ramshield-cli block 1.2.3.4 --reason manual --ttl 3600
@@ -130,21 +122,19 @@ open http://127.0.0.1:9999
 
 ---
 
-## 📦 Configuration
-
-Configuration via `config.toml` (CLI arg) or environment variables.
+## Configuration
 
 ```toml
 [engine]
 shard_count = 256          # DashMap shards (power of 2)
-ram_limit_mb = 512         # Hard memory ceiling
+ram_limit_mb = 512         # hard memory ceiling — CapacityExceeded beyond it
 
 [detection]
 rps_threshold = 1000       # EWMA RPS block trigger
-promote_min_events = 8     # Hits before full IpRecord
+promote_min_events = 8     # hits before full IpRecord promotion
 subnet_window_threshold = 500  # /24 volume for subnet block
-batch_max_events = 4096    # Batch flush size
-batch_window_ms = 50       # Max batch wait time
+batch_max_events = 4096    # batch flush size
+batch_window_ms = 50       # max batch wait
 
 [forecasting]
 enabled = true
@@ -155,181 +145,192 @@ min_entropy = 2.0          # Shannon entropy floor (bits)
 tcp_addr = "127.0.0.1:7890"
 max_connections = 256
 
-[wal]                      # Crash-durable block state (off by default)
+[wal]                      # crash-durable block state (off by default)
 enabled = true
 dir = "/var/lib/ramshield/wal"
-durability = "Flush"       # None | Flush | Fsync | GroupCommit (currently = Fsync; single-writer actor has nothing to batch)
-compress = true            # LZ4 records > 64B
+durability = "Flush"       # None | Flush | Fsync | GroupCommit (= Fsync today)
+compress = true            # LZ4 records > 64 B
 seg_max_bytes = 67108864   # 64 MB segment rotation
-retention_max_bytes = 536870912  # 512 MB total cap; oldest pruned (0 = unlimited)
+retention_max_bytes = 536870912  # 512 MB total cap; oldest pruned (0 = ∞)
 
-[xdp]                      # Optional kernel acceleration
+[xdp]                      # optional kernel acceleration
 enabled = false
 interface = "eth0"
 build_mode = "auto"        # auto | rust | clang | stub
 ```
 
-**WAL crash recovery:** with `[wal].enabled = true`, every block/unblock is
-journaled before state mutation (WAL-first). On restart the WAL is replayed:
-live blocks are restored into the store and re-armed in XDP by reconciliation;
-TTL-expired blocks are skipped; unblocks cancel earlier blocks. Verified
-end-to-end: block → kill → restart → `restored N live blocks` in the log.
+Every field is also env-overridable: `RAMSHIELD_ENGINE__RAM_LIMIT_MB=2048`.
 
-**Environment overrides** (prefix `RAMSHIELD_`):
-```bash
-RAMSHIELD_ENGINE__RAM_LIMIT_MB=2048 \
-RAMSHIELD_DETECTION__RPS_THRESHOLD=2000 \
-RAMSHIELD_XDP__ENABLED=true \
-RAMSHIELD_XDP__INTERFACE=eth0 \
-./target/release/ramshield config.toml
-```
+**WAL recovery semantics:** every block/unblock is journaled *before* state mutation.
+On restart the log is folded in LSN order — live blocks are restored into the store
+and re-armed in XDP by reconciliation, unblocks cancel earlier blocks, expired TTLs
+are skipped. Verified end-to-end: block → `kill -9` → restart → `restored N live blocks`.
 
 ---
 
-## 🔌 IPC Protocol
+## Performance
 
-**Transport:** TCP (default `127.0.0.1:7890`)  
-**Framing:** One JSON object per line (`\n` terminated)
+Measured on a 4-core laptop under `scripts/attack_nexus.py` mixed-profile load:
 
-### Core Endpoints
+| Metric | Measured | Notes |
+|--------|----------|-------|
+| IPC `check_ip` latency | p50 **0.29 ms** · p99 **1.05 ms** | 200-probe sample during sustained flood |
+| Sustained ingest | **30–40k events/s** | per driver worker set; 11.4M-event soak, 0 rejections |
+| Throughput ceiling | 1M+ events/s | batch path, 8-core |
+| Decision latency | < 50 ms | P99 under load |
+| Memory | hard-limited | `CapacityExceeded` at `ram_limit_mb`; RSS stable ~315 MB after 11.4M events |
+| XDP drop latency | ~100 ns | kernel fast path |
+| False positives | < 0.1% | bloom filter + promotion gate |
 
-| Request | Purpose | Example |
-|---------|---------|---------|
-| `report_connection` | Single event (backward compat) | `{"type":"report_connection","ip":"1.2.3.4","bytes":512,"status_code":200}` |
-| `report_connections` | Batch events (high throughput) | `{"type":"report_connections","events":[...]}` |
-| `check_ip` | Query block status & threat | `{"type":"check_ip","ip":"1.2.3.4"}` |
-| `block_ip` | Manual block | `{"type":"block_ip","ip":"1.2.3.4","reason":"manual","ttl_secs":3600}` |
-| `unblock_ip` | Clear block | `{"type":"unblock_ip","ip":"1.2.3.4"}` |
-| `get_stats` | Engine statistics | `{"type":"get_stats"}` |
-| `get_ip_stats` | Detailed IP record | `{"type":"get_ip_stats","ip":"1.2.3.4"}` |
+Attack profiles used: `l7_http_flood`, `volumetric_syn`, `slowloris`,
+`dns_amplification`, `botnet_entropy`, `api_abuse` + `red_team_full` chain.
 
-### Batch Integration (nginx/lua example)
+<details>
+<summary><b>Robustness verification</b></summary>
+
+- Malformed-input fuzz (empty lines, garbage bytes, unknown types, missing fields,
+  invalid IPs): clean typed JSON errors, server never exits
+- Oversized lines (> `max_connection_bytes`): connection reset — limit enforced
+- 1062 concurrent worker sockets held open for 20+ minutes without fd exhaustion
+- Kill -9 mid-write + WAL replay: zero block-state loss
+- 91 tests incl. property-based (`proptest`) and WAL recovery roundtrips
+
+</details>
+
+---
+
+## Architecture
+
+```
+┌─────────────┐     ┌─────────────────────────────────────────────────┐
+│  Edge /     │     │              ramshield daemon                   │
+│  Proxies    │────►│                                                 │
+│  (nginx,    │     │  ┌──────────┐    ┌──────────────────────┐     │
+│   HAProxy,  │     │  │  Engine  │───►│  DetectionEngine     │     │
+│   Envoy)    │     │  └────┬─────┘    │  (batch processor)   │     │
+└─────────────┘     │       │         └──────────┬───────────┘     │
+                    │       ▼                    ▼                 │
+                    │  ┌──────────┐    ┌──────────────────────┐     │
+                    │  │  Store   │◄───│  Forecaster          │     │
+                    │  │ (DashMap)│    │  (Holt-Winters +     │     │
+                    │  └──────────┘    │   Entropy)           │     │
+                    │       ▲          └──────────┬───────────┘     │
+                    │       │                     │                 │
+                    │       │    BlockDecision    │                 │
+                    │  ┌────┴───────┐             │                 │
+                    │  │ Enforcement│             │                 │
+                    │  │ (sole      │──► WAL      │                 │
+                    │  │  writer)   │    (durable)│                 │
+                    │  └────┬───────┘             │                 │
+                    │       ▼                     │                 │
+                    │  ┌──────────┐    ┌──────────────────────┐     │
+                    │  │ XDP Mgr  │───►│  eBPF/XDP Program    │     │
+                    │  └──────────┘    │  (kernel space)      │     │
+                    └─────────────────────────────────────────────────┘
+```
+
+**Design principles:** RAM-first hot path (sharded `DashMap`) · batch-first
+evaluation (50 ms / 4096-event windows amortize lock costs) · cold-event bloom
+filter before promotion · subnet-scale counters catch distributed floods early ·
+single-writer enforcement (all mutations through one actor, WAL-first) · hard
+memory ceiling as a first-class constraint.
+
+Workspace layout: `binary glue in src/` + nine domain crates
+(`config`, `detection`, `enforcement`, `forecasting`, `metrics`, `protocol`,
+`storage`, `types`, `xdp`). Edition 2024, `cargo audit` clean.
+
+<details>
+<summary><b>IPC protocol reference</b></summary>
+
+Transport: TCP, one JSON object per `\n`-terminated line.
+
+| Request | Purpose |
+|---------|---------|
+| `report_connection` | single event |
+| `report_connections` | batch events (high throughput) |
+| `check_ip` | query block status + threat score |
+| `block_ip` / `unblock_ip` | manual control |
+| `get_stats` / `get_ip_stats` | engine statistics |
 
 ```lua
--- Accumulate in shared dict, flush every 50ms
-local batch = ngx.shared.ramshield_batch
+-- nginx/Lua: accumulate and flush every 50ms
 table.insert(batch, {ip=ngx.var.remote_addr, bytes=ngx.var.body_bytes_sent, status_code=ngx.status})
 if #batch >= 100 then
-    local json = cjson.encode({type="report_connections", events=batch})
-    tcp_send("127.0.0.1", 7890, json .. "\n")
+    tcp_send("127.0.0.1", 7890, cjson.encode({type="report_connections", events=batch}) .. "\n")
     batch = {}
 end
 ```
 
----
+</details>
 
-## ⚡ XDP eBPF Acceleration (Linux)
+<details>
+<summary><b>XDP acceleration details</b></summary>
 
-When enabled, RamShield loads an eBPF XDP program that drops packets for blocked IPs **in kernel space** — before they reach userspace.
+When `[xdp].enabled = true`, an eBPF XDP program drops packets from blocked IPs
+in kernel space — before userspace is ever woken.
 
-### Requirements
-| Component | Version | Notes |
-|-----------|---------|-------|
-| Kernel | ≥ 5.10 | XDP hook support |
-| NIC driver | `ixgbe`, `i40e`, `mlx5`, etc. | XDP-capable |
-| Privileges | `CAP_SYS_ADMIN` | Required for `bpf_prog_load` |
-| Toolchain (Rust) | LLVM 21 + `bpf-linker` | Preferred path |
-| Toolchain (C) | `clang` + `linux-libc-dev` | Fallback path |
+Requirements: Linux ≥ 5.10, XDP-capable NIC driver, `CAP_SYS_ADMIN`.
+Build pipeline tries three paths in order: aya/Rust (`bpf-linker`) →
+clang `-target bpf` → stub ELF (guarantees builds never fail).
 
-### Build Pipeline
-
-```
-cargo build --release
-    │
-    ├─► Try 1: aya-build (Rust) ──► bpfel-unknown-none
-    │       Requires: nightly, bpf-linker, LLVM 21
-    │
-    ├─► Try 2: clang -target bpf ──► C source
-    │       Requires: clang, kernel headers
-    │
-    └─► Try 3: Stub ELF (4 bytes) ──► Always succeeds
-            Guarantees `cargo check` never fails
-```
-
-### Runtime Behavior
 ```rust
-// Startup: full blocklist sync from Store
+// startup: full blocklist sync from store
 xdp.sync_blocklist(&mut blocklist)?;
-
-// Runtime: targeted updates only
+// runtime: targeted updates only
 xdp.apply_block_decision(ip)?;   // BPF map insert
 xdp.remove_block(ip)?;           // BPF map remove
 ```
 
----
-
-## 📊 Performance Characteristics
-
-Measured on 4-core dev box, `scripts/attack_nexus.py` mixed-profile load:
-
-| Metric | Measured | Notes |
-|--------|----------|-------|
-| IPC `check_ip` latency | p50 0.29 ms / p99 1.05 ms | 200-probe under sustained flood |
-| Sustained ingest | 30–40k events/s per driver worker set | 0 rejections across 10M+ event soak |
-| Decision latency | < 50 ms | P99 under load |
-| Throughput ceiling | 1M+ events/s | Batch path, 8-core |
-| Memory | Hard-limited | `CapacityExceeded` enforced at `ram_limit_mb`; RSS stable ~230 MB under 10M-event soak |
-| XDP drop latency | ~100 ns | Kernel fast path |
-| False positive rate | < 0.1% | Bloom filter + promotion |
-
-*Attack profiles: l7_http_flood, volumetric_syn, slowloris, dns_amplification,
-botnet_entropy, api_abuse + red_team_full chain (`scripts/profiles.json`).*
-*Benchmarks run with `scripts/attack_nexus.py` against local instance.*
+</details>
 
 ---
 
-## 🛡️ Security
+## Security
 
-- **No TLS on IPC** — intended for localhost/trusted network only
-- **No authentication** — deploy behind firewall or in isolated network
-- **Input validation** — all IPC requests validated; invalid IP → 400
-- **Resource limits** — RAM ceiling, connection caps, channel backpressure
-- **Audit trail** — `EnforceCommand` includes actor, source, timestamp, policy version
+- **No TLS / auth on IPC** — localhost or isolated network only, by design
+- **Input validation** — every request parsed+validated; invalid IP → typed error
+- **Resource limits** — RAM ceiling, connection caps, bounded channel backpressure
+- **Audit trail** — every decision carries actor, source, timestamp, policy version
 
-### Threat Model
 | Threat | Mitigation |
 |--------|------------|
-| Memory exhaustion | Hard RAM limit + promotion filter |
-| IPC channel flood | 2M event capacity + 503 backpressure |
+| Memory exhaustion | hard RAM limit + promotion filter + capacity Result (no panics) |
+| IPC channel flood | bounded queue + backpressure, oversized-line reset |
 | Blocklist replay | UUID `decision_id` idempotency |
-| Kernel exploit | Minimal eBPF surface; verifier enforces safety |
+| Crash state loss | WAL-first journaling + replay |
+| Kernel exploit surface | minimal eBPF program, verifier-enforced safety |
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Technical Documentation](docs/DOCUMENTATION.md) | Full architecture, modules, config, integration |
-| [API Reference](https://docs.rs/ramshield/latest) | Generated Rust docs |
-| [Contributing](CONTRIBUTING.md) | Development workflow, style, testing |
-| [Security Policy](SECURITY.md) | Vulnerability reporting |
-| [Changelog](CHANGELOG.md) | Release history |
+| [Technical Documentation](docs/DOCUMENTATION.md) | architecture, modules, config, integration |
+| [API Reference](https://docs.rs/ramshield/latest) | generated Rust docs |
+| [Contributing](CONTRIBUTING.md) | workflow, style, testing |
+| [Security Policy](SECURITY.md) | vulnerability reporting |
+| [Changelog](CHANGELOG.md) | release history |
+
+## Contributing
+
+```bash
+cargo fmt -- --check && cargo clippy --all-targets -- -D warnings && cargo test
+```
+
+1. Fork → feature branch → keep gates green
+2. Conventional commits (`feat:`, `fix:`, `perf:`, `docs:`)
+3. Pull request
+
+## License
+
+Dual-licensed **MIT** or **Apache-2.0**, at your option.
 
 ---
 
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Run `cargo test && cargo clippy --all-targets -- -D warnings`
-4. Commit with conventional messages (`feat:`, `fix:`, `docs:`, etc.)
-5. Open a Pull Request
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
----
-
-## 📄 License
-
-Dual-licensed under **MIT** or **Apache-2.0** at your option.
-
----
-
-## 🔗 Links
-
-- **Crates.io**: https://crates.io/crates/ramshield
-- **Documentation**: https://docs.rs/ramshield/latest
-- **Repository**: https://github.com/grep999/ramshield
-- **Issues**: https://github.com/grep999/ramshield/issues
-- **Discussions**: https://github.com/grep999/ramshield/discussions
+<p align="center">
+  <a href="https://github.com/grep999/ramshield/issues">Issues</a> ·
+  <a href="https://github.com/grep999/ramshield/discussions">Discussions</a> ·
+  <a href="https://crates.io/crates/ramshield">crates.io</a> ·
+  <a href="https://docs.rs/ramshield/latest">docs.rs</a>
+</p>
