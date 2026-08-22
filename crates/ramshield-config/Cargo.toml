@@ -9,6 +9,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "1"
 arc-swap = "1"
 anyhow = "1"
+argon2 = { version = "0.5", features = ["std"] }
 
 [dev-dependencies]
 serial_test = "3"

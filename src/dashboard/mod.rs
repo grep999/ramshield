@@ -1,9 +1,12 @@
+pub mod auth;
+
 use crate::config::Config;
 use crate::engine::Engine;
 use axum::{
     Router,
     extract::State,
     http::StatusCode,
+    middleware as axum_mw,
     response::{Html, Json},
     routing::get,
 };
@@ -14,7 +17,11 @@ use tracing::info;
 
 use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, SubnetRow};
 
-pub async fn serve(engine: Arc<Engine>, addr: &str) -> Result<(), String> {
+pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), String> {
+    let auth = auth::AuthState::new(
+        cfg.dashboard.admin_password_hash.clone(),
+        cfg.dashboard.session_ttl_secs,
+    );
     let app = Router::new()
         .route("/", get(index))
         .route("/healthz", get(api_healthz))
@@ -28,7 +35,12 @@ pub async fn serve(engine: Arc<Engine>, addr: &str) -> Result<(), String> {
         // ponytail: permissive CORS is CSRF-open on /api/config; tighten to
         // same-origin when dashboard gets auth. Upgrade: tower-http CorsLayer
         // with allowed_origin from config.
-        .layer(CorsLayer::permissive());
+        .layer(CorsLayer::permissive())
+        .layer(axum_mw::from_fn_with_state(
+            auth.clone(),
+            auth::require_auth,
+        ))
+        .with_state(auth);
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await

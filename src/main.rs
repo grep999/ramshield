@@ -100,6 +100,7 @@ async fn main() -> Result<()> {
     // to guarantee responsiveness under detection load.
     let eng_clone = engine.clone();
     let dashboard_config = config.dashboard.clone();
+    let config_clone = config.clone();
     if dashboard_config.enabled {
         std::thread::Builder::new()
             .name("rs-dashboard".into())
@@ -109,7 +110,10 @@ async fn main() -> Result<()> {
                     .build()
                     .expect("dashboard runtime");
                 rt.block_on(async move {
-                    if let Err(e) = dashboard::serve(eng_clone, &dashboard_config.http_addr).await {
+                    if let Err(e) =
+                        dashboard::serve(eng_clone, &dashboard_config.http_addr, &config_clone)
+                            .await
+                    {
                         tracing::error!("Dashboard server error: {}", e);
                     }
                 });

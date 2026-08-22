@@ -251,6 +251,17 @@ pub struct DashboardConfig {
     /// in seconds. Default raised to 1000.
     #[serde(default = "default_block_log_size")]
     pub block_log_size: usize,
+    /// Argon2 PHC hash of the admin password. When set, every dashboard
+    /// route except /healthz and /login requires a valid session cookie.
+    /// Generate: `echo -n 'pw' | argon2 "$(head -c16 /dev/urandom | xxd -p)" -id -e`
+    #[serde(default)]
+    pub admin_password_hash: Option<String>,
+    /// Session lifetime in seconds (default 8h).
+    #[serde(default = "default_session_ttl_secs")]
+    pub session_ttl_secs: u64,
+}
+fn default_session_ttl_secs() -> u64 {
+    28_800
 }
 fn default_block_log_size() -> usize {
     1_000
@@ -261,6 +272,8 @@ impl Default for DashboardConfig {
             enabled: true,
             http_addr: "127.0.0.1:9999".into(),
             block_log_size: default_block_log_size(),
+            admin_password_hash: None,
+            session_ttl_secs: default_session_ttl_secs(),
         }
     }
 }
@@ -346,6 +359,14 @@ impl Config {
         }
         if let Ok(v) = std::env::var("RAMSHIELD_DASHBOARD__HTTP_ADDR") {
             cfg.dashboard.http_addr = v;
+        }
+        if let Ok(v) = std::env::var("RAMSHIELD_DASHBOARD__ADMIN_PASSWORD") {
+            // Plaintext env convenience: hash at load, never store plaintext.
+            use argon2::password_hash::{PasswordHasher, SaltString, rand_core::OsRng};
+            let salt = SaltString::generate(&mut OsRng);
+            if let Ok(hash) = argon2::Argon2::default().hash_password(v.as_bytes(), &salt) {
+                cfg.dashboard.admin_password_hash = Some(hash.to_string());
+            }
         }
 
         // Forecasting overrides
