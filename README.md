@@ -74,7 +74,7 @@ RamShield is a specialized in-memory engine that sits at your network edge and:
 ### Enforcement Pipeline
 - **Idempotent operations** — UUID `decision_id` prevents replay
 - **In-memory deduplication** — `HashSet<IpAddr>` skips redundant XDP ops
-- **WAL-ready** — durable commit path (configurable, off by default)
+- **WAL crash durability** — WAL-first commit (append→mutate→XDP), automatic startup replay restores live blocks, TTL-aware, segment retention with pruning (`[wal]` config, off by default)
 - **TTL wheel** — automatic expiry without background scans
 - **XDP integration** — targeted `insert`/`remove` on BPF hash map
 
@@ -260,15 +260,21 @@ xdp.remove_block(ip)?;           // BPF map remove
 
 ## 📊 Performance Characteristics
 
-| Metric | Target | Notes |
-|--------|--------|-------|
+Measured on 4-core dev box, `scripts/attack_nexus.py` mixed-profile load:
+
+| Metric | Measured | Notes |
+|--------|----------|-------|
+| IPC `check_ip` latency | p50 0.29 ms / p99 1.05 ms | 200-probe under sustained flood |
+| Sustained ingest | 30–40k events/s per driver worker set | 0 rejections across 10M+ event soak |
 | Decision latency | < 50 ms | P99 under load |
-| Throughput | 1M+ events/s | Batch path, 8-core |
-| Memory | Configurable | Hard limit enforced |
+| Throughput ceiling | 1M+ events/s | Batch path, 8-core |
+| Memory | Hard-limited | `CapacityExceeded` enforced at `ram_limit_mb`; RSS stable ~230 MB under 10M-event soak |
 | XDP drop latency | ~100 ns | Kernel fast path |
 | False positive rate | < 0.1% | Bloom filter + promotion |
 
-*Benchmarks run with `scripts/attack_extreme.py` against local instance.*
+*Attack profiles: l7_http_flood, volumetric_syn, slowloris, dns_amplification,
+botnet_entropy, api_abuse + red_team_full chain (`scripts/profiles.json`).*
+*Benchmarks run with `scripts/attack_nexus.py` against local instance.*
 
 ---
 
