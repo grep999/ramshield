@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>RAM-first DDoS detection &amp; mitigation engine with kernel-space XDP enforcement.</strong><br>
-  Detect · Decide · Enforce — in under 50&nbsp;ms, from a single static binary.
+  Detect · Decide · Enforce — from a single static binary.
 </p>
 
 <p align="center">
@@ -14,13 +14,14 @@
   <img src="https://img.shields.io/badge/rust-2024%2B-orange.svg" alt="Rust 2024">
   <a href="https://docs.rs/ramshield/latest"><img src="https://img.shields.io/docsrs/ramshield/latest" alt="docs.rs"></a>
 </p>
+
 ## Why RamShield
 
 Edge proxies see attacks. They don't know what to *do* about them.
 RamShield is the decision point between your reverse proxy and your origin:
 
 - **Detects** volumetric, protocol and application-layer abuse in real time — EWMA rate tracking, /24 subnet correlation, Holt-Winters forecasting, payload-entropy analysis
-- **Decides** in &lt;50 ms using batched evaluation over sharded in-memory state
+- **Decides** on mitigation using batched evaluation over sharded in-memory state
 - **Enforces** via IPC answers to your proxy — or drops packets **in the kernel** through an eBPF/XDP program before they ever reach userspace
 - **Survives** crashes: WAL-first commit log replays live blocks back into store + XDP on restart
 
@@ -30,22 +31,21 @@ One binary. No external services. No GC pauses. Hard memory ceiling enforced by 
 nginx / HAProxy / Envoy ──batch──► RamShield ──check──► allow / deny
                                       │
                                       ▼ (optional, CAP_NET_ADMIN)
-                                XDP eBPF drop @ ~100 ns/packet
+                                XDP eBPF kernel-space drop
 ```
 
 ---
 
-## Highlights
+## Features
 
 | | |
 |---|---|
-| **:zap: Sub-millisecond queries** | `check_ip` p50 **0.29 ms**, p99 **1.05 ms** under sustained flood |
-| **:chart_with_upwards_trend: High-throughput ingest** | 30–40k events/s sustained per driver set on a 4-core box; 1M+/s batch path ceiling; **0 rejections** across an 11.4M-event soak |
 | **:brain: Four detection engines** | EWMA rate · subnet batch · Holt-Winters anomaly · Shannon entropy — composite threat score |
-| **:nut_and_bolt: Kernel enforcement** | Optional aya-based XDP program drops blocked IPs at ~100 ns in kernel space |
+| **:nut_and_bolt: Kernel enforcement** | Optional aya-based XDP program drops blocked IPs in kernel space |
 | **:floppy_disk: Crash-durable state** | WAL-first commit (append → mutate → XDP). Restart replays live blocks automatically; TTL-aware; segment retention with pruning |
 | **:package: Single binary** | Static build, zero runtime dependencies, JSON-over-TCP integration from any language |
 | **:bar_chart: Live observability** | Dark ops dashboard + Prometheus-compatible metrics export |
+| **:lock: Hard memory ceiling** | `CapacityExceeded` as a Result, never a panic — RAM limit is a first-class constraint |
 
 <details>
 <summary><b>Full feature list</b></summary>
@@ -86,7 +86,7 @@ cargo build --release -F full
 ```
 
 ```bash
-# report traffic from your edge proxy
+# health check
 curl -s http://127.0.0.1:9999/healthz          # {"status":"ok"}
 
 # ask about an IP
@@ -156,38 +156,7 @@ Every field is also env-overridable: `RAMSHIELD_ENGINE__RAM_LIMIT_MB=2048`.
 **WAL recovery semantics:** every block/unblock is journaled *before* state mutation.
 On restart the log is folded in LSN order — live blocks are restored into the store
 and re-armed in XDP by reconciliation, unblocks cancel earlier blocks, expired TTLs
-are skipped. Verified end-to-end: block → `kill -9` → restart → `restored N live blocks`.
-
----
-
-## Performance
-
-Measured on a 4-core laptop under `scripts/attack_nexus.py` mixed-profile load:
-
-| Metric | Measured | Notes |
-|--------|----------|-------|
-| IPC `check_ip` latency | p50 **0.29 ms** · p99 **1.05 ms** | 200-probe sample during sustained flood |
-| Sustained ingest | **30–40k events/s** | per driver worker set; 11.4M-event soak, 0 rejections |
-| Throughput ceiling | 1M+ events/s | batch path, 8-core |
-| Decision latency | < 50 ms | P99 under load |
-| Memory | hard-limited | `CapacityExceeded` at `ram_limit_mb`; RSS stable ~315 MB after 11.4M events |
-| XDP drop latency | ~100 ns | kernel fast path |
-| False positives | < 0.1% | bloom filter + promotion gate |
-
-Attack profiles used: `l7_http_flood`, `volumetric_syn`, `slowloris`,
-`dns_amplification`, `botnet_entropy`, `api_abuse` + `red_team_full` chain.
-
-<details>
-<summary><b>Robustness verification</b></summary>
-
-- Malformed-input fuzz (empty lines, garbage bytes, unknown types, missing fields,
-  invalid IPs): clean typed JSON errors, server never exits
-- Oversized lines (> `max_connection_bytes`): connection reset — limit enforced
-- 1062 concurrent worker sockets held open for 20+ minutes without fd exhaustion
-- Kill -9 mid-write + WAL replay: zero block-state loss
-- 91 tests incl. property-based (`proptest`) and WAL recovery roundtrips
-
-</details>
+are skipped.
 
 ---
 
@@ -224,12 +193,11 @@ Attack profiles used: `l7_http_flood`, `volumetric_syn`, `slowloris`,
 **Design principles:** RAM-first hot path (sharded `DashMap`) · batch-first
 evaluation (50 ms / 4096-event windows amortize lock costs) · cold-event bloom
 filter before promotion · subnet-scale counters catch distributed floods early ·
-single-writer enforcement (all mutations through one actor, WAL-first) · hard
-memory ceiling as a first-class constraint.
+single-writer enforcement (all mutations through one actor, WAL-first).
 
 Workspace layout: `binary glue in src/` + nine domain crates
 (`config`, `detection`, `enforcement`, `forecasting`, `metrics`, `protocol`,
-`storage`, `types`, `xdp`). Edition 2024, `cargo audit` clean.
+`storage`, `types`, `xdp`). Edition 2024.
 
 <details>
 <summary><b>IPC protocol reference</b></summary>
