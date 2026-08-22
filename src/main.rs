@@ -75,7 +75,9 @@ async fn main() -> Result<()> {
         .traffic
         .uptime_secs
         .store(1, std::sync::atomic::Ordering::Relaxed); // mark non-zero
-    let metrics = Arc::new(ramshield::metrics::Metrics::new());
+    let metrics = Arc::new(ramshield::metrics::Metrics::with_block_log(
+        config.dashboard.block_log_size,
+    ));
     let engine = Arc::new(Engine::new(config.clone(), store.clone(), metrics.clone()));
     let _engine_handle = engine.clone().start_async().expect("engine pipeline");
 

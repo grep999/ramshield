@@ -6,7 +6,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sysinfo::System;
 
 const HISTORY: usize = 80;
-const BLOCK_LOG: usize = 40;
 
 pub fn now_ms() -> u64 {
     SystemTime::now()
@@ -197,11 +196,19 @@ pub struct Metrics {
     pub last_batch: Arc<Mutex<Option<BatchRecord>>>,
     pub batch_history: Arc<Mutex<VecDeque<BatchRecord>>>,
     pub block_log: Arc<Mutex<VecDeque<BlockRecord>>>,
+    pub block_log_cap: usize,
     started_ms: u64,
 }
 
 impl Metrics {
     pub fn new() -> Self {
+        Self::with_block_log(1_000)
+    }
+
+    /// `block_log_size`: ring size served by `/api/history/blocks`.
+    /// Was a hardcoded 40 — useless during floods. Config-driven now
+    /// (`[dashboard] block_log_size`, default 1000).
+    pub fn with_block_log(block_log_size: usize) -> Self {
         Self {
             requests_total: Arc::new(AtomicU64::new(0)),
             blocks_total: Arc::new(AtomicU64::new(0)),
@@ -224,7 +231,8 @@ impl Metrics {
             last_batch_blocks: Arc::new(AtomicU64::new(0)),
             last_batch: Arc::new(Mutex::new(None)),
             batch_history: Arc::new(Mutex::new(VecDeque::with_capacity(HISTORY))),
-            block_log: Arc::new(Mutex::new(VecDeque::with_capacity(BLOCK_LOG))),
+            block_log: Arc::new(Mutex::new(VecDeque::with_capacity(block_log_size.max(1)))),
+            block_log_cap: block_log_size.max(1),
             started_ms: now_ms(),
         }
     }
@@ -269,7 +277,7 @@ impl Metrics {
 
     pub fn record_block(&self, ip: &str, reason: &str, module: &str) {
         if let Ok(mut log) = self.block_log.lock() {
-            if log.len() >= BLOCK_LOG {
+            while log.len() >= self.block_log_cap {
                 log.pop_front();
             }
             log.push_back(BlockRecord {
@@ -511,5 +519,31 @@ impl Metrics {
 impl Default for Metrics {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_log_evicts_at_configured_cap() {
+        let m = Metrics::with_block_log(5);
+        for i in 0..12 {
+            m.record_block(&format!("10.0.0.{i}"), "high_rps", "detection");
+        }
+        let log = m.block_log.lock().unwrap();
+        assert_eq!(log.len(), 5, "ring must evict oldest beyond cap");
+        // newest survives, oldest gone
+        assert_eq!(log.back().unwrap().ip, "10.0.0.11");
+        assert_eq!(log.front().unwrap().ip, "10.0.0.7");
+    }
+
+    #[test]
+    fn block_log_cap_floor_is_one() {
+        // zero/nonsense config must not produce a zero-capacity deadlock ring
+        let m = Metrics::with_block_log(0);
+        m.record_block("10.0.0.1", "high_rps", "detection");
+        assert_eq!(m.block_log.lock().unwrap().len(), 1);
     }
 }

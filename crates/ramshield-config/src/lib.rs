@@ -225,12 +225,21 @@ impl Default for WalConfig {
 pub struct DashboardConfig {
     pub enabled: bool,
     pub http_addr: String,
+    /// Block-history ring size served by `/api/history/blocks`.
+    /// 40 was too small to be useful during floods — entries scrolled out
+    /// in seconds. Default raised to 1000.
+    #[serde(default = "default_block_log_size")]
+    pub block_log_size: usize,
+}
+fn default_block_log_size() -> usize {
+    1_000
 }
 impl Default for DashboardConfig {
     fn default() -> Self {
         Self {
             enabled: true,
             http_addr: "127.0.0.1:9999".into(),
+            block_log_size: default_block_log_size(),
         }
     }
 }
