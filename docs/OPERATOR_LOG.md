@@ -547,8 +547,47 @@
 2026-08-22T17:01:23Z [helper/metrics] Codebase metrics collected | {"files":9,"lines":1943,"blank_lines":150,"comment_lines":76,"unsafe_count":0,"todo_count":0,"test_count":6}
 2026-08-22T17:01:23Z [helper/roadmap] Roadmap tree parsed | {"research_nodes":9,"extensions":4,"milestones":0}
 2026-08-22T17:01:23Z [helper/done] Helper agent run completed | {"todos":0,"fixmes":0,"files":9,"lines":1943}
-2026-08-22T17:33:07Z [helper/start] Helper agent run started
-2026-08-22T17:33:07Z [helper/scan] TODO scan complete | {"markers":0}
-2026-08-22T17:33:07Z [helper/metrics] Codebase metrics collected | {"files":9,"lines":1943,"blank_lines":150,"comment_lines":76,"unsafe_count":0,"todo_count":0,"test_count":6}
-2026-08-22T17:33:07Z [helper/roadmap] Roadmap tree parsed | {"research_nodes":9,"extensions":4,"milestones":0}
-2026-08-22T17:33:07Z [helper/done] Helper agent run completed | {"todos":0,"fixmes":0,"files":9,"lines":1943}
+2026-08-22T17:05:50Z Healer dispatched 0 jobs for 0 issues
+2026-08-22T17:06:01Z | cron-status: 27 jobs, ok=20, error=5, running=1, pending=0
+2026-08-22T17:11:01Z | cron-status: 27 jobs, ok=14, error=5, running=2, pending=0
+2026-08-22T17:11:24Z [helper/start] Helper agent run started
+2026-08-22T17:11:24Z [helper/scan] TODO scan complete | {"markers":0}
+2026-08-22T17:11:24Z [helper/metrics] Codebase metrics collected | {"files":9,"lines":1943,"blank_lines":150,"comment_lines":76,"unsafe_count":0,"todo_count":0,"test_count":6}
+2026-08-22T17:11:24Z [helper/roadmap] Roadmap tree parsed | {"research_nodes":9,"extensions":4,"milestones":0}
+2026-08-22T17:11:24Z [helper/done] Helper agent run completed | {"todos":0,"fixmes":0,"files":9,"lines":1943}
+2026-08-22T17:15:02Z | cron-status: 27 jobs, ok=13, error=5, running=1, pending=0
+2026-08-22T17:20:03Z | cron-status: 27 jobs, ok=14, error=5, running=2, pending=0
+2026-08-22T17:20:22Z [helper/start] Helper agent run started
+2026-08-22T17:20:22Z [helper/scan] TODO scan complete | {"markers":0}
+2026-08-22T17:20:22Z [helper/metrics] Codebase metrics collected | {"files":9,"lines":1943,"blank_lines":150,"comment_lines":76,"unsafe_count":0,"todo_count":0,"test_count":6}
+2026-08-22T17:20:22Z [helper/roadmap] Roadmap tree parsed | {"research_nodes":9,"extensions":4,"milestones":0}
+2026-08-22T17:20:22Z [helper/done] Helper agent run completed | {"todos":0,"fixmes":0,"files":9,"lines":1943}
+2026-08-22T17:25:03Z | cron-status: 27 jobs, ok=16, error=5, running=2, pending=0
+2026-08-22T17:30:05Z | cron-status: 27 jobs, ok=6, error=5, running=2, pending=0
+2026-08-22T17:30:16Z [helper/start] Helper agent run started
+2026-08-22T17:30:16Z [helper/scan] TODO scan complete | {"markers":0}
+2026-08-22T17:30:16Z [helper/metrics] Codebase metrics collected | {"files":9,"lines":1943,"blank_lines":150,"comment_lines":76,"unsafe_count":0,"todo_count":0,"test_count":6}
+2026-08-22T17:30:16Z [helper/roadmap] Roadmap tree parsed | {"research_nodes":9,"extensions":4,"milestones":0}
+2026-08-22T17:30:17Z [helper/done] Helper agent run completed | {"todos":0,"fixmes":0,"files":9,"lines":1943}
+2026-08-22T17:30:33Z Healer dispatched 0 jobs for 0 issues
+2026-08-22T17:35:05Z | cron-status: 27 jobs, ok=17, error=5, running=1, pending=0
+2026-08-22T17:40:06Z | cron-status: 27 jobs, ok=14, error=5, running=2, pending=0
+2026-08-22T17:40:31Z [helper/start] Helper agent run started
+2026-08-22T17:40:31Z [helper/scan] TODO scan complete | {"markers":0}
+2026-08-22T17:40:31Z [helper/metrics] Codebase metrics collected | {"files":9,"lines":1943,"blank_lines":150,"comment_lines":76,"unsafe_count":0,"todo_count":0,"test_count":6}
+2026-08-22T17:40:31Z [helper/roadmap] Roadmap tree parsed | {"research_nodes":9,"extensions":4,"milestones":0}
+2026-08-22T17:40:31Z [helper/done] Helper agent run completed | {"todos":0,"fixmes":0,"files":9,"lines":1943}
+2026-08-22T17:45:06Z | cron-status: 27 jobs, ok=13, error=5, running=1, pending=0
+2026-08-22T17:50:07Z | cron-status: 27 jobs, ok=14, error=5, running=2, pending=0
+2026-08-22T17:50:26Z [helper/start] Helper agent run started
+2026-08-22T17:50:26Z [helper/scan] TODO scan complete | {"markers":0}
+2026-08-22T17:50:26Z [helper/metrics] Codebase metrics collected | {"files":9,"lines":1943,"blank_lines":150,"comment_lines":76,"unsafe_count":0,"todo_count":0,"test_count":6}
+2026-08-22T17:50:26Z [helper/roadmap] Roadmap tree parsed | {"research_nodes":9,"extensions":4,"milestones":0}
+2026-08-22T17:50:26Z [helper/done] Helper agent run completed | {"todos":0,"fixmes":0,"files":9,"lines":1943}
+2026-08-22T17:55:07Z | cron-status: 27 jobs, ok=17, error=5, running=1, pending=0
+2026-08-22T18:00:08Z | cron-status: 27 jobs, ok=3, error=5, running=2, pending=0
+2026-08-22T18:00:29Z [helper/start] Helper agent run started
+2026-08-22T18:00:29Z [helper/scan] TODO scan complete | {"markers":0}
+2026-08-22T18:00:29Z [helper/metrics] Codebase metrics collected | {"files":9,"lines":1943,"blank_lines":150,"comment_lines":76,"unsafe_count":0,"todo_count":0,"test_count":6}
+2026-08-22T18:00:29Z [helper/roadmap] Roadmap tree parsed | {"research_nodes":9,"extensions":4,"milestones":0}
+2026-08-22T18:00:29Z [helper/done] Helper agent run completed | {"todos":0,"fixmes":0,"files":9,"lines":1943}
