@@ -16,10 +16,6 @@
 </p>
 
 ---
-
-<p align="center">
-  <img src="docs/screenshots/dashboard.png" alt="RamShield live operations dashboard — 14M+ events ingested, real-time block feed, pipeline flow" width="100%">
-</p>
 <p align="center"><sub><b>Live ops dashboard</b> — 14.3M events ingested across a 6-phase attack soak (L7 flood → volumetric SYN → slowloris → DNS amplification → botnet entropy → API abuse). Zero rejected events. Real-time block feed, pipeline flow, per-module health.</sub></p>
 
 ## Why RamShield
