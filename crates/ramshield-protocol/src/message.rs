@@ -37,8 +37,12 @@ pub enum Body {
 /// Client-to-server requests.
 /// Wire format: internally-tagged JSON (`{"type":"check_ip",...}`) — matches
 /// deployed CLIs. Field names are part of the contract.
+/// `deny_unknown_fields` turns field typos (e.g. `ttl_seconds` vs `ttl_secs`)
+/// into loud parse errors instead of silently dropping the TTL (which produced
+/// a permanent block). Verified against all in-repo senders (cli.rs, README,
+/// docs examples) — none send unknown fields.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     CheckIp {
         ip: String,

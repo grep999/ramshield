@@ -177,6 +177,43 @@ mod tests {
     }
 
     #[test]
+    fn ttl_field_typo_is_rejected_not_silently_dropped() {
+        // F3: `ttl_seconds` used to be silently ignored → Option::None → permanent
+        // block. deny_unknown_fields must turn it into a parse error. (IPC path
+        // deserializes Request directly from the JSON line, no RSHP framing.)
+        use serde_json::from_str;
+        let raw = r#"{"type":"block_ip","ip":"10.0.0.1","reason":"x","ttl_seconds":60}"#;
+        let err = from_str::<Request>(raw).unwrap_err();
+        assert!(err.to_string().contains("ttl_seconds"), "got: {err}");
+    }
+
+    #[test]
+    fn unknown_extra_field_is_rejected() {
+        use serde_json::from_str;
+        let raw = r#"{"type":"check_ip","ip":"10.0.0.1","bogus":1}"#;
+        assert!(from_str::<Request>(raw).is_err());
+    }
+
+    #[test]
+    fn documented_wire_shapes_still_decode() {
+        use serde_json::from_str;
+        // Every shape from README + docs/DOCUMENTATION.md + cli.rs must keep working.
+        for line in [
+            r#"{"type":"check_ip","ip":"203.0.113.7"}"#,
+            r#"{"type":"block_ip","ip":"1.2.3.4","reason":"manual","ttl_secs":3600}"#,
+            r#"{"type":"unblock_ip","ip":"1.2.3.4"}"#,
+            r#"{"type":"get_stats"}"#,
+            r#"{"type":"get_status"}"#,
+            r#"{"type":"get_ip_stats","ip":"1.2.3.4"}"#,
+            r#"{"type":"report_connection","ip":"1.2.3.4","bytes":512,"status_code":200,"proto_fp":4096}"#,
+            r#"{"type":"report_connections","events":[{"ip":"1.2.3.4","bytes":512,"status_code":200,"proto_fp":4096}]}"#,
+            r#"{"type":"flush"}"#,
+        ] {
+            assert!(from_str::<Request>(line).is_ok(), "rejected: {line}");
+        }
+    }
+
+    #[test]
     fn roundtrip_response_ok() {
         let msg = Message::response(Response::Ok {
             message: "ok".into(),
