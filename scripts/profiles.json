@@ -1,0 +1,81 @@
+{
+  "l7_http_flood": {
+    "description": "HTTP flood: pareto hot IPs, medium entropy",
+    "mode": "pareto_hot",
+    "proto_cluster": "http",
+    "hot_ip_ratio": 0.2,
+    "subnet_concentration": 0.4,
+    "burst_multiplier": 1.5,
+    "workers": 24,
+    "batch_size": 1000
+  },
+  "volumetric_syn": {
+    "description": "TCP SYN volumetric: single-target saturation",
+    "mode": "volumetric",
+    "proto_cluster": "tcp_syn",
+    "target_ip": "10.255.0.99",
+    "burst_multiplier": 2.0,
+    "workers": 16,
+    "batch_size": 1500
+  },
+  "slowloris": {
+    "description": "Slow/low: tiny batches, long jitter, low rate",
+    "mode": "pareto_hot",
+    "proto_cluster": "slow",
+    "batch_size": 50,
+    "jitter_ms": [
+      80,
+      250
+    ],
+    "burst_multiplier": 0.3,
+    "workers": 12
+  },
+  "dns_amplification": {
+    "description": "DNS amplification pattern, udp/dns fingerprints",
+    "mode": "subnet",
+    "proto_cluster": "dns",
+    "subnet_concentration": 0.9,
+    "workers": 16,
+    "batch_size": 1200,
+    "bytes_range": [
+      512,
+      4096
+    ]
+  },
+  "botnet_entropy": {
+    "description": "Distributed botnet, high entropy, mixed malware protos",
+    "mode": "botnet",
+    "proto_cluster": "mixed_malware",
+    "entropy": "high",
+    "hot_ip_ratio": 0.05,
+    "subnet_concentration": 0.1,
+    "workers": 20,
+    "batch_size": 800
+  },
+  "api_abuse": {
+    "description": "API abuse: api proto cluster, status 4xx heavy",
+    "mode": "pareto_hot",
+    "proto_cluster": "api",
+    "status_weights": {
+      "200": 40,
+      "401": 30,
+      "403": 15,
+      "429": 10,
+      "500": 5
+    },
+    "workers": 12,
+    "batch_size": 600
+  },
+  "red_team_full": {
+    "description": "Full chain: l7 -> volumetric -> slow -> dns -> botnet -> api",
+    "chain": [
+      "l7_http_flood",
+      "volumetric_syn",
+      "slowloris",
+      "dns_amplification",
+      "botnet_entropy",
+      "api_abuse"
+    ],
+    "chain_duration_sec": 45
+  }
+}
