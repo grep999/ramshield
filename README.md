@@ -14,10 +14,6 @@
   <img src="https://img.shields.io/badge/rust-2024%2B-orange.svg" alt="Rust 2024">
   <a href="https://docs.rs/ramshield/latest"><img src="https://img.shields.io/docsrs/ramshield/latest" alt="docs.rs"></a>
 </p>
-
----
-<p align="center"><sub><b>Live ops dashboard</b> — 14.3M events ingested across a 6-phase attack soak (L7 flood → volumetric SYN → slowloris → DNS amplification → botnet entropy → API abuse). Zero rejected events. Real-time block feed, pipeline flow, per-module health.</sub></p>
-
 ## Why RamShield
 
 Edge proxies see attacks. They don't know what to *do* about them.
