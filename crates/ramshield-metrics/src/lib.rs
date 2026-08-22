@@ -397,122 +397,129 @@ impl Metrics {
 }
 
 impl Metrics {
-    /// Emit all counters in Prometheus exposition format to stdout.
-    /// Called periodically (e.g. by healthcheck loop).
-    pub fn emit_prometheus(&self) {
+    /// Render all counters in Prometheus exposition format.
+    /// ponytail: replaced dead stdout printer; upgrade path is
+    /// metrics-exporter-prometheus if cardinality ever demands it.
+    pub fn render_prometheus(&self) -> String {
         let elapsed = ((now_ms().saturating_sub(self.started_ms)) as f64 / 1000.0).max(0.001);
 
         macro_rules! emit {
-            ($name:literal, $val:expr, $help:literal, $typ:literal) => {
-                println!("# HELP {} {}", $name, $help);
-                println!("# TYPE {} {}", $name, $typ);
-                println!("{} {}", $name, $val);
-            };
+            ($name:literal, $val:expr, $help:literal, $typ:literal) => {{
+                let mut out = String::new();
+                out.push_str(&format!("# HELP {} {}\n", $name, $help));
+                out.push_str(&format!("# TYPE {} {}\n", $name, $typ));
+                out.push_str(&format!("{} {}\n", $name, $val));
+                out
+            }};
         }
 
-        emit!(
+        let mut out = String::new();
+
+        out.push_str(&emit!(
             "ramshield_uptime_seconds",
             elapsed as u64,
             "Process uptime in seconds.",
             "gauge"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_requests_total",
             self.requests_total.load(Ordering::Relaxed),
             "Total IPC requests received.",
             "counter"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_blocks_total",
             self.blocks_total.load(Ordering::Relaxed),
             "Total blocks issued.",
             "counter"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_events_ingested_total",
             self.events_ingested.load(Ordering::Relaxed),
             "Total events ingested.",
             "counter"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_events_rejected_total",
             self.events_rejected.load(Ordering::Relaxed),
             "Total events rejected.",
             "counter"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_batches_total",
             self.batches_total.load(Ordering::Relaxed),
             "Total detection batches processed.",
             "counter"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_promotions_total",
             self.promotions_total.load(Ordering::Relaxed),
             "Total IPs promoted to tracking.",
             "counter"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_cold_skipped_total",
             self.cold_skipped_total.load(Ordering::Relaxed),
             "Total cold IPs skipped.",
             "counter"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_blocks_detection",
             self.blocks_detection.load(Ordering::Relaxed),
             "Blocks from detection engine.",
             "counter"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_blocks_subnet",
             self.blocks_subnet.load(Ordering::Relaxed),
             "Blocks from subnet module.",
             "counter"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_blocks_forecast",
             self.blocks_forecast.load(Ordering::Relaxed),
             "Blocks from forecasting.",
             "counter"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_forecast_ticks",
             self.forecast_ticks.load(Ordering::Relaxed),
             "Forecast ticks executed.",
             "counter"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_entropy_ticks",
             self.entropy_ticks.load(Ordering::Relaxed),
             "Entropy check ticks executed.",
             "counter"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_hw_rps",
             Metrics::f64(&self.hw_rps_bits),
             "Holt-Winters RPS forecast.",
             "gauge"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_hw_zscore",
             Metrics::f64(&self.hw_z_bits),
             "Holt-Winters z-score.",
             "gauge"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_hw_forecast",
             Metrics::f64(&self.hw_forecast_bits),
             "Holt-Winters forecast value.",
             "gauge"
-        );
-        emit!(
+        ));
+        out.push_str(&emit!(
             "ramshield_entropy",
             Metrics::f64(&self.entropy_bits),
             "Current IP entropy.",
             "gauge"
-        );
+        ));
         println!(); // trailing newline flushes stanza
+
+        out
     }
 }
 

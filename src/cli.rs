@@ -1,5 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 
@@ -8,6 +10,10 @@ use std::net::TcpStream;
 struct Cli {
     #[arg(short, long, default_value = "127.0.0.1:7890")]
     addr: String,
+    /// Shared HMAC key (hex). Read from RAMSHIELD_IPC_KEY when servers
+    /// require auth. Omitted = unsigned frames (open servers).
+    #[arg(long)]
+    key: Option<String>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -52,6 +58,36 @@ fn main() -> Result<()> {
     };
 
     let compact = matches!(&cli.cmd, Cmd::Status { json: true });
+
+    // Auth: RAMSHIELD_IPC_KEY (hex) or --key. When set, wrap the frame:
+    // {"auth":{"key_id","ts_ms","sig"},"type":...} where sig = HMAC-SHA256
+    // over "<ts_ms>.<compact frame json without auth>".
+    let key_hex = cli.key.or_else(|| std::env::var("RAMSHIELD_IPC_KEY").ok());
+    let json = if let Some(hexkey) = &key_hex {
+        use serde_json::Value;
+        let mut v: Value = serde_json::from_str(&json).expect("built frame must be valid JSON");
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let payload = serde_json::to_vec(&v)?;
+        let key = hex::decode(hexkey.trim()).map_err(|e| anyhow::anyhow!("bad key hex: {}", e))?;
+        let mut mac = Hmac::<Sha256>::new_from_slice(&key)
+            .map_err(|e| anyhow::anyhow!("hmac init: {}", e))?;
+        mac.update(ts_ms.to_string().as_bytes());
+        mac.update(b".");
+        mac.update(&payload);
+        let sig = hex::encode(mac.finalize().into_bytes());
+        v.as_object_mut().unwrap().insert(
+            "auth".into(),
+            serde_json::json!({
+                "key_id": "k1", "ts_ms": ts_ms, "sig": sig
+            }),
+        );
+        v.to_string()
+    } else {
+        json
+    };
 
     let mut stream = TcpStream::connect(&cli.addr)
         .map_err(|e| anyhow::anyhow!("cannot connect to {}: {}", cli.addr, e))?;

@@ -165,6 +165,11 @@ pub struct IpcConfig {
     pub write_timeout_ms: Option<u64>,
     #[serde(default = "default_connection_idle_timeout_ms")]
     pub connection_idle_timeout_ms: Option<u64>,
+    /// HMAC-SHA256 keys as `key_id:hex_key` pairs. When non-empty, every IPC
+    /// frame MUST carry a valid `"auth":{"key_id","ts_ms","sig"}` envelope
+    /// (see protocol::auth). Empty = open server (loopback dev default).
+    #[serde(default)]
+    pub auth_keys: Vec<String>,
 }
 
 fn default_max_connection_bytes() -> Option<usize> {
@@ -188,6 +193,7 @@ impl Default for IpcConfig {
             read_timeout_ms: None,
             write_timeout_ms: None,
             connection_idle_timeout_ms: None,
+            auth_keys: Vec::new(),
         }
     }
 }
@@ -347,6 +353,13 @@ impl Config {
         }
 
         // IPC overrides
+        if let Ok(v) = std::env::var("RAMSHIELD_IPC__AUTH_KEYS") {
+            self.ipc.auth_keys = v
+                .split(',')
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect();
+        }
         if let Ok(v) = std::env::var("RAMSHIELD_IPC__TCP_ADDR") {
             self.ipc.tcp_addr = v;
         }

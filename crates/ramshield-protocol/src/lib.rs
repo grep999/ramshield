@@ -31,6 +31,7 @@
 //! `bincode`-encoded — versioned independently of the frame header, but kept in
 //! lockstep with it for now (see `ponytail:` notes).
 
+pub mod auth;
 pub mod codec;
 pub mod message;
 

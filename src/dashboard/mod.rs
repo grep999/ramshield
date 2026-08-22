@@ -26,6 +26,7 @@ pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), 
     let app = Router::new()
         .route("/", get(index))
         .route("/healthz", get(api_healthz))
+        .route("/metrics", get(api_metrics))
         .route("/api/snapshot", get(api_snapshot))
         .route("/api/history/batches", get(api_history_batches))
         .route("/api/history/blocks", get(api_history_blocks))
@@ -73,6 +74,18 @@ async fn api_healthz(State(eng): State<Arc<Engine>>) -> (StatusCode, Json<serde_
             "reason": snapshot.health_reason,
             "uptime_secs": snapshot.uptime_secs,
         })),
+    )
+}
+
+/// Prometheus exposition format. Public like /healthz — scrape targets are
+/// meant to be pollable; sensitive data stays behind authed routes.
+async fn api_metrics(
+    State(eng): State<Arc<Engine>>,
+) -> ([(axum::http::header::HeaderName, &'static str); 1], String) {
+    use axum::http::header;
+    (
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        eng.metrics.render_prometheus(),
     )
 }
 

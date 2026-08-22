@@ -1333,9 +1333,12 @@ name = "ramshield-protocol"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "hex",
+ "hmac",
  "proptest",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

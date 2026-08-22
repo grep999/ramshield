@@ -26,6 +26,7 @@ struct ConnectionConfig {
     read_timeout: Duration,
     write_timeout: Duration,
     idle_timeout: Duration,
+    auth_keys: Arc<Vec<(String, Vec<u8>)>>,
 }
 
 impl ConnectionConfig {
@@ -35,6 +36,7 @@ impl ConnectionConfig {
             read_timeout: Duration::from_millis(server.read_timeout_ms),
             write_timeout: Duration::from_millis(server.write_timeout_ms),
             idle_timeout: Duration::from_millis(server.connection_idle_timeout_ms),
+            auth_keys: Arc::new(server.auth_keys.clone()),
         }
     }
 }
@@ -50,6 +52,8 @@ const CONNECTION_IDLE_TIMEOUT_MS: u64 = 30_000; // 30s idle
 pub struct IpcServer {
     listener: TcpListener,
     engine: Arc<Engine>,
+    /// (key_id, key_bytes) pairs; empty = auth disabled.
+    auth_keys: Vec<(String, Vec<u8>)>,
     event_tx: Sender<ConnectionEvent>,
     store: Arc<Store>,
     enforcement_tx: mpsc::Sender<EnforceCommand>,
@@ -95,10 +99,24 @@ impl IpcServer {
             .ipc
             .connection_idle_timeout_ms
             .unwrap_or(CONNECTION_IDLE_TIMEOUT_MS);
+        let mut auth_keys: Vec<(String, Vec<u8>)> = Vec::new();
+        for entry in &config.ipc.auth_keys {
+            match entry.split_once(':') {
+                Some((id, hexkey)) => match hex::decode(hexkey.trim()) {
+                    Ok(k) if !k.is_empty() => auth_keys.push((id.trim().to_string(), k)),
+                    _ => warn!("ipc.auth_keys: invalid hex key for '{}', skipped", id),
+                },
+                None => warn!("ipc.auth_keys: expected 'key_id:hex_key', got '{}'", entry),
+            }
+        }
+        if !auth_keys.is_empty() {
+            info!("IPC HMAC auth ENABLED ({} key(s))", auth_keys.len());
+        }
 
         Ok(Self {
             listener,
             engine,
+            auth_keys,
             event_tx,
             store,
             enforcement_tx,
@@ -281,6 +299,36 @@ async fn handle_connection(
                 return Ok(());
             }
             let line: Vec<u8> = buf.drain(..=pos).collect();
+
+            // HMAC auth gate: enforced only when keys configured. The auth
+            // object rides OUTSIDE the Request enum so deny_unknown_fields
+            // on the wire contract stays intact.
+            let mut line = line;
+            if !config.auth_keys.is_empty() {
+                match verify_frame_auth(&config.auth_keys, &line) {
+                    Ok(sanitized) => {
+                        // Continue parsing the auth-stripped payload so
+                        // Request's deny_unknown_fields never sees `auth`.
+                        line = sanitized;
+                    }
+                    Err(reason) => {
+                        warn!("IPC auth rejected: {}", reason);
+                        engine.metrics.inc_rejected(1);
+                        let resp = Response::Error {
+                            code: 401,
+                            message: format!("unauthorized: {}", reason),
+                        };
+                        if timeout(config.write_timeout, write_resp(&mut socket, &resp))
+                            .await
+                            .is_err()
+                        {
+                            return Ok(());
+                        }
+                        continue;
+                    }
+                }
+            }
+
             let req: Request = match serde_json::from_slice(&line) {
                 Ok(r) => r,
                 Err(e) => {
@@ -575,4 +623,40 @@ fn process_request(
             state: None,
         },
     }
+}
+
+/// Verify the HMAC auth envelope on a raw frame line.
+/// Expected shape: `{"auth":{"key_id":..,"ts_ms":..,"sig":..},"type":..,...}`.
+/// The signature covers `<ts_ms>.<full frame bytes minus the auth object>` —
+/// simplest correct scheme: signer strips `auth` field, signs remaining JSON
+/// bytes with ts prefix. Here we sign the RAW LINE as sent by the client
+/// including its auth object? No — sig must cover payload WITHOUT auth object,
+/// else self-reference. Client signs `ts.payload_without_auth`; server removes
+/// the auth object, re-serializes compactly and compares.
+fn verify_frame_auth(keys: &[(String, Vec<u8>)], line: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let mut v: serde_json::Value =
+        serde_json::from_slice(line).map_err(|_| "frame is not valid JSON")?;
+    let auth = v
+        .as_object_mut()
+        .ok_or("frame is not an object")?
+        .remove("auth")
+        .ok_or("missing auth object")?;
+    let obj = auth.as_object().ok_or("auth is not an object")?;
+    let key_id = obj
+        .get("key_id")
+        .and_then(|x| x.as_str())
+        .ok_or("auth.key_id missing")?;
+    let ts_ms = obj
+        .get("ts_ms")
+        .and_then(|x| x.as_u64())
+        .ok_or("auth.ts_ms missing")?;
+    let sig = obj
+        .get("sig")
+        .and_then(|x| x.as_str())
+        .ok_or("auth.sig missing")?;
+
+    // Payload = compact serialization of the frame without the auth object.
+    let payload = serde_json::to_vec(&v).map_err(|_| "reserialize failed")?;
+    ramshield_protocol::auth::verify(keys, key_id, ts_ms, sig, &payload)?;
+    Ok(payload)
 }
