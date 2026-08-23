@@ -102,13 +102,21 @@ echo '{"type":"check_ip","ip":"203.0.113.7"}' | nc -q1 127.0.0.1 7890
 # → {"type":"ip_status","ip":"203.0.113.7","blocked":false,"threat":0.0,...}
 ```
 
-### Drive it with the attack simulator
+### Test it — one suite, every layer
 
 ```bash
-python3 scripts/attack_nexus.py profiles list          # 6 attack classes + chain
-python3 scripts/attack_nexus.py run --profile l7_http_flood --duration 30
-python3 scripts/attack_nexus.py run --profile red_team_full   # 6-phase chain
+python3 scripts/suite.py all      # lint + unit + e2e (CI order)
+python3 scripts/suite.py e2e      # boots a scratch server, drives the real IPC protocol
+python3 scripts/suite.py load profiles   # 6 attack classes + chain
+
+# attack simulation against a scratch instance (loopback only)
+python3 scripts/suite.py load run --profile l7_http_flood --duration 30
+python3 scripts/suite.py load bench      # 5-min subnet DDoS benchmark, 30 /24s per 15s
 ```
+
+The e2e layer exercises the full enforcement path end-to-end: batch ingestion,
+EWMA auto-block with debounce, distinct-IP /24 subnet blocks, WAL durability,
+dashboard snapshot, malformed-input error frames — 14 checks, exit code = failures.
 
 Watch blocks appear live at `http://localhost:9999`.
 
@@ -285,7 +293,7 @@ xdp.remove_block(ip)?;           // BPF map remove
 ## Contributing
 
 ```bash
-cargo fmt -- --check && cargo clippy --all-targets -- -D warnings && cargo test
+python3 scripts/suite.py all   # fmt + clippy + cargo test + e2e protocol check
 ```
 
 1. Fork → feature branch → keep gates green
