@@ -69,3 +69,12 @@ docs/promotion/
 docs/healer_sessions/
 docs/radok/
 backups/*.tar.gz
+
+# scratch/agent artifacts
+c.txt
+clippy.out
+*.out
+/out/
+/test_xdp_load*
+/verify.sh
+.hermes/
