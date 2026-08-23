@@ -27,6 +27,11 @@ RamShield is the decision point between your reverse proxy and your origin:
 
 One binary. No external services. No GC pauses. Hard memory ceiling enforced by design.
 
+<p align="center">
+  <a href="docs/screenshots/dashboard.png"><img src="docs/screenshots/dashboard.png" alt="RamShield live ops dashboard — pipeline flow, block log, hot subnets" width="820"></a>
+</p>
+<p align="center"><em>Live ops dashboard: ingest → batch → promote → block pipeline, block log, /24 subnet heat.</em></p>
+
 ```
 nginx / HAProxy / Envoy ──batch──► RamShield ──check──► allow / deny
                                       │
@@ -38,22 +43,24 @@ nginx / HAProxy / Envoy ──batch──► RamShield ──check──► allo
 
 ## Features
 
-| | |
-|---|---|
-| **:brain: Four detection engines** | EWMA rate · subnet batch · Holt-Winters anomaly · Shannon entropy — composite threat score |
+| | | |
+|---|---|---|
+| **:brain: Six detection signals** | EWMA rate · inst-rate CUSUM · subnet batch (distinct-IP keyed) · Holt-Winters anomaly · SPOT-lite tail alarm · Shannon entropy — composite threat score |
 | **:nut_and_bolt: Kernel enforcement** | Optional aya-based XDP program drops blocked IPs in kernel space |
 | **:floppy_disk: Crash-durable state** | WAL-first commit (append → mutate → XDP). Restart replays live blocks automatically; TTL-aware; segment retention with pruning |
 | **:package: Single binary** | Static build, zero runtime dependencies, JSON-over-TCP integration from any language |
-| **:bar_chart: Live observability** | Dark ops dashboard + Prometheus-compatible metrics export |
-| **:lock: Hard memory ceiling** | `CapacityExceeded` as a Result, never a panic — RAM limit is a first-class constraint |
+| **:bar_chart: Live observability** | Dark ops dashboard + Prometheus-compatible metrics export + autonomous operator console |
+| **:lock: Hardened surface** | HMAC frame auth, Argon2 dashboard login, hard memory ceiling — `CapacityExceeded` as a Result, never a panic |
 
 <details>
 <summary><b>Full feature list</b></summary>
 
 ### Detection & Mitigation
 - **EWMA rate tracking** per IP with configurable thresholds
-- **Subnet batch blocking** — automatic /24 blocks on coordinated abuse
+- **Inst-rate CUSUM** — capped cumulative-sum burst detector with warm-up allowance (no cold-start false positives)
+- **Subnet batch blocking** — automatic /24 blocks keyed on *distinct* source IPs, so one noisy host can't take down its neighborhood
 - **Holt-Winters forecasting** — preemptive blocks on anomaly z-score
+- **SPOT-lite tail alarm** — empirical extreme-quantile estimation for heavy-tailed traffic
 - **Entropy analysis** — detects botnet uniformity across subnets
 - **Threat scoring** — composite of RPS, error rate, and history
 
@@ -103,6 +110,11 @@ python3 scripts/attack_nexus.py run --profile red_team_full   # 6-phase chain
 ```
 
 Watch blocks appear live at `http://localhost:9999`.
+
+<p align="center">
+  <a href="docs/screenshots/operator_console.png"><img src="docs/screenshots/operator_console.png" alt="RamShield operator console — cron fleet, engine health, git state, bench results, live log" width="820"></a>
+</p>
+<p align="center"><em>Operator console: autonomous agent fleet (30 cronjobs), engine health, attack-bench results, live ops log.</em></p>
 
 ### CLI
 
