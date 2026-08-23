@@ -224,6 +224,9 @@ impl Default for ForecastingConfig {
 
 /// WAL durability settings. Disabled by default — enable for crash-durable
 /// block state (survives restarts, replays into store + XDP reconcile).
+// ponytail: per-field serde(default) omitted — all six keys required in [wal].
+// Add `#[serde(default)]` per field (or `#[serde(default)]` on the struct via
+// Default impl) when partial [wal] sections should be accepted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalConfig {
     pub enabled: bool,
