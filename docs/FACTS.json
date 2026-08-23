@@ -179,5 +179,8 @@
   },
   "review_statuses": {},
   "dead_links": [],
-  "backlog_remaining": null
+  "backlog_remaining": null,
+  "review_notes": {
+    "2026-08-23": "RECURRING FAILURE: dispatcher failed 2 consecutive cycles (config-drift spend-guard, unpinned job c0d0d4bc8275) - workers never dispatched, not a task failure. Also: facts-collector writes /home/m/docs/FACTS.json (wrong workspace); HEALTH_CHECK.md missing so T1 unsatisfiable. Remediation in docs/REVIEW.md Next Cycle Recommendations."
+  }
 }
