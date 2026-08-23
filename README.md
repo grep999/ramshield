@@ -72,10 +72,11 @@ nginx / HAProxy / Envoy ──batch──► RamShield ──check──► allo
 
 ### Integration & Observability
 - **JSON over TCP** line protocol — integrate from nginx/Lua, Go, Python, anything
+- **HMAC-SHA256 frame auth** — optional shared-secret authentication per IPC frame
 - **Batch endpoint** — `report_connections` for high-throughput edge proxies
-- **HTTP dashboard** — real-time metrics, block feed, subnet heat
+- **HTTP dashboard** — real-time metrics, block feed, subnet heat; Argon2 admin login
+- **Prometheus-compatible** — `/metrics` endpoint and `Metrics::emit_prometheus()`
 - **Structured logging** — `tracing` with `RUST_LOG` filtering
-- **Prometheus-compatible** — `Metrics::emit_prometheus()`
 
 </details>
 
@@ -259,16 +260,18 @@ xdp.remove_block(ip)?;           // BPF map remove
 
 ## Security
 
-- **No TLS / auth on IPC** — localhost or isolated network only, by design
-- **Input validation** — every request parsed+validated; invalid IP → typed error
-- **Resource limits** — RAM ceiling, connection caps, bounded channel backpressure
+- **HMAC frame auth** — optional shared-secret per IPC frame; plaintext localhost still supported for dev
+- **Dashboard admin login** — Argon2-hashed password + session cookies (`admin_password_hash` or env)
+- **Input validation** — every request parsed with `deny_unknown_fields`; invalid IP → typed error
+- **Resource limits** — RAM ceiling, connection caps, bounded channel backpressure, typed 413 on oversize frames
 - **Audit trail** — every decision carries actor, source, timestamp, policy version
 
 | Threat | Mitigation |
 |--------|------------|
 | Memory exhaustion | hard RAM limit + promotion filter + capacity Result (no panics) |
-| IPC channel flood | bounded queue + backpressure, oversized-line reset |
-| Blocklist replay | UUID `decision_id` idempotency |
+| IPC channel flood | bounded queue + backpressure, oversized-line reset w/ typed 413 |
+| Forged frames / replay | HMAC-SHA256 frame auth + UUID `decision_id` idempotency |
+| Dashboard takeover | Argon2 password + session-cookie middleware |
 | Crash state loss | WAL-first journaling + replay |
 | Kernel exploit surface | minimal eBPF program, verifier-enforced safety |
 
@@ -279,6 +282,7 @@ xdp.remove_block(ip)?;           // BPF map remove
 | Document | Description |
 |----------|-------------|
 | [Technical Documentation](docs/DOCUMENTATION.md) | architecture, modules, config, integration |
+| [Operator Docs](docs/OPERATOR_DOCS.md) | autonomous agent fleet, cron jobs, dashboards, runbooks |
 | [API Reference](https://docs.rs/ramshield/latest) | generated Rust docs |
 | [Contributing](CONTRIBUTING.md) | workflow, style, testing |
 | [Security Policy](SECURITY.md) | vulnerability reporting |
