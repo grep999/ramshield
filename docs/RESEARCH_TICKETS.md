@@ -15,3 +15,11 @@
 - **effort:** S (no Rust code changes; content + repo config only)
 - **research:** https://www.getzola.org/ | https://docs.github.com/en/discussions/quickstart | https://rust-lang.github.io/mdBook/
 - **acceptance:** blog builds with `zola build` in CI and deploys to GitHub Pages; Discussions enabled with Q&A/Announcements/Show-and-tell; README links to both; first post drafted from BLOG_CALENDAR.md week 1 topic.
+
+## TICKET: Q5 Cloudflare Workers edge-detection spike
+- **task_id:** roadmap/Q5-Cloudflare-Workers-Edge
+- **title:** Spike: edge pre-filter Worker (`worker` crate / workers-rs) mirroring rate_tracker EWMA at Cloudflare edge
+- **priority:** high (last uncovered Q5 roadmap task)
+- **effort:** M (new `edge-worker/` crate targeting wasm32-unknown-unknown; no core src changes)
+- **research:** https://developers.cloudflare.com/workers/languages/rust/ | https://docs.rs/worker/latest/worker/ | https://github.com/cloudflare/workers-rs
+- **acceptance:** `#[event(fetch)]` handler scores request IPs against EWMA counters stored in Workers KV/Durable Objects; bans forwarded to origin dashboard IPC endpoint; `wrangler deploy` succeeds and spike documented in docs/.

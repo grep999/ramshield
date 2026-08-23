@@ -13,3 +13,4 @@ Source plan: docs/PLAN.md (2026-08-23), tasks T1–T3. No pre-existing `ramshiel
 ## Completions
 <!-- workers append: task ID, completion time UTC, verify result -->
 - T1 2026-08-23T09:47Z — facts_collector.py workspace fallback → /home/m/vehicle_of_rationalism/ramshield/beta/rs (GITHUB_WORKSPACE override kept). Verify: `python3 -W error` exit=0; FACTS.json workspace=/home/m/vehicle_of_rationalism/ramshield/beta/rs; stray /home/m/docs/FACTS.json removed.
+- T2 2026-08-23T10:05Z — CONTROL_CENTER.md present (reviewer-created); added contracted links AGENT_REPORT.md/DEPENDENCY_AUDIT.md/AUTOMATION_DASHBOARD.html. Verify: exists, "## Agent Status" present, all 4 relative links test -f OK.

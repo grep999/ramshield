@@ -30,4 +30,4 @@ Human-readable overview of the autonomous agent fleet. Updated by the reviewer a
 2. **facts-collector workspace bug**: template fallback resolves to `/home/m`. Fix: set job workdir to repo path.
 3. **HEALTH_CHECK.md vanished** from `rs/docs/` — T1 plan task unsatisfiable until regenerated.
 
-Full detail: [`REVIEW.md`](REVIEW.md) · Raw data: `docs/FACTS.json` · Fleet snapshot: `docs/CRON_STATUS.json`
+Full detail: [`REVIEW.md`](REVIEW.md) · [`AGENT_REPORT.md`](AGENT_REPORT.md) · [`DEPENDENCY_AUDIT.md`](DEPENDENCY_AUDIT.md) · Dashboard: [`AUTOMATION_DASHBOARD.html`](AUTOMATION_DASHBOARD.html) · Raw data: `docs/FACTS.json` · Fleet snapshot: `docs/CRON_STATUS.json`
