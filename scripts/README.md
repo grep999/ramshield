@@ -1,61 +1,53 @@
-# RamShield attack simulators (authorized testing only)
+# RamShield Testing Suite
 
-Use only against **your own** RamShield instance (`127.0.0.1:7890`).
-
-## Recommended: `attack_nexus.py`
-
-Next-gen simulator based on common multi-vector DDoS taxonomies (L3 volumetric, L4 protocol, L7 application) and patterns seen in open-source stress frameworks: mixed rotation, entropy botnets, slow/low + flood combos, k6-style ramps.
+One entry point for every check. Authorized testing only — everything binds
+and talks to `127.0.0.1` on scratch ports, never touching a live instance.
 
 ```bash
-# List profiles
-./scripts/attack_nexus.py profiles list
-
-# HTTP flood (L7)
-./scripts/attack_nexus.py run --profile l7_http_flood --duration 60 --workers 256
-
-# Full red-team chain (4 phases)
-./scripts/attack_nexus.py run --profile red_team_full
-
-# Ramp-up like k6 (approximate EPS scaling)
-./scripts/attack_nexus.py run --profile botnet_distributed --ramp 1000 50000 120 --duration 120
-
-# Interactive shell — full customization
-./scripts/attack_nexus.py shell
+python3 scripts/suite.py <layer>
 ```
 
-### Shell highlights
+| Layer | What it does | Exit |
+|-------|--------------|------|
+| `lint` | `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings` (CI gates) | fail count |
+| `unit` | `cargo test --all` — Rust unit + integration tests | fail count |
+| `e2e`  | Boots a release binary on scratch ports (IPC `:17890`, dash `:19999` via `RAMSHIELD_*` env overrides), drives the real JSON-over-TCP protocol: health, check/block/unblock, batch ingestion → EWMA auto-block, distinct-IP /24 subnet block, stats, dashboard snapshot, malformed-input error frames | fail count |
+| `load` | Attack profiles through the retained simulator (`attack_nexus.py`): `profiles` list, `run --profile NAME --duration S`, `bench` (5-min subnet DDoS benchmark) | process rc |
+| `all`  | `lint` + `unit` + `e2e` in CI order | total fails |
 
+## Examples
+
+```bash
+# full CI pass
+python3 scripts/suite.py all
+
+# just the end-to-end protocol test (needs target/release/ramshield)
+python3 scripts/suite.py e2e
+
+# 30s HTTP-flood against a scratch server
+python3 scripts/suite.py load run --profile l7_http_flood --duration 30
+
+# the heavy benchmark (30 unique /24s per 15s rotation, 5 minutes)
+python3 scripts/suite.py load bench
 ```
-nexus> profiles load l4_syn_wave
-nexus> set workers 512
-nexus> set jitter 0 20
-nexus> set pareto 64 8192 2.0
-nexus> set hot_ip_ratio 0.3
-nexus> seed 42
-nexus> ramp 5000 80000 90
-nexus> macro baseline          # save current settings
-nexus> flood 120
-nexus> stats
-```
 
-Edit or add scenarios in `profiles.json`.
+## e2e checks performed
 
-## Legacy scripts
+1. `healthz` returns `{"status":"ok"}`
+2. `check_ip` on an unknown IP → clean
+3. `block_ip` → `check_ip` blocked → `unblock_ip` → clean (round-trip)
+4. `report_connections` batch accepted (`proto_fp` field required)
+5. Sustained batches above `rps_threshold` → EWMA auto-block fires
+   (detector needs 2 consecutive hot EWMA samples — the suite drives ~20)
+6. 250 distinct IPs from one /24 → subnet block fires on any member
+7. `get_stats` returns counters
+8. Dashboard `/api/snapshot` healthy with blocked > 0
+9. Malformed IP → typed `error` frame with code 400; connection survives
 
-| Script | Purpose |
-|--------|---------|
-| `attack_sim_100k.py` | Simple fixed 100k burst |
-| `attack_extreme.py` | Burst/flood/phase + basic REPL |
+## Removed legacy scripts
 
-## Profile → RamShield mapping
-
-Real attacks are simulated via IPC `report_connections`:
-
-| Profile class | Simulated behavior |
-|---------------|-------------------|
-| L7 HTTP flood | High RPS, weighted 2xx/4xx/5xx, browser byte sizes |
-| RUDY / slowloris | Large or tiny payloads, hot IP |
-| SYN wave | Subnet bursts, small packets, mixed 503 |
-| Botnet | High IP entropy (Zipf/Pareto pools) |
-| DNS amp | Multi-/24 spikes |
-| Credential spray | 401/403/429 weighted, scan rotation |
+`attack_sim_100k.py`, `attack_extreme.py`, `cruel_ddos.py`, `attack_driver.py`
+(stale port 19847), `scenario_runner.py`, `generate_scenarios.py`,
+`map_and_run.py`, `create_mapped_scenarios.py`, `selftest.sh`,
+`check_guardrails.sh` — all functionality lives in the suite layers above.
+`attack_nexus.py` is retained as the load engine behind `suite.py load`.

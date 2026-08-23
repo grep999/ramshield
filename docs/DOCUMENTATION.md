@@ -685,20 +685,17 @@ Internet → NIC (XDP drop) → Nginx/HAProxy
 
 ## 12. Load Testing Scripts
 
-| Script                       | Purpose                               |
-| ---------------------------- | ------------------------------------- |
-| `scripts/attack_sim_100k.py` | Fixed 100k event burst                |
-| `scripts/attack_extreme.py`  | Burst, flood, phase, interactive REPL |
+| Command                                        | Purpose                                |
+| ---------------------------------------------- | -------------------------------------- |
+| `python3 scripts/suite.py lint`                | fmt + clippy gates                     |
+| `python3 scripts/suite.py unit`                | cargo test --all                       |
+| `python3 scripts/suite.py e2e`                 | end-to-end IPC/dashboard protocol test |
+| `python3 scripts/suite.py load profiles`       | list attack profiles                   |
+| `python3 scripts/suite.py load run --profile …`| attack simulation on scratch ports     |
+| `python3 scripts/suite.py load bench`          | 5-min subnet DDoS benchmark            |
+| `python3 scripts/suite.py all`                 | full CI pass                           |
 
-Examples:
-
-```bash
-./target/release/ramshield config.toml
-
-python3 scripts/attack_extreme.py burst --events 500000 --workers 256
-python3 scripts/attack_extreme.py flood --duration 60 --mode volumetric
-python3 scripts/attack_extreme.py interactive
-```
+See `scripts/README.md` for the complete testing-suite reference.
 
 ---
 
@@ -818,8 +815,8 @@ crates/
 │       └── src/main.c   C BPF (clang fallback)
 
 scripts/
-├── attack_sim_100k.py
-└── attack_extreme.py
+├── attack_nexus.py      # load engine (profiles.json)
+└── suite.py             # unified test entry point
 
 docs/
 └── DOCUMENTATION.md     This file
