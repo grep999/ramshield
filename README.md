@@ -49,7 +49,7 @@ nginx / HAProxy / Envoy ──batch──► RamShield ──check──► allo
 | **:nut_and_bolt: Kernel enforcement** | Optional aya-based XDP program drops blocked IPs in kernel space |
 | **:floppy_disk: Crash-durable state** | WAL-first commit (append → mutate → XDP). Restart replays live blocks automatically; TTL-aware; segment retention with pruning |
 | **:package: Single binary** | Static build, zero runtime dependencies, JSON-over-TCP integration from any language |
-| **:bar_chart: Live observability** | Dark ops dashboard + Prometheus-compatible metrics export + autonomous operator console |
+| **:bar_chart: Live observability** | Dark ops dashboard + Prometheus-compatible metrics export |
 | **:lock: Hardened surface** | HMAC frame auth, Argon2 dashboard login, hard memory ceiling — `CapacityExceeded` as a Result, never a panic |
 
 <details>
@@ -111,11 +111,6 @@ python3 scripts/attack_nexus.py run --profile red_team_full   # 6-phase chain
 ```
 
 Watch blocks appear live at `http://localhost:9999`.
-
-<p align="center">
-  <a href="docs/screenshots/operator_console.png"><img src="docs/screenshots/operator_console.png" alt="RamShield operator console — cron fleet, engine health, git state, bench results, live log" width="820"></a>
-</p>
-<p align="center"><em>Operator console: autonomous agent fleet (30 cronjobs), engine health, attack-bench results, live ops log.</em></p>
 
 ### CLI
 
@@ -282,7 +277,6 @@ xdp.remove_block(ip)?;           // BPF map remove
 | Document | Description |
 |----------|-------------|
 | [Technical Documentation](docs/DOCUMENTATION.md) | architecture, modules, config, integration |
-| [Operator Docs](docs/OPERATOR_DOCS.md) | autonomous agent fleet, cron jobs, dashboards, runbooks |
 | [API Reference](https://docs.rs/ramshield/latest) | generated Rust docs |
 | [Contributing](CONTRIBUTING.md) | workflow, style, testing |
 | [Security Policy](SECURITY.md) | vulnerability reporting |

@@ -8,9 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **IPC frame authentication** — HMAC-SHA256 per-frame auth for TCP clients; Prometheus `/metrics` export on the dashboard.
+- **IPC frame authentication** — HMAC-SHA256 per-frame auth for TCP clients.
 - **Dashboard admin auth** — Argon2-hashed admin password + session-cookie middleware (`admin_password_hash` config or env).
-- **Operator console** — standalone web dashboard (fleet, jobs, engine health, git, promo, bench panels) plus a terminal REPL; documented in `docs/OPERATOR_DOCS.md`.
+- **Prometheus `/metrics` export** endpoint on the dashboard.
 - **Bench harness: `subnet_ddos_5min` profile** — 30 unique /24s rotated every 15 s per worker; loopback-only wrapper `scripts/subnet_ddos_bench.sh`.
 - **SPOT-lite extreme-quantile alarm** (forecasting P2) — empirical tail estimation complements Holt-Winters z-score.
 - **Inst-rate EWMA sample + capped CUSUM with debounce** (detection P1) — sharper burst response without cold-start false positives.
