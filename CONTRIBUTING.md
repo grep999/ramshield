@@ -79,8 +79,7 @@ docs: update CLI reference
 cargo test
 
 # Attack simulation
-python3 scripts/attack_extreme.py burst --events 1000000 --workers 64
-python3 scripts/attack_extreme.py flood --duration 60 --mode volumetric
+python3 scripts/suite.py load run --profile l7_http_flood --duration 60
 
 # IPC wiring tests
 cargo test --test ipc_wiring

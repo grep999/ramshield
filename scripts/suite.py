@@ -194,7 +194,7 @@ def layer_e2e(keep: bool = False) -> int:
 
         # manual block / unblock round-trip
         r = ipc({"type": "block_ip", "ip": "203.0.113.7", "reason": "suite", "ttl_secs": 120})
-        c.ok(bool(r.get("blocked") in (True, "true") or r.get("ok")), "block_ip accepted", str(r))
+        c.ok(r.get("type") == "ok", "block_ip accepted", str(r))
         r = ipc({"type": "check_ip", "ip": "203.0.113.7"})
         c.ok(bool(r.get("blocked")), "check_ip blocked after block_ip", str(r))
         r = ipc({"type": "unblock_ip", "ip": "203.0.113.7"})

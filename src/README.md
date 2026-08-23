@@ -108,7 +108,7 @@ cargo build --release
 cargo build --all-targets && cargo clippy --all-targets -- -D warnings && cargo test
 
 # Run attack simulation
-python3 scripts/attack_sim_100k.py --events 1000000 --workers 64
+python3 scripts/suite.py load run --profile l7_http_flood --duration 60
 
 # Check server health
 curl http://127.0.0.1:7891/healthz
