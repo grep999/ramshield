@@ -49,9 +49,33 @@ kubectl -n ramshield port-forward svc/ramshield-dashboard 9999:9999
 ```
 
 **The container image is not pre-built.** The `Containerfile` at the repo
-root produces a distroless nonroot image; the `ghcr.io/grep999/ramshield:0.2.0`
-reference in `deployment.yaml` will fail with `ImagePullBackOff` until you
-build and push it. CI builds are tracked under issue #128 (to be filed at PR merge).
+root produces a `distroless/cc-debian12:nonroot` image (glibc runtime;
+static-debian12 is too minimal for the glibc-linked binary); the
+`ghcr.io/grep999/ramshield:0.2.0` reference in `deployment.yaml` will
+fail with `ImagePullBackOff` until you build and push it. CI builds are
+tracked under issue #128 (to be filed at PR merge).
+
+## Admin password (optional)
+
+The dashboard's Argon2 admin login is gated on a Secret that may not
+exist in your cluster. Without it, `/login` returns "server not
+configured" and the dashboard is read-only.
+
+To create the secret (after first run prints the generated hash):
+
+```bash
+# 1. Get the auto-generated hash from the pod's first-run logs
+kubectl -n ramshield logs deploy/ramshield | grep ADMIN_PASSWORD_HASH
+
+# 2. Create the secret
+kubectl -n ramshield create secret generic ramshield-admin \
+  --from-literal=argon2-hash='$argon2id$v=19$m=19456,t=2,p=1$...'
+```
+
+The `secretKeyRef` in `deployment.yaml` is `optional: true`, so the pod
+starts without the Secret. If the Secret exists, the env var
+`RAMSHIELD_DASHBOARD__ADMIN_PASSWORD_HASH` is set and `/login` accepts
+the matching password.
 
 ## XDP
 
