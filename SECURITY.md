@@ -13,7 +13,32 @@ We will aim to acknowledge your report within 48 hours and provide an update on 
 | Version | Supported          |
 | ------- | ------------------ |
 | 0.2.x   | ✅ Yes             |
-| 0.1.x   | ❌ No              |
+| 0.1.x   | ❌ No (EOL)        |
+
+The 0.1.x line is no longer maintained. Sites on 0.1.x should upgrade to
+0.2.x — see [CHANGELOG](CHANGELOG.md) for the migration notes (breaking:
+`deny_unknown_fields` on protocol requests, subnet batch now keyed on
+distinct source IPs, CUSUM warm-up allowance).
+
+## Fuzzing
+
+The IPC protocol parser is exercised by `cargo-fuzz` harnesses under
+`fuzz/`. The current harnesses:
+
+- `fuzz_ipc_parser` — arbitrary bytes → `Request` parse → must never panic
+- `fuzz_config`    — arbitrary TOML → `Config::load` → must never panic,
+                     out-of-range values must surface as typed `ConfigError`
+
+Run:
+
+```bash
+cargo install cargo-fuzz
+cargo +nightly fuzz run fuzz_ipc_parser -- -max_total_time=300
+```
+
+Continuous fuzzing is **not** yet wired in CI. Tracked under
+[issue #124](https://github.com/grep999/ramshield/issues) — add when budget
+allows. Until then, fuzzing is run manually before each release.
 
 ## Disclosure Policy
 

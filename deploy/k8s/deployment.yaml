@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ramshield
+  namespace: ramshield
+  labels:
+    app.kubernetes.io/name: ramshield
+spec:
+  replicas: 1   # see deploy/k8s/README.md — single-replica until WAL supports a shared backend
+  strategy:
+    type: Recreate  # avoid two pods fighting over the emptyDir WAL
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ramshield
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ramshield
+    spec:
+      serviceAccountName: ramshield
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532     # distroless nonroot
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ramshield
+          image: ghcr.io/grep999/ramshield:0.2.0
+          imagePullPolicy: IfNotPresent
+          args: ["/etc/ramshield/config.toml"]
+          ports:
+            - name: ipc
+              containerPort: 7890
+              protocol: TCP
+            - name: dashboard
+              containerPort: 7891
+              protocol: TCP
+          env:
+            - name: RUST_LOG
+              value: "info,ramshield=debug"
+            - name: RAMSHIELD_DASHBOARD__ADMIN_PASSWORD_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: ramshield-admin
+                  key: argon2-hash
+                  optional: true
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"   # matches ConfigMap ram_limit_mb; tight, intentional
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: dashboard
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: dashboard
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ramshield
+              readOnly: true
+            - name: wal
+              mountPath: /var/lib/ramshield/wal
+      volumes:
+        - name: config
+          configMap:
+            name: ramshield-config
+        - name: wal
+          emptyDir:
+            sizeLimit: 1Gi
+      terminationGracePeriodSeconds: 15

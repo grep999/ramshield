@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ramshield
+  namespace: ramshield
+  labels:
+    app.kubernetes.io/name: ramshield
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ramshield
+  ports:
+    - name: ipc
+      port: 7890
+      targetPort: ipc
+      protocol: TCP
+    - name: dashboard
+      port: 7891
+      targetPort: dashboard
+      protocol: TCP
+---
+# Optional: expose the dashboard outside the cluster.
+# The IPC port (7890) deliberately stays ClusterIP-only — edge proxies
+# (nginx/Envoy/HAProxy) live on the same cluster network and reach the
+# Service by DNS. The dashboard is admin-only and meant to be reached via
+# `kubectl port-forward`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ramshield-dashboard
+  namespace: ramshield
+  labels:
+    app.kubernetes.io/name: ramshield
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ramshield
+  ports:
+    - name: dashboard
+      port: 7891
+      targetPort: dashboard
+      protocol: TCP
