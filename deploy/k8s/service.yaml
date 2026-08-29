@@ -15,7 +15,7 @@ spec:
       targetPort: ipc
       protocol: TCP
     - name: dashboard
-      port: 7891
+      port: 9999
       targetPort: dashboard
       protocol: TCP
 ---
@@ -37,6 +37,6 @@ spec:
     app.kubernetes.io/name: ramshield
   ports:
     - name: dashboard
-      port: 7891
+      port: 9999
       targetPort: dashboard
       protocol: TCP

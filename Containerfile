@@ -29,5 +29,5 @@ RUN touch src/main.rs && cargo build --release --locked -F full \
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=builder /build/target/release/ramshield /usr/local/bin/ramshield
 USER 65532:65532
-EXPOSE 7890 7891
+EXPOSE 7890 9999
 ENTRYPOINT ["/usr/local/bin/ramshield"]

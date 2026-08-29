@@ -135,13 +135,13 @@ git clone https://github.com/grep999/ramshield
 cd ramshield/beta/rs
 cargo build --release -F full
 
-# run (dashboard :7891, IPC :7890)
+# run (dashboard :9999, IPC :7890)
 ./target/release/ramshield config.toml
 ```
 
 ```bash
 # health check
-curl -s http://127.0.0.1:7891/healthz          # {"status":"ok"}
+curl -s http://127.0.0.1:9999/healthz          # {"status":"ok"}
 
 # ask about an IP
 echo '{"type":"check_ip","ip":"203.0.113.7"}' | nc -q1 127.0.0.1 7890
@@ -164,7 +164,7 @@ The e2e layer exercises the full enforcement path end-to-end: batch ingestion,
 EWMA auto-block with debounce, distinct-IP /24 subnet blocks, WAL durability,
 dashboard snapshot, malformed-input error frames — 14 checks, exit code = failures.
 
-Watch blocks appear live at `http://localhost:7891`.
+Watch blocks appear live at `http://localhost:9999`.
 
 ### CLI
 

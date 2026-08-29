@@ -12,7 +12,7 @@ updates, WAL PVC orchestration, XDP-aware scheduling) is on the roadmap.
 | `namespace.yaml` | `ramshield` namespace |
 | `configmap.yaml` | Default `config.toml` (IPC + dashboard bound to `0.0.0.0`) |
 | `deployment.yaml` | 1-replica Deployment; mount ConfigMap, WAL on `emptyDir` |
-| `service.yaml`    | ClusterIP for IPC (7890) and dashboard (7891) |
+| `service.yaml`    | ClusterIP for IPC (7890) and dashboard (9999) |
 | `rbac.yaml`       | ServiceAccount + minimal role for `ConfigMap` read |
 
 ## Why no `StatefulSet`?
@@ -44,8 +44,8 @@ docker push ghcr.io/grep999/ramshield:0.2.0
 kubectl apply -f deploy/k8s/
 
 # 3) Reach the dashboard
-kubectl -n ramshield port-forward svc/ramshield-dashboard 7891:7891
-# Open http://localhost:7891
+kubectl -n ramshield port-forward svc/ramshield-dashboard 9999:9999
+# Open http://localhost:9999
 ```
 
 **The container image is not pre-built.** The `Containerfile` at the repo

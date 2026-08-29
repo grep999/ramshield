@@ -35,7 +35,7 @@ spec:
               containerPort: 7890
               protocol: TCP
             - name: dashboard
-              containerPort: 7891
+              containerPort: 9999
               protocol: TCP
           env:
             - name: RUST_LOG

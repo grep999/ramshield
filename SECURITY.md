@@ -59,7 +59,7 @@ RamShield is designed to operate in a **trusted network zone** (localhost or iso
 ## Security Best Practices for Operators
 
 1. **Bind IPC to localhost only** — `tcp_addr = "127.0.0.1:7890"`
-2. **Firewall dashboard port** — `:7891` should not be public
+2. **Firewall dashboard port** — `:9999` should not be public
 3. **Run as non-root user** — XDP requires `CAP_SYS_ADMIN` capability only
 4. **Use dedicated NIC for XDP** — isolate from management traffic
 5. **Monitor RAM usage** — alert at 80% of `ram_limit_mb`

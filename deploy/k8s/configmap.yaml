@@ -21,7 +21,7 @@ data:
 
     [dashboard]
     enabled = true
-    http_addr = "0.0.0.0:7891"
+    http_addr = "0.0.0.0:9999"
 
     [forecasting]
     enabled = true
