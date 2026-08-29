@@ -2,9 +2,9 @@
 
 | Task ID | Title | Status | Completion Time |
 |---------|-------|--------|-----------------|
-| T1 | Fix facts-collector workspace resolution | Pending | — |
-| T2 | Create CONTROL_CENTER.md | Pending | — |
-| T3 | Deduplicate roadmap files | Pending | — |
+| T1 | Diagnose ramshield-backup exit 1 | Pending | — |
+| T2 | Add dead-link self-check to facts-collector | Pending | — |
+| T3 | Document helper-agent TERMINAL_CWD workaround | Pending | — |
 
-Last dispatcher run: 2026-08-23 09:20 UTC (3 created, 0 skipped).
+Last dispatcher run: 2026-08-29 08:22 UTC (3 created, 0 skipped).
 Workers append completions to docs/DISPATCH_LOG.md ("## Completions"); update this table when reviewing.
