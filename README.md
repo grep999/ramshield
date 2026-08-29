@@ -77,8 +77,54 @@ nginx / HAProxy / Envoy ──batch──► RamShield ──check──► allo
 - **HTTP dashboard** — real-time metrics, block feed, subnet heat; Argon2 admin login
 - **Prometheus-compatible** — `/metrics` endpoint and `Metrics::emit_prometheus()`
 - **Structured logging** — `tracing` with `RUST_LOG` filtering
+- **K8s-ready** — Helm-free manifests in `deploy/k8s/`; `kubectl apply -f deploy/k8s/`
+- **Fuzz-tested** — property-based harnesses on protocol parser and config loader; run `cargo test -p ramshield-protocol -p ramshield-config`
 
 </details>
+
+---
+
+## Production readiness — honest status
+
+**RamShield is pre-1.0 (`0.2.0` at time of writing).** That means the
+semver contract is *unstable* — minor versions may include breaking changes
+(see [CHANGELOG](CHANGELOG.md) for `deny_unknown_fields` and subnet-batch
+behavior changes between 0.1 → 0.2). Use a pinned version in production.
+
+What's solid today:
+
+- **Single binary, no GC, hard RAM ceiling** — capacity-exceeded returns
+  `Result::Err`, never a panic. We are removing production `.unwrap()/.expect()`
+  one at a time; the lock-poisoning case in `engine::boot_pipeline` is the
+  first to land (was a startup panic-once bug). Remaining instances are
+  documented in issue #127 and scheduled for 0.3.
+- **WAL-first durability** — restart replays live blocks (store + XDP) in
+  <1s, TTL-aware.
+- **Hardening** — HMAC-SHA256 frame auth, Argon2 dashboard login, no
+  public Internet exposure expected (see [SECURITY.md](SECURITY.md) threat
+  model — trusted-network only).
+- **Property-based fuzz** — `proptest` harnesses on the IPC protocol
+  parser and config loader (`cargo test -p ramshield-protocol -p
+  ramshield-config`); 2,048 cases each.
+- **Kubernetes manifests** — `deploy/k8s/` for the common case
+  (single-replica Deployment + Service + ConfigMap). Build the image
+  with the repo's `Containerfile` before applying.
+
+What's not yet, and why:
+
+- **No third-party security audit.** Tracked under issue #125.
+- **No K8s operator.** Single-replica Deployment is correct until WAL
+  supports a shared backend (issue #126).
+- **No compliance certs** (SOC2, ISO 27001). Self-hosted open source;
+  certificate work follows enterprise sponsorship.
+- **Continuous fuzzing in CI is not yet wired** — fuzzing runs in `cargo
+  test` on every push; oss-fuzz is the natural next step.
+
+For deployments where audit + operator are required, **pin a 0.2.x
+release and run a single replica with WAL disabled or on a `emptyDir` you
+accept losing on pod restart**. The honest path to 1.0 is in
+[ROADMAP.md](docs/ROADMAP.md) — public, dated milestones, no dates we
+can't keep.
 
 ---
 
@@ -89,13 +135,13 @@ git clone https://github.com/grep999/ramshield
 cd ramshield/beta/rs
 cargo build --release -F full
 
-# run (dashboard :9999, IPC :7890)
+# run (dashboard :7891, IPC :7890)
 ./target/release/ramshield config.toml
 ```
 
 ```bash
 # health check
-curl -s http://127.0.0.1:9999/healthz          # {"status":"ok"}
+curl -s http://127.0.0.1:7891/healthz          # {"status":"ok"}
 
 # ask about an IP
 echo '{"type":"check_ip","ip":"203.0.113.7"}' | nc -q1 127.0.0.1 7890
@@ -118,7 +164,7 @@ The e2e layer exercises the full enforcement path end-to-end: batch ingestion,
 EWMA auto-block with debounce, distinct-IP /24 subnet blocks, WAL durability,
 dashboard snapshot, malformed-input error frames — 14 checks, exit code = failures.
 
-Watch blocks appear live at `http://localhost:9999`.
+Watch blocks appear live at `http://localhost:7891`.
 
 ### CLI
 

@@ -190,7 +190,7 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     let enforcement_rx = engine
         .enforcement_rx
         .lock()
-        .expect("enforcement receiver lock")
+        .map_err(|_| std::io::Error::other("enforcement receiver lock poisoned"))?
         .take()
         .ok_or_else(|| {
             std::io::Error::new(

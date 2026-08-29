@@ -1,96 +1,67 @@
-# RamShield Advanced Features & Research Roadmap
+# RamShield Roadmap
 
-## 1. Research Audit Tree
-*Automated scanning of technical frontiers and potential integration points.*
-
-### 🧠 AI & Machine Learning Extensions
-- **Deep Learning for Packet Inspection**: LSTM/GRU for sequence-based anomaly detection.
-- **Reinforcement Learning (RL)**: Adaptive rate-limiting policies that evolve with attacker behavior.
-- **Federated Learning**: Collaborative defense across distributed RamShield nodes without sharing raw traffic.
-
-### 🔒 Cryptography & Security Extensions
-- **Zero-Knowledge Proofs (ZKP)**: For privacy-preserving threat intelligence sharing.
-- **Homomorphic Encryption**: Analyzing encrypted traffic without decryption overhead.
-- **Post-Quantum Cryptography (PQC)**: Preparing IPC and storage encryption for the quantum era.
-
-### ⚡ Performance & Systems Extensions
-- **eBPF/XDP Integration**: Kernel-level packet filtering bypassing userspace overhead.
-- **Memory-Mapped I/O (mmap)**: High-speed shared memory for multi-node RamShield clusters.
-- **Data-Oriented Design (DOD)**: Restructuring core data layouts for SIMD-heavy pipelines.
+Dated milestones. Every item is a concrete, verifiable outcome — not a feature
+request. When an item is marked **done**, the date is frozen.
 
 ---
 
-## 2. Feature Roadmap & Milestones
+## 0.3 — Fuzz & hardening (in progress)
 
-### Q1: Advanced Analytics (Weeks 1-2)
-- [ ] Implement XGBoost threat scoring model
-- [ ] Add scikit-learn preprocessing pipeline
-- [ ] Integrate model versioning with Git LFS
-- [ ] *Milestone:* 95% accuracy on test dataset
+Target: end of Q4 2026.
 
-### Q2: Performance Optimization (Weeks 3-4)
-- [ ] Implement Rust-based ML inference (tflite-rust)
-- [ ] Add AVX2/AVX2 optimization flags
-- [ ] Benchmark against Go implementation
-- [ ] *Milestone:* 2x faster inference than Python baseline
-
-### Q3: Security Enhancements (Weeks 5-6)
-- [ ] TLS 1.3 support for encrypted IPC
-- [ ] iptables rate limiting integration
-- [ ] Cryptographic audit logging (SHA-256 signed)
-- [ ] *Milestone:* Zero-trust IPC communication
-
-### Q4: Promotion & Community (Weeks 7-8)
-- [ ] Launch RamShield Blog (weekly posts)
-- [ ] Create GitHub Discussions for community feedback
-- [ ] Launch "RamShield Champions" program
-
-### Q5: Platform Integration (Weeks 9-12)
-- [ ] Kubernetes Operator for auto-scaling
-- [ ] Heroku buildpack for one-click deploy
-- [ ] Cloudflare Workers integration for edge detection
+- [ ] **oss-fuzz integration** — corpus submission, continuous fuzzing on merged PRs.
+  Signals: oss-fuzz project page shows green, no unfixed bugs > 90 days.
+- [ ] **protocol fuzz coverage ≥ 90%** — `cargo-fuzz coverage` report shows
+  ≥ 90% branch coverage on `Request` and `Response` deserialization.
+- [ ] **Crash-free fuzz runs** — zero panics or aborts after 10M iterations
+  across all harnesses.
+- [ ] **Security audit** — third-party audit engagement signed. Report published
+  or embargo until next minor. Tracked in issue #125.
+- [ ] **Remove remaining production `.unwrap()/.expect()`** — `rg` returns only
+  in test modules. Started in 0.2 (lock-poisoning case in `engine::boot_pipeline`),
+  ~16 instances remain across 9 files. Tracked in issue #127.
 
 ---
 
-## 3. Extension Tree Expansion
-*Future-proofing RamShield for global-scale threats.*
+## 1.0 — General Availability
 
-### Edge-Native Expansions
-- [ ] **WebAssembly (WASM) Module Support**: Allow users to write custom detection logic in WASM.
-- [ ] **IoT Gateway Shielding**: Optimized build for ARM/RISC-V edge devices.
+**GA means**: no breaking changes without a major version bump, migration
+path documented, change-logged. It does **not** mean "certified for every
+compliance framework" — that follows enterprise adoption.
 
-### Data Expansions
-- [ ] **Time-Series Database Integration**: Sync with InfluxDB/Prometheus for long-term analytics.
-- [ ] **Kafka/Pulsar Streaming**: Real-time threat event streaming for enterprise logs.
+### Hard blockers (all must be done)
+
+| Blocker | Verification |
+|---------|--------------|
+| Zero production `.unwrap()/.expect()` in `src/` | `rg '\.(unwrap\|expect)(' src/*.rs src/**/*.rs` returns only in test modules |
+| WAL handles shared-backend (PostgreSQL / S3) | Integration test spins up Postgres, writes block, kills process, restarts, block present |
+| Config hot-reload without restart | `SIGHUP` or `/api/reload` — old connections drain, new config applies |
+| End-to-end test suite runs in < 60 s on a 4-core VM | `scripts/suite.py e2e` exit 0 in < 60 s |
+| Docs cover every config field | Every key in `config.toml` has a doc comment in `src/config.rs` |
+| CHANGELOG entries for all 0.x → 1.0 changes | `git log --oneline 0.2.0..HEAD --grep="feat\|fix\|perf"` |
+| Published container image per release | `ghcr.io/grep999/ramshield:X.Y.Z` resolves; CI builds on tag |
+
+### Soft requirements (nice to have before GA, hard blockers after)
+
+| Item | Notes |
+|------|-------|
+| K8s operator | Required only if multi-replica with shared WAL is needed. Current manifests are sufficient for 95% of users. |
+| `CHANGELOG.md` for 0.2 → 0.3 | Release note quality matching [Keep a Changelog](https://keepachangelog.com/) |
+| crates.io download count ≥ 10k/month | Adoption signal, not a quality gate |
+| 3+ production case studies | Anonymized is fine |
 
 ---
 
-## 4. Positioning & Enterprise Phases
+## Post-1.0
 
-### Proposition: Edge-Native Sovereign Defense
-RamShield: On-prem, edge-native, sovereign DDoS detection.
-- Sovereignty: No data egress, private residency.
-- Efficiency: 30K events/s per node, 4.8MB RAM footprint (benchmark).
-- Density: Deployable on edge SoCs/routers.
-- Advantage: Mitigate 90% malicious traffic at perimeter, reducing egress costs.
+These ship after GA, no schedule set:
 
-### Industry Landscape
-| Platform | Peak Capacity | Architecture | Cost Model |
-| :--- | :--- | :--- | :--- |
-| Cloudflare | 3.2 Pbps | Global Edge | Usage |
-| AWS Shield | 2.1 Pbps | 21 Regions | Tiered |
-| **RamShield** | **3.8 Tbps (sim)** | **Edge-native** | **Fixed/Opex** |
+- **Multi-replica mode** — shared WAL backends (Postgres, S3, etcd)
+- **Istio / Envoy Wasm filter** — native integration without a sidecar TCP proxy
+- **Metric alerts** — Prometheus alerting rules for block storms, WAL lag, RAM pressure
+- **Terraform / Pulumi provider** — declarative config management
 
-### Enterprise Development Roadmap
-| Phase | Focus | Tech/Integration | Goal |
-| :--- | :--- | :--- | :--- |
-| I | Clustering | Raft, Gossip | Distributed state |
-| II | Kernel-Speed | eBPF, XDP | Kernel-level L3/L4 filtering |
-| III | Intelligence | Isolation Forest | Zero-day anomaly detection |
-| IV | Scale Ops | OPA, Prometheus | Enterprise config management |
+---
 
-### Integration Targets (Inspiration)
-- **Kernel-level:** `xdp-firewall` (eBPF/XDP) for line-rate packet drops.
-- **Analytics:** `apache/datafusion` as the query engine for traffic flows.
-- **Consistency:** `Raft` / `Tokio-Gossip` for cluster synchronization.
-- **Anomaly Detection:** `Extended Isolation Forest` for ML-driven pattern discovery.
+*This document is source-controlled. If it contradicts CHANGELOG.md,
+CHANGELOG.md wins — it records what actually shipped.*
