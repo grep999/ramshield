@@ -254,6 +254,9 @@ impl Default for WalConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardConfig {
     pub enabled: bool,
+    /// Bind address for the dashboard HTTP server. Default: `127.0.0.1:9999`.
+    /// Override in config.toml to expose on a different port or interface.
+    #[serde(default = "default_dashboard_http_addr")]
     pub http_addr: String,
     /// Block-history ring size served by `/api/history/blocks`.
     /// 40 was too small to be useful during floods — entries scrolled out
@@ -271,6 +274,9 @@ pub struct DashboardConfig {
 }
 fn default_session_ttl_secs() -> u64 {
     28_800
+}
+fn default_dashboard_http_addr() -> String {
+    "127.0.0.1:9999".into()
 }
 fn default_block_log_size() -> usize {
     1_000
