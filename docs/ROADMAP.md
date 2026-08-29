@@ -16,10 +16,10 @@ Target: end of Q4 2026.
 - [ ] **Crash-free fuzz runs** — zero panics or aborts after 10M iterations
   across all harnesses.
 - [ ] **Security audit** — third-party audit engagement signed. Report published
-  or embargo until next minor. Tracked in issue #125.
+  or embargo until next minor. Tracked in issue #125 (to be filed at PR merge).
 - [ ] **Remove remaining production `.unwrap()/.expect()`** — `rg` returns only
   in test modules. Started in 0.2 (lock-poisoning case in `engine::boot_pipeline`),
-  ~16 instances remain across 9 files. Tracked in issue #127.
+  ~39 instances remain across 18 files. Tracked in issue #127 (to be filed at PR merge).
 
 ---
 

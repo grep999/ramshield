@@ -97,7 +97,7 @@ What's solid today:
   `Result::Err`, never a panic. We are removing production `.unwrap()/.expect()`
   one at a time; the lock-poisoning case in `engine::boot_pipeline` is the
   first to land (was a startup panic-once bug). Remaining instances are
-  documented in issue #127 and scheduled for 0.3.
+  documented in issue #127 (to be filed at PR merge) and scheduled for 0.3.
 - **WAL-first durability** — restart replays live blocks (store + XDP) in
   <1s, TTL-aware.
 - **Hardening** — HMAC-SHA256 frame auth, Argon2 dashboard login, no
@@ -112,9 +112,9 @@ What's solid today:
 
 What's not yet, and why:
 
-- **No third-party security audit.** Tracked under issue #125.
+- **No third-party security audit.** Tracked under issue #125 (to be filed at PR merge).
 - **No K8s operator.** Single-replica Deployment is correct until WAL
-  supports a shared backend (issue #126).
+  supports a shared backend (to be filed as issue at PR merge).
 - **No compliance certs** (SOC2, ISO 27001). Self-hosted open source;
   certificate work follows enterprise sponsorship.
 - **Continuous fuzzing in CI is not yet wired** — fuzzing runs in `cargo

@@ -51,7 +51,7 @@ kubectl -n ramshield port-forward svc/ramshield-dashboard 9999:9999
 **The container image is not pre-built.** The `Containerfile` at the repo
 root produces a distroless nonroot image; the `ghcr.io/grep999/ramshield:0.2.0`
 reference in `deployment.yaml` will fail with `ImagePullBackOff` until you
-build and push it. CI builds are tracked under issue #128.
+build and push it. CI builds are tracked under issue #128 (to be filed at PR merge).
 
 ## XDP
 
