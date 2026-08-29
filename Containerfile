@@ -26,7 +26,11 @@ RUN touch src/main.rs src/cli.rs && cargo build --release --locked -F full \
     && strip target/release/ramshield
 
 # ---- runtime ----
-FROM gcr.io/distroless/static-debian12:nonroot
+# cc-debian12 (not static): cargo --release on bookworm produces a glibc-linked
+# binary (libgcc_s, libm, libc). static-debian12 has no libc → runtime fail.
+# ponytail: switch to musl (`--target x86_64-unknown-linux-musl` + musl-tools)
+# when we want a fully static image.
+FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=builder /build/target/release/ramshield /usr/local/bin/ramshield
 USER 65532:65532
 EXPOSE 7890 9999
