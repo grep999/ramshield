@@ -1,4 +1,4 @@
-# Cron Job Status — 2026-08-29 08:40 UTC
+# Cron Job Status — 2026-08-29 08:50 UTC
 
 **Live snapshot from `hermes cron list`.** 28 jobs tracked. Updated every 5 minutes.
 
@@ -13,22 +13,22 @@
 | Job | Schedule | Status | Execution | Last Run |
 | :--- | :--- | :--- | :--- | :--- |
 | RamShield Promotion Agent | `0 9 * * *` | ❌ error | failed | 2026-08-29T10:16:23.381073+02:00 |
-| ramshield-helper-agent | `*/10 * * * *` | 🏃 running | running | 2026-08-29T10:31:32.419600+02:00 |
+| ramshield-helper-agent | `*/10 * * * *` | 🏃 running | running | 2026-08-29T10:41:10.367692+02:00 |
 | ramshield-facts-collector | `*/30 * * * *` | ✅ ok | completed | 2026-08-29T10:30:40.884307+02:00 |
 | ramshield-daily-planner | `0 1 * * *` | ✅ ok | completed | 2026-08-29T10:17:39.405682+02:00 |
 | ramshield-reviewer | `0 3 * * *` | ✅ ok | completed | 2026-08-29T10:20:46.115472+02:00 |
-| ramshield-cron-status | `*/5 * * * *` | 🏃 running | running | 2026-08-29T10:35:43.118123+02:00 |
-| ramshield-pulse | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-29T10:35:43.485222+02:00 |
-| ramshield-health-loop | `*/15 * * * *` | ✅ ok | completed | 2026-08-29T10:31:01.232240+02:00 |
+| ramshield-cron-status | `*/5 * * * *` | 🏃 running | running | 2026-08-29T10:45:44.188296+02:00 |
+| ramshield-pulse | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-29T10:45:44.459336+02:00 |
+| ramshield-health-loop | `*/15 * * * *` | ✅ ok | completed | 2026-08-29T10:46:02.557594+02:00 |
 | ramshield-health-repair | `0 * * * *` | ✅ ok | completed | 2026-08-29T10:21:42.267608+02:00 |
-| ramshield-git-automation | `*/15 * * * *` | ✅ ok | completed | 2026-08-29T10:31:01.581394+02:00 |
-| promo-qw-github-topics | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-29T10:35:43.828864+02:00 |
-| promo-qw-awesome-rust | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-29T10:35:44.146973+02:00 |
-| promo-qw-crates-io | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-29T10:35:44.482061+02:00 |
-| promo-fast-reddit | `*/10 * * * *` | 📅 scheduled | claimed | 2026-08-29T10:31:02.682464+02:00 |
-| promo-fast-x | `*/10 * * * *` | 📅 scheduled | claimed | 2026-08-29T10:31:02.948516+02:00 |
-| promo-std-devto | `*/15 * * * *` | ✅ ok | completed | 2026-08-29T10:31:03.267575+02:00 |
-| promo-std-hn | `*/15 * * * *` | ✅ ok | completed | 2026-08-29T10:31:03.650810+02:00 |
+| ramshield-git-automation | `*/15 * * * *` | ✅ ok | completed | 2026-08-29T10:46:02.890014+02:00 |
+| promo-qw-github-topics | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-29T10:46:03.172728+02:00 |
+| promo-qw-awesome-rust | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-29T10:46:03.517620+02:00 |
+| promo-qw-crates-io | `*/5 * * * *` | 📅 scheduled | claimed | 2026-08-29T10:46:03.875921+02:00 |
+| promo-fast-reddit | `*/10 * * * *` | 📅 scheduled | claimed | 2026-08-29T10:40:45.234609+02:00 |
+| promo-fast-x | `*/10 * * * *` | 📅 scheduled | claimed | 2026-08-29T10:40:45.537950+02:00 |
+| promo-std-devto | `*/15 * * * *` | ✅ ok | completed | 2026-08-29T10:46:04.165957+02:00 |
+| promo-std-hn | `*/15 * * * *` | ✅ ok | completed | 2026-08-29T10:46:04.434326+02:00 |
 | promo-deep-blog | `*/30 * * * *` | ✅ ok | completed | 2026-08-29T10:31:03.988835+02:00 |
 | promo-deep-rust-weekly | `*/30 * * * *` | ✅ ok | completed | 2026-08-29T10:31:04.224175+02:00 |
 | promo-strategic-plan | `0 * * * *` | ✅ ok | completed | 2026-08-29T10:21:45.937980+02:00 |
@@ -63,10 +63,10 @@
     Name:      ramshield-helper-agent
     Schedule:  */10 * * * *
     Repeat:    ∞
-    Next run:  2026-08-29T10:50:00+02:00
+    Next run:  2026-08-29T11:00:00+02:00
     Deliver:   local
-    Last run:  2026-08-29T10:31:32.419600+02:00  ok
-    Execution: running  9ab0a3e7e2674d39baabb6053ab4a893
+    Last run:  2026-08-29T10:41:10.367692+02:00  ok
+    Execution: running  7a9b0ffd12374f4bbff59bd46b225ebe
 
   1cb5e490c826 [active]
     Name:      ramshield-facts-collector
@@ -106,37 +106,37 @@
     Name:      ramshield-cron-status
     Schedule:  */5 * * * *
     Repeat:    ∞
-    Next run:  2026-08-29T10:45:00+02:00
+    Next run:  2026-08-29T10:55:00+02:00
     Deliver:   local
     Script:    cron_status_collector.py
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-29T10:35:43.118123+02:00  ok
-    Execution: running  0f98eb85d21c44259fb11a82728ff9c9
+    Last run:  2026-08-29T10:45:44.188296+02:00  ok
+    Execution: running  103982b90d444915a7dca2a7766f1aaf
 
   076a9de35470 [active]
     Name:      ramshield-pulse
     Schedule:  */5 * * * *
     Repeat:    ∞
-    Next run:  2026-08-29T10:45:00+02:00
+    Next run:  2026-08-29T10:55:00+02:00
     Deliver:   local
     Script:    pulse_agent.py
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-29T10:35:43.485222+02:00  ok
-    Execution: claimed  e7a6a01e8582406180904cf2f4d5b704
+    Last run:  2026-08-29T10:45:44.459336+02:00  ok
+    Execution: claimed  15a94d71aaa9460da501f968b8999a27
 
   3bc0c27129c2 [active]
     Name:      ramshield-health-loop
     Schedule:  */15 * * * *
     Repeat:    ∞
-    Next run:  2026-08-29T10:45:00+02:00
+    Next run:  2026-08-29T11:00:00+02:00
     Deliver:   local
     Script:    health_check_repair.py
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-29T10:31:01.232240+02:00  ok
-    Execution: completed  374e25e3bcd24977950afb7876cba132
+    Last run:  2026-08-29T10:46:02.557594+02:00  ok
+    Execution: completed  f2153a301da4457aad74735970b34ceb
 
   22f70c51ef6f [active]
     Name:      ramshield-health-repair
@@ -154,97 +154,97 @@
     Name:      ramshield-git-automation
     Schedule:  */15 * * * *
     Repeat:    ∞
-    Next run:  2026-08-29T10:45:00+02:00
+    Next run:  2026-08-29T11:00:00+02:00
     Deliver:   local
     Script:    git_automation.py
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-29T10:31:01.581394+02:00  ok
-    Execution: completed  a21d343059ec457ca18025b50b627d5a
+    Last run:  2026-08-29T10:46:02.890014+02:00  ok
+    Execution: completed  4d84d50c24d842d3bb105a8c1f141e33
 
   cdc99e8f0b2c [active]
     Name:      promo-qw-github-topics
     Schedule:  */5 * * * *
     Repeat:    ∞
-    Next run:  2026-08-29T10:45:00+02:00
+    Next run:  2026-08-29T10:55:00+02:00
     Deliver:   local
     Script:    promo_qw_github_topics.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-29T10:35:43.828864+02:00  ok
-    Execution: claimed  2920230ed2934f4f8e05cbc8dceac166
+    Last run:  2026-08-29T10:46:03.172728+02:00  ok
+    Execution: claimed  605b42865f0b42589fabd30aa9f0ad2a
 
   4c68ff84646b [active]
     Name:      promo-qw-awesome-rust
     Schedule:  */5 * * * *
     Repeat:    ∞
-    Next run:  2026-08-29T10:45:00+02:00
+    Next run:  2026-08-29T10:55:00+02:00
     Deliver:   local
     Script:    promo_qw_awesome_rust.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-29T10:35:44.146973+02:00  ok
-    Execution: claimed  952a4c9d273149d9a6846eb4db2ac960
+    Last run:  2026-08-29T10:46:03.517620+02:00  ok
+    Execution: claimed  a10f4ce4d2c741aea8fb15333ee3c53e
 
   f192f20e812a [active]
     Name:      promo-qw-crates-io
     Schedule:  */5 * * * *
     Repeat:    ∞
-    Next run:  2026-08-29T10:45:00+02:00
+    Next run:  2026-08-29T10:55:00+02:00
     Deliver:   local
     Script:    promo_qw_crates_io.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-29T10:35:44.482061+02:00  ok
-    Execution: claimed  903357f033b54ecdb0a94b873e1c2343
+    Last run:  2026-08-29T10:46:03.875921+02:00  ok
+    Execution: claimed  8b2140b6ade14f21a59873c201f115a7
 
   d758989bd22f [active]
     Name:      promo-fast-reddit
     Schedule:  */10 * * * *
     Repeat:    ∞
-    Next run:  2026-08-29T10:50:00+02:00
+    Next run:  2026-08-29T11:00:00+02:00
     Deliver:   local
     Script:    promo_fast_reddit.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-29T10:31:02.682464+02:00  ok
-    Execution: claimed  61f38787fca14bd089a0d9ec002703da
+    Last run:  2026-08-29T10:40:45.234609+02:00  ok
+    Execution: claimed  6222a20eea5d4df1993bad688f14295b
 
   22cb958d90ef [active]
     Name:      promo-fast-x
     Schedule:  */10 * * * *
     Repeat:    ∞
-    Next run:  2026-08-29T10:50:00+02:00
+    Next run:  2026-08-29T11:00:00+02:00
     Deliver:   local
     Script:    promo_fast_x.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-29T10:31:02.948516+02:00  ok
-    Execution: claimed  afe803de8b294177a47bef234413340c
+    Last run:  2026-08-29T10:40:45.537950+02:00  ok
+    Execution: claimed  194e56f7d1934e4298ec09b6f35f4799
 
   5d51ca4e9179 [active]
     Name:      promo-std-devto
     Schedule:  */15 * * * *
     Repeat:    ∞
-    Next run:  2026-08-29T10:45:00+02:00
+    Next run:  2026-08-29T11:00:00+02:00
     Deliver:   local
     Script:    promo_std_devto.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-29T10:31:03.267575+02:00  ok
-    Execution: completed  477d965dd7b54548aae9e054f25a2eaa
+    Last run:  2026-08-29T10:46:04.165957+02:00  ok
+    Execution: completed  77c60ab769a2444ea689ef8c353caa26
 
   c9aebd15e27c [active]
     Name:      promo-std-hn
     Schedule:  */15 * * * *
     Repeat:    ∞
-    Next run:  2026-08-29T10:45:00+02:00
+    Next run:  2026-08-29T11:00:00+02:00
     Deliver:   local
     Script:    promo_std_hn.sh
     Mode:      no-agent (script stdout delivered directly)
     Workdir:   /home/m/vehicle_of_rationalism/ramshield/beta/rs
-    Last run:  2026-08-29T10:31:03.650810+02:00  ok
-    Execution: completed  0ce1c206ae794cc58f23bbd099f7b404
+    Last run:  2026-08-29T10:46:04.434326+02:00  ok
+    Execution: completed  7768251809bf4036b037d7bc0d3adadb
 
   5275947fb767 [active]
     Name:      promo-deep-blog
