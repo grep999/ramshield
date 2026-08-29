@@ -19,7 +19,9 @@ Target: end of Q4 2026.
   or embargo until next minor. Tracked in issue #125 (to be filed at PR merge).
 - [ ] **Remove remaining production `.unwrap()/.expect()`** — `rg` returns only
   in test modules. Started in 0.2 (lock-poisoning case in `engine::boot_pipeline`),
-  ~39 instances remain across 18 files. Tracked in issue #127 (to be filed at PR merge).
+  39 instances remain across 4 files (`src/main.rs`, `src/cli.rs`,
+  `src/dashboard/mod.rs`, `src/dashboard/auth.rs`). Tracked in issue #127
+  (to be filed at PR merge).
 
 ---
 
@@ -33,7 +35,7 @@ compliance framework" — that follows enterprise adoption.
 
 | Blocker | Verification |
 |---------|--------------|
-| Zero production `.unwrap()/.expect()` in `src/` | `rg '\.(unwrap\|expect)(' src/*.rs src/**/*.rs` returns only in test modules |
+| Zero production `.unwrap()/.expect()` in `src/` | `rg '\\.(unwrap\|expect)(' src/` — 39 instances in 4 files (all pre-existing) |
 | WAL handles shared-backend (PostgreSQL / S3) | Integration test spins up Postgres, writes block, kills process, restarts, block present |
 | Config hot-reload without restart | `SIGHUP` or `/api/reload` — old connections drain, new config applies |
 | End-to-end test suite runs in < 60 s on a 4-core VM | `scripts/suite.py e2e` exit 0 in < 60 s |

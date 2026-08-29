@@ -111,7 +111,7 @@ cargo build --all-targets && cargo clippy --all-targets -- -D warnings && cargo 
 python3 scripts/suite.py load run --profile l7_http_flood --duration 60
 
 # Check server health
-curl http://127.0.0.1:7891/healthz
+curl http://127.0.0.1:9999/healthz
 ```
 
 ## License

@@ -24,8 +24,9 @@ distinct source IPs, CUSUM warm-up allowance).
 
 The IPC protocol parser and the config loader are exercised by `proptest`
 harnesses (`crates/ramshield-protocol/tests/fuzz.rs`,
-`crates/ramshield-config/tests/fuzz.rs`). 2,048 cases per harness on every
-`cargo test`. The harnesses assert:
+`crates/ramshield-config/tests/fuzz.rs`). The protocol harness runs
+2,048 cases per `cargo test`; the config harness runs 1,024. Both can be
+overridden at runtime via `PROPTEST_CASES=N`. The harnesses assert:
 
 - `serde_json` deserialization of `Request`/`Response` never panics on
   arbitrary bytes.
