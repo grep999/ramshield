@@ -16,13 +16,13 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 RUN mkdir -p src \
     && echo "fn main() {}" > src/main.rs \
-    && echo "" > src/lib.rs \
+    && echo "fn main() {}" > src/cli.rs \
     && cargo build --release --locked -F full \
     && rm -rf src
 
 # Now copy the real source and rebuild (deps cached).
 COPY src ./src
-RUN touch src/main.rs && cargo build --release --locked -F full \
+RUN touch src/main.rs src/cli.rs && cargo build --release --locked -F full \
     && strip target/release/ramshield
 
 # ---- runtime ----
