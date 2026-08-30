@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -193,8 +194,8 @@ pub struct Metrics {
     pub last_batch_events: Arc<AtomicU64>,
     pub last_batch_promoted: Arc<AtomicU64>,
     pub last_batch_blocks: Arc<AtomicU64>,
-    pub last_batch: Arc<Mutex<Option<BatchRecord>>>,
-    pub batch_history: Arc<Mutex<VecDeque<BatchRecord>>>,
+    pub last_batch: Arc<Mutex<Option<Arc<BatchRecord>>>>,
+    pub batch_history: Arc<Mutex<VecDeque<Arc<BatchRecord>>>>,
     pub block_log: Arc<Mutex<VecDeque<BlockRecord>>>,
     pub block_log_cap: usize,
     started_ms: u64,
@@ -264,14 +265,16 @@ impl Metrics {
             .fetch_add(rec.cold_skipped as u64, Ordering::Relaxed);
         self.blocks_detection
             .fetch_add(rec.blocks as u64, Ordering::Relaxed);
+        // ponytail: Arc avoids the full BatchRecord clone (~64 B) on every batch.
+        let shared = Arc::new(rec);
         if let Ok(mut h) = self.batch_history.lock() {
             if h.len() >= HISTORY {
                 h.pop_front();
             }
-            h.push_back(rec.clone());
+            h.push_back(Arc::clone(&shared));
         }
         if let Ok(mut lb) = self.last_batch.lock() {
-            *lb = Some(rec);
+            *lb = Some(shared);
         }
     }
 
@@ -280,6 +283,25 @@ impl Metrics {
             while log.len() >= self.block_log_cap {
                 log.pop_front();
             }
+            log.push_back(BlockRecord {
+                ts_ms: now_ms(),
+                ip: ip.to_string(),
+                reason: reason.to_string(),
+                module: module.to_string(),
+            });
+        }
+    }
+
+    /// Record a block event with `IpAddr`, avoiding caller-side `to_string()`.
+    #[inline]
+    pub fn record_block_ip(&self, ip: &IpAddr, reason: &str, module: &str) {
+        if let Ok(mut log) = self.block_log.lock() {
+            while log.len() >= self.block_log_cap {
+                log.pop_front();
+            }
+            // ponytail: avoid double-format of IpAddr — caller used to call
+            // `record_block(&ip.to_string(), ...)` which allocated a throwaway
+            // String just to feed it to `to_string()` again inside.
             log.push_back(BlockRecord {
                 ts_ms: now_ms(),
                 ip: ip.to_string(),
@@ -307,9 +329,12 @@ impl Metrics {
     }
 
     pub fn get_batch_history(&self) -> Vec<BatchRecord> {
+        // ponytail: Arc::try_unwrap would copy if we're the sole holder; in
+        // practice the deque + last_batch always hold one ref each, so 2 copies.
+        // Cheap (64 B/record × 80 entries).
         self.batch_history
             .lock()
-            .map(|h| h.iter().cloned().collect())
+            .map(|h| h.iter().map(|a| (**a).clone()).collect())
             .unwrap_or_default()
     }
 

@@ -31,7 +31,7 @@ echo "→ booting binary with $CFG (WAL=$WAL_DIR)"
 RAMSHIELD_ENGINE__RAM_LIMIT_MB=1024 \
     "$BIN" --config "$CFG" --no-xdp > "$LOG" 2>&1 &
 PID=$!
-trap "kill -9 $PID 2>/dev/null || true" EXIT
+trap "kill -9 $PID 2>/dev/null || true; pkill -9 -f 'ramshield --config' 2>/dev/null || true" EXIT
 
 # Wait for health
 for i in {1..20}; do
@@ -41,9 +41,20 @@ for i in {1..20}; do
 done
 green "✓ boot: /healthz ok"
 
+ipc_send() {
+    python3 -c "
+import socket, json, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(3)
+s.connect(('$IPC', 7890))
+s.sendall((sys.argv[1] + '\n').encode())
+print(s.recv(4096).decode().strip())
+s.close()
+" "$1"
+}
+
 # Block via IPC
-RESP=$(printf '%s' '{"type":"block_ip","ip":"203.0.113.7","reason":"prod_smoke","ttl_secs":300}' | \
-       timeout 3 nc -q1 "$IPC" 2>/dev/null || true)
+RESP=$(ipc_send '{"type":"block_ip","ip":"203.0.113.7","reason":"prod_smoke","ttl_secs":300}')
 echo "$RESP" | grep -q "block queued" || fail "block_ip did not respond: $RESP"
 green "✓ IPC: block_ip queued"
 
@@ -70,8 +81,7 @@ echo "$MT" | grep -q "ramshield_blocks_total" || fail "Prometheus metrics missin
 green "✓ DASH: /metrics serves Prometheus format"
 
 # Unblock
-RESP=$(printf '%s' '{"type":"unblock_ip","ip":"203.0.113.7"}' | \
-       timeout 3 nc -q1 "$IPC" 2>/dev/null || true)
+RESP=$(ipc_send '{"type":"unblock_ip","ip":"203.0.113.7"}')
 echo "$RESP" | grep -q "unblock queued" || fail "unblock_ip did not respond: $RESP"
 green "✓ IPC: unblock_ip queued"
 

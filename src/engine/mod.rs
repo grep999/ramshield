@@ -146,20 +146,39 @@ impl Engine {
     }
 
     pub fn get_hot_subnets(&self) -> Vec<SubnetRow> {
+        // ponytail: select_nth_unstable finds the 100th in O(n) — old sort was
+        // O(n log n) when only top-100 is kept. Strings still allocate; the
+        // real win is avoiding the sort.
+        if self.store.subnet_table().is_empty() {
+            return Vec::new();
+        }
         let mut rows: Vec<SubnetRow> = self
             .store
             .subnet_table()
             .iter()
             .map(|e| {
                 let rec = e.value();
+                // ponytail: pre-sized — IPv4 /24 never exceeds 15 chars.
+                let mut prefix = String::with_capacity(15);
+                let _ = std::fmt::Write::write_fmt(
+                    &mut prefix,
+                    format_args!(
+                        "{}.{}.{}",
+                        rec.prefix[0], rec.prefix[1], rec.prefix[2]
+                    ),
+                );
                 SubnetRow {
-                    prefix: format!("{}.{}.{}", rec.prefix[0], rec.prefix[1], rec.prefix[2]),
+                    prefix,
                     events: rec.total_rps,
                 }
             })
             .collect();
-        rows.sort_by_key(|r| std::cmp::Reverse(r.events));
-        rows.truncate(100);
+        if rows.len() > 100 {
+            rows.select_nth_unstable_by_key(100, |r| std::cmp::Reverse(r.events));
+            rows.truncate(100);
+        } else {
+            rows.sort_by_key(|r| std::cmp::Reverse(r.events));
+        }
         rows
     }
 

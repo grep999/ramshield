@@ -290,7 +290,7 @@ impl Forecaster {
                 warn!(%ip, "enforcement queue full; forecast block rejected");
             }
             self.metrics
-                .record_block(&ip.to_string(), "forecast_anomaly", "forecasting");
+                .record_block_ip(&ip, "forecast_anomaly", "forecasting");
             self.metrics.blocks_forecast.fetch_add(1, Ordering::Relaxed);
             n += 1;
         }

@@ -458,8 +458,8 @@ fn process_request(
             };
             match enforcement_tx.try_send(cmd) {
                 Ok(()) => {
-                    engine.metrics.record_block(
-                        &ip,
+                    engine.metrics.record_block_ip(
+                        &ip_addr,
                         &reason_display,
                         "ipc",
                     );

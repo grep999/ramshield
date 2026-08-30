@@ -235,6 +235,11 @@ pub struct Store {
     /// Maintained during batch flush to avoid O(store_size) scans.
     subnet_index: Arc<DashMap<SubnetKey, DashSet<IpAddr>>>,
     ram_bytes: Arc<AtomicUsize>,
+    /// O(1) blocked count — updated on BlockState transitions in insert().
+    /// ponytail: does not track pre-existing blocked IPs from WAL replay unless
+    /// replay calls insert() with a Blocked state (it does). add scan at boot
+    /// if needed.
+    blocked_count: Arc<AtomicU64>,
     pub traffic: Arc<TrafficCounters>,
     pub total_inserts: Arc<AtomicU64>,
     pub total_evictions: Arc<AtomicU64>,
@@ -252,6 +257,7 @@ impl Store {
             subnet_table: Arc::new(DashMap::with_shard_amount(32)),
             subnet_index: Arc::new(DashMap::with_shard_amount(32)),
             ram_bytes: Arc::new(AtomicUsize::new(0)),
+            blocked_count: Arc::new(AtomicU64::new(0)),
             traffic: Arc::new(TrafficCounters::new()),
             total_inserts: Arc::new(AtomicU64::new(0)),
             total_evictions: Arc::new(AtomicU64::new(0)),
@@ -321,7 +327,13 @@ impl Store {
             ram_limit_bytes
         );
         let expires_at = ttl_secs.map(|s| Instant::now() + Duration::from_secs(s));
+        // Snapshot old blocked state before insert for O(1) blocked_count tracking.
+        let was_blocked = self
+            .inner
+            .get(&key)
+            .is_some_and(|e| e.value().value.is_blocked());
         let new_entry = Entry { value, expires_at };
+        let new_blocked = new_entry.value.is_blocked();
         let entry_size = std::mem::size_of::<IpAddr>()
             + std::mem::size_of::<Entry>()
             + new_entry.value.heap_bytes();
@@ -354,6 +366,12 @@ impl Store {
             .used_bytes
             .fetch_add(net_growth as u64, Ordering::Relaxed);
         self.total_inserts.fetch_add(1, Ordering::Relaxed);
+        // O(1) blocked_count tracking — only mutate on transition.
+        if !was_blocked && new_blocked {
+            self.blocked_count.fetch_add(1, Ordering::Relaxed);
+        } else if was_blocked && !new_blocked {
+            self.blocked_count.fetch_sub(1, Ordering::Relaxed);
+        }
         tracing::debug!("Store::insert - Successfully inserted key: {}", key);
         Ok(())
     }
@@ -367,17 +385,25 @@ impl Store {
     }
 
     pub fn evict_batch(&self, keys: &[IpAddr]) {
+        // ponytail: `entry()` gives exclusive shard lock once per key
+        // (no separate get + remove = 1 lock acquisition instead of 2).
         for key in keys {
-            let expired = self.inner.get(key).is_some_and(|e| e.is_expired());
-            if expired && let Some((_k, e)) = self.inner.remove(key) {
-                let freed = std::mem::size_of::<IpAddr>()
-                    + std::mem::size_of::<Entry>()
-                    + e.value.heap_bytes();
-                self.ram_bytes.fetch_sub(freed, Ordering::Relaxed);
-                self.traffic
-                    .used_bytes
-                    .fetch_sub(freed as u64, Ordering::Relaxed);
-                self.total_evictions.fetch_add(1, Ordering::Relaxed);
+            if let dashmap::Entry::Occupied(e) = self.inner.entry(*key) {
+                if e.get().is_expired() {
+                    let was_blocked = e.get().value.is_blocked();
+                    let (_, removed) = e.remove_entry();
+                    let freed = std::mem::size_of::<IpAddr>()
+                        + std::mem::size_of::<Entry>()
+                        + removed.value.heap_bytes();
+                    self.ram_bytes.fetch_sub(freed, Ordering::Relaxed);
+                    self.traffic
+                        .used_bytes
+                        .fetch_sub(freed as u64, Ordering::Relaxed);
+                    self.total_evictions.fetch_add(1, Ordering::Relaxed);
+                    if was_blocked {
+                        self.blocked_count.fetch_sub(1, Ordering::Relaxed);
+                    }
+                }
             }
         }
     }
@@ -391,6 +417,9 @@ impl Store {
                 .used_bytes
                 .fetch_sub(freed as u64, Ordering::Relaxed);
             self.total_evictions.fetch_add(1, Ordering::Relaxed);
+            if e.value.is_blocked() {
+                self.blocked_count.fetch_sub(1, Ordering::Relaxed);
+            }
             e.value
         })
     }
@@ -413,11 +442,8 @@ impl Store {
     /// Returns aggregate store statistics for dashboard / CLI.
     pub fn get_stats(&self) -> StoreStats {
         let ips_tracked = self.inner.len();
-        let blocked = self
-            .inner
-            .iter()
-            .filter(|e| e.value().value.is_blocked())
-            .count() as u64;
+        // ponytail: O(1) via atomic counter — no O(store) scan.
+        let blocked = self.blocked_count.load(Ordering::Relaxed);
         let ram_bytes = self.ram_bytes.load(Ordering::Relaxed);
         let ram_limit_mb = self.traffic.ram_limit_mb.load(Ordering::Relaxed);
         let uptime_secs = self.traffic.uptime_secs.load(Ordering::Relaxed);

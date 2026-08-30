@@ -6,7 +6,7 @@ pub mod batch;
 pub mod rate_tracker;
 
 use anyhow::Result;
-use batch::{IpAgg, aggregate, subnet_key};
+use batch::{IpAgg, aggregate};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded};
 use dashmap::DashMap;
 use ramshield_config::{ConfigHandle, DetectionConfig};
@@ -220,11 +220,7 @@ impl DetectionEngine {
         self.metrics.inc_ingested(total_events);
 
         let subnet_counts = subnet_counts_of(&aggs);
-        // ponytail: pass aggs straight through — reconstructing per-event
-        // ConnectionEvents and re-aggregating was O(N) allocs + lost the real
-        // status distribution. Upgrade path: none.
-        let networks = HashMap::new(); // pre-agg path: merge_subnet_window derives prefix from table
-        self.flush_batch(&aggs, &subnet_counts, &networks, total_events);
+        self.flush_batch(&aggs, &subnet_counts, &HashMap::new(), total_events);
     }
 
     pub fn spawn_workers(self: Arc<Self>, _n: usize) {
@@ -348,8 +344,9 @@ impl DetectionEngine {
         let hot_subnets = subnet_counts.len();
 
         for &(ip, ref agg) in ip_aggs {
-            let subnet_hot = subnet_key(ip)
-                .and_then(|(sk, _)| subnet_counts.get(&sk))
+            let sk = subnet_key_u128(ip);
+            let subnet_hot = sk
+                .and_then(|k| subnet_counts.get(&k))
                 .is_some_and(|&(ev, _)| ev as u64 >= det.subnet_window_threshold);
 
             let (a, b) = BloomFilter::slots(&ip);
@@ -371,7 +368,7 @@ impl DetectionEngine {
             // ponytail: merge_record does the single store lookup (is_blocked check
             // was a second DashMap hit on the same key).
             let (ewma_rps, threat, should_block, was_blocked) =
-                self.merge_record(ip, agg, det, ram_lim, now);
+                self.merge_record(ip, agg, det, ram_lim, now, sk);
             if was_blocked {
                 continue;
             }
@@ -402,8 +399,7 @@ impl DetectionEngine {
 
         let block_count = blocks.len() as u32;
         for b in &blocks {
-            self.metrics
-                .record_block(&b.0.to_string(), b.1.as_str(), "detection");
+            self.metrics.record_block_ip(&b.0, b.1.as_str(), "detection");
         }
         // ponytail: warn once per 1024 rejections — log churn kills throughput
         // under sustained queue pressure. Upgrade: sliding-window rate limiter
@@ -450,6 +446,7 @@ impl DetectionEngine {
     /// ponytail: returns the 4-tuple `(ewma_rps, threat, should_block, was_blocked)`.
     /// `was_blocked` is set true if the IP already had a BlockState, so callers can
     /// skip the extra store.get() they used to do.
+    /// `sk`: pre-computed subnet key (avoids redundant `subnet_key_u128` call).
     fn merge_record(
         &self,
         ip: IpAddr,
@@ -457,6 +454,7 @@ impl DetectionEngine {
         det: &DetectionConfig,
         ram_lim: usize,
         now: u64,
+        sk: Option<SubnetKey>,
     ) -> (f64, f32, bool, bool) {
         let existing = self.store.get(&ip);
         if let Some(Value::IpRecord(ref r)) = existing
@@ -548,7 +546,7 @@ impl DetectionEngine {
             warn!("Failed to insert IP record for {}: {}", ip, e);
         }
         self.store
-            .update_subnet_index(ip, subnet_key_u128(ip), false);
+            .update_subnet_index(ip, sk, false);
         (ewma_rps, threat, block, false)
     }
 
@@ -619,7 +617,7 @@ impl DetectionEngine {
                             warn!(ip=%r.ip, "enforcement queue full; subnet block rejected");
                         }
                         self.metrics
-                            .record_block(&r.ip.to_string(), "subnet_batch", "detection");
+                            .record_block_ip(&r.ip, "subnet_batch", "detection");
                         self.metrics.blocks_subnet.fetch_add(1, Ordering::Relaxed);
                     }
                 }
