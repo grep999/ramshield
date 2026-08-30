@@ -39,7 +39,7 @@ Transport: TCP, address from `engine.ipc.tcp_addr`, max concurrent connections f
 ## Minimal example (POSIX nc)
 
 ```sh
-printf '{"type":"check_ip","ip":"1.2.3.4"}\n' | nc -w1 127.0.0.1 7900
+printf '{"type":"check_ip","ip":"1.2.3.4"}\n' | nc -w1 127.0.0.1 7890
 # {"type":"ip_status","ip":"1.2.3.4","blocked":false,"threat":0.0,"ewma_rps":0.0,"reason":null}
 ```
 

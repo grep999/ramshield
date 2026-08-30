@@ -388,21 +388,21 @@ impl Store {
         // ponytail: `entry()` gives exclusive shard lock once per key
         // (no separate get + remove = 1 lock acquisition instead of 2).
         for key in keys {
-            if let dashmap::Entry::Occupied(e) = self.inner.entry(*key) {
-                if e.get().is_expired() {
-                    let was_blocked = e.get().value.is_blocked();
-                    let (_, removed) = e.remove_entry();
-                    let freed = std::mem::size_of::<IpAddr>()
-                        + std::mem::size_of::<Entry>()
-                        + removed.value.heap_bytes();
-                    self.ram_bytes.fetch_sub(freed, Ordering::Relaxed);
-                    self.traffic
-                        .used_bytes
-                        .fetch_sub(freed as u64, Ordering::Relaxed);
-                    self.total_evictions.fetch_add(1, Ordering::Relaxed);
-                    if was_blocked {
-                        self.blocked_count.fetch_sub(1, Ordering::Relaxed);
-                    }
+            if let dashmap::Entry::Occupied(e) = self.inner.entry(*key)
+                && e.get().is_expired()
+            {
+                let was_blocked = e.get().value.is_blocked();
+                let (_, removed) = e.remove_entry();
+                let freed = std::mem::size_of::<IpAddr>()
+                    + std::mem::size_of::<Entry>()
+                    + removed.value.heap_bytes();
+                self.ram_bytes.fetch_sub(freed, Ordering::Relaxed);
+                self.traffic
+                    .used_bytes
+                    .fetch_sub(freed as u64, Ordering::Relaxed);
+                self.total_evictions.fetch_add(1, Ordering::Relaxed);
+                if was_blocked {
+                    self.blocked_count.fetch_sub(1, Ordering::Relaxed);
                 }
             }
         }

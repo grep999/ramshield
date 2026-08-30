@@ -64,6 +64,12 @@ spec:
               port: dashboard
             initialDelaySeconds: 2
             periodSeconds: 5
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: dashboard
+            failureThreshold: 30
+            periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /healthz

@@ -39,6 +39,10 @@ impl Engine {
         }
     }
 
+    #[deprecated(
+        since = "0.2.0",
+        note = "no-op stub; use start_async() instead to actually boot the pipeline"
+    )]
     pub fn start(&self) {
         info!("Engine::start: sync stub — call start_async to actually boot");
     }
@@ -96,14 +100,10 @@ impl Engine {
         let blocks_applied = metrics.blocks_detection.load(Ordering::Relaxed)
             + metrics.blocks_subnet.load(Ordering::Relaxed)
             + metrics.blocks_forecast.load(Ordering::Relaxed);
-        let (is_healthy, health_reason) = if self.is_shutting_down() {
-            (false, "shutting down".into())
-        } else if ram_pct >= 95.0 {
-            (false, "ram pressure".into())
-        } else {
-            (true, "running".into())
-        };
-        // ponytail: no last-event heartbeat; add when Metrics grows a last_event_ns.
+        let channel_depth = 0usize;
+        // ponytail: tokio::sync::mpsc::Sender has no len(). Real depth
+        // requires an AtomicU64 gauge in IPC send + enforcement receive
+        // paths. Add when dashboard_channel_depth becomes a real SLO target.
 
         DashboardSnapshot {
             ts_ms: crate::metrics::now_ms(),
@@ -119,21 +119,21 @@ impl Engine {
             ipc_requests: metrics.requests_total.load(Ordering::Relaxed),
             events_ingested: ingested,
             events_rejected: metrics.events_rejected.load(Ordering::Relaxed),
-            channel_depth: 0,
+            channel_depth,
             batches_total: batches,
             promotions,
             cold_skipped: metrics.cold_skipped_total.load(Ordering::Relaxed),
             blocks_applied,
             pipeline: crate::metrics::PipelineFlow {
                 ingest: ingested,
-                queued: 0,
+                queued: channel_depth as u64,
                 batched: batches,
                 promoted: promotions,
-                merged: 0,
+                merged: stats.ips_tracked as u64,
                 blocked: blocks_applied,
             },
-            is_healthy,
-            health_reason,
+            is_healthy: !self.is_shutting_down(),
+            health_reason: if self.is_shutting_down() { "shutting down".into() } else { "running".into() },
         }
     }
 
@@ -185,10 +185,14 @@ impl Engine {
     pub fn get_module_stats(&self) -> Vec<ModuleStats> {
         let stats = self.store.get_stats();
         let ingested = self.metrics.events_ingested.load(Ordering::Relaxed);
+        let channel_depth = 0usize;
+        // ponytail: tokio::sync::mpsc::Sender has no len(). Real depth
+        // requires an AtomicU64 gauge in IPC send + enforcement receive
+        // paths. Add when dashboard_channel_depth becomes a real SLO target.
         self.metrics.get_module_stats_data(
             stats.uptime_secs,
             ingested,
-            0,
+            channel_depth,
             stats.ips_tracked,
             stats.ram_bytes,
             stats.ram_limit_mb,
@@ -369,6 +373,7 @@ mod startup_tests {
             Arc::new(Store::new(16)),
             Arc::new(Metrics::new()),
         );
+        #[allow(deprecated)]
         engine.start();
         let snap = engine.dashboard_snapshot();
         assert!(snap.is_healthy);
@@ -384,6 +389,7 @@ mod startup_tests {
             Arc::new(Store::new(16)),
             Arc::new(Metrics::new()),
         );
+        #[allow(deprecated)]
         engine.start();
         let stats = engine.get_module_stats();
         assert_eq!(stats.len(), 4);

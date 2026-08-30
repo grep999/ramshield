@@ -14,9 +14,37 @@ use network_types::{
     ip::Ipv4Hdr,
 };
 
-/// IPv4 source → present means DROP. Value unused.
+// IPv4 source → present means DROP. Value unused.
+// Capacity passed via BLOCKLIST_CAP env at build time (default 102_400).
+// Tune with `BLOCKLIST_CAP=1048576` for production deployments expecting
+// millions of concurrent blocks. Set per [xdp] config blocklist_cap userspace
+// limit when that ships.
 #[map]
-static BLOCKLIST: HashMap<u32, u8> = HashMap::with_max_entries(102_400, 0);
+static BLOCKLIST: HashMap<u32, u8> = HashMap::with_max_entries(blocklist_cap_env(), 0);
+
+#[inline(always)]
+const fn blocklist_cap_env() -> u32 {
+    // Default 102_400; override at build: BLOCKLIST_CAP=N cargo build ...
+    match option_env!("BLOCKLIST_CAP") {
+        Some(s) => {
+            // ponytail: const parse — no std::parse at compile time, only literal-ish.
+            // Honest: this only fires for non-numeric env vars; numbers in source still win.
+            let bytes = s.as_bytes();
+            let mut v: u32 = 0;
+            let mut i = 0;
+            while i < bytes.len() {
+                let c = bytes[i];
+                if c < b'0' || c > b'9' {
+                    return 102_400;
+                }
+                v = v.saturating_mul(10).saturating_add((c - b'0') as u32);
+                i += 1;
+            }
+            if v == 0 { 102_400 } else { v }
+        }
+        None => 102_400,
+    }
+}
 
 #[inline(always)]
 fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, ()> {

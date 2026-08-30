@@ -351,7 +351,16 @@ impl EnforcementService {
 }
 
 fn reason_to_block_reason(reason: &str) -> BlockReason {
-    BlockReason::from_reason_str(&reason.to_ascii_lowercase()).unwrap_or(BlockReason::ManualBlock)
+    match BlockReason::from_reason_str(&reason.to_ascii_lowercase()) {
+        Some(r) => r,
+        None => {
+            tracing::warn!(
+                reason = %reason,
+                "unknown block reason string; defaulting to ManualBlock"
+            );
+            BlockReason::ManualBlock
+        }
+    }
 }
 
 /// Replay WAL entries into the store: fold BlockIp/UnblockIp in LSN order to

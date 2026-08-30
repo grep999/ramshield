@@ -10,7 +10,7 @@
 # ---- builder ----
 # rust:nightly is required because the workspace uses edition = "2024"
 # (unstable).  Pin to a specific nightly date in CI to avoid regressions.
-FROM rustlang/rust:nightly AS builder
+FROM rustlang/rust:nightly-2026-08-29 AS builder
 WORKDIR /build
 
 # Cache dep layer first.
