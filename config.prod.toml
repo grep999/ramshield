@@ -24,8 +24,9 @@ http_addr = "0.0.0.0:9999"
 block_log_size = 1024
 
 [wal]
+enabled = true
 dir = "/var/lib/ramshield/wal"
-durability = "fsync"
+durability = "Fsync"
 compress = true
 seg_max_bytes = 67108864    # 64 MiB
 retention_max_bytes = 0     # unbounded
@@ -41,6 +42,7 @@ min_entropy = 4.5
 
 [detection]
 rps_threshold = 5000
+rate_window_secs = 10
 subnet_batch_threshold = 500
 subnet_batch_min_events = 50
 batch_block_enabled = true
