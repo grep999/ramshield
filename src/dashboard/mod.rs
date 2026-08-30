@@ -22,6 +22,7 @@ pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), 
         cfg.dashboard.admin_password_hash.clone(),
         cfg.dashboard.session_ttl_secs,
         cfg.dashboard.max_login_attempts,
+        cfg.dashboard.max_password_length,
     );
     let login = auth::router().with_state(auth.clone());
     let app = Router::new()

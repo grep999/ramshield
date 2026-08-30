@@ -165,6 +165,10 @@ pub struct IpcConfig {
     pub write_timeout_ms: Option<u64>,
     #[serde(default = "default_connection_idle_timeout_ms")]
     pub connection_idle_timeout_ms: Option<u64>,
+    /// Max line length in bytes (default 32MB). Frames exceeding this are dropped
+    /// and the connection is closed. Prevents memory exhaustion from malformed clients.
+    #[serde(default = "default_max_line_length")]
+    pub max_line_length: Option<usize>,
     /// HMAC-SHA256 keys as `key_id:hex_key` pairs. When non-empty, every IPC
     /// frame MUST carry a valid `"auth":{"key_id","ts_ms","sig"}` envelope
     /// (see protocol::auth). Empty = open server (loopback dev default).
@@ -184,6 +188,9 @@ fn default_write_timeout_ms() -> Option<u64> {
 fn default_connection_idle_timeout_ms() -> Option<u64> {
     Some(30_000)
 }
+fn default_max_line_length() -> Option<usize> {
+    Some(33_554_432) // 32MB — ponytail: 64MB limit needs different impl
+}
 impl Default for IpcConfig {
     fn default() -> Self {
         Self {
@@ -193,6 +200,7 @@ impl Default for IpcConfig {
             read_timeout_ms: None,
             write_timeout_ms: None,
             connection_idle_timeout_ms: None,
+            max_line_length: None,
             auth_keys: Vec::new(),
         }
     }
@@ -274,12 +282,19 @@ pub struct DashboardConfig {
     /// Max failed login attempts before lockout (default 50).
     #[serde(default = "default_max_login_attempts")]
     pub max_login_attempts: u32,
+    /// Max accepted password length (default 1024). Argon2 work is bounded so
+    /// garbage input can't pin the CPU on a multi-MB blob.
+    #[serde(default = "default_max_password_length")]
+    pub max_password_length: usize,
 }
 fn default_session_ttl_secs() -> u64 {
     28_800
 }
 fn default_max_login_attempts() -> u32 {
     50
+}
+fn default_max_password_length() -> usize {
+    1024
 }
 fn default_dashboard_http_addr() -> String {
     "127.0.0.1:9999".into()
@@ -296,6 +311,7 @@ impl Default for DashboardConfig {
             admin_password_hash: None,
             session_ttl_secs: default_session_ttl_secs(),
             max_login_attempts: default_max_login_attempts(),
+            max_password_length: default_max_password_length(),
         }
     }
 }

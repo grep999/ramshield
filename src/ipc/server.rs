@@ -26,6 +26,7 @@ struct ConnectionConfig {
     read_timeout: Duration,
     write_timeout: Duration,
     idle_timeout: Duration,
+    max_line_length: usize,
     auth_keys: Arc<Vec<(String, Vec<u8>)>>,
 }
 
@@ -36,6 +37,7 @@ impl ConnectionConfig {
             read_timeout: Duration::from_millis(server.read_timeout_ms),
             write_timeout: Duration::from_millis(server.write_timeout_ms),
             idle_timeout: Duration::from_millis(server.connection_idle_timeout_ms),
+            max_line_length: server.max_line_length,
             auth_keys: Arc::new(server.auth_keys.clone()),
         }
     }
@@ -63,6 +65,7 @@ pub struct IpcServer {
     read_timeout_ms: u64,
     write_timeout_ms: u64,
     connection_idle_timeout_ms: u64,
+    max_line_length: usize,
     total_connections: Arc<AtomicU64>,
     active_connections: Arc<AtomicU64>,
     rejected_connections: Arc<AtomicU64>,
@@ -99,6 +102,7 @@ impl IpcServer {
             .ipc
             .connection_idle_timeout_ms
             .unwrap_or(CONNECTION_IDLE_TIMEOUT_MS);
+        let max_line_length = config.ipc.max_line_length.unwrap_or(MAX_LINE_LENGTH);
         let mut auth_keys: Vec<(String, Vec<u8>)> = Vec::new();
         for entry in &config.ipc.auth_keys {
             match entry.split_once(':') {
@@ -126,6 +130,7 @@ impl IpcServer {
             read_timeout_ms,
             write_timeout_ms,
             connection_idle_timeout_ms,
+            max_line_length,
             total_connections: Arc::new(AtomicU64::new(0)),
             active_connections: Arc::new(AtomicU64::new(0)),
             rejected_connections: Arc::new(AtomicU64::new(0)),
@@ -291,10 +296,10 @@ async fn handle_connection(
         buf.extend_from_slice(&chunk[..n]);
 
         while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-            if pos > MAX_LINE_LENGTH {
+            if pos > config.max_line_length {
                 warn!(
                     "Line exceeds max length ({}), dropping connection",
-                    MAX_LINE_LENGTH
+                    config.max_line_length
                 );
                 return Ok(());
             }

@@ -27,15 +27,22 @@ pub struct AuthState {
     ttl: Duration,
     sessions: Arc<std::sync::Mutex<HashMap<String, Instant>>>,
     max_login_attempts: u32,
+    max_password_length: usize,
 }
 
 impl AuthState {
-    pub fn new(password_hash: Option<String>, ttl_secs: u64, max_login_attempts: u32) -> Self {
+    pub fn new(
+        password_hash: Option<String>,
+        ttl_secs: u64,
+        max_login_attempts: u32,
+        max_password_length: usize,
+    ) -> Self {
         Self {
             password_hash,
             ttl: Duration::from_secs(ttl_secs.max(60)),
             sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
             max_login_attempts,
+            max_password_length,
         }
     }
 
@@ -47,7 +54,7 @@ impl AuthState {
         let hash = self.password_hash.as_ref()?;
         let parsed = argon2::PasswordHash::new(hash).ok()?;
         // Constant-time verify inside argon2; cap work on garbage input.
-        if password.len() > 1024 {
+        if password.len() > self.max_password_length {
             return None;
         }
         let ok = {
@@ -208,7 +215,7 @@ mod tests {
 
     #[test]
     fn login_sets_session_and_validates() {
-        let a = AuthState::new(Some(hash_of("hunter2")), 3600, 50);
+        let a = AuthState::new(Some(hash_of("hunter2")), 3600, 50, 1024);
         assert!(a.enabled());
         assert!(a.login("wrong").is_none());
         let tok = a.login("hunter2").expect("good pw logs in");
@@ -218,7 +225,7 @@ mod tests {
 
     #[test]
     fn disabled_auth_has_no_sessions() {
-        let a = AuthState::new(None, 3600, 50);
+        let a = AuthState::new(None, 3600, 50, 1024);
         assert!(!a.enabled());
         assert!(a.login("x").is_none()); // no hash → nothing validates
     }
