@@ -350,6 +350,7 @@ async fn handle_connection(
             engine.metrics.inc_requests();
             let resp = process_request(
                 req,
+                &engine,
                 &event_tx,
                 &store,
                 &enforcement_tx,
@@ -383,6 +384,7 @@ fn epoch_ns() -> u64 {
 
 fn process_request(
     req: Request,
+    engine: &Arc<Engine>,
     event_tx: &Sender<ConnectionEvent>,
     store: &Store,
     enforcement_tx: &mpsc::Sender<EnforceCommand>,
@@ -438,6 +440,11 @@ fn process_request(
                 }
             };
 
+            let reason_display = if reason.is_empty() {
+                "manual_block".to_string()
+            } else {
+                reason.clone()
+            };
             let cmd = EnforceCommand {
                 decision_id: Uuid::new_v4(),
                 policy_version: 1,
@@ -450,10 +457,17 @@ fn process_request(
                 action: EnforceAction::Block,
             };
             match enforcement_tx.try_send(cmd) {
-                Ok(()) => Response::Ok {
-                    message: format!("block queued for {}", ip_addr),
-                    state: Some("pending".into()),
-                },
+                Ok(()) => {
+                    engine.metrics.record_block(
+                        &ip,
+                        &reason_display,
+                        "ipc",
+                    );
+                    Response::Ok {
+                        message: format!("block queued for {}", ip_addr),
+                        state: Some("pending".into()),
+                    }
+                }
                 Err(_) => Response::Error {
                     code: 503,
                     message: "enforcement queue full".into(),
