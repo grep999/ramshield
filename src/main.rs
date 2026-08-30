@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ramshield::{Config, Engine, dashboard};
 use std::sync::Arc;
 use tracing::{debug, info}; // Add debug
@@ -57,7 +57,11 @@ async fn main() -> Result<()> {
                 "Attempting to load config from absolute path: {:?}",
                 absolute_path
             );
-            Config::load(absolute_path.to_str().unwrap())?
+            Config::load(
+                absolute_path
+                    .to_str()
+                    .context("config path contains non-UTF-8 characters")?,
+            )?
         }
         None => {
             // Still honor env overrides in no-config mode (dashboard auth etc).
@@ -85,7 +89,7 @@ async fn main() -> Result<()> {
         config.dashboard.block_log_size,
     ));
     let engine = Arc::new(Engine::new(config.clone(), store.clone(), metrics.clone()));
-    let _engine_handle = engine.clone().start_async().expect("engine pipeline");
+    let _engine_handle = engine.clone().start_async().context("failed to start engine pipeline")?;
 
     // Periodic uptime updater (every second)
     {
@@ -108,13 +112,13 @@ async fn main() -> Result<()> {
     let dashboard_config = config.dashboard.clone();
     let config_clone = config.clone();
     if dashboard_config.enabled {
-        std::thread::Builder::new()
+        let _dashboard_handle = std::thread::Builder::new()
             .name("rs-dashboard".into())
-            .spawn(move || {
+            .spawn(move || -> Result<()> {
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_io()
                     .build()
-                    .expect("dashboard runtime");
+                    .context("failed to build dashboard runtime")?;
                 rt.block_on(async move {
                     if let Err(e) =
                         dashboard::serve(eng_clone, &dashboard_config.http_addr, &config_clone)
@@ -123,8 +127,9 @@ async fn main() -> Result<()> {
                         tracing::error!("Dashboard server error: {}", e);
                     }
                 });
+                Ok(())
             })
-            .expect("spawn dashboard thread");
+            .context("failed to spawn dashboard thread")?;
     }
 
     info!("RamShield running — Ctrl+C to stop");

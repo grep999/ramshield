@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -65,10 +65,10 @@ fn main() -> Result<()> {
     let key_hex = cli.key.or_else(|| std::env::var("RAMSHIELD_IPC_KEY").ok());
     let json = if let Some(hexkey) = &key_hex {
         use serde_json::Value;
-        let mut v: Value = serde_json::from_str(&json).expect("built frame must be valid JSON");
+        let mut v: Value = serde_json::from_str(&json).context("built frame must be valid JSON")?;
         let ts_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .context("system clock is before UNIX epoch")?
             .as_millis() as u64;
         let payload = serde_json::to_vec(&v)?;
         let key = hex::decode(hexkey.trim()).map_err(|e| anyhow::anyhow!("bad key hex: {}", e))?;
@@ -78,7 +78,10 @@ fn main() -> Result<()> {
         mac.update(b".");
         mac.update(&payload);
         let sig = hex::encode(mac.finalize().into_bytes());
-        v.as_object_mut().unwrap().insert(
+        let obj = v
+            .as_object_mut()
+            .context("auth frame root must be a JSON object")?;
+        obj.insert(
             "auth".into(),
             serde_json::json!({
                 "key_id": "k1", "ts_ms": ts_ms, "sig": sig
