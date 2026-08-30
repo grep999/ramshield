@@ -1,0 +1,59 @@
+# config.prod.toml — production-like settings.
+#
+# Apply with: ./target/release/ramshield --config config.prod.toml --no-xdp
+#
+# Differences from config.toml:
+#   - IPC + dashboard bound to 0.0.0.0 (was 127.0.0.1)
+#   - WAL dir set to /var/lib/ramshield/wal (was ./data/wal)
+#   - Detection RPS threshold raised to 5000 (production baseline)
+#   - Engine RAM limit raised to 8 GiB (production budget)
+#   - XDP disabled — host-NIC deployment only
+
+[engine]
+shard_count = 256
+worker_threads = 0
+ram_limit_mb = 8192
+
+[ipc]
+tcp_addr = "0.0.0.0:7890"
+max_connections = 1000000
+
+[dashboard]
+enabled = true
+http_addr = "0.0.0.0:9999"
+block_log_size = 1024
+
+[wal]
+dir = "/var/lib/ramshield/wal"
+durability = "fsync"
+compress = true
+seg_max_bytes = 67108864    # 64 MiB
+retention_max_bytes = 0     # unbounded
+
+[forecasting]
+enabled = true
+ewma_alpha = 0.3
+hw_beta = 0.1
+hw_gamma = 0.1
+seasonality_period = 60
+anomaly_zscore = 3.0
+min_entropy = 4.5
+
+[detection]
+rps_threshold = 5000
+subnet_batch_threshold = 500
+subnet_batch_min_events = 50
+batch_block_enabled = true
+block_ttl_secs = 300
+subnet_burst_ttl_secs = 600
+bloom_bits = 1048576
+batch_window_ms = 50
+pre_aggs_flush_interval_ms = 100
+promote_min_events = 10
+subnet_window_threshold = 100
+pre_aggs_max_size = 262144
+
+[xdp]
+enabled = false
+interface = "lo"
+mode = "skb"
