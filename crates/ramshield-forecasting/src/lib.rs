@@ -14,6 +14,18 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+// ── Block TTLs ───────────────────────────────────────────────────────────────
+
+/// TTL for blocks issued by the EWMA+HW forecaster when it predicts a spike
+/// before the threshold is hit. Longer than the high_rps TTL because predicted
+/// spikes need more time to either materialize or get re-validated.
+const FORECAST_BLOCK_TTL_SECS: u64 = 300;
+
+/// TTL for blocks issued by entropy-based detection (low-and-slow patterns).
+/// Entropy threats evolve slower than RPS spikes, so we hold the block longer
+/// to prevent rapid block/unblock churn.
+const ENTROPY_BLOCK_TTL_SECS: u64 = 600;
+
 // ── Holt-Winters ──────────────────────────────────────────────────────────────
 
 pub struct HoltWinters {
@@ -281,7 +293,7 @@ impl Forecaster {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0),
-                ttl_seconds: 300,
+                ttl_seconds: FORECAST_BLOCK_TTL_SECS,
                 reason: "forecast_anomaly".into(),
                 ip,
                 action: EnforceAction::Block,
@@ -322,7 +334,7 @@ impl Forecaster {
                 source: "forecasting".into(),
                 actor: "system".into(),
                 timestamp_utc: ts,
-                ttl_seconds: 600,
+                ttl_seconds: ENTROPY_BLOCK_TTL_SECS,
                 reason: "entropy_anomaly".into(),
                 ip: *ip,
                 action: EnforceAction::Block,
