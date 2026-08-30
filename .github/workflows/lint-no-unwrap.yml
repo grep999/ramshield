@@ -1,0 +1,44 @@
+name: lint-no-unwrap
+
+on:
+  push:
+    branches: [prod-up]
+  pull_request:
+
+jobs:
+  no-unwrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Scan production source for .unwrap() / .expect()
+        run: |
+          set -euo pipefail
+          # ripgrep: \b unwraps whole identifier. Strip test files + #[cfg(test)] modules.
+          HITS=$(rg -n --type rust \
+            --glob '!tests/**' \
+            --glob '!**/tests/**' \
+            --glob '!**/*.test.rs' \
+            --glob '!**/test_*.rs' \
+            --glob '!**/*_test.rs' \
+            -e '\.unwrap\s*\(' \
+            -e '\.expect\s*\(' \
+            src/ || true)
+          # Drop matches inside #[cfg(test)] blocks: crude but sufficient — test attribute
+          # lines and anything indented under them get filtered.
+          FILTERED=$(printf '%s\n' "$HITS" | awk -F: '
+            /#\[cfg\(test\)\]/ { skip=1; next }
+            skip && /^[[:space:]]/ { next }
+            skip && /^[^[:space:]]/ { skip=0 }
+            !skip && NF { print }
+          ')
+          COUNT=$(printf '%s\n' "$FILTERED" | grep -c . || true)
+          echo "unwrap/expect hits in production src/: $COUNT"
+          if [ "$COUNT" -gt 0 ]; then
+            echo "::error::Production code contains .unwrap() or .expect(). Forbidden by AGENTS.md §3."
+            printf '%s\n' "$FILTERED"
+            exit 1
+          fi
