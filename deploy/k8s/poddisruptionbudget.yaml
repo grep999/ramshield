@@ -1,0 +1,20 @@
+# PodDisruptionBudget — keep at least one RamShield pod available during
+# voluntary disruptions (node drains, autoscaler scale-downs, cluster upgrades).
+#
+# minAvailable: 1 is the right default for a 1-replica stateful engine.
+# For 2+ replicas bump to 2 or use maxUnavailable: 1.
+# Apply with: kubectl apply -f poddisruptionbudget.yaml
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ramshield
+  namespace: ramshield
+  labels:
+    app.kubernetes.io/name: ramshield
+    app.kubernetes.io/component: pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ramshield

@@ -1,0 +1,113 @@
+# NetworkPolicy for RamShield — restrict IPC port to internal cluster traffic only.
+#
+# Dashboard (port 9999) is the only externally-reachable surface; the IPC port
+# (7890) is privileged — it accepts engine block/unblock commands. Default:
+# deny-all ingress, then allow only the in-cluster traffic we expect.
+#
+# Apply with: kubectl apply -f networkpolicy.yaml
+# Verify with: kubectl exec -n ramshield <pod> -- ss -tlnp
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ramshield-default-deny
+  namespace: ramshield
+  labels:
+    app.kubernetes.io/name: ramshield
+    app.kubernetes.io/component: netpol
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  # Default deny all ingress + egress. Specific policies below carve out
+  # exactly what we permit — least surprise, least attack surface.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ramshield-allow-dashboard
+  namespace: ramshield
+  labels:
+    app.kubernetes.io/name: ramshield
+    app.kubernetes.io/component: netpol
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ramshield
+  policyTypes:
+    - Ingress
+  ingress:
+    # Dashboard HTTP (9999) — read metrics, view block log, admin login.
+    - ports:
+        - port: 9999
+          protocol: TCP
+      from:
+        # Allow from the API gateway / ingress controller. Tighten to specific
+        # namespaces or CIDRs in production. The cluster's own internal
+        # monitoring and operator CLI are also permitted.
+        - namespaceSelector: {}
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ramshield-allow-ipc-internal
+  namespace: ramshield
+  labels:
+    app.kubernetes.io/name: ramshield
+    app.kubernetes.io/component: netpol
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ramshield
+  policyTypes:
+    - Ingress
+  ingress:
+    # IPC (7890) — privileged control plane port. ONLY allow in-namespace
+    # pods (sidecars / operators / admin jobs). No cross-namespace access.
+    - ports:
+        - port: 7890
+          protocol: TCP
+      from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ramshield
+---
+# Optional: egress allow-list. Block all egress except DNS + the
+# OpenTelemetry collector (if otel feature is enabled).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ramshield-egress-otel-dns
+  namespace: ramshield
+  labels:
+    app.kubernetes.io/name: ramshield
+    app.kubernetes.io/component: netpol
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ramshield
+  policyTypes:
+    - Egress
+  egress:
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+      to:
+        - namespaceSelector: {}
+    # OTLP gRPC + HTTP — adjust to your collector Service IP or CIDR.
+    - ports:
+        - port: 4317
+          protocol: TCP
+        - port: 4318
+          protocol: TCP
+      to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.0.0/16  # link-local

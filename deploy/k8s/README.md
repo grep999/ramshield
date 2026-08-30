@@ -14,6 +14,8 @@ updates, WAL PVC orchestration, XDP-aware scheduling) is on the roadmap.
 | `deployment.yaml` | 1-replica Deployment; mount ConfigMap, WAL on `emptyDir` |
 | `service.yaml`    | ClusterIP for IPC (7890) and dashboard (9999) |
 | `rbac.yaml`       | ServiceAccount + minimal role for `ConfigMap` read |
+| `networkpolicy.yaml` | Default-deny ingress + dashboard/IPC carve-outs |
+| `poddisruptionbudget.yaml` | PDB: minAvailable=1 (single replica) |
 
 ## Why no `StatefulSet`?
 
