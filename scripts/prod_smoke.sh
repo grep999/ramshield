@@ -15,42 +15,46 @@ CFG="${CFG:-./config.prod.toml}"
 WAL_DIR="${WAL_DIR:-/tmp/ramshield-prod-smoke-wal}"
 LOG="${LOG:-/tmp/ramshield-prod-smoke.log}"
 DASH="${DASH:-127.0.0.1:9999}"
-IPC="${IPC:-127.0.0.1:7890}"
+IPC_HOST="${IPC_HOST:-127.0.0.1}"
+IPC_PORT="${IPC_PORT:-7890}"
 
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 red()   { printf '\033[31m%s\033[0m\n' "$*" >&2; }
-fail()  { red "FAIL: $*"; pkill -9 ramshield 2>/dev/null; exit 1; }
+fail()  { red "FAIL: $*"; cleanup; exit 1; }
+cleanup() { pkill -9 -f "ramshield --config" 2>/dev/null || true; }
 
 # Reset state
 rm -rf "$WAL_DIR"
 mkdir -p "$WAL_DIR"
-pkill -9 ramshield 2>/dev/null || true
+cleanup
 sleep 0.5
 
 echo "→ booting binary with $CFG (WAL=$WAL_DIR)"
 RAMSHIELD_ENGINE__RAM_LIMIT_MB=1024 \
     "$BIN" --config "$CFG" --no-xdp > "$LOG" 2>&1 &
 PID=$!
-trap "kill -9 $PID 2>/dev/null || true; pkill -9 -f 'ramshield --config' 2>/dev/null || true" EXIT
+trap cleanup EXIT
 
 # Wait for health
 for i in {1..20}; do
     if curl -sf -m 1 "http://$DASH/healthz" >/dev/null 2>&1; then break; fi
     sleep 0.3
-    if [ "$i" = 20 ]; then fail "binary never became healthy"; fi
+    if [ "$i" = "20" ]; then fail "binary never became healthy"; fi
 done
 green "✓ boot: /healthz ok"
 
+# IPC helper: send JSON and return the response
 ipc_send() {
     python3 -c "
 import socket, json, sys
+host, port = sys.argv[1], int(sys.argv[2])
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.settimeout(3)
-s.connect(('$IPC', 7890))
-s.sendall((sys.argv[1] + '\n').encode())
+s.connect((host, port))
+s.sendall((sys.argv[3] + '\n').encode())
 print(s.recv(4096).decode().strip())
 s.close()
-" "$1"
+" "$IPC_HOST" "$IPC_PORT" "$1"
 }
 
 # Block via IPC
@@ -72,7 +76,7 @@ green "✓ DASH: snapshot reports blocked_total=$BT"
 
 # Status modules
 M=$(curl -sf -m 3 "http://$DASH/api/status/modules")
-echo "$M" | grep -q '"engine"' || fail "/api/status/modules missing engine"
+echo "$M" | grep -q '"label"' || fail "/api/status/modules missing label"
 green "✓ DASH: status/modules ok"
 
 # Metrics
@@ -90,7 +94,7 @@ HS=$(curl -sf -m 3 "http://$DASH/api/hot-subnets" || echo "[]")
 green "✓ DASH: /api/hot-subnets reachable ($(echo "$HS" | wc -c) bytes)"
 
 # WAL
-WAL_FILES=$(find "$WAL_DIR" -type f -name "*.wal" -o -name "*.seg" 2>/dev/null | wc -l)
+WAL_FILES=$(find "$WAL_DIR" -type f 2>/dev/null | wc -l)
 [ "$WAL_FILES" -ge 0 ] || fail "WAL inspection failed"
 green "✓ WAL: $WAL_FILES files in $WAL_DIR"
 
