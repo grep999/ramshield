@@ -205,12 +205,15 @@ impl DetectionEngine {
             return;
         }
 
-        // DashMap has no drain() — collect via iter(), then clear()
-        let aggs: Vec<(IpAddr, IpAgg)> = self
-            .pre_aggs
-            .iter()
-            .map(|e| (*e.key(), e.value().clone()))
-            .collect();
+        // DashMap has no drain() — take ownership of each value via
+        // iter_mut() + mem::take, avoiding the per-IP clone of the
+        // `IpAgg` (~56 B) that the old `iter().map(|e| e.value().clone())`
+        // path produced. At 1M unique IPs/s the clone churn hit ~50 MB/s
+        // and held every shard lock for the full iter walk.
+        let mut aggs: Vec<(IpAddr, IpAgg)> = Vec::with_capacity(self.pre_aggs.len());
+        for mut e in self.pre_aggs.iter_mut() {
+            aggs.push((*e.key(), std::mem::take(e.value_mut())));
+        }
         self.pre_aggs.clear();
 
         let total_events: u64 = aggs.iter().map(|a| a.1.count as u64).sum();

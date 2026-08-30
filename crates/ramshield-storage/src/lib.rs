@@ -64,14 +64,16 @@ impl TrafficCounters {
             .store(total_events, Ordering::Relaxed);
         self.unique_ips_window.store(unique_ips, Ordering::Relaxed);
         // Snapshot semantics: this flush's counts fully replace the previous
-        // window. Zero stale slots first so entropy never blends old windows.
-        for slot in &self.subnet_window {
+        // window. Only zero the slots BEYOND the incoming range — slots
+        // inside the range are about to be overwritten with the new value
+        // anyway. Saves ~256 atomic stores on every flush when the
+        // subnet count is well under 256.
+        let n = subnet_counts.len().min(256);
+        for slot in &self.subnet_window[n..] {
             slot.store(0, Ordering::Relaxed);
         }
-        for (i, count) in subnet_counts.iter().enumerate() {
-            if i < 256 {
-                self.subnet_window[i].store(*count, Ordering::Relaxed);
-            }
+        for (i, count) in subnet_counts.iter().take(256).enumerate() {
+            self.subnet_window[i].store(*count, Ordering::Relaxed);
         }
     }
 
