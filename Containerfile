@@ -19,13 +19,17 @@ COPY crates ./crates
 RUN mkdir -p src \
     && echo "fn main() {}" > src/main.rs \
     && echo "fn main() {}" > src/cli.rs \
+    && echo "" > src/lib.rs \
     && cargo build --release --locked -F full \
     && rm -rf src
 
 # Now copy the real source and rebuild (deps cached).
 COPY src ./src
-RUN touch src/main.rs src/cli.rs && cargo build --release --locked -F full \
-    && strip target/release/ramshield
+# Touch every source file so the lib crate doesn't think the cached (empty
+# dummy) lib.rs is still current.
+RUN find src crates -name "*.rs" -exec touch {} + && \
+    cargo build --release --locked -F full && \
+    strip target/release/ramshield
 
 # ---- runtime ----
 # cc-debian12 (not static): cargo --release on bookworm produces a glibc-linked
