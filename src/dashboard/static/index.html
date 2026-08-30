@@ -106,6 +106,7 @@ tr:last-child td { border-bottom: none; }
 .badge { display:inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: .5px; }
 .badge-danger { background: rgba(255,51,102,.12); color: var(--danger); border: 1px solid rgba(255,51,102,.3); }
 .badge-warn { background: rgba(255,176,32,.12); color: var(--warn); border: 1px solid rgba(255,176,32,.3); }
+.badge-ok { background: rgba(0,229,137,.12); color: var(--ok); border: 1px solid rgba(0,229,137,.3); }
 .badge-muted { background: rgba(92,102,114,.15); color: var(--fg-dim); border: 1px solid rgba(92,102,114,.3); }
 .empty-row td { text-align: center; color: var(--muted); padding: 22px; }
 
@@ -128,6 +129,7 @@ tr:last-child td { border-bottom: none; }
     <span id="uptime">uptime —</span>
     <div class="status-dot" id="dot"></div>
     <span id="health">connecting…</span>
+    <span id="xdp-chip" class="badge badge-muted" title="Kernel XDP dataplane status" style="display:none">XDP —</span>
   </div>
 </div>
 
@@ -215,6 +217,18 @@ function render(d) {
   $('health').textContent = healthy ? (d.health_reason || 'running') : (d.health_reason || 'degraded');
   $('health').style.color = healthy ? 'var(--ok)' : 'var(--danger)';
   $('dot').classList.toggle('bad', !healthy);
+
+  // XDP dataplane chip — only rendered when the field is present in the snapshot.
+  const chip = $('xdp-chip');
+  if (chip) {
+    if (typeof d.xdp_active === 'boolean') {
+      chip.style.display = 'inline-block';
+      chip.textContent = d.xdp_active ? 'XDP active' : 'XDP degraded';
+      chip.className = 'badge ' + (d.xdp_active ? 'badge-ok' : 'badge-warn');
+    } else {
+      chip.style.display = 'none';
+    }
+  }
 
   const ing = d.events_ingested || 0;
   let rate = 0;

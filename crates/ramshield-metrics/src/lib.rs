@@ -121,6 +121,9 @@ pub struct DashboardSnapshot {
     pub pipeline: PipelineFlow,
     pub is_healthy: bool,
     pub health_reason: String,
+    /// True if the kernel XDP dataplane is loaded and attached. False when
+    /// the daemon is running in degraded mode (in-band enforcement only).
+    pub xdp_active: bool,
 }
 
 impl Default for DashboardSnapshot {
@@ -154,6 +157,7 @@ impl Default for DashboardSnapshot {
             },
             is_healthy: true,
             health_reason: "initializing".to_string(),
+            xdp_active: false,
         }
     }
 }

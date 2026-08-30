@@ -24,6 +24,10 @@ pub struct Engine {
     shutdown: AtomicBool,
     enforcement_tx: mpsc::Sender<EnforceCommand>,
     enforcement_rx: std::sync::Mutex<Option<mpsc::Receiver<EnforceCommand>>>,
+    /// True only when the kernel XDP dataplane is loaded and attached. False
+    /// for StubXdpApplier (degraded mode: in-band enforcement only). Read by
+    /// `dashboard_snapshot()` so the UI can surface a "XDP inactive" chip.
+    xdp_active: Arc<AtomicBool>,
 }
 
 impl Engine {
@@ -36,6 +40,7 @@ impl Engine {
             shutdown: AtomicBool::new(false),
             enforcement_tx,
             enforcement_rx: std::sync::Mutex::new(Some(enforcement_rx)),
+            xdp_active: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -134,6 +139,7 @@ impl Engine {
             },
             is_healthy: !self.is_shutting_down(),
             health_reason: if self.is_shutting_down() { "shutting down".into() } else { "running".into() },
+            xdp_active: self.xdp_active.load(Ordering::Acquire),
         }
     }
 
@@ -236,6 +242,7 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
             match applier.load_and_attach() {
                 Ok(()) => {
                     tracing::info!(iface = %cfg_snapshot.xdp.interface, mode = %cfg_snapshot.xdp.mode, "XDP dataplane active");
+                    engine.xdp_active.store(true, Ordering::Release);
                     Box::new(applier)
                 }
                 Err(e) => {
