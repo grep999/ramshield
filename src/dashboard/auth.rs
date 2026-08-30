@@ -26,14 +26,16 @@ pub struct AuthState {
     password_hash: Option<String>,
     ttl: Duration,
     sessions: Arc<std::sync::Mutex<HashMap<String, Instant>>>,
+    max_login_attempts: u32,
 }
 
 impl AuthState {
-    pub fn new(password_hash: Option<String>, ttl_secs: u64) -> Self {
+    pub fn new(password_hash: Option<String>, ttl_secs: u64, max_login_attempts: u32) -> Self {
         Self {
             password_hash,
             ttl: Duration::from_secs(ttl_secs.max(60)),
             sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            max_login_attempts,
         }
     }
 
@@ -152,8 +154,11 @@ struct LoginForm {
 }
 
 async fn login_submit(State(auth): State<AuthState>, Form(form): Form<LoginForm>) -> Response {
-    if auth.failed_logins() > 50 {
-        warn!("dashboard login locked out (50+ failures)");
+    if auth.failed_logins() > auth.max_login_attempts {
+        warn!(
+            "dashboard login locked out ({}+ failures)",
+            auth.max_login_attempts
+        );
         return (StatusCode::TOO_MANY_REQUESTS, "locked").into_response();
     }
     match auth.login(&form.password) {
@@ -203,7 +208,7 @@ mod tests {
 
     #[test]
     fn login_sets_session_and_validates() {
-        let a = AuthState::new(Some(hash_of("hunter2")), 3600);
+        let a = AuthState::new(Some(hash_of("hunter2")), 3600, 50);
         assert!(a.enabled());
         assert!(a.login("wrong").is_none());
         let tok = a.login("hunter2").expect("good pw logs in");
@@ -213,7 +218,7 @@ mod tests {
 
     #[test]
     fn disabled_auth_has_no_sessions() {
-        let a = AuthState::new(None, 3600);
+        let a = AuthState::new(None, 3600, 50);
         assert!(!a.enabled());
         assert!(a.login("x").is_none()); // no hash → nothing validates
     }

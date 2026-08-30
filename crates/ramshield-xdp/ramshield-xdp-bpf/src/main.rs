@@ -11,7 +11,7 @@ use aya_ebpf::bindings::xdp_md;
 use core::mem;
 use network_types::{
     eth::{EthHdr, EtherType},
-    ip::Ipv4Hdr,
+    ip::{Ipv4Hdr, Ipv6Hdr},
 };
 
 // IPv4 source → present means DROP. Value unused.
@@ -21,6 +21,13 @@ use network_types::{
 // limit when that ships.
 #[map]
 static BLOCKLIST: HashMap<u32, u8> = HashMap::with_max_entries(blocklist_cap_env(), 0);
+
+// IPv6 source: 16 raw octets of src_addr (network-order). Byte-for-byte
+// identical to userspace BlocklistKey::from_ip(V6) low 128 bits
+// (u128::from_be_bytes(v6.octets())). Same capacity budget; tune via env too.
+#[map]
+static BLOCKLIST_V6: HashMap<[u8; 16], u8> =
+    HashMap::with_max_entries(blocklist_cap_env(), 0);
 
 #[inline(always)]
 const fn blocklist_cap_env() -> u32 {
@@ -67,13 +74,26 @@ pub fn ramshield_xdp(ctx: XdpContext) -> u32 {
 
 fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
     let eth: *const EthHdr = ptr_at(&ctx, 0)?;
-    if unsafe { (*eth).ether_type } != EtherType::Ipv4 {
+    let ether_type = unsafe { (*eth).ether_type };
+    if ether_type == EtherType::Ipv4 {
+        let ip: *const Ipv4Hdr = ptr_at(&ctx, EthHdr::LEN)?;
+        let src = u32::from_be(unsafe { (*ip).src_addr });
+        if unsafe { BLOCKLIST.get(&src) }.is_some() {
+            return Ok(xdp_action::XDP_DROP);
+        }
         return Ok(xdp_action::XDP_PASS);
     }
-    let ip: *const Ipv4Hdr = ptr_at(&ctx, EthHdr::LEN)?;
-    let src = u32::from_be(unsafe { (*ip).src_addr });
-    if unsafe { BLOCKLIST.get(&src) }.is_some() {
-        return Ok(xdp_action::XDP_DROP);
+    if ether_type == EtherType::Ipv6 {
+        let ip6: *const Ipv6Hdr = ptr_at(&ctx, EthHdr::LEN)?;
+        // ponytail: version 4 means malformed. PASS to keep fail-open semantics
+        // (see try_ramshield_xdp outer catch-all).
+        if unsafe { (*ip6).version() } == 6 {
+            let src = unsafe { (*ip6).src_addr };
+            if unsafe { BLOCKLIST_V6.get(&src) }.is_some() {
+                return Ok(xdp_action::XDP_DROP);
+            }
+        }
+        return Ok(xdp_action::XDP_PASS);
     }
     Ok(xdp_action::XDP_PASS)
 }

@@ -271,9 +271,15 @@ pub struct DashboardConfig {
     /// Session lifetime in seconds (default 8h).
     #[serde(default = "default_session_ttl_secs")]
     pub session_ttl_secs: u64,
+    /// Max failed login attempts before lockout (default 50).
+    #[serde(default = "default_max_login_attempts")]
+    pub max_login_attempts: u32,
 }
 fn default_session_ttl_secs() -> u64 {
     28_800
+}
+fn default_max_login_attempts() -> u32 {
+    50
 }
 fn default_dashboard_http_addr() -> String {
     "127.0.0.1:9999".into()
@@ -289,6 +295,7 @@ impl Default for DashboardConfig {
             block_log_size: default_block_log_size(),
             admin_password_hash: None,
             session_ttl_secs: default_session_ttl_secs(),
+            max_login_attempts: default_max_login_attempts(),
         }
     }
 }

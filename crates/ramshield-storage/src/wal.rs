@@ -94,7 +94,11 @@ pub struct Wal {
 }
 
 struct Inner {
-    writer: BufWriter<File>,
+    // writer holds a BufWriter over the same Arc<File> exposed below.
+    // The file handle is kept as Arc<File> so the writer + the sync_data
+    // caller can both reference it after the mutex is dropped.
+    writer: BufWriter<Arc<File>>,
+    file: Arc<File>,
     bytes: u64,
     seg: u64,
 }
@@ -114,7 +118,7 @@ impl Wal {
         // Discover highest segment to resume from
         let max_seg = discover_max_seg(dir);
         let path = seg_path(dir, max_seg);
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let file = Arc::new(OpenOptions::new().create(true).append(true).open(&path)?);
         let bytes = file.metadata()?.len();
 
         // Discover highest LSN across all segments
@@ -129,9 +133,11 @@ impl Wal {
             path, bytes, start_lsn, durability
         );
 
+        let writer = BufWriter::with_capacity(64 * 1024, Arc::clone(&file));
         Ok(Self {
             inner: Arc::new(Mutex::new(Inner {
-                writer: BufWriter::with_capacity(64 * 1024, file),
+                writer,
+                file,
                 bytes,
                 seg: max_seg,
             })),
@@ -175,47 +181,60 @@ impl Wal {
         let rh_bytes = rh.to_bytes();
 
         // Step 2: I/O under mutex — minimal critical section.
-        let needs_dir_sync = {
+        // Writes + flush are fast (buffered). The expensive sync_data() runs
+        // OUTSIDE the lock: we snapshot the current file handle as Arc<File>
+        // and drop the guard, then call sync_data on the Arc clone.
+        // ponytail: a dedicated writer thread via crossbeam channel would
+        // remove the Arc clone hop entirely.
+        let (old_file_arc, needs_dir_sync) = {
             let mut g = self.inner.lock().unwrap();
             g.writer.write_all(&rh_bytes)?;
             g.writer.write_all(&payload)?;
             g.bytes += (HEADER + payload.len()) as u64;
 
-            match self.durability {
-                Durability::None => {}
-                Durability::Flush => {
-                    g.writer.flush()?;
-                }
-                Durability::Fsync | Durability::GroupCommit => {
-                    // ponytail: group_commit currently same as fsync; batch timer deferred
-                    g.writer.flush()?;
-                    g.writer.get_ref().sync_data()?;
-                }
+            let must_sync = matches!(
+                self.durability,
+                Durability::Fsync | Durability::GroupCommit
+            );
+            if must_sync || matches!(self.durability, Durability::Flush) {
+                g.writer.flush()?;
             }
 
-            // Rotation: holds lock only for the open() call (fast), drops before fsync_dir.
-            if g.bytes >= self.seg_max {
-                if matches!(self.durability, Durability::Fsync | Durability::GroupCommit) {
-                    g.writer.get_ref().sync_data()?;
-                }
+            let must_rotate = g.bytes >= self.seg_max;
+            // Snapshot the CURRENT file handle (which is the file holding
+            // the just-written bytes) before any rotation swaps `g.file`.
+            let old_file_arc = if must_sync {
+                Some(Arc::clone(&g.file))
+            } else {
+                None
+            };
+
+            if must_rotate {
                 let new_seg = g.seg + 1;
                 let path = seg_path(&self.base_dir, new_seg);
-                let file = OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(true)
-                    .open(&path)?;
-                g.writer = BufWriter::with_capacity(64 * 1024, file);
+                let new_file = Arc::new(
+                    OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .open(&path)?,
+                );
+                g.writer = BufWriter::with_capacity(64 * 1024, Arc::clone(&new_file));
+                g.file = new_file;
                 g.bytes = 0;
                 g.seg = new_seg;
                 info!("WAL rotated → {:?}", path);
-                true // need dir sync after rotation
-            } else {
-                false
             }
-        }; // mutex dropped here — fsync_dir is longest-latency op, keep it unlocked
+            (old_file_arc, must_rotate)
+        }; // mutex dropped here
 
-        // Step 3: Directory sync OUTSIDE the mutex — ~10ms on rotational, ~0.1ms on SSD.
+        // Step 3: sync_data OUTSIDE the mutex. Other appenders proceed
+        // immediately while this fsync runs (100µs SSD, up to ~10ms HDD).
+        if let Some(f) = old_file_arc {
+            f.sync_data()?;
+        }
+
+        // Step 4: Directory sync OUTSIDE the mutex — ~10ms on rotational, ~0.1ms on SSD.
         if needs_dir_sync {
             fsync_dir(&self.base_dir)?;
         }

@@ -10,6 +10,7 @@ max_connections = 1000000
 
 [dashboard]
 enabled = true
+max_login_attempts = 50
 # Default port is 9999 (see crates/ramshield-config/src/lib.rs:282).
 # Override here only if you need a non-default bind (e.g., in containers
 # with port-mapping collisions). To match the README and SECURITY docs,
