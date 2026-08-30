@@ -7,6 +7,7 @@ ram_limit_mb = 14512
 [ipc]
 tcp_addr = "127.0.0.1:7890"  # Set to the port you want
 max_connections = 1000000
+max_line_length = 33554432  # 32MB; frames larger than this drop the connection
 
 [dashboard]
 enabled = true
