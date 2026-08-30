@@ -60,6 +60,22 @@ docs/CRON_STATUS.md
 docs/AUTOMATION_DASHBOARD.html
 docs/AGENT_REPORT.md
 docs/FACTS.json
+docs/OPERATOR_LOG.md
+docs/CRON_STATUS.md
+docs/CRON_STATUS.json
+docs/PLAN.md
+docs/CONTROL_CENTER.md
+docs/DISPATCH_LOG.md
+docs/WORKER_STATUS.md
+docs/REVIEW.md
+docs/RESEARCH.md
+docs/RESEARCH_TICKETS.md
+docs/CODE_REVIEW_AUG_2026.md
+docs/enterprise_roadmap.md
+docs/roadmap.md
+docs/BLOG_CALENDAR.md
+docs/DEPENDENCY_AUDIT.md
+docs/AUTOMATION_DASHBOARD.html
 
 # Auto-generated healer and agent outputs
 docs/HEALER_*.md
