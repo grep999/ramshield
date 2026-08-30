@@ -8,7 +8,9 @@
 # only the IPC and dashboard ports declared in deploy/k8s/deployment.yaml.
 
 # ---- builder ----
-FROM rust:1.85-bookworm AS builder
+# rust:nightly is required because the workspace uses edition = "2024"
+# (unstable).  Pin to a specific nightly date in CI to avoid regressions.
+FROM rustlang/rust:nightly AS builder
 WORKDIR /build
 
 # Cache dep layer first.

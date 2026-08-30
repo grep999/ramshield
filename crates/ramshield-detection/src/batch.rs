@@ -65,8 +65,11 @@ pub fn subnet_key(ip: IpAddr) -> Option<(u128, IpNetwork)> {
 pub fn ip_in_subnet(ip: IpAddr, prefix: [u8; 3]) -> bool {
     match ip {
         IpAddr::V4(v4) => {
+            // u32 compare is one 4-byte load + one cmp; array compare
+            // would be 3 short-circuited byte loads on the same address.
             let o = v4.octets();
-            o[0] == prefix[0] && o[1] == prefix[1] && o[2] == prefix[2]
+            u32::from_be_bytes([o[0], o[1], o[2], 0]) & 0xFFFFFF00
+                == u32::from_be_bytes([prefix[0], prefix[1], prefix[2], 0])
         }
         IpAddr::V6(_) => false,
     }

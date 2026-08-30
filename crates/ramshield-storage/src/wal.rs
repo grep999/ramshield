@@ -146,12 +146,10 @@ impl Wal {
 
     /// Append an entry and return its LSN.
     pub fn append(&self, entry: &WalEntry) -> Result<u64> {
+        // Step 1: Serialization, CRC, header — all CPU work OUTSIDE the mutex.
         let raw = serde_json::to_vec(entry).map_err(|e| RsError::Serde(e.to_string()))?;
         if raw.len() > MAX_RECORD_SIZE {
-            return Err(RsError::RecordTooLarge {
-                size: raw.len(),
-                max: MAX_RECORD_SIZE,
-            });
+            return Err(RsError::RecordTooLarge { size: raw.len(), max: MAX_RECORD_SIZE });
         }
         let (payload, flags): (Vec<u8>, u8) = if self.compress && raw.len() > 64 {
             (compress_prepend_size(&raw), 0x01)
@@ -159,16 +157,11 @@ impl Wal {
             (raw, 0x00)
         };
         if payload.len() > MAX_RECORD_SIZE {
-            return Err(RsError::RecordTooLarge {
-                size: payload.len(),
-                max: MAX_RECORD_SIZE,
-            });
+            return Err(RsError::RecordTooLarge { size: payload.len(), max: MAX_RECORD_SIZE });
         }
-
         let mut h = Crc32::new();
         h.update(&payload);
         let crc = h.finalize();
-
         let lsn = self.lsn_counter.fetch_add(1, Ordering::SeqCst);
 
         let rh = RecordHeader {
@@ -179,48 +172,58 @@ impl Wal {
             crc,
             flags,
         };
+        let rh_bytes = rh.to_bytes();
 
-        let mut g = self.inner.lock().unwrap();
-        g.writer.write_all(&rh.to_bytes())?;
-        g.writer.write_all(&payload)?;
-        g.bytes += (HEADER + payload.len()) as u64;
+        // Step 2: I/O under mutex — minimal critical section.
+        let needs_dir_sync = {
+            let mut g = self.inner.lock().unwrap();
+            g.writer.write_all(&rh_bytes)?;
+            g.writer.write_all(&payload)?;
+            g.bytes += (HEADER + payload.len()) as u64;
 
-        match self.durability {
-            Durability::None => {}
-            Durability::Flush => {
-                g.writer.flush()?;
+            match self.durability {
+                Durability::None => {}
+                Durability::Flush => {
+                    g.writer.flush()?;
+                }
+                Durability::Fsync | Durability::GroupCommit => {
+                    // ponytail: group_commit currently same as fsync; batch timer deferred
+                    g.writer.flush()?;
+                    g.writer.get_ref().sync_data()?;
+                }
             }
-            Durability::Fsync => {
-                g.writer.flush()?;
-                g.writer.get_ref().sync_data()?;
-            }
-            Durability::GroupCommit => {
-                // ponytail: group_commit currently same as fsync; batch timer deferred
-                g.writer.flush()?;
-                g.writer.get_ref().sync_data()?;
-            }
-        }
 
-        if g.bytes >= self.seg_max {
-            g.writer.flush()?;
-            if matches!(self.durability, Durability::Fsync | Durability::GroupCommit) {
-                g.writer.get_ref().sync_data()?;
+            // Rotation: holds lock only for the open() call (fast), drops before fsync_dir.
+            if g.bytes >= self.seg_max {
+                if matches!(self.durability, Durability::Fsync | Durability::GroupCommit) {
+                    g.writer.get_ref().sync_data()?;
+                }
+                let new_seg = g.seg + 1;
+                let path = seg_path(&self.base_dir, new_seg);
+                let file = OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(&path)?;
+                g.writer = BufWriter::with_capacity(64 * 1024, file);
+                g.bytes = 0;
+                g.seg = new_seg;
+                info!("WAL rotated → {:?}", path);
+                true // need dir sync after rotation
+            } else {
+                false
             }
-            g.seg += 1;
-            let path = seg_path(&self.base_dir, g.seg);
-            let file = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&path)?;
-            g.writer = BufWriter::with_capacity(64 * 1024, file);
-            g.bytes = 0;
+        }; // mutex dropped here — fsync_dir is longest-latency op, keep it unlocked
+
+        // Step 3: Directory sync OUTSIDE the mutex — ~10ms on rotational, ~0.1ms on SSD.
+        if needs_dir_sync {
             fsync_dir(&self.base_dir)?;
-            info!("WAL rotated → {:?}", path);
         }
+
         if self.retention_max > 0 {
             enforce_retention(&self.base_dir, self.retention_max);
         }
+
         Ok(lsn)
     }
 

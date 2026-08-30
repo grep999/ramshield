@@ -176,6 +176,53 @@ Watch blocks appear live at `http://localhost:9999`.
 
 ---
 
+## Performance baselines (single replica, kvm guest, 4 vCPU)
+
+Measured with `scripts/perf_test.py` (sustained load) and `scripts/perf_test2.py`
+(edge cases) against a `--no-xdp` build on `test11`.
+
+| Metric | Value | Notes |
+|---|---|---|
+| **Sustained event ingest** | 30 000 ev/s | 4 generator threads, persistent connection, pipelined batching |
+| **IPC latency (p50)** | 1.30 ms | report_connections round-trip |
+| **IPC latency (p95)** | 9.90 ms | at 30 k ev/s throughput |
+| **IPC latency (p99)** | 17.57 ms | |
+| **Dashboard /api/snapshot (p50)** | 2.26 ms | under load |
+| **Acceptance rate** | 100 % | 900 k events / 30 s, 0 rejected, 0 panicked |
+| **Memory growth** | 0 MB | over the full 30 s test |
+| **CPU usage** | 20.4 % | 4 vCPU box |
+| **Detection (dual gate)** | ✓ | 50 unique IPs + 100 RPS in 2 s window |
+
+Detection deliberately requires sustained RPS > 100 with ≥ 50 unique IPs in a
+2-second window — single bursts are rejected.  Sustained 1 000 ev/s for 10 s
+from 200 unique IPs reliably triggers subnet-level blocks.
+
+## Production deployment (Kubernetes)
+
+```bash
+# Build the image (uses rust nightly for edition 2024)
+docker build -t ghcr.io/grep999/ramshield:0.2.0 .
+
+# Apply manifests
+kubectl apply -f deploy/k8s/namespace.yaml
+kubectl apply -f deploy/k8s/rbac.yaml
+kubectl apply -f deploy/k8s/configmap.yaml
+kubectl apply -f deploy/k8s/deployment.yaml
+kubectl apply -f deploy/k8s/service.yaml
+kubectl apply -f deploy/k8s/networkpolicy.yaml      # default-deny + port allow
+kubectl apply -f deploy/k8s/poddisruptionbudget.yaml  # minAvailable=1
+```
+
+The `networkpolicy.yaml` and `poddisruptionbudget.yaml` are non-optional in
+production: the default-deny NetworkPolicy keeps the privileged IPC port
+(`7890`) reachable only from inside the cluster, and the PDB ensures the
+single-replica deployment survives voluntary disruptions (node drains,
+upgrades).
+
+`--features full` builds the binary with `aya` (XDP eBPF) and
+`opentelemetry` (OTLP/gRPC) support.  Drop the feature in the Containerfile
+if you do not need kernel enforcement or tracing export.
+
 ## Configuration
 
 ```toml
