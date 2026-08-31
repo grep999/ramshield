@@ -1,26 +1,38 @@
-# Daily Plan — 2026-08-23
+# Daily Plan — 2026-08-31
 
 ## State Assessment
-**Pipeline incident:** this morning's facts-collector run wrote `/home/m/docs/FACTS.json` (workspace=`/home/m`) instead of the repo's `docs/FACTS.json`. Root cause: `~/.hermes/scripts/facts_collector.py` resolves workspace as `Path(__file__).parent.parent.parent` (= `/home/m`) when `GITHUB_WORKSPACE` is unset; the cron job's `Workdir:` field is ignored by the script. The stray FACTS scanned home-dir junk: 8 bogus TODOs from a foreign `src/enforcement/mod.rs`, git "unknown", empty deps. Repo `docs/FACTS.json` is stale (2026-08-22T16:57Z).
-
-Valid ground truth from yesterday's FACTS.json: branch `operator` @ b8cbc3b, 9 Rust files / 1,934 LOC, 0 clippy warnings, **0 TODOs/FIXMEs**, no dead links, codebase healthy. No REVIEW.md exists yet — nothing to skip. `docs/PLAN.md` and `docs/CONTROL_CENTER.md` are missing from the repo docs tree. Duplicate roadmaps present: `docs/roadmap.md` AND `docs/ROADMAP.md`.
+- Facts‑collector mis‑directed output to `/home/m/docs/FACTS.json` (wrong workspace); repo `docs/FACTS.json` stale and missing current git state.
+- Daily planner ran and produced `docs/PLAN.md` (untracked in git).
+- Dispatcher skipped this cycle due to config‑drift spend‑guard (unpinned LLM job); no workers spawned.
+- Production code in `src/dashboard/mod.rs` and `src/dashboard/auth.rs` still contains `.unwrap()`/`.expect()` calls flagged by roadmap “Remove remaining .unwrap/.expect”.
+- `docs/HEALTH_CHECK.md` missing from repo (output vanished from last health‑loop run).
+- `docs/PLAN.md` untracked; not committed to git.
+- Backup job `ramshield-backup` exited with code 1 at 10:50 UTC; needs investigation.
+- Git history polluted with many `[skip ci]` helper‑agent commits; squash recommended before merge.
 
 ## Prioritized Tasks
+### T1: Fix facts‑collector workspace resolution
+- **Target:** `~/.hermes/scripts/facts_collector.py` (fallback workspace line)
+- **Action:** Replace the `Path(__file__).parent.parent.parent` fallback with the explicit repo path `'/home/m/vehicle_of_rationalism/ramshield/beta/rs'` (or add `RAMSHIELD_WS` env‑var support).
+- **Verify:** Run `python3 -W error .hermes/scripts/facts_collector.py` and confirm `docs/FACTS.json` reports `workspace: /home/m/vehicle_of_rationalism/ramshield/beta/rs` and that the stray `/home/m/docs/FACTS.json` is removed.
 
-### T1: Fix facts-collector workspace resolution
-- Target: `~/.hermes/scripts/facts_collector.py` (line ~17)
-- Action: Change the workspace fallback from `str(Path(__file__).resolve().parent.parent.parent)` to the repo path `'/home/m/vehicle_of_rationalism/ramshield/beta/rs'` (keep `GITHUB_WORKSPACE` override first).
-- Verify: `python3 -W error /home/m/.hermes/scripts/facts_collector.py` exits ok AND `python3 -c "import json;print(json.load(open('docs/FACTS.json'))['workspace'])"` prints `/home/m/vehicle_of_rationalism/ramshield/beta/rs`; also `rm /home/m/docs/FACTS.json` (stray artifact from bad run).
+### T2: Remove `.unwrap()` from `src/dashboard/mod.rs` (production)
+- **Target:** `src/dashboard/mod.rs` – replace the 15 `.unwrap()` calls in request‑handler bodies with `unwrap_or_else`/`Result` propagation or `unwrap_or_default` where appropriate.
+- **Verify:** `cargo build --all-targets` succeeds with zero lints (`cargo clippy --all-targets -- -D warnings` passes).
 
-### T2: Create CONTROL_CENTER.md
-- Target: `docs/CONTROL_CENTER.md`
-- Action: Create the human-readable overview the reviewer job is contracted to update: current state summary (from valid FACTS.json), agent/cron status table sourced from `docs/CRON_STATUS.md` (17 ok / 5 error as of last snapshot), links to AGENT_REPORT/DEPENDENCY_AUDIT/AUTOMATION_DASHBOARD.html.
-- Verify: file exists, contains `## Agent Status` section and relative links that resolve (`test -f` each target).
+### T3: Remove `.unwrap()` / `.expect()` from `src/dashboard/auth.rs` (production)
+- **Target:** `src/dashboard/auth.rs` – replace the three `.unwrap()` calls at lines 145, 184 and the `.expect()` at line 221 (non‑test production path) with safe error handling (e.g., `unwrap_or_else` or propagate `Result`).
+- **Verify:** `cargo build --all-targets` succeeds; `cargo clippy` reports no new warnings.
 
-### T3: Deduplicate roadmap files
-- Target: `docs/roadmap.md`, `docs/ROADMAP.md`
-- Action: Diff the two; keep `ROADMAP.md` as canonical, fold any unique content from `roadmap.md` into it, replace `roadmap.md` with a one-line pointer (`See [ROADMAP.md](ROADMAP.md).`) or delete it if identical.
-- Verify: `grep -rl 'roadmap' docs --include='*.md' -i` shows no second divergent copy; FACTS collector next run reports roadmap tasks once (not doubled).
+### T4: Commit `docs/PLAN.md` to git so it is tracked
+- **Target:** `docs/PLAN.md`
+- **Action:** `git add docs/PLAN.md && git commit -m "planner: daily plan 2026-08-31 [skip ci]"`
+- **Verify:** `git log --oneline -- docs/PLAN.md` shows the new commit.
+
+### T5: Create minimal `docs/HEALTH_CHECK.md` placeholder
+- **Target:** `docs/HEALTH_CHECK.md`
+- **Action:** Write a concise markdown file summarising current health‑loop status (OK/Error counts from `CRON_STATUS.md`, last run timestamp) so downstream agents have an artifact instead of a missing file.
+- **Verify:** File exists and contains at least the three lines `## Status`, `## Last run`, `## Metrics` with plausible values.
 
 ## No Work Needed
-Not applicable — T1 above is urgent: every downstream agent (planner, reviewer, dashboard) consumes FACTS.json, which is currently being poisoned by the home-dir scan.
+- None of the remaining roadmap items (oss‑fuzz integration, protocol fuzz coverage, crash‑free fuzz runs, security audit) can be advanced in a single 15‑minute agent run; they require larger infrastructure or dedicated research cycles.
