@@ -14,7 +14,7 @@ use ramshield_metrics::Metrics;
 use ramshield_storage::{BlockState, IpRecord, Store, SubnetKey, Value, subnet_key_u128};
 use ramshield_types::BlockReason;
 use ramshield_types::{ConnectionEvent, EnforceAction, EnforceCommand, IpNetwork};
-use rate_tracker::{
+use rate_tracker::{pulse_tracker_step, 
     CUSUM_WARMUP_SAMPLES, cusum_allowance, cusum_fired, cusum_step_capped, ewma, ewma_alpha_slow,
     is_exceeded,
 };
@@ -476,6 +476,8 @@ impl DetectionEngine {
                 baseline_rps: 0.0,
                 prev_sample_hot: false,
                 sample_count: 0,
+                pulse_samples_in_window: 0,
+                pulse_window_start_ns: 0,
                 first_seen_ns: agg.first_ts_ns,
                 last_seen_ns: agg.last_ts_ns,
                 bytes_in: 0,
@@ -544,7 +546,20 @@ impl DetectionEngine {
         // threshold twice in a row, or on accumulated CUSUM drift.
         let hot = over_threshold && rec.prev_sample_hot;
         rec.prev_sample_hot = over_threshold;
-        let block = hot || cusum_fired(rec.cusum_s, det.rps_threshold);
+        // Pulse-wave correlation: catch 2s-on/3s-off patterns that the EWMA
+        // debounce misses (EWMA decays between bursts). Counts distinct
+        // over-threshold samples inside a sliding M-second window.
+        let (pulse_count, pulse_start, pulse_fired) = pulse_tracker_step(
+            rec.pulse_samples_in_window,
+            rec.pulse_window_start_ns,
+            now,
+            over_threshold,
+            det.pulse_window_secs,
+            det.pulse_threshold_samples,
+        );
+        rec.pulse_samples_in_window = pulse_count;
+        rec.pulse_window_start_ns = pulse_start;
+        let block = hot || cusum_fired(rec.cusum_s, det.rps_threshold) || pulse_fired;
 
         if let Err(e) = self.store.insert(ip, Value::IpRecord(rec), None, ram_lim) {
             warn!("Failed to insert IP record for {}: {}", ip, e);

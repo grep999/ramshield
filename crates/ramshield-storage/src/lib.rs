@@ -154,6 +154,14 @@ pub struct IpRecord {
     /// 6 samples to arm, saturates long before overflow matters.
     #[serde(default)]
     pub sample_count: u8,
+    /// Sliding-window count of distinct over-threshold batch samples.
+    /// Resets on window expiry or block. ponytail: u8 caps at 255.
+    #[serde(default)]
+    pub pulse_samples_in_window: u8,
+    /// Earliest pulse-sample timestamp in the current sliding window (ns).
+    /// 0 = window not yet opened. Resets on expiry or block.
+    #[serde(default)]
+    pub pulse_window_start_ns: u64,
     pub first_seen_ns: u64,
     pub last_seen_ns: u64,
     pub bytes_in: u64,

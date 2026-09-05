@@ -53,6 +53,15 @@ pub struct DetectionConfig {
     pub subnet_batch_min_events: u64,
     pub batch_block_enabled: bool,
     pub block_ttl_secs: u64,
+    /// Pulse-wave correlation: sliding window (seconds) to detect short
+    /// bursts spaced just below detection threshold. Sized for 2s-on/3s-off
+    /// T13 pattern (window covers 1 gap + 1 burst).
+    #[serde(default = "default_pulse_window_secs")]
+    pub pulse_window_secs: u64,
+    /// Distinct over-threshold samples within pulse_window_secs that
+    /// escalate to a pulse-wave block. Set to 2; raise if FPR measured.
+    #[serde(default = "default_pulse_threshold_samples")]
+    pub pulse_threshold_samples: u8,
     /// TTL for subnet_burst blocks specifically. Shared egress /24s hold up to
     /// 253 hosts; inheriting the 1h per-IP TTL locked out whole CGNAT ranges
     /// for an hour. Short default — continued abuse re-fires from fresh events.
@@ -91,6 +100,12 @@ fn default_promote_min() -> u32 {
 fn default_subnet_batch_min_events() -> u64 {
     100
 }
+fn default_pulse_window_secs() -> u64 {
+    6
+}
+fn default_pulse_threshold_samples() -> u8 {
+    2
+}
 fn default_subnet_burst_ttl_secs() -> u64 {
     120
 }
@@ -113,6 +128,8 @@ impl Default for DetectionConfig {
             subnet_batch_min_events: default_subnet_batch_min_events(),
             batch_block_enabled: true,
             block_ttl_secs: 3_600,
+            pulse_window_secs: default_pulse_window_secs(),
+            pulse_threshold_samples: default_pulse_threshold_samples(),
             subnet_burst_ttl_secs: default_subnet_burst_ttl_secs(),
             bloom_bits: 8_000_000,
             batch_max_events: default_batch_max_events(),
