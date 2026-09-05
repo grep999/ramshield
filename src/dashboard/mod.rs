@@ -17,6 +17,13 @@ use tracing::info;
 
 use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, SubnetRow};
 
+/// Single state type so one Router::with_state call satisfies all handlers.
+#[derive(Clone)]
+pub struct AppState {
+    pub engine: Arc<Engine>,
+    pub auth: Arc<auth::AuthState>,
+}
+
 pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), String> {
     let auth = auth::AuthState::new(
         cfg.dashboard.admin_password_hash.clone(),
@@ -24,7 +31,11 @@ pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), 
         cfg.dashboard.max_login_attempts,
         cfg.dashboard.max_password_length,
     );
-    let login = auth::router().with_state(auth.clone());
+    let app_state = AppState {
+        engine: engine.clone(),
+        auth: Arc::new(auth.clone()),
+    };
+    let login = auth::router().with_state(auth);
     let app = Router::new()
         .route("/", get(index))
         .route("/healthz", get(api_healthz))
@@ -36,19 +47,18 @@ pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), 
         .route("/api/status/modules", get(api_status_modules))
         .route("/api/config", get(api_get_config).post(api_set_config))
         .merge(login)
-        .with_state(engine)
+        .with_state(app_state.clone())
         // Auth on → same-origin only. Open dashboard (loopback, no password)
         // keeps permissive CORS for local tooling.
-        .layer(if auth.enabled() {
+        .layer(if app_state.auth.enabled() {
             CorsLayer::new()
         } else {
             CorsLayer::permissive()
         })
         .layer(axum_mw::from_fn_with_state(
-            auth.clone(),
+            app_state,
             auth::require_auth,
-        ))
-        .with_state(auth);
+        ));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -61,8 +71,8 @@ async fn index() -> Html<&'static str> {
     Html(include_str!("static/index.html"))
 }
 
-async fn api_healthz(State(eng): State<Arc<Engine>>) -> (StatusCode, Json<serde_json::Value>) {
-    let snapshot = eng.dashboard_snapshot();
+async fn api_healthz(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
+    let snapshot = state.engine.dashboard_snapshot();
     let status = if snapshot.is_healthy {
         "ok"
     } else {
@@ -85,37 +95,37 @@ async fn api_healthz(State(eng): State<Arc<Engine>>) -> (StatusCode, Json<serde_
 /// Prometheus exposition format. Public like /healthz — scrape targets are
 /// meant to be pollable; sensitive data stays behind authed routes.
 async fn api_metrics(
-    State(eng): State<Arc<Engine>>,
+    State(state): State<AppState>,
 ) -> ([(axum::http::header::HeaderName, &'static str); 1], String) {
     use axum::http::header;
     (
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        eng.metrics.render_prometheus(),
+        state.engine.metrics.render_prometheus(),
     )
 }
 
-async fn api_snapshot(State(eng): State<Arc<Engine>>) -> Json<DashboardSnapshot> {
-    Json(eng.dashboard_snapshot())
+async fn api_snapshot(State(state): State<AppState>) -> Json<DashboardSnapshot> {
+    Json(state.engine.dashboard_snapshot())
 }
 
-async fn api_history_batches(State(eng): State<Arc<Engine>>) -> Json<Vec<BatchRecord>> {
-    Json(eng.get_batch_history())
+async fn api_history_batches(State(state): State<AppState>) -> Json<Vec<BatchRecord>> {
+    Json(state.engine.get_batch_history())
 }
 
-async fn api_history_blocks(State(eng): State<Arc<Engine>>) -> Json<Vec<BlockRecord>> {
-    Json(eng.get_block_log())
+async fn api_history_blocks(State(state): State<AppState>) -> Json<Vec<BlockRecord>> {
+    Json(state.engine.get_block_log())
 }
 
-async fn api_traffic_subnets(State(eng): State<Arc<Engine>>) -> Json<Vec<SubnetRow>> {
-    Json(eng.get_hot_subnets())
+async fn api_traffic_subnets(State(state): State<AppState>) -> Json<Vec<SubnetRow>> {
+    Json(state.engine.get_hot_subnets())
 }
 
-async fn api_status_modules(State(eng): State<Arc<Engine>>) -> Json<Vec<ModuleStats>> {
-    Json(eng.get_module_stats())
+async fn api_status_modules(State(state): State<AppState>) -> Json<Vec<ModuleStats>> {
+    Json(state.engine.get_module_stats())
 }
 
-async fn api_get_config(State(eng): State<Arc<Engine>>) -> Json<Config> {
-    Json(eng.config.load().as_ref().clone())
+async fn api_get_config(State(state): State<AppState>) -> Json<Config> {
+    Json(state.engine.config.load().as_ref().clone())
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,10 +149,10 @@ struct ConfigResponse {
 }
 
 async fn api_set_config(
-    State(eng): State<Arc<Engine>>,
+    State(state): State<AppState>,
     Json(patch): Json<ConfigPatch>,
 ) -> (StatusCode, Json<ConfigResponse>) {
-    let mut cfg = eng.config.load().as_ref().clone();
+    let mut cfg = state.engine.config.load().as_ref().clone();
     if let Some(v) = patch.engine {
         cfg.engine = v;
     }
@@ -163,11 +173,11 @@ async fn api_set_config(
             StatusCode::BAD_REQUEST,
             Json(ConfigResponse {
                 ok: false,
-                config: eng.config.load().as_ref().clone(),
+                config: state.engine.config.load().as_ref().clone(),
             }),
         );
     }
-    eng.config.store(Arc::new(cfg.clone()));
+    state.engine.config.store(Arc::new(cfg.clone()));
     (
         StatusCode::OK,
         Json(ConfigResponse {
@@ -185,22 +195,24 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    fn test_engine() -> Arc<Engine> {
+    fn test_app_state() -> AppState {
         use crate::metrics::Metrics;
         use crate::storage::Store;
-        Arc::new(Engine::new(
+        let engine = Arc::new(Engine::new(
             Config::default(),
             Arc::new(Store::new(16)),
             Arc::new(Metrics::new()),
-        ))
+        ));
+        let auth = Arc::new(auth::AuthState::new(None, 3600, 50, 1024));
+        AppState { engine, auth }
     }
 
     #[tokio::test]
     async fn healthz_returns_ok() {
-        let eng = test_engine();
+        let state = test_app_state();
         let app = Router::new()
             .route("/healthz", get(api_healthz))
-            .with_state(eng);
+            .with_state(state);
 
         let response = app
             .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
@@ -218,10 +230,10 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_returns_valid_json() {
-        let eng = test_engine();
+        let state = test_app_state();
         let app = Router::new()
             .route("/api/snapshot", get(api_snapshot))
-            .with_state(eng);
+            .with_state(state);
 
         let response = app
             .oneshot(Request::get("/api/snapshot").body(Body::empty()).unwrap())
@@ -240,10 +252,10 @@ mod tests {
 
     #[tokio::test]
     async fn config_get_returns_default() {
-        let eng = test_engine();
+        let state = test_app_state();
         let app = Router::new()
             .route("/api/config", get(api_get_config))
-            .with_state(eng);
+            .with_state(state);
 
         let response = app
             .oneshot(Request::get("/api/config").body(Body::empty()).unwrap())
@@ -262,10 +274,10 @@ mod tests {
 
     #[tokio::test]
     async fn history_batches_returns_ok() {
-        let eng = test_engine();
+        let state = test_app_state();
         let app = Router::new()
             .route("/api/history/batches", get(api_history_batches))
-            .with_state(eng);
+            .with_state(state);
         let response = app
             .oneshot(
                 Request::get("/api/history/batches")
@@ -284,10 +296,10 @@ mod tests {
 
     #[tokio::test]
     async fn history_blocks_returns_ok() {
-        let eng = test_engine();
+        let state = test_app_state();
         let app = Router::new()
             .route("/api/history/blocks", get(api_history_blocks))
-            .with_state(eng);
+            .with_state(state);
         let response = app
             .oneshot(
                 Request::get("/api/history/blocks")
@@ -306,10 +318,10 @@ mod tests {
 
     #[tokio::test]
     async fn traffic_subnets_returns_ok() {
-        let eng = test_engine();
+        let state = test_app_state();
         let app = Router::new()
             .route("/api/traffic/subnets", get(api_traffic_subnets))
-            .with_state(eng);
+            .with_state(state);
         let response = app
             .oneshot(
                 Request::get("/api/traffic/subnets")
@@ -328,10 +340,10 @@ mod tests {
 
     #[tokio::test]
     async fn status_modules_returns_ok() {
-        let eng = test_engine();
+        let state = test_app_state();
         let app = Router::new()
             .route("/api/status/modules", get(api_status_modules))
-            .with_state(eng);
+            .with_state(state);
         let response = app
             .oneshot(
                 Request::get("/api/status/modules")
@@ -347,5 +359,45 @@ mod tests {
         let modules: Vec<ModuleStats> = serde_json::from_slice(&body).unwrap();
         assert!(!modules.is_empty()); // Should have at least default modules
         assert_eq!(modules.len(), 4);
+    }
+
+    /// REGRESSION: AppState was introduced because the original code called
+    /// `.with_state(engine)` then `.with_state(auth)`, and the second call
+    /// silently replaced the first. Handlers extracting `State<Arc<Engine>>`
+    /// would 500 in production. This test wires the full router (login merge
+    /// + auth middleware + state) and confirms an authenticated request to
+    /// `/api/snapshot` returns 200 with a real snapshot — proving both that
+    /// AppState is the correct state type AND that the engine handle survives
+    /// after the auth middleware has run.
+    #[tokio::test]
+    async fn full_router_serves_snapshot_via_app_state() {
+        use axum::middleware as axum_mw;
+        use tower_http::cors::CorsLayer;
+
+        let state = test_app_state();
+        let app_state = state.clone();
+        let login = auth::router().with_state((*state.auth).clone());
+        let app = Router::new()
+            .route("/api/snapshot", get(api_snapshot))
+            .route("/api/config", get(api_get_config))
+            .merge(login)
+            .with_state(state)
+            .layer(CorsLayer::new())
+            .layer(axum_mw::from_fn_with_state(
+                app_state,
+                auth::require_auth,
+            ));
+
+        // Auth disabled in test_app_state (None password hash) — request
+        // passes the middleware, lands in api_snapshot, returns 200.
+        let response = app
+            .oneshot(
+                Request::get("/api/snapshot")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

@@ -110,7 +110,12 @@ impl AuthState {
 }
 
 /// Middleware: gate every request unless auth disabled or path exempted.
-pub async fn require_auth(State(auth): State<AuthState>, req: Request, next: Next) -> Response {
+pub async fn require_auth(
+    State(state): State<crate::dashboard::AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let auth = &state.auth;
     if !auth.enabled() {
         return next.run(req).await;
     }
@@ -175,7 +180,10 @@ struct LoginForm {
     password: String,
 }
 
-async fn login_submit(State(auth): State<AuthState>, Form(form): Form<LoginForm>) -> Response {
+async fn login_submit(
+    State(auth): State<AuthState>,
+    Form(form): Form<LoginForm>,
+) -> Response {
     if auth.failed_logins() >= auth.max_login_attempts {
         warn!(
             "dashboard login locked out ({}+ failures)",

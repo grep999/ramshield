@@ -70,7 +70,9 @@ async fn main() -> Result<()> {
             c
         }
     };
-    config.apply_env_overrides();
+    // ponytail: Config::load() already calls apply_env_overrides() once
+    // internally. A second call here was harmless (idempotent) but wasteful
+    // and confusing — removed.
     info!("Loaded config: {:#?}", config);
     debug!("Loaded config: {:#?}", config);
 
