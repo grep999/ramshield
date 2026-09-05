@@ -285,30 +285,41 @@ impl Store {
     ) {
         const WINDOW_NS: u64 = 2 * 1_000_000_000; // ponytail: fixed 2s window vs config plumbing — matches pre_aggs flush cadence; add per-subnet window cfg when justified.
         let prefix = net.prefix_octets();
-        let mut rec = self
-            .subnet_table
-            .get(&key)
-            .map(|e| e.value().clone())
-            .unwrap_or(SubnetRecord {
-                prefix,
-                total_rps: 0,
-                host_bitmap: [0; 4],
-                last_updated_ns: now_ns,
+        // P0 fix: hold the shard lock for the full read-modify-write.
+        // The old get().map(|e| e.value().clone()) → mutate → insert pattern
+        // dropped the lock between read and write, so two concurrent
+        // callers for the same subnet would both see the same baseline,
+        // both compute stale deltas, and lose one update.
+        self.subnet_table
+            .entry(key)
+            .and_modify(|rec| {
+                if now_ns.saturating_sub(rec.last_updated_ns) > WINDOW_NS {
+                    rec.total_rps = 0;
+                    rec.host_bitmap = [0; 4];
+                }
+                rec.total_rps = rec.total_rps.saturating_add(events as u64);
+                if let Some(ms) = members {
+                    for ip in ms {
+                        rec.mark_host_v4(*ip);
+                    }
+                }
+                rec.last_updated_ns = now_ns;
+            })
+            .or_insert_with(|| {
+                let mut rec = SubnetRecord {
+                    prefix,
+                    total_rps: 0,
+                    host_bitmap: [0; 4],
+                    last_updated_ns: now_ns,
+                };
+                rec.total_rps = rec.total_rps.saturating_add(events as u64);
+                if let Some(ms) = members {
+                    for ip in ms {
+                        rec.mark_host_v4(*ip);
+                    }
+                }
+                rec
             });
-        if now_ns.saturating_sub(rec.last_updated_ns) > WINDOW_NS {
-            // Window rollover: reset counters + bitmap so a quiet subnet
-            // de-arms naturally instead of carrying stale swarm signals.
-            rec.total_rps = 0;
-            rec.host_bitmap = [0; 4];
-        }
-        rec.total_rps = rec.total_rps.saturating_add(events as u64);
-        if let Some(members) = members {
-            for ip in members {
-                rec.mark_host_v4(*ip);
-            }
-        }
-        rec.last_updated_ns = now_ns;
-        self.subnet_table.insert(key, rec);
     }
 
     pub fn reset_subnet_window(&self, key: SubnetKey) {
@@ -415,7 +426,6 @@ impl Store {
 
     pub fn evict_batch(&self, keys: &[IpAddr]) {
         // ponytail: `entry()` gives exclusive shard lock once per key
-        // (no separate get + remove = 1 lock acquisition instead of 2).
         for key in keys {
             if let dashmap::Entry::Occupied(e) = self.inner.entry(*key)
                 && e.get().is_expired()
@@ -433,6 +443,8 @@ impl Store {
                 if was_blocked {
                     self.blocked_count.fetch_sub(1, Ordering::Relaxed);
                 }
+                // P0 fix: stale subnet_index entries leaked forever.
+                self.update_subnet_index(*key, subnet_key_u128(*key), true);
             }
         }
     }
@@ -449,6 +461,9 @@ impl Store {
             if e.value.is_blocked() {
                 self.blocked_count.fetch_sub(1, Ordering::Relaxed);
             }
+            // P0 fix: subnet_index must be cleaned here too, same reason
+            // as evict_batch — stale entries leak without this.
+            self.update_subnet_index(*key, subnet_key_u128(*key), true);
             e.value
         })
     }
@@ -507,9 +522,13 @@ impl Store {
         let Some(sk) = subnet_key else { return };
 
         if is_removal {
-            if let Some(subnet_ips) = self.subnet_index.get(&sk) {
-                subnet_ips.remove(&ip_key);
-                if subnet_ips.is_empty() {
+            // Take a copy of the value (the DashSet Arc) to avoid holding
+            // the outer shard read lock across the inner DashSet mutation.
+            // The inner write lock is independent of the outer read lock.
+            let inner_set = self.subnet_index.get(&sk).map(|r| r.value().clone());
+            if let Some(inner) = inner_set {
+                inner.remove(&ip_key);
+                if inner.is_empty() {
                     self.subnet_index.remove(&sk);
                 }
             }
@@ -680,5 +699,109 @@ mod tests {
             used,
             limit
         );
+    }
+
+    /// P0 regression: subnet_index must be cleaned on eviction/removal.
+    /// Without this, every churned IP leaves a phantom in its subnet's
+    /// DashSet, growing the index unboundedly.
+    #[test]
+    fn subnet_index_cleaned_on_evict_and_remove() {
+        let store = Store::new(16);
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        let sk = subnet_key_u128(ip).unwrap();
+        let net = IpNetwork::of_ip(ip);
+        // Build a real record in `inner` AND populate subnet_index — this
+        // is the steady-state shape detection creates.
+        store
+            .insert(
+                ip,
+                Value::IpRecord(crate::IpRecord {
+                    ip,
+                    request_count: 0,
+                    ewma_rps: 0.0,
+                    cusum_s: 0.0,
+                    baseline_rps: 0.0,
+                    prev_sample_hot: false,
+                    sample_count: 0,
+                    pulse_samples_in_window: 0,
+                    pulse_window_start_ns: 0,
+                    first_seen_ns: 0,
+                    last_seen_ns: 0,
+                    bytes_in: 0,
+                    status_dist: [0; 5],
+                    proto_fingerprint: 0,
+                    threat_score: 0.0,
+                    block_state: crate::BlockState::Clean,
+                }),
+                Some(0),
+                1 << 20,
+            )
+            .unwrap();
+        store.update_subnet_index(ip, Some(sk), false);
+        // Also seed the subnet window so the same subnet is recognized.
+        store.merge_subnet_window(sk, net, 1, Some(&[ip]), 1_000_000_000);
+        assert_eq!(store.get_ips_in_subnet(sk).len(), 1);
+
+        // evict_batch: TTL already expired by the time we call.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        store.evict_batch(&[ip]);
+        assert!(
+            store.get_ips_in_subnet(sk).is_empty(),
+            "subnet_index must be empty after evict_batch; stale entries leak memory"
+        );
+    }
+
+    /// P0 regression: Store::remove must also clean subnet_index, or any
+    /// caller that removes an IP directly (e.g. dashboard unblock endpoint)
+    /// leaves a phantom in the reverse index.
+    #[test]
+    fn subnet_index_cleaned_on_remove() {
+        let store = Store::new(16);
+        let ip: IpAddr = "10.0.0.2".parse().unwrap();
+        let sk = subnet_key_u128(ip).unwrap();
+        store
+            .insert(
+                ip,
+                Value::Counter(1),
+                None,
+                1 << 20,
+            )
+            .unwrap();
+        store.update_subnet_index(ip, Some(sk), false);
+        assert_eq!(store.get_ips_in_subnet(sk).len(), 1);
+        store.remove(&ip);
+        assert!(
+            store.get_ips_in_subnet(sk).is_empty(),
+            "subnet_index must be empty after remove; stale entries leak memory"
+        );
+    }
+
+    /// P0 regression: merge_subnet_window read-modify-write must not lose
+    /// updates under concurrency. The old code did get().clone() → mutate
+    /// → insert, dropping the shard lock between read and write, so two
+    /// concurrent calls for the same subnet would both see the same
+    /// baseline and one update would be lost.
+    #[test]
+    fn merge_subnet_window_concurrent_no_lost_updates() {
+        use std::sync::Arc;
+        use std::thread;
+        let store = Arc::new(Store::new(16));
+        let sk: SubnetKey = 0x0a14_1e00_0000_0000_0000_0000_0000_0000;
+        let net = IpNetwork::ipv4_subnet(std::net::Ipv4Addr::new(10, 20, 30, 0));
+        // 16 threads each call merge_subnet_window with 1 event for the
+        // same subnet, 100 ms apart so the window doesn't roll over.
+        // Total expected: 16 events; old code frequently observed <16.
+        let mut handles = vec![];
+        for _ in 0..16 {
+            let s = store.clone();
+            handles.push(thread::spawn(move || {
+                s.merge_subnet_window(sk, net, 1, None, 1_000_000_000);
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        let total = store.subnet_table().get(&sk).unwrap().total_rps;
+        assert_eq!(total, 16, "all 16 concurrent merges must be counted");
     }
 }
