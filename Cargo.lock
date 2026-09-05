@@ -1332,6 +1332,7 @@ dependencies = [
 name = "ramshield-protocol"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "crc32fast",
  "hex",
  "hmac",

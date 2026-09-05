@@ -28,6 +28,9 @@ struct ConnectionConfig {
     idle_timeout: Duration,
     max_line_length: usize,
     auth_keys: Arc<Vec<(String, Vec<u8>)>>,
+    /// Per-key nonce store. Bounded LRU + 10s TTL; lives for the server's
+    /// lifetime. Shared by every connection via Arc.
+    replay_store: Arc<ramshield_protocol::auth::ReplayStore>,
 }
 
 impl ConnectionConfig {
@@ -39,6 +42,7 @@ impl ConnectionConfig {
             idle_timeout: Duration::from_millis(server.connection_idle_timeout_ms),
             max_line_length: server.max_line_length,
             auth_keys: Arc::new(server.auth_keys.clone()),
+            replay_store: server.replay_store.clone(),
         }
     }
 }
@@ -70,6 +74,11 @@ pub struct IpcServer {
     active_connections: Arc<AtomicU64>,
     rejected_connections: Arc<AtomicU64>,
     dropped_events: Arc<AtomicU64>,
+    /// Per-key LRU nonce store for replay protection. Capacity = 256 entries
+    /// per key, entries expire after 10s. Sized to cover the max concurrent
+    /// IPC clients with headroom; evicted entries leave a brief hole but that
+    /// only slightly widens the replay window — acceptable tradeoff vs memory.
+    replay_store: Arc<ramshield_protocol::auth::ReplayStore>,
 }
 
 impl IpcServer {
@@ -135,6 +144,14 @@ impl IpcServer {
             active_connections: Arc::new(AtomicU64::new(0)),
             rejected_connections: Arc::new(AtomicU64::new(0)),
             dropped_events: Arc::new(AtomicU64::new(0)),
+            // 256 entries × 10s TTL = bounded memory, tight enough to close
+            // the clock-skew window. Honest comment: cap is per-key not global
+            // because the store is shared across keys; tune if one key churns
+            // hard. Add global cap when a second key_id lands in prod.
+            replay_store: Arc::new(ramshield_protocol::auth::ReplayStore::new(
+                256,
+                Duration::from_secs(10),
+            )),
         })
     }
 
@@ -310,7 +327,7 @@ async fn handle_connection(
             // on the wire contract stays intact.
             let mut line = line;
             if !config.auth_keys.is_empty() {
-                match verify_frame_auth(&config.auth_keys, &line) {
+                match verify_frame_auth(&config.auth_keys, &line, &config.replay_store) {
                     Ok(sanitized) => {
                         // Continue parsing the auth-stripped payload so
                         // Request's deny_unknown_fields never sees `auth`.
@@ -650,7 +667,11 @@ fn process_request(
 /// including its auth object? No — sig must cover payload WITHOUT auth object,
 /// else self-reference. Client signs `ts.payload_without_auth`; server removes
 /// the auth object, re-serializes compactly and compares.
-fn verify_frame_auth(keys: &[(String, Vec<u8>)], line: &[u8]) -> Result<Vec<u8>, &'static str> {
+fn verify_frame_auth(
+    keys: &[(String, Vec<u8>)],
+    line: &[u8],
+    replay: &ramshield_protocol::auth::ReplayStore,
+) -> Result<Vec<u8>, &'static str> {
     let mut v: serde_json::Value =
         serde_json::from_slice(line).map_err(|_| "frame is not valid JSON")?;
     let auth = v
@@ -674,6 +695,6 @@ fn verify_frame_auth(keys: &[(String, Vec<u8>)], line: &[u8]) -> Result<Vec<u8>,
 
     // Payload = compact serialization of the frame without the auth object.
     let payload = serde_json::to_vec(&v).map_err(|_| "reserialize failed")?;
-    ramshield_protocol::auth::verify(keys, key_id, ts_ms, sig, &payload)?;
+    ramshield_protocol::auth::verify(keys, key_id, ts_ms, sig, &payload, Some(replay))?;
     Ok(payload)
 }
