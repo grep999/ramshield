@@ -137,8 +137,14 @@ impl Engine {
                 merged: stats.ips_tracked as u64,
                 blocked: blocks_applied,
             },
-            is_healthy: !self.is_shutting_down(),
-            health_reason: if self.is_shutting_down() { "shutting down".into() } else { "running".into() },
+            is_healthy: !self.is_shutting_down() && ram_pct < 95.0,
+            health_reason: if self.is_shutting_down() {
+                "shutting down".into()
+            } else if ram_pct >= 95.0 {
+                "ram pressure".into()
+            } else {
+                "running".into()
+            },
             xdp_active: self.xdp_active.load(Ordering::Acquire),
         }
     }
@@ -168,10 +174,7 @@ impl Engine {
                 let mut prefix = String::with_capacity(15);
                 let _ = std::fmt::Write::write_fmt(
                     &mut prefix,
-                    format_args!(
-                        "{}.{}.{}",
-                        rec.prefix[0], rec.prefix[1], rec.prefix[2]
-                    ),
+                    format_args!("{}.{}.{}", rec.prefix[0], rec.prefix[1], rec.prefix[2]),
                 );
                 SubnetRow {
                     prefix,
@@ -418,5 +421,21 @@ mod startup_tests {
         let snap = engine.dashboard_snapshot();
         assert!(!snap.is_healthy);
         assert_eq!(snap.health_reason, "shutting down");
+    }
+
+    #[test]
+    fn engine_snapshot_unhealthy_when_ram_pressure() {
+        // RED: set ram_limit_mb=1 MB and ram_bytes = 1.5 MB → ram_pct > 95%.
+        // Broken code (8c159cc): is_healthy stays true. Fixed code: flips to false.
+        let store = Arc::new(Store::new(16));
+        store.set_ram_limit_mb_for_testing(1);
+        store.set_ram_bytes_for_testing(1_572_864); // 1.5 MB > 1 MB → ram_pct = 100.0
+        let engine = Engine::new(Config::default(), store, Arc::new(Metrics::new()));
+        let snap = engine.dashboard_snapshot();
+        assert!(
+            !snap.is_healthy,
+            "is_healthy should flip false at ram_pct=100%"
+        );
+        assert_eq!(snap.health_reason, "ram pressure");
     }
 }

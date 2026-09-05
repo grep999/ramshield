@@ -433,6 +433,16 @@ impl Store {
     pub fn ram_bytes(&self) -> usize {
         self.ram_bytes.load(Ordering::Relaxed)
     }
+
+    #[doc(hidden)]
+    pub fn set_ram_limit_mb_for_testing(&self, mb: usize) {
+        self.traffic.ram_limit_mb.store(mb, Ordering::Relaxed);
+    }
+
+    #[doc(hidden)]
+    pub fn set_ram_bytes_for_testing(&self, bytes: usize) {
+        self.ram_bytes.store(bytes, Ordering::Relaxed);
+    }
     pub fn inner(&self) -> &DashMap<IpAddr, Entry> {
         &self.inner
     }
