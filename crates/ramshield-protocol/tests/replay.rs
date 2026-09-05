@@ -25,10 +25,10 @@
 //!     is two independent nonces.
 //!   - `replay_cache_lru_bounded`              -> store never exceeds capacity.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ramshield_protocol::auth::{self, ReplayStore, MAX_CLOCK_SKEW_MS};
+use ramshield_protocol::auth::{self, MAX_CLOCK_SKEW_MS, ReplayStore};
 
 fn now_ms() -> u64 {
     SystemTime::now()

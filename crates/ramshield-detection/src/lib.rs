@@ -14,9 +14,9 @@ use ramshield_metrics::Metrics;
 use ramshield_storage::{BlockState, IpRecord, Store, SubnetKey, Value, subnet_key_u128};
 use ramshield_types::BlockReason;
 use ramshield_types::{ConnectionEvent, EnforceAction, EnforceCommand, IpNetwork};
-use rate_tracker::{pulse_tracker_step, 
+use rate_tracker::{
     CUSUM_WARMUP_SAMPLES, cusum_allowance, cusum_fired, cusum_step_capped, ewma, ewma_alpha_slow,
-    is_exceeded,
+    is_exceeded, pulse_tracker_step,
 };
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;

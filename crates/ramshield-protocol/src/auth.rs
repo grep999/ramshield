@@ -214,4 +214,3 @@ mod replay_tests {
         assert!(verify(&keys, "k1", now, &sig2, b"payload-b", Some(&store)).is_ok());
     }
 }
-

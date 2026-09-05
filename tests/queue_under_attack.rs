@@ -10,8 +10,6 @@ const BURST: usize = 100_000;
 #[test]
 fn channel_capacity_is_bounded_and_drops_newest_under_attack() {
     use ramshield::ipc::server::{CHANNEL_CAPACITY, IpcServerStats};
-    use ramshield_types::ConnectionEvent;
-    use std::net::IpAddr;
 
     // Verify the channel capacity constant matches expectations
     assert_eq!(CHANNEL_CAPACITY, CAPACITY as u64);
@@ -56,11 +54,15 @@ fn crossbeam_channel_drops_at_16k_capacity() {
     assert!(
         dropped > 0,
         "expected drops under attack (cap={} burst={}); got accepted={} dropped={}",
-        CAPACITY, BURST, accepted, dropped,
+        CAPACITY,
+        BURST,
+        accepted,
+        dropped,
     );
     assert!(
         accepted <= CAPACITY as u64,
         "channel accepted {} > capacity {} — not bounded!",
-        accepted, CAPACITY,
+        accepted,
+        CAPACITY,
     );
 }

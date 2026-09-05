@@ -61,19 +61,21 @@ impl ReplayStore {
         let mut g = self.inner.lock().map_err(|_| "replay store poisoned")?;
         // Lazy TTL sweep on the front (oldest). A full sweep is O(n) and
         // not needed — old entries fall out of the LRU window anyway.
-        while g.order
+        while g
+            .order
             .front()
             .and_then(|k| g.map.get(k))
-            .map_or(false, |ts| now.duration_since(*ts) >= self.ttl)
+            .is_some_and(|ts| now.duration_since(*ts) >= self.ttl)
         {
             if let Some(expired) = g.order.pop_front() {
                 g.map.remove(&expired);
             }
         }
-        if let Some(prev) = g.map.get(&key) {
-            if now.duration_since(*prev) < self.ttl {
-                return Err("replay");
-            }
+        if g.map
+            .get(&key)
+            .is_some_and(|prev| now.duration_since(*prev) < self.ttl)
+        {
+            return Err("replay");
         }
         // Insert / refresh.
         g.order.retain(|k| k != &key);
