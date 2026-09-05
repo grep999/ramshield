@@ -124,8 +124,48 @@ async fn api_status_modules(State(state): State<AppState>) -> Json<Vec<ModuleSta
     Json(state.engine.get_module_stats())
 }
 
-async fn api_get_config(State(state): State<AppState>) -> Json<Config> {
-    Json(state.engine.config.load().as_ref().clone())
+async fn api_get_config(State(state): State<AppState>) -> Json<ConfigView> {
+    let cfg = state.engine.config.load().as_ref().clone();
+    Json(ConfigView::from_config(&cfg))
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct ConfigView {
+    pub engine: crate::config::EngineConfig,
+    pub detection: crate::config::DetectionConfig,
+    pub ipc: crate::config::IpcConfig,
+    pub forecasting: crate::config::ForecastingConfig,
+    pub dashboard: crate::config::DashboardConfig,
+    /// True when IPC HMAC auth is configured (regardless of how many keys).
+    pub auth_enabled: bool,
+}
+
+impl ConfigView {
+    pub fn from_config(c: &crate::config::Config) -> Self {
+        // P0 fix: redact raw HMAC key material. Each `key_id:hex` is replaced
+        // with `key_id:<redacted>` so /api/config is safe to expose to any
+        // authenticated dashboard user, while still letting operators see
+        // which key_ids are configured.
+        let redacted: Vec<String> = c
+            .ipc
+            .auth_keys
+            .iter()
+            .map(|entry| match entry.split_once(':') {
+                Some((id, _)) => format!("{id}:<redacted>"),
+                None => "<redacted>".into(),
+            })
+            .collect();
+        let mut ipc = c.ipc.clone();
+        ipc.auth_keys = redacted;
+        Self {
+            engine: c.engine.clone(),
+            detection: c.detection.clone(),
+            ipc,
+            forecasting: c.forecasting.clone(),
+            dashboard: c.dashboard.clone(),
+            auth_enabled: !c.ipc.auth_keys.is_empty(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -267,9 +307,41 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), 100_000)
             .await
             .unwrap();
-        let json: Config = serde_json::from_slice(&body).unwrap();
+        let json: ConfigView = serde_json::from_slice(&body).unwrap();
         assert_eq!(json.engine.ram_limit_mb, 512);
         assert_eq!(json.engine.shard_count, 256);
+    }
+
+    /// P0 regression: /api/config must NOT return raw HMAC keys. Without
+    /// the redaction, anyone with a session token could read every
+    /// ipc.auth_keys entry and forge signed IPC frames.
+    #[tokio::test]
+    async fn config_redacts_hmac_keys() {
+        let mut state = test_app_state();
+        // Plant a fake key into the live config; should appear as <redacted>.
+        let mut cfg = state.engine.config.load().as_ref().clone();
+        cfg.ipc.auth_keys = vec!["k1:deadbeefcafebabe0123456789abcdef0123456789abcdef0123456789abcdef".into()];
+        state.engine.config.store(Arc::new(cfg));
+        let app = Router::new()
+            .route("/api/config", get(api_get_config))
+            .with_state(state);
+        let response = app
+            .oneshot(Request::get("/api/config").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 100_000)
+            .await
+            .unwrap();
+        let raw = std::str::from_utf8(&body).unwrap();
+        assert!(
+            !raw.contains("deadbeefcafebabe"),
+            "raw hex secret leaked in /api/config response"
+        );
+        assert!(
+            raw.contains("k1:<redacted>"),
+            "expected redacted key id marker"
+        );
     }
 
     #[tokio::test]

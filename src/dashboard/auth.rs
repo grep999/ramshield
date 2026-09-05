@@ -73,6 +73,10 @@ impl AuthState {
         if !ok {
             return None;
         }
+        // Reset lockout counter on successful login — otherwise one
+        // temporary typo permanently locks the owner out of the dashboard
+        // until process restart.
+        self.failed_logins.store(0, Ordering::Relaxed);
         let mut token = [0u8; 32];
         rand::rng().fill_bytes(&mut token);
         let token = hex::encode(token);
@@ -194,7 +198,7 @@ async fn login_submit(
     match auth.login(&form.password) {
         Some(token) => {
             let cookie = format!(
-                "{}={}; HttpOnly; SameSite=Lax; Max-Age={}",
+                "{}={}; HttpOnly; SameSite=Lax; Secure; Max-Age={}",
                 COOKIE_NAME,
                 token,
                 auth.ttl.as_secs()
