@@ -29,9 +29,19 @@ mkdir -p "$WAL_DIR"
 cleanup
 sleep 0.5
 
-echo "→ booting binary with $CFG (WAL=$WAL_DIR)"
+# config.prod.toml binds 0.0.0.0 and now fail-closes without credentials
+# (Config::validate). Smoke tests exercise endpoints, not public exposure —
+# rewrite binds to loopback and point the WAL at the scratch dir. The
+# fail-closed rule itself is covered by ramshield-config unit tests.
+SMOKE_CFG="${SMOKE_CFG:-/tmp/ramshield-prod-smoke.toml}"
+sed -e 's/^tcp_addr = "0\.0\.0\.0/tcp_addr = "127.0.0.1/' \
+    -e 's/^http_addr = "0\.0\.0\.0/http_addr = "127.0.0.1/' \
+    -e "s|^dir = \"/var/lib/ramshield/wal\"|dir = \"$WAL_DIR\"|" \
+    "$CFG" > "$SMOKE_CFG"
+
+echo "→ booting binary with $SMOKE_CFG (WAL=$WAL_DIR)"
 RAMSHIELD_ENGINE__RAM_LIMIT_MB=1024 \
-    "$BIN" --config "$CFG" --no-xdp > "$LOG" 2>&1 &
+    "$BIN" --config "$SMOKE_CFG" --no-xdp > "$LOG" 2>&1 &
 PID=$!
 trap cleanup EXIT
 

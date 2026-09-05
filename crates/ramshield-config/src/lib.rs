@@ -509,12 +509,37 @@ impl Config {
             anyhow::bail!("dashboard.http_addr must not be empty");
         }
 
+        // Fail-closed: a public bind without credentials is an open admin
+        // surface. Loopback (127.0.0.1 / ::1) stays open for local dev.
+        if is_public_bind(&self.dashboard.http_addr) && self.dashboard.admin_password_hash.is_none()
+        {
+            anyhow::bail!(
+                "dashboard.http_addr binds a public interface ({}) but admin_password_hash is unset — set the hash or bind 127.0.0.1",
+                self.dashboard.http_addr
+            );
+        }
+        if is_public_bind(&self.ipc.tcp_addr) && self.ipc.auth_keys.is_empty() {
+            anyhow::bail!(
+                "ipc.tcp_addr binds a public interface ({}) but auth_keys is empty — set HMAC keys or bind 127.0.0.1",
+                self.ipc.tcp_addr
+            );
+        }
+
         Ok(())
     }
 
     pub fn into_handle(self) -> ConfigHandle {
         Arc::new(ArcSwap::from_pointee(self))
     }
+}
+
+/// True when `addr` would accept packets from other hosts.
+/// Treats `0.0.0.0`, `[::]`, and bare `::` as public; everything else
+/// (loopback, specific NIC IPs, hostnames) is the operator's problem.
+fn is_public_bind(addr: &str) -> bool {
+    let host = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(addr);
+    let host = host.trim_matches(['[', ']']);
+    host == "0.0.0.0" || host == "::" || host == "*"
 }
 
 #[cfg(test)]
@@ -550,6 +575,32 @@ mod tests {
     #[test]
     fn default_config_validates() {
         let cfg = Config::default();
+        cfg.validate().unwrap();
+    }
+
+    #[test]
+    fn public_dashboard_without_password_is_rejected() {
+        let mut cfg = Config::default();
+        cfg.dashboard.http_addr = "0.0.0.0:9999".into();
+        cfg.dashboard.admin_password_hash = None;
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("admin_password_hash"), "{err}");
+    }
+
+    #[test]
+    fn public_ipc_without_keys_is_rejected() {
+        let mut cfg = Config::default();
+        cfg.ipc.tcp_addr = "0.0.0.0:7890".into();
+        cfg.ipc.auth_keys.clear();
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("auth_keys"), "{err}");
+    }
+
+    #[test]
+    fn loopback_without_auth_still_validates() {
+        let cfg = Config::default();
+        assert_eq!(cfg.dashboard.http_addr, "127.0.0.1:9999");
+        assert_eq!(cfg.ipc.tcp_addr, "127.0.0.1:7890");
         cfg.validate().unwrap();
     }
 

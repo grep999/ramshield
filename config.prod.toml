@@ -2,11 +2,19 @@
 #
 # Apply with: ./target/release/ramshield --config config.prod.toml --no-xdp
 #
+# FAIL-CLOSED: this file binds 0.0.0.0. Config::validate() refuses to
+# start until you set:
+#   [dashboard] admin_password_hash = "<argon2 PHC>"
+#   [ipc]       auth_keys = ["k1:<64-hex-hmac-key>"]
+# Loopback (127.0.0.1) stays open for local dev.
+#
 # Differences from config.toml:
 #   - IPC + dashboard bound to 0.0.0.0 (was 127.0.0.1)
 #   - WAL dir set to /var/lib/ramshield/wal (was ./data/wal)
 #   - Detection RPS threshold raised to 5000 (production baseline)
 #   - Engine RAM limit raised to 8 GiB (production budget)
+#   - Dual gate restored to 50 unique IPs + 100 events (500 unique IPs
+#     is unreachable on a /24)
 #   - XDP disabled — host-NIC deployment only
 
 [engine]
@@ -43,8 +51,11 @@ min_entropy = 4.5
 [detection]
 rps_threshold = 5000
 rate_window_secs = 10
-subnet_batch_threshold = 500
-subnet_batch_min_events = 50
+# Dual gate: unique IPs per /24 AND events/s in the 2s window.
+# 500 unique IPs is unreachable on a /24 (254 hosts). Keep the
+# documented 50+100 gate; rps_threshold=5000 is the per-IP tripwire.
+subnet_batch_threshold = 50
+subnet_batch_min_events = 100
 batch_block_enabled = true
 block_ttl_secs = 300
 subnet_burst_ttl_secs = 600

@@ -120,6 +120,7 @@ async fn main() -> Result<()> {
             .spawn(move || -> Result<()> {
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_io()
+                    .enable_time()
                     .build()
                     .context("failed to build dashboard runtime")?;
                 rt.block_on(async move {
