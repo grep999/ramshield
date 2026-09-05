@@ -372,9 +372,12 @@ impl DetectionEngine {
             // was a second DashMap hit on the same key).
             let (ewma_rps, threat, should_block, was_blocked) =
                 self.merge_record(ip, agg, det, ram_lim, now, sk);
-            if was_blocked {
-                continue;
-            }
+            // Note: we do NOT skip already-blocked IPs here. The pulse-wave
+            // tracker needs to keep running on every batch to count distinct
+            // over-threshold samples; subsequent bursts must still record
+            // their state. The enforcement layer deduplicates block commands
+            // by (ip, reason), so duplicate emits just refresh the TTL.
+            let _ = was_blocked;
 
             promoted += 1;
             promoted_events += agg.count;
@@ -461,11 +464,10 @@ impl DetectionEngine {
         sk: Option<SubnetKey>,
     ) -> (f64, f32, bool, bool) {
         let existing = self.store.get(&ip);
-        if let Some(Value::IpRecord(ref r)) = existing
-            && matches!(r.block_state, BlockState::Blocked { .. })
-        {
-            return (r.ewma_rps, r.threat_score, false, true);
-        }
+        let was_blocked = match &existing {
+            Some(Value::IpRecord(r)) => matches!(r.block_state, BlockState::Blocked { .. }),
+            _ => false,
+        };
         let mut rec = match existing {
             Some(Value::IpRecord(r)) => r,
             _ => IpRecord {
