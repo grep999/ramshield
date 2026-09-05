@@ -370,14 +370,13 @@ impl DetectionEngine {
 
             // ponytail: merge_record does the single store lookup (is_blocked check
             // was a second DashMap hit on the same key).
-            let (ewma_rps, threat, should_block, was_blocked) =
+            let (ewma_rps, threat, should_block, _was_blocked) =
                 self.merge_record(ip, agg, det, ram_lim, now, sk);
             // Note: we do NOT skip already-blocked IPs here. The pulse-wave
             // tracker needs to keep running on every batch to count distinct
             // over-threshold samples; subsequent bursts must still record
             // their state. The enforcement layer deduplicates block commands
             // by (ip, reason), so duplicate emits just refresh the TTL.
-            let _ = was_blocked;
 
             promoted += 1;
             promoted_events += agg.count;
@@ -567,7 +566,7 @@ impl DetectionEngine {
             warn!("Failed to insert IP record for {}: {}", ip, e);
         }
         self.store.update_subnet_index(ip, sk, false);
-        (ewma_rps, threat, block, false)
+        (ewma_rps, threat, block, was_blocked)
     }
 
     /// Subnet-scale batch block — reads subnet_table only, not full store key scan.
