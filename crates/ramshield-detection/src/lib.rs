@@ -399,7 +399,8 @@ impl DetectionEngine {
 
         let block_count = blocks.len() as u32;
         for b in &blocks {
-            self.metrics.record_block_ip(&b.0, b.1.as_str(), "detection");
+            self.metrics
+                .record_block_ip(&b.0, b.1.as_str(), "detection");
         }
         // ponytail: warn once per 1024 rejections — log churn kills throughput
         // under sustained queue pressure. Upgrade: sliding-window rate limiter
@@ -545,8 +546,7 @@ impl DetectionEngine {
         if let Err(e) = self.store.insert(ip, Value::IpRecord(rec), None, ram_lim) {
             warn!("Failed to insert IP record for {}: {}", ip, e);
         }
-        self.store
-            .update_subnet_index(ip, sk, false);
+        self.store.update_subnet_index(ip, sk, false);
         (ewma_rps, threat, block, false)
     }
 

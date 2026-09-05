@@ -155,7 +155,10 @@ impl Wal {
         // Step 1: Serialization, CRC, header — all CPU work OUTSIDE the mutex.
         let raw = serde_json::to_vec(entry).map_err(|e| RsError::Serde(e.to_string()))?;
         if raw.len() > MAX_RECORD_SIZE {
-            return Err(RsError::RecordTooLarge { size: raw.len(), max: MAX_RECORD_SIZE });
+            return Err(RsError::RecordTooLarge {
+                size: raw.len(),
+                max: MAX_RECORD_SIZE,
+            });
         }
         let (payload, flags): (Vec<u8>, u8) = if self.compress && raw.len() > 64 {
             (compress_prepend_size(&raw), 0x01)
@@ -163,7 +166,10 @@ impl Wal {
             (raw, 0x00)
         };
         if payload.len() > MAX_RECORD_SIZE {
-            return Err(RsError::RecordTooLarge { size: payload.len(), max: MAX_RECORD_SIZE });
+            return Err(RsError::RecordTooLarge {
+                size: payload.len(),
+                max: MAX_RECORD_SIZE,
+            });
         }
         let mut h = Crc32::new();
         h.update(&payload);
@@ -192,10 +198,7 @@ impl Wal {
             g.writer.write_all(&payload)?;
             g.bytes += (HEADER + payload.len()) as u64;
 
-            let must_sync = matches!(
-                self.durability,
-                Durability::Fsync | Durability::GroupCommit
-            );
+            let must_sync = matches!(self.durability, Durability::Fsync | Durability::GroupCommit);
             if must_sync || matches!(self.durability, Durability::Flush) {
                 g.writer.flush()?;
             }

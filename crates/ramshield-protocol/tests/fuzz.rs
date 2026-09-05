@@ -11,7 +11,7 @@
 //!    Ok for non-matching key/timestamp/signature.
 
 use proptest::prelude::*;
-use ramshield_protocol::{auth, Request, Response};
+use ramshield_protocol::{Request, Response, auth};
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(2048))]
@@ -47,9 +47,9 @@ proptest! {
 /// or Err (for every other case). Must not panic on weird inputs.
 fn arb_auth() -> impl Strategy<Value = (String, u64, String, Vec<u8>)> {
     (
-        "[a-zA-Z0-9_]{0,16}",       // key_id
-        any::<u64>(),                // ts_ms (any u64 incl. overflow risks)
-        "[0-9a-fA-Fx]{0,128}",       // sig_hex (may be malformed, odd-length, non-hex)
+        "[a-zA-Z0-9_]{0,16}",                           // key_id
+        any::<u64>(),                                   // ts_ms (any u64 incl. overflow risks)
+        "[0-9a-fA-Fx]{0,128}", // sig_hex (may be malformed, odd-length, non-hex)
         proptest::collection::vec(any::<u8>(), 0..512), // payload
     )
 }

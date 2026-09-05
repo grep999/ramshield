@@ -463,11 +463,9 @@ fn process_request(
             };
             match enforcement_tx.try_send(cmd) {
                 Ok(()) => {
-                    engine.metrics.record_block_ip(
-                        &ip_addr,
-                        &reason_display,
-                        "ipc",
-                    );
+                    engine
+                        .metrics
+                        .record_block_ip(&ip_addr, &reason_display, "ipc");
                     Response::Ok {
                         message: format!("block queued for {}", ip_addr),
                         state: Some("pending".into()),

@@ -89,7 +89,10 @@ async fn main() -> Result<()> {
         config.dashboard.block_log_size,
     ));
     let engine = Arc::new(Engine::new(config.clone(), store.clone(), metrics.clone()));
-    let _engine_handle = engine.clone().start_async().context("failed to start engine pipeline")?;
+    let _engine_handle = engine
+        .clone()
+        .start_async()
+        .context("failed to start engine pipeline")?;
 
     // Periodic uptime updater (every second)
     {
