@@ -138,14 +138,23 @@ pub async fn require_auth(State(auth): State<AuthState>, req: Request, next: Nex
         )
             .into_response()
     } else {
-        // ponytail: builder only fails on invalid header values, which a
-        // hard-coded SEE_OTHER + "/login" never produces. Switch to a typed
-        // 500 response if the redirect target becomes user-supplied.
-        Response::builder()
+        // ponytail: build() can only fail on invalid header values. The
+        // inputs here (SEE_OTHER status code, "/login" path) are constants
+        // http::HeaderValue always accepts — this match is belt-and-suspenders.
+        // Upgrade to axum::response::Redirect when the target becomes
+        // user-supplied; the typed builder eliminates the runtime path entirely.
+        match Response::builder()
             .status(StatusCode::SEE_OTHER)
             .header(header::LOCATION, "/login")
             .body(axum::body::Body::empty())
-            .expect("hard-coded redirect response is always valid")
+        {
+            Ok(r) => r,
+            Err(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "redirect builder failed (hard-coded inputs — should be unreachable)",
+            )
+                .into_response(),
+        }
     }
 }
 
@@ -179,15 +188,23 @@ async fn login_submit(State(auth): State<AuthState>, Form(form): Form<LoginForm>
                 token,
                 auth.ttl.as_secs()
             );
-            // ponytail: cookie format is fully controlled (hex token, ASCII
-            // attrs) — Set-Cookie parse failure is impossible here. Swap to a
-            // typed 500 response if the cookie value ever becomes user input.
-            Response::builder()
+            // ponytail: cookie value is a hex token (header::HeaderValue::from_str
+            // accepts it); attrs are ASCII constants. The match is
+            // belt-and-suspenders. If the cookie ever embeds user-supplied bytes,
+            // swap to typed Set-Cookie helpers in axum-extra.
+            match Response::builder()
                 .status(StatusCode::SEE_OTHER)
                 .header(header::SET_COOKIE, cookie)
                 .header(header::LOCATION, "/")
                 .body(axum::body::Body::empty())
-                .expect("controlled cookie + redirect is always valid")
+            {
+                Ok(r) => r,
+                Err(_) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "login response builder failed (controlled inputs — should be unreachable)",
+                )
+                    .into_response(),
+            }
         }
         None => {
             auth.note_failure();

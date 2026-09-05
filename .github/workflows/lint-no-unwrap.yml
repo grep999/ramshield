@@ -17,7 +17,7 @@ jobs:
       - name: Scan production source for .unwrap() / .expect()
         run: |
           set -euo pipefail
-          # ripgrep: \b unwraps whole identifier. Strip test files + #[cfg(test)] modules.
+          # ripgrep: \b unwraps whole identifier. Strip test files first.
           HITS=$(rg -n --type rust \
             --glob '!tests/**' \
             --glob '!**/tests/**' \
@@ -27,14 +27,34 @@ jobs:
             -e '\.unwrap\s*\(' \
             -e '\.expect\s*\(' \
             src/ || true)
-          # Drop matches inside #[cfg(test)] blocks: crude but sufficient — test attribute
-          # lines and anything indented under them get filtered.
-          FILTERED=$(printf '%s\n' "$HITS" | awk -F: '
-            /#\[cfg\(test\)\]/ { skip=1; next }
-            skip && /^[[:space:]]/ { next }
-            skip && /^[^[:space:]]/ { skip=0 }
-            !skip && NF { print }
-          ')
+          # Drop matches inside #[cfg(test)] blocks. The previous awk filter
+          # was a 3-line state machine that broke on `mod tests {` (non-indented
+          # line resetting `skip=0`). The Python heredoc below tracks brace
+          # depth: enter on `#[cfg(test)]` + opening `{`, exit when depth
+          # returns to 0. This correctly drops ALL test code regardless of
+          # indentation.
+          FILTERED=$(printf '%s\n' "$HITS" | python3 <<'PYEOF'
+          import sys, re
+          depth = 0
+          in_cfg_test = False
+          for line in sys.stdin:
+              line = line.rstrip("\n")
+              if depth == 0 and re.search(r"#\[cfg\(test\)\]", line):
+                  in_cfg_test = True
+              if in_cfg_test:
+                  for ch in line:
+                      if ch == "{":
+                          depth += 1
+                      elif ch == "}":
+                          depth -= 1
+                          if depth == 0:
+                              in_cfg_test = False
+                              break
+                  continue
+              if line:
+                  print(line)
+          PYEOF
+          )
           COUNT=$(printf '%s\n' "$FILTERED" | grep -c . || true)
           echo "unwrap/expect hits in production src/: $COUNT"
           if [ "$COUNT" -gt 0 ]; then
