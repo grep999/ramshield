@@ -13,7 +13,10 @@ use rand::RngCore;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tracing::warn;
@@ -28,6 +31,9 @@ pub struct AuthState {
     sessions: Arc<std::sync::Mutex<HashMap<String, Instant>>>,
     max_login_attempts: u32,
     max_password_length: usize,
+    /// Process-wide failed-login counter. thread_local was a no-op under
+    /// tokio (each worker sees 0); one AtomicU32 covers every request.
+    failed_logins: Arc<AtomicU32>,
 }
 
 impl AuthState {
@@ -43,6 +49,7 @@ impl AuthState {
             sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
             max_login_attempts,
             max_password_length,
+            failed_logins: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -92,18 +99,14 @@ impl AuthState {
     }
 
     fn failed_logins(&self) -> u32 {
-        // ponytail: fixed-window counter is per-process and resets on restart;
-        // swap for a proper limiter when the dashboard faces hostile networks.
-        FAILED_LOGINS.with(|c| c.get())
+        // ponytail: process-wide counter, resets on restart. Swap for a
+        // per-IP limiter when the dashboard faces hostile networks.
+        self.failed_logins.load(Ordering::Relaxed)
     }
 
     fn note_failure(&self) {
-        FAILED_LOGINS.with(|c| c.set(c.get() + 1));
+        self.failed_logins.fetch_add(1, Ordering::Relaxed);
     }
-}
-
-thread_local! {
-    static FAILED_LOGINS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// Middleware: gate every request unless auth disabled or path exempted.
@@ -173,7 +176,7 @@ struct LoginForm {
 }
 
 async fn login_submit(State(auth): State<AuthState>, Form(form): Form<LoginForm>) -> Response {
-    if auth.failed_logins() > auth.max_login_attempts {
+    if auth.failed_logins() >= auth.max_login_attempts {
         warn!(
             "dashboard login locked out ({}+ failures)",
             auth.max_login_attempts
@@ -251,5 +254,18 @@ mod tests {
         let a = AuthState::new(None, 3600, 50, 1024);
         assert!(!a.enabled());
         assert!(a.login("x").is_none()); // no hash → nothing validates
+    }
+
+    #[test]
+    fn lockout_is_process_wide_not_thread_local() {
+        let a = AuthState::new(Some(hash_of("hunter2")), 3600, 3, 1024);
+        for _ in 0..4 {
+            assert!(a.login("wrong").is_none());
+            a.note_failure();
+        }
+        assert!(a.failed_logins() >= a.max_login_attempts);
+        // Same AuthState cloned across "threads" still sees the counter.
+        let b = a.clone();
+        assert!(b.failed_logins() >= b.max_login_attempts);
     }
 }

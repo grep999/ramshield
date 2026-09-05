@@ -37,10 +37,13 @@ pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), 
         .route("/api/config", get(api_get_config).post(api_set_config))
         .merge(login)
         .with_state(engine)
-        // ponytail: permissive CORS is CSRF-open on /api/config; tighten to
-        // same-origin when dashboard gets auth. Upgrade: tower-http CorsLayer
-        // with allowed_origin from config.
-        .layer(CorsLayer::permissive())
+        // Auth on → same-origin only. Open dashboard (loopback, no password)
+        // keeps permissive CORS for local tooling.
+        .layer(if auth.enabled() {
+            CorsLayer::new()
+        } else {
+            CorsLayer::permissive()
+        })
         .layer(axum_mw::from_fn_with_state(
             auth.clone(),
             auth::require_auth,
