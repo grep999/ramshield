@@ -141,10 +141,13 @@ impl DetectionEngine {
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         let bloom_bits = config.load().detection.bloom_bits;
-        // 256k events ≈ 25s of peak ingest buffered — backpressure kicks in
-        // long before RAM blowout (2M cap cost ~200MB RSS headroom for no
-        // throughput gain; BATCH_MAX 1M still fits).
-        let (tx, rx) = bounded::<ConnectionEvent>(256_000);
+        // 16k cap ≈ 1MB RSS, fills in 16ms at 1M eps attack rate — keeps
+        // the batch processor honest. 256k was ~16MB of dead buffer that
+        // delayed inevitable drops and let legitimate events back up
+        // head-of-line.
+        // ponytail: hardcoded; lift to Config.detection.batch_channel_capacity
+        // when traffic profiles diverge.
+        let (tx, rx) = bounded::<ConnectionEvent>(16_000);
         let shard_count = (bloom_bits / 1024).max(1).next_power_of_two();
         Self {
             store,

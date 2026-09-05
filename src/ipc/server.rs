@@ -51,7 +51,11 @@ impl ConnectionConfig {
 const DEFAULT_MAX_CONNECTION_BYTES: usize = 1_048_576; // 1MB per connection
 const DEFAULT_READ_TIMEOUT_MS: u64 = 5000;
 const DEFAULT_WRITE_TIMEOUT_MS: u64 = 5000;
-const BATCH_MAX: usize = 1_000_000; // channel holds 2M; try_send backpressure is the real limiter
+const BATCH_MAX: usize = 1_000_000;
+/// Bounded channel capacity for ConnectionEvent ingest between IPC server and
+/// DetectionEngine. 16k ≈ 1MB RSS. Fills in 16ms at 1M eps attack rate.
+/// ponytail: hardcoded; lift to Config.detection.batch_channel_capacity.
+pub const CHANNEL_CAPACITY: u64 = 16_000;
 const MAX_LINE_LENGTH: usize = 33_554_432; // 32MB max single line (batch reports)
 const CONNECTION_IDLE_TIMEOUT_MS: u64 = 30_000; // 30s idle
 
@@ -247,6 +251,7 @@ impl IpcServer {
             rejected_connections: self.rejected_connections.load(Ordering::Relaxed),
             max_connections: self.max_connections as u64,
             dropped_events: self.dropped_events.load(Ordering::Relaxed),
+            channel_capacity: CHANNEL_CAPACITY,
         }
     }
 }
@@ -258,6 +263,10 @@ pub struct IpcServerStats {
     pub rejected_connections: u64,
     pub max_connections: u64,
     pub dropped_events: u64,
+    /// Bounded channel capacity for connection-event ingest. Equal to the
+    /// cap set on the crossbeam channel in DetectionEngine::new (16k).
+    /// Dashboard can compute utilization = accepted / channel_capacity.
+    pub channel_capacity: u64,
 }
 
 async fn handle_connection(
