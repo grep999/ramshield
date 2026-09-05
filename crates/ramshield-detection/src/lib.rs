@@ -45,6 +45,15 @@ impl BloomFilter {
         }
     }
 
+    /// Wipe the filter. Required because the bloom is advisory and grows
+    /// monotonically otherwise — every bit becomes set within hours of
+    /// any real traffic, after which `contains_hashed` always returns
+    /// true and the cold-skip short-circuit at line 365 stops skipping
+    /// anything, ballooning the store to O(total_ips_ever_seen).
+    pub fn clear(&mut self) {
+        self.bits.fill(0);
+    }
+
     pub fn slots(ip: &IpAddr) -> (usize, usize) {
         let mut h = DefaultHasher::new();
         ip.hash(&mut h);
@@ -400,7 +409,7 @@ impl DetectionEngine {
         self.store
             .traffic
             .promoted_ips
-            .store(self.store.len() as u64, Ordering::Relaxed);
+            .store(promoted as u64, Ordering::Relaxed);
 
         let block_count = blocks.len() as u32;
         for b in &blocks {
@@ -572,12 +581,24 @@ impl DetectionEngine {
     /// Subnet-scale batch block — reads subnet_table only, not full store key scan.
     fn subnet_batch_loop(self: Arc<Self>) {
         let tick = std::time::Duration::from_millis(500);
+        // Bloom clear cadence: 8s. Advisory cache resets faster than the slowest
+        // legitimate IP's revisit window, so cold-skip stays effective.
+        // Without clear, every bit becomes set within hours and cold-skip dies.
+        let bloom_clear_ns: u64 = 8 * 1_000_000_000;
+        let mut last_bloom_clear_ns = now_ns();
         loop {
             if self.shutdown.load(Ordering::Acquire) {
                 info!("Subnet batch loop shutting down");
                 break;
             }
             std::thread::sleep(tick);
+            if now_ns().saturating_sub(last_bloom_clear_ns) >= bloom_clear_ns {
+                self.bloom
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clear();
+                last_bloom_clear_ns = now_ns();
+            }
             let cfg = self.config.load();
             if !cfg.detection.batch_block_enabled {
                 continue;
@@ -843,5 +864,66 @@ mod tests {
             "stale swarm signal must not survive rollover"
         );
         assert_eq!(rec.total_rps, 3);
+    }
+
+    /// P0 regression: bloom must clear periodically — without clear, every bit
+    /// becomes set within hours and cold-skip stops skipping anything,
+    /// ballooning the store to O(total_ips_ever_seen).
+    #[test]
+    fn bloom_clear_resets_all_bits() {
+        let mut bf = BloomFilter::new(1024);
+        let ip: IpAddr = "192.168.0.1".parse().unwrap();
+        bf.insert(ip);
+        assert!(bf.contains(ip));
+        bf.clear();
+        assert!(!bf.contains(ip), "clear() must reset the filter to empty");
+    }
+
+    /// P0 regression: detection flush must record the per-flush promoted count
+    /// (not the total store size) in the metrics counter. Without this fix the
+    /// dashboard shows the cumulative store size, which is unrelated to
+    /// per-window throughput and makes the metric meaningless.
+    #[test]
+    fn flush_records_per_flush_promoted_count() {
+        use ramshield_config::Config;
+        let cfg = Config::default();
+        let store = Arc::new(Store::new(16));
+        let metrics = Arc::new(Metrics::new());
+        let (etx, _erx) = mpsc::channel(64);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        // Tighten thresholds so the synthetic traffic is hot enough to
+        // promote without flapping into blocks.
+        let mut cfg = cfg;
+        cfg.detection.promote_min_events = 2;
+        cfg.detection.subnet_window_threshold = 1;
+        let eng = Arc::new(DetectionEngine::new(
+            store.clone(),
+            cfg.into_handle(),
+            etx,
+            metrics,
+            shutdown,
+        ));
+        // 3 distinct /24s, each with a hot IP, in a SINGLE flush.
+        let events: Vec<_> = (0..3u8)
+            .flat_map(|n| {
+                let ip = IpAddr::V4(Ipv4Addr::new(10, 20, 30, n + 1));
+                (0..5).map(move |i| ConnectionEvent {
+                    ip,
+                    timestamp_ns: i,
+                    bytes: 64,
+                    status_code: 200,
+                    proto_fingerprint: 0,
+                })
+            })
+            .collect();
+        eng.flush_events(&events);
+        let promoted = eng.store.traffic.promoted_ips.load(Ordering::Relaxed);
+        // promote_min_events=2, 3 IPs each with 5 events, all get promoted.
+        // The metric should report 3, not store.len() which could be larger
+        // or smaller depending on prior state.
+        assert_eq!(
+            promoted, 3,
+            "promoted_ips counter must reflect this flush's promoted count, not store.len()"
+        );
     }
 }
