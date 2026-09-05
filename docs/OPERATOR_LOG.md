@@ -690,3 +690,317 @@
 2026-08-30T07:15:42Z | cron-status: 28 jobs, ok=16, error=0, running=1, pending=0
 2026-08-30T07:20:52Z | cron-status: 27 jobs, ok=17, error=0, running=1, pending=0
 2026-08-30T07:25:43Z | cron-status: 27 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T10:20:10Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T10:25:11Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T10:30:12Z | cron-status: 24 jobs, ok=10, error=0, running=1, pending=0
+2026-08-30T10:30:29Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T10:35:12Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T10:40:12Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T10:45:13Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T10:50:13Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T10:55:14Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T11:01:02Z | cron-status: 24 jobs, ok=8, error=0, running=1, pending=0
+2026-08-30T11:01:33Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T11:05:15Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T11:10:16Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T11:15:16Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T11:20:17Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T11:25:20Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T11:30:22Z | cron-status: 24 jobs, ok=10, error=0, running=1, pending=0
+2026-08-30T11:30:39Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T11:35:22Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T11:40:22Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T11:45:11Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T11:50:12Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T11:55:13Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T12:00:13Z | cron-status: 24 jobs, ok=8, error=0, running=1, pending=0
+2026-08-30T12:00:47Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T12:05:13Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T12:10:13Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T12:15:14Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T12:20:14Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T12:25:15Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T12:30:16Z | cron-status: 24 jobs, ok=10, error=0, running=1, pending=0
+2026-08-30T12:30:33Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T12:35:16Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T12:40:17Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T12:45:17Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T12:50:18Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T12:55:19Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T13:00:20Z | cron-status: 24 jobs, ok=8, error=0, running=1, pending=0
+2026-08-30T13:00:48Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T13:05:20Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T13:26:26Z | cron-status: 24 jobs, ok=14, error=0, running=1, pending=0
+2026-08-30T13:30:29Z | cron-status: 24 jobs, ok=10, error=0, running=1, pending=0
+2026-08-30T13:30:50Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T13:35:29Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T13:40:28Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T13:45:30Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T13:50:30Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T13:55:34Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T14:00:40Z | cron-status: 24 jobs, ok=8, error=0, running=1, pending=0
+2026-08-30T14:01:23Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T14:05:32Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T14:10:32Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T14:15:34Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T14:20:33Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T14:25:34Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T14:30:40Z | cron-status: 24 jobs, ok=10, error=0, running=1, pending=0
+2026-08-30T14:31:02Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T14:35:36Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T14:40:37Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T14:45:37Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T14:50:38Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T14:55:42Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T15:00:59Z | cron-status: 24 jobs, ok=8, error=0, running=1, pending=0
+2026-08-30T15:02:29Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T15:05:42Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T15:10:45Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T15:15:46Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T15:20:44Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T15:25:47Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T15:30:51Z | cron-status: 24 jobs, ok=10, error=0, running=1, pending=0
+2026-08-30T15:31:16Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T15:35:46Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T15:40:47Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T15:45:47Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T15:50:49Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T15:55:52Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T16:00:56Z | cron-status: 24 jobs, ok=8, error=0, running=1, pending=0
+2026-08-30T16:01:31Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T16:05:53Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T16:10:53Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T16:15:54Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T16:20:56Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T16:25:55Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T16:30:57Z | cron-status: 24 jobs, ok=10, error=0, running=1, pending=0
+2026-08-30T16:31:21Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T16:35:58Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T16:41:01Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T16:46:01Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T16:51:01Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T16:56:02Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T17:01:12Z | cron-status: 24 jobs, ok=8, error=0, running=1, pending=0
+2026-08-30T17:02:02Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T17:05:04Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T17:10:07Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T17:15:06Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T17:20:07Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T17:25:07Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T17:30:11Z | cron-status: 24 jobs, ok=10, error=0, running=1, pending=0
+2026-08-30T17:30:45Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T17:35:11Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T17:40:11Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T17:45:14Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T17:50:15Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T17:55:15Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T18:00:18Z | cron-status: 24 jobs, ok=8, error=0, running=1, pending=0
+2026-08-30T18:01:10Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T18:05:15Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T18:10:15Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T18:15:16Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T18:20:21Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T18:25:17Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T18:30:18Z | cron-status: 24 jobs, ok=10, error=0, running=1, pending=0
+2026-08-30T18:30:41Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T18:35:19Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T18:40:19Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T18:45:20Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T18:50:20Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T18:55:21Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T19:00:23Z | cron-status: 24 jobs, ok=8, error=0, running=1, pending=0
+2026-08-30T19:00:58Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T19:05:22Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T19:10:22Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T19:15:23Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T19:20:27Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T19:25:26Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T19:30:29Z | cron-status: 24 jobs, ok=10, error=0, running=1, pending=0
+2026-08-30T19:30:54Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T19:35:29Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T19:40:30Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T19:45:31Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T19:50:29Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T19:55:30Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T20:00:33Z | cron-status: 24 jobs, ok=8, error=0, running=1, pending=0
+2026-08-30T20:01:05Z Healer dispatched 0 jobs for 0 issues
+2026-08-30T20:05:31Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-30T20:10:31Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T20:15:32Z | cron-status: 24 jobs, ok=16, error=0, running=1, pending=0
+2026-08-30T20:20:33Z | cron-status: 24 jobs, ok=17, error=0, running=1, pending=0
+2026-08-30T20:25:34Z | cron-status: 24 jobs, ok=19, error=0, running=1, pending=0
+2026-08-31T17:18:15Z | cron-status: 24 jobs, ok=6, error=1, running=2, pending=0
+2026-08-31T17:18:46Z Healer dispatched 0 jobs for 0 issues
+2026-08-31T17:20:15Z | cron-status: 24 jobs, ok=16, error=1, running=1, pending=0
+2026-08-31T17:25:16Z | cron-status: 24 jobs, ok=18, error=1, running=1, pending=0
+2026-08-31T17:30:17Z | cron-status: 24 jobs, ok=9, error=1, running=1, pending=0
+2026-08-31T17:30:35Z Healer dispatched 0 jobs for 0 issues
+2026-08-31T17:35:17Z | cron-status: 24 jobs, ok=18, error=1, running=1, pending=0
+2026-08-31T17:40:19Z | cron-status: 24 jobs, ok=16, error=1, running=1, pending=0
+2026-08-31T17:45:19Z | cron-status: 24 jobs, ok=15, error=1, running=1, pending=0
+2026-08-31T17:50:20Z | cron-status: 24 jobs, ok=16, error=1, running=1, pending=0
+2026-08-31T17:55:21Z | cron-status: 24 jobs, ok=18, error=1, running=1, pending=0
+2026-08-31T18:00:22Z | cron-status: 24 jobs, ok=7, error=1, running=1, pending=0
+2026-08-31T18:00:59Z Healer dispatched 0 jobs for 0 issues
+2026-08-31T18:05:22Z | cron-status: 24 jobs, ok=18, error=1, running=1, pending=0
+2026-08-31T18:10:23Z | cron-status: 24 jobs, ok=16, error=1, running=1, pending=0
+2026-08-31T18:15:24Z | cron-status: 24 jobs, ok=15, error=1, running=1, pending=0
+2026-08-31T18:20:34Z | cron-status: 24 jobs, ok=21, error=1, running=2, pending=0
+2026-08-31T18:44:33Z Healer dispatched 0 jobs for 0 issues
+2026-08-31T18:44:33Z | cron-status: 24 jobs, ok=12, error=1, running=5, pending=0
+2026-08-31T18:45:33Z | cron-status: 24 jobs, ok=18, error=1, running=5, pending=0
+2026-09-03T17:16:45Z | cron-status: 24 jobs, ok=2, error=0, running=8, pending=0
+2026-09-03T17:16:48Z Healer dispatched 0 jobs for 0 issues
+2026-09-03T17:20:46Z | cron-status: 24 jobs, ok=22, error=0, running=2, pending=0
+2026-09-03T17:25:48Z | cron-status: 24 jobs, ok=22, error=0, running=2, pending=0
+2026-09-03T17:32:15Z | cron-status: 24 jobs, ok=14, error=0, running=3, pending=0
+2026-09-03T17:32:15Z Healer dispatched 0 jobs for 0 issues
+2026-09-03T17:35:09Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T17:40:10Z | cron-status: 24 jobs, ok=22, error=0, running=2, pending=0
+2026-09-03T17:45:12Z | cron-status: 24 jobs, ok=22, error=0, running=2, pending=0
+2026-09-03T17:50:11Z | cron-status: 24 jobs, ok=22, error=0, running=2, pending=0
+2026-09-03T17:55:12Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T18:00:16Z | cron-status: 24 jobs, ok=10, error=0, running=4, pending=0
+2026-09-03T18:00:18Z Healer dispatched 0 jobs for 0 issues
+2026-09-03T18:05:15Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T18:10:20Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T18:15:17Z | cron-status: 24 jobs, ok=20, error=0, running=4, pending=0
+2026-09-03T18:20:16Z | cron-status: 24 jobs, ok=21, error=0, running=3, pending=0
+2026-09-03T18:25:16Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T18:30:19Z Healer dispatched 0 jobs for 0 issues
+2026-09-03T18:30:20Z | cron-status: 24 jobs, ok=15, error=0, running=3, pending=0
+2026-09-03T18:35:18Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T18:40:19Z | cron-status: 24 jobs, ok=22, error=0, running=2, pending=0
+2026-09-03T18:45:20Z | cron-status: 24 jobs, ok=22, error=0, running=2, pending=0
+2026-09-03T18:50:20Z | cron-status: 24 jobs, ok=21, error=0, running=3, pending=0
+2026-09-03T18:55:20Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T19:00:25Z | cron-status: 24 jobs, ok=11, error=0, running=4, pending=0
+2026-09-03T19:00:27Z Healer dispatched 0 jobs for 0 issues
+2026-09-03T19:05:22Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T19:10:23Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T19:15:24Z | cron-status: 24 jobs, ok=22, error=0, running=2, pending=0
+2026-09-03T19:20:24Z | cron-status: 24 jobs, ok=22, error=0, running=2, pending=0
+2026-09-03T19:25:25Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T19:30:28Z | cron-status: 24 jobs, ok=13, error=0, running=4, pending=0
+2026-09-03T19:30:28Z Healer dispatched 0 jobs for 0 issues
+2026-09-03T19:35:26Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T19:40:27Z | cron-status: 24 jobs, ok=22, error=0, running=2, pending=0
+2026-09-03T19:45:28Z | cron-status: 24 jobs, ok=21, error=0, running=3, pending=0
+2026-09-03T19:50:28Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T19:55:29Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T20:00:33Z | cron-status: 24 jobs, ok=6, error=0, running=8, pending=0
+2026-09-03T20:00:36Z Healer dispatched 0 jobs for 0 issues
+2026-09-03T20:05:32Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T20:10:31Z | cron-status: 24 jobs, ok=21, error=0, running=3, pending=0
+2026-09-03T20:15:34Z | cron-status: 24 jobs, ok=21, error=0, running=3, pending=0
+2026-09-03T20:20:33Z | cron-status: 24 jobs, ok=20, error=0, running=4, pending=0
+2026-09-03T20:25:33Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T20:30:37Z | cron-status: 24 jobs, ok=13, error=0, running=4, pending=0
+2026-09-03T20:30:38Z Healer dispatched 0 jobs for 0 issues
+2026-09-03T20:35:35Z | cron-status: 24 jobs, ok=22, error=0, running=2, pending=0
+2026-09-03T20:40:38Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T20:45:37Z | cron-status: 24 jobs, ok=20, error=0, running=4, pending=0
+2026-09-03T20:50:37Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T20:55:37Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T21:00:43Z | cron-status: 24 jobs, ok=10, error=0, running=4, pending=0
+2026-09-03T21:00:44Z Healer dispatched 0 jobs for 0 issues
+2026-09-03T21:05:39Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T21:10:40Z | cron-status: 24 jobs, ok=22, error=0, running=2, pending=0
+2026-09-03T21:15:41Z | cron-status: 24 jobs, ok=22, error=0, running=2, pending=0
+2026-09-03T21:20:43Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T21:25:43Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T21:30:46Z Healer dispatched 0 jobs for 0 issues
+2026-09-03T21:30:47Z | cron-status: 24 jobs, ok=15, error=0, running=3, pending=0
+2026-09-03T21:35:45Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T21:40:44Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T21:45:46Z | cron-status: 24 jobs, ok=20, error=0, running=4, pending=0
+2026-09-03T21:50:45Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T21:55:46Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T22:00:52Z | cron-status: 24 jobs, ok=11, error=0, running=3, pending=0
+2026-09-03T22:00:55Z Healer dispatched 0 jobs for 0 issues
+2026-09-03T22:05:47Z | cron-status: 24 jobs, ok=23, error=0, running=1, pending=0
+2026-09-03T22:10:48Z | cron-status: 24 jobs, ok=21, error=0, running=3, pending=0
+2026-09-03T22:15:49Z | cron-status: 24 jobs, ok=21, error=0, running=3, pending=0
+2026-09-04T18:44:39Z | cron-status: 24 jobs, ok=2, error=0, running=7, pending=0
+2026-09-04T18:44:46Z Healer dispatched 0 jobs for 0 issues
+2026-09-04T18:45:34Z | cron-status: 24 jobs, ok=16, error=3, running=4, pending=0
+2026-09-04T18:51:01Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-04T18:55:47Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-04T19:00:51Z | cron-status: 24 jobs, ok=4, error=4, running=6, pending=0
+2026-09-04T19:00:53Z Healer dispatched 0 jobs for 0 issues
+2026-09-04T19:05:49Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-04T19:10:51Z | cron-status: 24 jobs, ok=18, error=4, running=2, pending=0
+2026-09-04T19:15:54Z | cron-status: 24 jobs, ok=18, error=4, running=2, pending=0
+2026-09-04T19:20:53Z | cron-status: 24 jobs, ok=18, error=4, running=2, pending=0
+2026-09-04T19:25:53Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-04T19:30:59Z Healer dispatched 0 jobs for 0 issues
+2026-09-04T19:31:02Z | cron-status: 24 jobs, ok=12, error=4, running=5, pending=0
+2026-09-04T19:35:56Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-04T19:40:57Z | cron-status: 24 jobs, ok=17, error=4, running=3, pending=0
+2026-09-04T19:45:58Z | cron-status: 24 jobs, ok=17, error=4, running=3, pending=0
+2026-09-04T19:50:57Z | cron-status: 24 jobs, ok=17, error=4, running=3, pending=0
+2026-09-04T19:55:57Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-04T20:01:01Z | cron-status: 24 jobs, ok=4, error=4, running=6, pending=0
+2026-09-04T20:01:03Z Healer dispatched 0 jobs for 0 issues
+2026-09-04T20:06:00Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-04T20:11:01Z | cron-status: 24 jobs, ok=18, error=4, running=2, pending=0
+2026-09-04T20:16:02Z | cron-status: 24 jobs, ok=15, error=4, running=5, pending=0
+2026-09-04T20:21:02Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-04T20:26:03Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-04T20:30:06Z Healer dispatched 0 jobs for 0 issues
+2026-09-04T20:30:07Z | cron-status: 24 jobs, ok=11, error=4, running=4, pending=0
+2026-09-04T20:35:04Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-04T20:40:06Z | cron-status: 24 jobs, ok=17, error=4, running=3, pending=0
+2026-09-04T20:45:07Z | cron-status: 24 jobs, ok=16, error=4, running=4, pending=0
+2026-09-04T20:50:07Z | cron-status: 24 jobs, ok=18, error=4, running=2, pending=0
+2026-09-04T20:55:08Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-04T21:00:11Z | cron-status: 24 jobs, ok=6, error=4, running=4, pending=0
+2026-09-04T21:00:14Z Healer dispatched 0 jobs for 0 issues
+2026-09-04T21:05:10Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-04T21:10:11Z | cron-status: 24 jobs, ok=17, error=4, running=3, pending=0
+2026-09-04T21:15:13Z | cron-status: 24 jobs, ok=14, error=4, running=6, pending=0
+2026-09-04T21:20:14Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T07:06:39Z | cron-status: 24 jobs, ok=2, error=0, running=6, pending=0
+2026-09-05T07:06:48Z Healer dispatched 0 jobs for 0 issues
+2026-09-05T07:10:36Z | cron-status: 24 jobs, ok=18, error=4, running=2, pending=0
+2026-09-05T07:15:38Z | cron-status: 24 jobs, ok=16, error=4, running=4, pending=0
+2026-09-05T07:20:38Z | cron-status: 24 jobs, ok=17, error=4, running=3, pending=0
+2026-09-05T07:25:38Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T07:30:41Z | cron-status: 24 jobs, ok=9, error=4, running=4, pending=0
+2026-09-05T07:30:41Z Healer dispatched 0 jobs for 0 issues
+2026-09-05T07:35:39Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T07:40:41Z | cron-status: 24 jobs, ok=18, error=4, running=2, pending=0
+2026-09-05T07:45:42Z | cron-status: 24 jobs, ok=17, error=4, running=3, pending=0
+2026-09-05T07:50:43Z | cron-status: 24 jobs, ok=18, error=4, running=2, pending=0
+2026-09-05T07:55:43Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T08:00:47Z | cron-status: 24 jobs, ok=4, error=4, running=6, pending=0
+2026-09-05T08:00:50Z Healer dispatched 0 jobs for 0 issues
+2026-09-05T08:05:45Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T08:10:46Z | cron-status: 24 jobs, ok=18, error=4, running=2, pending=0
+2026-09-05T08:15:47Z | cron-status: 24 jobs, ok=15, error=4, running=5, pending=0
+2026-09-05T08:20:48Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T08:25:48Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T08:30:53Z | cron-status: 24 jobs, ok=8, error=4, running=5, pending=0
+2026-09-05T08:30:53Z Healer dispatched 0 jobs for 0 issues
+2026-09-05T08:35:50Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T08:40:52Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T08:45:52Z | cron-status: 24 jobs, ok=17, error=4, running=3, pending=0
+2026-09-05T08:50:52Z | cron-status: 24 jobs, ok=16, error=4, running=4, pending=0
+2026-09-05T08:55:53Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T09:01:00Z | cron-status: 24 jobs, ok=7, error=4, running=4, pending=0
+2026-09-05T09:01:01Z Healer dispatched 0 jobs for 0 issues
+2026-09-05T09:05:55Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T09:10:56Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T09:15:57Z | cron-status: 24 jobs, ok=15, error=4, running=5, pending=0
+2026-09-05T09:20:57Z | cron-status: 24 jobs, ok=16, error=4, running=4, pending=0
+2026-09-05T09:25:58Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T09:31:02Z Healer dispatched 0 jobs for 0 issues
+2026-09-05T09:31:03Z | cron-status: 24 jobs, ok=11, error=4, running=2, pending=0
+2026-09-05T09:36:00Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T09:41:01Z | cron-status: 24 jobs, ok=18, error=4, running=2, pending=0
+2026-09-05T09:46:02Z | cron-status: 24 jobs, ok=16, error=4, running=4, pending=0
+2026-09-05T09:51:03Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T09:55:03Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0
+2026-09-05T10:00:07Z | cron-status: 24 jobs, ok=8, error=4, running=3, pending=0
+2026-09-05T10:00:08Z Healer dispatched 0 jobs for 0 issues
+2026-09-05T10:05:05Z | cron-status: 24 jobs, ok=19, error=4, running=1, pending=0

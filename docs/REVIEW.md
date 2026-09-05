@@ -1,49 +1,60 @@
-# Review — 2026-08-23
+# Review — 2026-09-03
 
-**Reviewer run context:** First completed review. Yesterday's reviewer run (2026-08-22 03:00) was **skipped** by the config-drift spend-guard (unpinned LLM job, `'ram' -> 'zombobobo'`). The dispatcher has **not successfully executed since 2026-08-22 01:30** for the same reason. Therefore this cycle had: facts-collector (ran, misdirected output), planner (ran late, ok), dispatcher (**skipped again**), workers (**none dispatched**), reviewer (this run).
+**Reviewer run context:** Dispatcher ran 08:33 UTC, skipped again (config-drift spend-guard, 4th consecutive cycle). Planner last ran 2026-08-31 19:11 UTC — no new plan generated. Only one commit since Aug 30: `d6cb2e4 planner: daily plan 2026-08-31 [skip ci]`. Uncommitted changes exist in `src/dashboard/auth.rs` (ponytail `.unwrap()` → `.expect()` conversions). No workers were spawned this cycle.
 
 ## Task Status
 
 | Task | Status | Evidence | Notes |
 | :--- | :--- | :--- | :--- |
-| P0: `docs/ROADMAP.md` | COMPLETED | File exists, mtime 2026-08-20 | Pre-existing; not produced this cycle |
-| P0: `docs/AUTOMATION_DASHBOARD.html` | COMPLETED | 67,102 bytes, mtime 2026-08-22 19:02 | Generated pre-cycle |
-| P0: BACKLOG/PLAN/PULSE_LOG exist | COMPLETED | All three present | Pre-existing |
-| T1: Resolve health-check issues | NOT_STARTED | `docs/HEALTH_CHECK.md` **missing** from `rs/docs/` (only copies exist in `rs.backup.20260819_163539/` and `alfa_stud/rs/`) | Plan references an artifact that no longer exists; nothing to resolve against, no fixes applied this cycle |
-| Roadmap: health-check auto-fixer | PARTIAL | `docs/RESEARCH.md` entry 2026-08-22 `RQ3-autofix`: full design (applicability levels, fail-closed parser) + 3 links | Research done; zero implementation |
-| Roadmap: metrics dashboard | NOT_STARTED | No artifact, no commit | — |
-| Roadmap: alerting rules | NOT_STARTED | No artifact, no commit | — |
-| Pipeline: facts-collector | PARTIAL | Job `ok` 11:02 but wrote `/home/m/docs/FACTS.json` (15481 B, `workspace: /home/m`, `git unavailable`, rust_files=1) | **Wrong workspace.** Script lives in `~/.hermes/scripts/`; template fallback `Path(__file__).parent.parent.parent` resolves to `/home/m`. Repo `docs/FACTS.json` stale at 2026-08-22T16:57Z (branch `operator`, commit `b8cbc3b`) |
-| Pipeline: daily-planner | COMPLETED | Ran 11:07:30 `ok`; rewrote `docs/PLAN.md` (2718 B, currently **untracked in git**) | Recovered after 8/22 failure |
-| Pipeline: dispatcher | FAILED | Job `c0d0d4bc8275` last exec 2026-08-22 01:30: `RuntimeError: [drift_skip:silent] ... provider 'opencode-go' -> 'custom'; model 'kimi-k2.7-code' -> 'zombobobo' ... unpinned`. No 8/23 run recorded. No `docs/DISPATCH_LOG.md` | Never ran this cycle; no workers spawned |
-| Workers | NOT_STARTED | No `WORKER_STATUS.md`, no worker cronjobs in fleet | Consequence of dispatcher skip |
+| T1: Fix facts-collector workspace resolution | COMPLETED (pre-existing) | `FACTS.json` workspace=`/home/m/vehicle_of_rationalism/ramshield/beta/rs`, commit=`d6cb2e4`, branch=`test11`. Facts collector runs clean. | Done 2026-08-23. Stable. |
+| T2: Remove `.unwrap()` from `src/dashboard/mod.rs` | NOT_STARTED (misclassified) | `rg` finds `.unwrap()` at lines 203–300 — all inside `#[cfg(test)] mod tests` (line 177+). Production code is clean. | PLAN mis-scoped. Test unwraps are idiomatic. Drop from future plans. |
+| T3: Remove `.unwrap()` / `.expect()` from `src/dashboard/auth.rs` | PARTIAL (uncommitted) | `git diff src/dashboard/auth.rs` shows two `.unwrap()` → `.expect()` conversions with `ponytail:` comments: line 148 (`require_auth` redirect) and line 187 (`login_submit` cookie redirect). Both are controlled-value builders where `expect` is semantically correct. Two test-code `.unwrap()` at lines 215, 224 left as-is (correct). | Changes exist but are **uncommitted**. Need `git add` + commit. |
+| T4: Commit `docs/PLAN.md` to git | COMPLETED | `git log --oneline -- docs/PLAN.md` → `d6cb2e4 planner: daily plan 2026-08-31 [skip ci]`. | Done. |
+| T5: Create minimal `docs/HEALTH_CHECK.md` placeholder | NOT_STARTED (root-caused) | `docs/HEALTH_CHECK.md` still missing. `health_check_repair.py` line 17: `WORKSPACE = Path(__file__).resolve().parent.parent.parent` resolves to `/home/m/.hermes` (script is at `~/.hermes/scripts/health_check_repair.py`). Output goes to `~/.hermes/docs/HEALTH_CHECK.md`, not the repo. | Root cause: same workspace-resolution bug as facts_collector had pre-T1 fix. Need to set explicit path or env var in the script. |
 
 ## Quality Assessment
 
 **What went well**
-- Planner self-recovered after its 8/22 drift-skip and produced a coherent PLAN.md.
-- Research agent delivered a genuinely usable design entry (RQ3 auto-fixer) with canonical references.
-- Helper agent continues committing automated updates (10 consecutive `[skip ci]` commits visible).
+- Auth.rs changes are technically sound: `.expect()` with explanatory message on controlled-value builders is an acceptable YAGNI simplification over full `Result` propagation for these specific cases. Ponytail comments document the ceiling.
+- Facts collector remains stable, output is clean.
+- Previous review accurately identified T2/T3 misclassification — good feedback loop.
 
 **What needs retry**
-- Dispatcher: blocked, not broken — needs config-layer unpin (see recommendations), then it will fire 8/24 01:30.
-- `ramshield-backup`: exited code 1 at 10:50 today — investigate backup_project.sh.
-- `ramshield-helper-agent`: failing with `TimeoutError: TERMINAL_CWD read lock after 660s` (#79768) — workdir contention between concurrent cron jobs sharing a terminal session cwd; stagger schedules or drop workdir from blocking jobs.
+- **auth.rs changes are uncommitted.** Worker or human must `git add src/dashboard/auth.rs && git commit -m "fix(dashboard): expect on controlled auth responses [skip ci]"` to land T3.
+- **T5 root cause is now clear.** `health_check_repair.py` needs the same workspace fix facts_collector got: either `RAMSHIELD_WS` env var or explicit path `/home/m/vehicle_of_rationalism/ramshield/beta/rs`. Without this, HEALTH_CHECK.md will never appear in the repo.
+- **Dispatcher remains broken** — 4th consecutive skip. The config-drift spend-guard silently drops every cycle. Until pinned, no worker tasks execute. This is the single biggest bottleneck.
+- **Planner has not run since Aug 31.** Either the cron was removed, disabled, or it also hit the spend-guard. No new plan is being generated. The pipeline is effectively dead at the planning stage.
 
 **Model performance notes**
-- Zero model-quality failures observed — no worker LLM ever ran. The dominant failure mode is **operational, not cognitive**: every unpinned LLM job (dispatcher 8/22+8/23, reviewer 8/22) was silently skipped by the spend-guard after global config drift. Recurring-failure flag for next planner: *task type "dispatch workers" has failed 2 consecutive cycles for infra reasons, not task reasons.*
+- No LLM agent work happened this cycle (dispatcher skipped, planner stale). No model quality signal.
 
 ## Next Cycle Recommendations
 
-1. **Unblock the pipeline (cron layer, requires authorization):**
+1. **Pin dispatcher** (highest priority, infrastructure):
    ```
-   hermes cron update job_id=c0d0d4bc8275 provider=custom model=zombobobo   # dispatcher
-   hermes cron update job_id=d72f32a35099 provider=custom model=zombobobo   # reviewer
+   hermes cron update job_id=c0d0d4bc8275 provider=custom model=zombobobo
    ```
-   Alternative: pin to original values or convert dispatcher to explicit-pin config. Until pinned, both jobs skip silently each cycle.
-2. **Fix facts-collector workspace:** set the cron job's `workdir` to `/home/m/vehicle_of_rationalism/ramshield/beta/rs` (dispatcher already has it; collector does not), or make the script require an explicit `RAMSHIELD_WS` env var. Until fixed, planner consumes `/home/m` data (git unavailable, wrong TODO scan) — today's PLAN was built on stale repo facts.
-3. **Regenerate `docs/HEALTH_CHECK.md`** (health-loop output vanished from `rs/docs/`) before re-attempting T1; otherwise drop T1 from PLAN as unsatisfiable.
-4. **Commit `docs/PLAN.md`** (untracked) so git-automation/history reflects planner output.
-5. Investigate `ramshield-backup` exit 1 (10:50 today).
-6. Git hygiene: squash the `[skip ci]` helper-agent commits before any merge to main.
-7. Keep all roadmap tasks; drop nothing. T1 stays conditional on recommendation 3.
+2. **Pin or re-enable planner** — check if `ramshield-daily-planner` is disabled or also hitting spend-guard. If unpinned:
+   ```
+   hermes cron update job_id=cd22edb2d5f2 provider=custom model=zombobobo
+   ```
+3. **Commit auth.rs changes** — one-line worker task:
+   ```
+   cd /home/m/vehicle_of_rationalism/ramshield/beta/rs
+   git add src/dashboard/auth.rs
+   git commit -m "fix(dashboard): expect on controlled auth responses [skip ci]"
+   ```
+4. **Fix `health_check_repair.py` workspace** — add env-var or explicit path:
+   ```python
+   # Line 17 of ~/.hermes/scripts/health_check_repair.py
+   WORKSPACE = Path(os.environ.get('RAMSHIELD_WS',
+                    '/home/m/vehicle_of_rationalism/ramshield/beta/rs'))
+   ```
+5. **Drop T2 from future plans** — all `.unwrap()` in `mod.rs` are test code.
+6. **Git hygiene** — squash `[skip ci]` commits before merge to main.
+
+## Carried-Forward Flags for Next Planner
+- Dispatcher spend-guard skip: **4 consecutive cycles**. Until pinned, do NOT plan worker tasks — they will never execute.
+- Planner itself may be stale/broken — verify it ran today or re-enable.
+- HEALTH_CHECK.md: root cause identified (workspace resolution in `health_check_repair.py`). Fix is trivial but requires editing `~/.hermes/scripts/`, not repo code.
+- auth.rs: uncommitted `.expect()` changes ready to land.
