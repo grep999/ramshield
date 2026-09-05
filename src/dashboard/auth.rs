@@ -138,11 +138,14 @@ pub async fn require_auth(State(auth): State<AuthState>, req: Request, next: Nex
         )
             .into_response()
     } else {
+        // ponytail: builder only fails on invalid header values, which a
+        // hard-coded SEE_OTHER + "/login" never produces. Switch to a typed
+        // 500 response if the redirect target becomes user-supplied.
         Response::builder()
             .status(StatusCode::SEE_OTHER)
             .header(header::LOCATION, "/login")
             .body(axum::body::Body::empty())
-            .unwrap()
+            .expect("hard-coded redirect response is always valid")
     }
 }
 
@@ -176,12 +179,15 @@ async fn login_submit(State(auth): State<AuthState>, Form(form): Form<LoginForm>
                 token,
                 auth.ttl.as_secs()
             );
+            // ponytail: cookie format is fully controlled (hex token, ASCII
+            // attrs) — Set-Cookie parse failure is impossible here. Swap to a
+            // typed 500 response if the cookie value ever becomes user input.
             Response::builder()
                 .status(StatusCode::SEE_OTHER)
                 .header(header::SET_COOKIE, cookie)
                 .header(header::LOCATION, "/")
                 .body(axum::body::Body::empty())
-                .unwrap()
+                .expect("controlled cookie + redirect is always valid")
         }
         None => {
             auth.note_failure();
