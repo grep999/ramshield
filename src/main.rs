@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    let mut config = match config_path {
+    let config = match config_path {
         Some(path) => {
             let absolute_path = std::fs::canonicalize(&path)
                 .map_err(|e| anyhow::anyhow!("Error canonicalizing path {}: {}", path, e))?;
