@@ -20,11 +20,18 @@ where
     F: FnOnce(&mut System) -> R,
 {
     static SYS: Mutex<Option<System>> = Mutex::new(None);
-    let mut guard = SYS.lock().unwrap();
+    // ponytail: poison-recovery — sysinfo cache is advisory; a panicked
+    // holder must not take down every dashboard poll. Upgrade: parking_lot.
+    let mut guard = SYS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if guard.is_none() {
         *guard = Some(System::new_all());
     }
-    f(guard.as_mut().unwrap())
+    match guard.as_mut() {
+        Some(sys) => f(sys),
+        None => unreachable!("SYS initialized above"),
+    }
 }
 
 /// (cpu_usage, total_ram_mb, own_process_rss_mb). Cached 1s — see get_system_usage.
@@ -33,7 +40,9 @@ pub fn get_system_usage() -> (f32, usize, usize) {
     // both need the same numbers; upgrade to crossbeam channel ticker if
     // sub-second freshness ever matters.
     static CACHE: Mutex<Option<(std::time::Instant, f32, usize, usize)>> = Mutex::new(None);
-    let mut cache = CACHE.lock().unwrap();
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some((_, cpu, mem, rss)) =
         (*cache).filter(|(at, ..)| at.elapsed() < std::time::Duration::from_secs(1))
     {

@@ -72,11 +72,13 @@ impl RecordHeader {
 
     fn from_bytes(buf: &[u8; HEADER]) -> Self {
         Self {
-            magic: u32::from_le_bytes(buf[0..4].try_into().unwrap()),
-            version: u16::from_le_bytes(buf[4..6].try_into().unwrap()),
-            lsn: u64::from_le_bytes(buf[6..14].try_into().unwrap()),
-            payload_len: u32::from_le_bytes(buf[14..18].try_into().unwrap()),
-            crc: u32::from_le_bytes(buf[18..22].try_into().unwrap()),
+            magic: u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]),
+            version: u16::from_le_bytes([buf[4], buf[5]]),
+            lsn: u64::from_le_bytes([
+                buf[6], buf[7], buf[8], buf[9], buf[10], buf[11], buf[12], buf[13],
+            ]),
+            payload_len: u32::from_le_bytes([buf[14], buf[15], buf[16], buf[17]]),
+            crc: u32::from_le_bytes([buf[18], buf[19], buf[20], buf[21]]),
             flags: buf[22],
         }
     }
@@ -193,7 +195,10 @@ impl Wal {
         // ponytail: a dedicated writer thread via crossbeam channel would
         // remove the Arc clone hop entirely.
         let (old_file_arc, needs_dir_sync) = {
-            let mut g = self.inner.lock().unwrap();
+            let mut g = self
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             g.writer.write_all(&rh_bytes)?;
             g.writer.write_all(&payload)?;
             g.bytes += (HEADER + payload.len()) as u64;

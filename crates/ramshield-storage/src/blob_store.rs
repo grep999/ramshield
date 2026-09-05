@@ -37,7 +37,10 @@ impl BlobStore {
         let compressed = compress_prepend_size(data);
         let comp_len = compressed.len() as u32;
         let orig_len = data.len() as u32;
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         g.file.seek(SeekFrom::End(0))?;
         g.file.write_all(&compressed)?;
         let offset = g.cursor;
@@ -50,7 +53,10 @@ impl BlobStore {
     }
 
     pub fn read(&self, h: &BlobHandle) -> Result<Vec<u8>> {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         g.file.seek(SeekFrom::Start(h.offset))?;
         let mut buf = vec![0u8; h.compressed_len as usize];
         g.file.read_exact(&mut buf)?;
