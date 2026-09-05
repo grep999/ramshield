@@ -352,6 +352,38 @@ impl Store {
         });
 
         let net_growth = entry_size.saturating_sub(old_size);
+
+        // Capacity check must be atomic: two threads both reading the
+        // pre-insert `ram_bytes` and both deciding "fits" will both insert
+        // and the budget will be silently exceeded. fetch_update loops
+        // until the CAS succeeds, so the second thread sees the first's
+        // bookkeeping and rolls back.
+        if old_size == 0 {
+            let mut current = self.ram_bytes.load(Ordering::Relaxed);
+            loop {
+                if current + net_growth > ram_limit_bytes {
+                    self.inner.remove(&key);
+                    tracing::warn!("Store::insert - CapacityExceeded for key: {}", key);
+                    return Err(RsError::CapacityExceeded {
+                        limit_mb: ram_limit_bytes / (1024 * 1024),
+                    });
+                }
+                match self.ram_bytes.compare_exchange_weak(
+                    current,
+                    current + net_growth,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(observed) => current = observed,
+                }
+            }
+        } else {
+            // Replacement: net_growth may be negative (smaller value). Adjust
+            // the counter directly — no need to gate it, the limit only
+            // protects net-new growth.
+            self.ram_bytes.fetch_add(net_growth, Ordering::Relaxed);
+        }
         let current = self.ram_bytes.load(Ordering::Relaxed);
         tracing::debug!(
             "Store::insert - current ram_bytes: {}, net_growth: {}",
@@ -359,17 +391,6 @@ impl Store {
             net_growth
         );
 
-        // Only enforce limit on actual growth, not replacement
-        if old_size == 0 && current + net_growth > ram_limit_bytes {
-            // Rollback
-            self.inner.remove(&key);
-            tracing::warn!("Store::insert - CapacityExceeded for key: {}", key);
-            return Err(RsError::CapacityExceeded {
-                limit_mb: ram_limit_bytes / (1024 * 1024),
-            });
-        }
-
-        self.ram_bytes.fetch_add(net_growth, Ordering::Relaxed);
         self.traffic
             .used_bytes
             .fetch_add(net_growth as u64, Ordering::Relaxed);
@@ -609,5 +630,55 @@ mod tests {
         assert_eq!(store.subnet_table().get(&key).unwrap().total_rps, 5);
         store.reset_subnet_window(key);
         assert_eq!(store.subnet_table().get(&key).unwrap().total_rps, 0);
+    }
+
+    /// P0 regression: capacity check used to be racy — two threads both
+    /// reading pre-insert `ram_bytes` could both decide "fits" and both
+    /// insert, silently exceeding the budget. The CAS-based reservation
+    /// ensures only one thread succeeds; the other rolls back.
+    #[test]
+    fn capacity_race_serializes_via_cas() {
+        use std::sync::Arc;
+        use std::thread;
+        let store = Arc::new(Store::new(16));
+        // Tight budget: 1 KiB net-new total.
+        let limit = 1024;
+        let mut handles = vec![];
+        // 64 distinct IPs, each with a 64-byte payload (size_of::<Entry> +
+        // 64 bytes value). 64 × ~200B = ~13 KiB > 1 KiB limit.
+        // Some inserts must fail with CapacityExceeded; the survivors must
+        // leave ram_bytes ≤ limit.
+        for n in 0..64u8 {
+            let s = store.clone();
+            handles.push(thread::spawn(move || {
+                let ip: IpAddr = format!("10.1.1.{}", n).parse().unwrap();
+                s.insert(
+                    ip,
+                    Value::Inline(vec![0u8; 64]),
+                    None,
+                    limit,
+                )
+            }));
+        }
+        let mut ok = 0;
+        let mut denied = 0;
+        for h in handles {
+            match h.join().unwrap() {
+                Ok(_) => ok += 1,
+                Err(RsError::CapacityExceeded { .. }) => denied += 1,
+                Err(e) => panic!("unexpected error: {e}"),
+            }
+        }
+        assert!(denied > 0, "some inserts must be denied at 1KiB / 64 IPs");
+        assert_eq!(ok + denied, 64);
+        // Critical: ram_bytes must not exceed the limit. The old racy code
+        // could let the budget be silently blown here.
+        let used = store.ram_bytes();
+        assert!(
+            used <= limit,
+            "ram_bytes {} must not exceed limit {} after race",
+            used,
+            limit
+        );
     }
 }
