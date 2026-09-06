@@ -5,7 +5,6 @@
 pub mod batch;
 pub mod rate_tracker;
 
-use anyhow::Result;
 use batch::{IpAgg, aggregate};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded};
 use dashmap::DashMap;
@@ -194,16 +193,6 @@ impl DetectionEngine {
 
     pub fn event_sender(&self) -> Sender<ConnectionEvent> {
         self.event_tx.clone()
-    }
-
-    /// Submit many events in one channel send (amortises IPC / edge overhead).
-    pub fn submit_batch(&self, events: Vec<ConnectionEvent>) -> Result<()> {
-        for ev in events {
-            self.event_tx
-                .send(ev)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        }
-        Ok(())
     }
 
     fn pre_aggs_needs_flush_due_to_timeout(&self, interval_ms: u64) -> bool {

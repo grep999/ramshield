@@ -105,13 +105,6 @@ impl AyaXdpApplier {
             HashMap::try_from(map).map_err(map_err)?;
         f(&mut m).map_err(map_err)
     }
-
-    pub fn detach(&mut self) {
-        // Dropping Bpf detaches the program and pins nothing.
-        if self.bpf.take().is_some() {
-            tracing::info!(iface = %self.iface, "XDP detached");
-        }
-    }
 }
 
 #[async_trait::async_trait]

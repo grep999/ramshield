@@ -461,11 +461,6 @@ impl Wal {
         Ok(out.into_iter().map(|(_, e)| e).collect())
     }
 
-    /// Current LSN (next append will use this value).
-    pub fn current_lsn(&self) -> u64 {
-        self.lsn_counter.load(Ordering::SeqCst)
-    }
-
     /// Directory this WAL was opened under (for replay).
     pub fn base_dir(&self) -> &str {
         &self.base_dir

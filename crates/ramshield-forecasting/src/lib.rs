@@ -326,10 +326,6 @@ impl HypothesisTracker {
     pub fn priors(&self) -> &[f64; H_COUNT] {
         &self.priors
     }
-
-    pub fn tick_count(&self) -> u64 {
-        self.tick
-    }
 }
 
 // ── Likelihood Functions ──────────────────────────────────────────────────────
