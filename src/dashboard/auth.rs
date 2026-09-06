@@ -57,12 +57,12 @@ impl AuthState {
         // P3 fix: an unparseable PHC hash made verify_password() return
         // None forever — indistinguishable from a wrong password, i.e. a
         // silently un-loginable dashboard. Fail loudly at startup instead.
-        if let Some(h) = password_hash.as_deref() {
-            if argon2::PasswordHash::new(h).is_err() {
-                tracing::error!(
-                    "dashboard.admin_password_hash is not a valid PHC string —                      logins WILL fail until fixed"
-                );
-            }
+        if let Some(h) = password_hash.as_deref()
+            && argon2::PasswordHash::new(h).is_err()
+        {
+            tracing::error!(
+                "dashboard.admin_password_hash is not a valid PHC string — logins WILL fail until fixed"
+            );
         }
         Self {
             password_hash,
