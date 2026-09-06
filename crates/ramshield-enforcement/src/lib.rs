@@ -17,7 +17,7 @@ use ramshield_storage::{
 use ramshield_types::{
     BlockReason, EnforceAction, EnforceCommand, EnforceResult, EnforcementError,
 };
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::sync::{
     Arc,
@@ -79,7 +79,14 @@ pub struct EnforcementService {
     processed_decisions: HashSet<Uuid>,
     processed_order: VecDeque<Uuid>,
     blocked_ips: HashSet<IpAddr>,
-    expirations: Vec<(Instant, IpAddr)>,
+    /// P1 fix: was Vec<(Instant, IpAddr)> — every re-block did an O(N)
+    /// `.retain()` sweep and expire_due scanned all N every 250ms. Hash
+    /// keyed by IP: dedup becomes O(1) insert-overwrite (HashMap naturally
+    /// upholds the one-expiration-per-IP invariant), and expiry is a
+    /// collect-then-remove walk over the map. BinaryHeap was the reviewer
+    /// suggestion but needs a rebuild on every re-block (stale-entry lazy
+    /// delete) — same asymptotics for the sweep, worse for re-blocks.
+    expirations: HashMap<IpAddr, Instant>,
     shutdown: Arc<AtomicBool>,
 }
 
@@ -98,7 +105,7 @@ impl EnforcementService {
             processed_decisions: HashSet::new(),
             processed_order: VecDeque::with_capacity(65_536),
             blocked_ips: HashSet::new(),
-            expirations: Vec::new(),
+            expirations: HashMap::new(),
             shutdown,
         }
     }
@@ -149,9 +156,9 @@ impl EnforcementService {
     async fn expire_due(&mut self) {
         let now = Instant::now();
         let mut due = Vec::new();
-        self.expirations.retain(|(at, ip)| {
-            if *at <= now {
-                due.push(*ip);
+        self.expirations.retain(|&ip, &mut at| {
+            if at <= now {
+                due.push(ip);
                 false
             } else {
                 true
@@ -287,14 +294,13 @@ impl EnforcementService {
                 self.blocked_ips.insert(cmd.ip);
                 // Invariant: at most one expiration per IP. A re-block must not
                 // inherit a stale TTL from a previous block/unblock cycle.
+                // HashMap keyed by IP: insert overwrites any stale TTL
+                // (O(1), was an O(N) retain+sweep).
                 if cmd.ttl_seconds > 0 {
-                    self.expirations.retain(|(_, existing)| *existing != cmd.ip);
-                    self.expirations.push((
-                        Instant::now() + Duration::from_secs(cmd.ttl_seconds),
-                        cmd.ip,
-                    ));
+                    self.expirations
+                        .insert(cmd.ip, Instant::now() + Duration::from_secs(cmd.ttl_seconds));
                 } else {
-                    self.expirations.retain(|(_, existing)| *existing != cmd.ip);
+                    self.expirations.remove(&cmd.ip);
                 }
 
                 // Step 3: dataplane.
@@ -330,7 +336,7 @@ impl EnforcementService {
                 }
                 self.blocked_ips.remove(&cmd.ip);
                 // Purge any pending TTL so a later re-block starts clean.
-                self.expirations.retain(|(_, existing)| *existing != cmd.ip);
+                self.expirations.remove(&cmd.ip);
                 let xdp_applied = match self.xdp.apply_unblock(cmd.ip, cmd.decision_id) {
                     Ok(()) => true,
                     Err(e) => {
@@ -597,8 +603,11 @@ mod tests {
         s.enforce(unblock_cmd(target)).await.unwrap();
         s.enforce(block_cmd(target, 3600)).await.unwrap();
         // Exactly ONE pending expiration for the IP (old one purged).
-        let pending: Vec<_> = s.expirations.iter().filter(|(_, i)| *i == target).collect();
-        assert_eq!(pending.len(), 1, "re-block must not stack TTL entries");
+        // HashMap type-enforces <=1 per IP; assert the one it must hold.
+        assert!(
+            s.expirations.contains_key(&target),
+            "re-block must keep its TTL"
+        );
     }
 
     #[tokio::test]
@@ -606,7 +615,7 @@ mod tests {
         let mut s = svc(Box::new(RecordingApplier::new()));
         let target = ip([9, 9, 9, 6]);
         s.enforce(block_cmd(target, 0)).await.unwrap();
-        assert!(s.expirations.iter().all(|(_, i)| *i != target));
+        assert!(!s.expirations.contains_key(&target));
         assert!(s.blocked_ips.contains(&target));
     }
 
@@ -801,7 +810,7 @@ mod tests {
                     } else {
                         let _ = s.enforce(unblock_cmd(target)).await.unwrap();
                         prop_assert!(!s.blocked_ips.contains(&target));
-                        prop_assert!(s.expirations.iter().all(|(_, i)| *i != target),
+                        prop_assert!(!s.expirations.contains_key(&target),
                             "unblock must purge TTL entry");
                     }
                     // Global invariant: expirations never exceed blocked set size.
