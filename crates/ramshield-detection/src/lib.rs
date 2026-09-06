@@ -395,14 +395,19 @@ impl DetectionEngine {
             }
 
             if should_block {  // ponytail: debounce removed single-sample is_exceeded bypass
-                self.bloom
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert_hashed(a, b);
                 blocks.push((ip, BlockReason::HighRps, det.block_ttl_secs));
             }
         }
 
+        // Batch bloom insert — single write lock instead of per-block write lock.
+        if !blocks.is_empty() {
+            let mut bloom = self.bloom.write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for &(ip, _, _) in &blocks {
+                let (a, b) = BloomFilter::slots(&ip);
+                bloom.insert_hashed(a, b);
+            }
+        }
         threat_sample.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         threat_sample.truncate(128);
         self.store.traffic.push_threat_samples(threat_sample);
@@ -593,6 +598,7 @@ impl DetectionEngine {
             }
             std::thread::sleep(tick);
             if now_ns().saturating_sub(last_bloom_clear_ns) >= bloom_clear_ns {
+                // ponytail: single write lock to clear, not held across flush.
                 self.bloom
                     .write()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
