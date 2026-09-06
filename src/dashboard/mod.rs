@@ -159,8 +159,8 @@ impl ConfigView {
             .auth_keys
             .iter()
             .map(|entry| match entry.split_once(':') {
-                Some((id, _)) => format!("{id}:<redacted>"),
-                None => "<redacted>".into(),
+                Some((id, _)) => format!("{id}:{}", ramshield_config::REDACTED_PLACEHOLDER),
+                None => ramshield_config::REDACTED_PLACEHOLDER.into(),
             })
             .collect();
         let mut ipc = c.ipc.clone();
@@ -174,7 +174,7 @@ impl ConfigView {
                 let mut d = c.dashboard.clone();
                 // ponytail: admin_password_hash is Argon2 PHC — never expose.
                 if d.admin_password_hash.is_some() {
-                    d.admin_password_hash = Some("<redacted>".into());
+                    d.admin_password_hash = Some(ramshield_config::REDACTED_PLACEHOLDER.into());
                 }
                 d
             },
@@ -208,6 +208,24 @@ async fn api_set_config(
     Json(patch): Json<ConfigPatch>,
 ) -> (StatusCode, Json<ConfigResponse>) {
     let mut cfg = state.engine.config.load().as_ref().clone();
+    // P2 fix: GET /api/config returns auth_keys as "id:<redacted>" and
+    // admin_password_hash as "<redacted>". An operator (or UI) POSTing the
+    // viewed config back used to PASS validate() — the placeholder strings
+    // are non-empty, so the public-bind guard waved them through — then on
+    // restart hex-decode failed, keys were SKIPPED, and the server came up
+    // with auth silently disabled (or the dashboard permanently un-loginable
+    // via PasswordHash::new failing). Placeholders are never valid input.
+    fn contains_placeholder(cfg: &ramshield_config::Config) -> bool {
+        cfg.ipc
+            .auth_keys
+            .iter()
+            .any(|k| k.contains(ramshield_config::REDACTED_PLACEHOLDER))
+            || cfg
+                .dashboard
+                .admin_password_hash
+                .as_deref()
+                .is_some_and(|h| h.contains(ramshield_config::REDACTED_PLACEHOLDER))
+    }
     if let Some(v) = patch.engine {
         cfg.engine = v;
     }
@@ -223,7 +241,8 @@ async fn api_set_config(
     if let Some(v) = patch.dashboard {
         cfg.dashboard = v;
     }
-    if cfg.validate().is_err() {
+    let invalid = cfg.validate().is_err() || contains_placeholder(&cfg);
+    if invalid {
         return (
             StatusCode::BAD_REQUEST,
             Json(ConfigResponse {
