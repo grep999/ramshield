@@ -39,7 +39,7 @@ auth_keys = ["k1:$(openssl rand -hex 32)"]
 [detection]
 rps_threshold = 5000
 rate_window_secs = 10
-subnet_batch_threshold = 500
+subnet_batch_threshold = 50
 EOF
 
 # Run
@@ -105,7 +105,7 @@ xdp-ddos-protect and holon-rs are defensive.
 | **Detection** | EWMA + Holt-Winters | — | — | — | Rate-limit heuristic | VSA/HDC embedding |
 | **Subnet aggregation** | ✅ 100 ev /24h /2s window | — | — | — | — | — |
 | **Auth (IPC)** | HMAC-SHA256 | — | — | — | — | — |
-| **WAL / durability** | ✅ Fsync + zstd | — | — | — | — | — |
+| **WAL / durability** | ✅ Fsync + lz4 | — | — | — | — | — |
 | **IPC throughput** | **135,602 eps** | — | — | — | — | — |
 | **Sustained flood** | **154,731 eps** | — | — | — | — | — |
 | **False-positive rate** | **0.0000%** | — | — | — | — | — |
@@ -207,7 +207,7 @@ Across 21M events and 21 test phases:
 
 - Linux 5.8+ (for XDP `xdpgeneric`; 5.12+ for `xdpdrv`)
 - `cap_net_admin`, `cap_bpf`, `cap_perfmon` — set via `setcap` on the binary
-- Rust 1.75+
+- Rust 1.85+ (edition 2024; nightly pinned via rust-toolchain.toml for XDP)
 
 ---
 

@@ -14,7 +14,7 @@ Thank you for your interest in contributing! This document outlines the process 
 
 ### Prerequisites
 
-- Rust 1.80+ (2024 edition) — [rustup.rs](https://rustup.rs/)
+- Rust 1.85+ (edition 2024; nightly pinned via rust-toolchain.toml for XDP build-std) — [rustup.rs](https://rustup.rs/)
 - Python 3.8+ — for attack simulators
 - Linux kernel ≥ 5.10 — for XDP eBPF development (optional)
 

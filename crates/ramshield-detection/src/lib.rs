@@ -272,7 +272,7 @@ impl DetectionEngine {
     /// writes to the same `pre_aggs` DashMap — sharded internally so concurrent
     /// writers on different IPs don't block each other.
     ///
-    /// ponytail: if `n == 0`, fall back to `num_cpus::get()`.  Add a config knob
+    /// ponytail: if `n == 0`, fall back to available_parallelism. Add a config knob
     /// when worker_threads tuning becomes a real SLO target.
     pub fn spawn_workers(self: Arc<Self>, n: usize) {
         let det = self.config.load().detection.clone();

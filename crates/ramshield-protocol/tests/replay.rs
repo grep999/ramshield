@@ -2,29 +2,11 @@
 //!
 //! Run: `cargo test -p ramshield-protocol --test replay`
 //!
-//! Bug being nailed: `auth::verify` accepts the same `(ts_ms, payload, sig)`
-//! tuple any number of times within the ±MAX_CLOCK_SKEW_MS window. The
-//! signature covers only `<ts_ms>.<payload>` — nothing ties the frame to a
-//! unique send instance, so an attacker who sniffs one signed frame can
-//! replay it until `ts_ms` falls out of the skew window.
-//!
-//! Expected (RED, before fix):
-//!   - `replay_same_frame_accepted_today`  -> the frame is accepted twice
-//!     (this test will FAIL once the nonce store is in place; right now it
-//!     PASSES, documenting the bug.)
-//!   - `replay_after_window_rejected`       -> already passes; documents the
-//!     existing outer bound.
-//!
-//! After the fix:
-//!   - First frame: Ok.
-//!   - Second identical frame: Err("replay").
-//!   - `replay_after_window_rejected`         -> Err (stale ts out of window).
-//!   - `replay_cache_evicts_after_ttl`         -> same frame accepted again once
-//!     the nonce's TTL elapses.
-//!   - `replay_cache_per_key_isolation`        -> same sig under different key_id
-//!     is two independent nonces.
-//!   - `replay_cache_lru_bounded`              -> store never exceeds capacity.
-
+//! Production replay protection = ReplayStore (crates/ramshield-protocol/src/auth/replay_store.rs),
+//! wired at src/ipc/server.rs verify_frame_auth(Some(replay)). `auth::verify`
+//! with replay=None is the store-less baseline: identical signed frames repeat
+//! freely inside the ±MAX_CLOCK_SKEW window — pinning THAT contract is this
+//! file's remaining job.
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -41,20 +23,20 @@ fn keys() -> Vec<(String, Vec<u8>)> {
     vec![("k1".to_string(), b"server-key".to_vec())]
 }
 
-/// RED: the current code accepts the same signed frame twice. This test
-/// passes today (bug present). After the fix lands, the second call must
-/// return `Err` and this test will start failing — at which point flip the
-/// assertion to `is_err()` to drive the fix in. Filed here as a TODO marker
-/// so a future reader knows the inversion is intentional.
+/// Baseline: verify() WITHOUT a nonce store (replay=None) accepts duplicate
+/// frames by design — replay protection lives in ReplayStore, which
+/// production wires in at src/ipc/server.rs (Some(replay)). This test pins
+/// the None path's contract; server-side dedup is covered by the
+/// replay_store tests in crates/ramshield-protocol/src/auth/.
 #[test]
-fn replay_same_frame_accepted_today() {
+fn replay_protection_requires_store() {
     let k = keys();
     let payload = br#"{"type":"check_ip","ip":"1.2.3.4"}"#;
     let ts = now_ms();
     let sig = auth::sign(b"server-key", ts, payload);
 
     assert!(auth::verify(&k, "k1", ts, &sig, payload, None).is_ok());
-    // BUG: second identical call also returns Ok. Documented, not yet fixed.
+    // No store => no memory => duplicate is (correctly) accepted.
     let second = auth::verify(&k, "k1", ts, &sig, payload, None);
     assert!(
         second.is_ok(),

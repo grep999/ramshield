@@ -182,16 +182,6 @@ pub enum BlockState {
     Blocked { reason: BlockReason, since_ns: u64 },
 }
 
-impl BlockState {
-    /// Returns the since_ns timestamp if blocked, 0 otherwise.
-    pub fn since_ns(&self) -> u64 {
-        match self {
-            BlockState::Blocked { since_ns, .. } => *since_ns,
-            _ => 0,
-        }
-    }
-}
-
 /// Subnet aggregate. `prefix` metadata carried by `IpNetwork` (v4 /24, v6 /64);
 /// `prefix_octets` kept for dashboard display of v4 subnets.
 #[derive(Debug, Clone, Serialize, Deserialize)]

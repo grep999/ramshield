@@ -1,8 +1,7 @@
-pub mod learning;
 
 use arc_swap::ArcSwap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{mpsc, watch};
 use tracing::info;
 
@@ -29,7 +28,6 @@ pub struct Engine {
     /// `dashboard_snapshot()` so the UI can surface a "XDP inactive" chip.
     xdp_active: Arc<AtomicBool>,
     /// Shared depth counter for IPC event channel.
-    pub ipc_depth: Arc<AtomicU64>,
     /// Watch channel for async shutdown signaling (replaces AtomicBool polling).
     shutdown_tx: watch::Sender<bool>,
     /// F9: set by boot_pipeline so main can JOIN the batch/subnet threads
@@ -50,7 +48,6 @@ impl Engine {
             enforcement_tx,
             enforcement_rx: std::sync::Mutex::new(Some(enforcement_rx)),
             xdp_active: Arc::new(AtomicBool::new(false)),
-            ipc_depth: Arc::new(AtomicU64::new(0)),
             shutdown_tx,
         }
     }
@@ -130,7 +127,6 @@ impl Engine {
             + metrics.blocks_subnet.load(Ordering::Relaxed)
             + metrics.blocks_forecast.load(Ordering::Relaxed);
         let channel_depth = 0usize;
-        // ponytail: ipc_depth field exists but needs IPC server plumbing.
         // Add increment/decrement in try_send + recv paths when ready.
 
         DashboardSnapshot {
@@ -218,7 +214,6 @@ impl Engine {
         let stats = self.store.get_stats();
         let ingested = self.metrics.events_ingested.load(Ordering::Relaxed);
         let channel_depth = 0usize;
-        // ponytail: ipc_depth field exists but needs IPC server plumbing.
         // Add increment/decrement in try_send + recv paths when ready.
         self.metrics.get_module_stats_data(
             stats.uptime_secs,

@@ -53,10 +53,8 @@ const DEFAULT_MAX_CONNECTION_BYTES: usize = 1_048_576; // 1MB per connection
 const DEFAULT_READ_TIMEOUT_MS: u64 = 5000;
 const DEFAULT_WRITE_TIMEOUT_MS: u64 = 5000;
 const BATCH_MAX: usize = 1_000_000;
-/// Bounded channel capacity for ConnectionEvent ingest between IPC server and
-/// DetectionEngine. 16k ≈ 1MB RSS. Fills in 16ms at 1M eps attack rate.
-/// ponytail: hardcoded; lift to Config.detection.batch_channel_capacity.
-// Single source of truth: the detection engine's bounded ingest channel.
+// Ingest channel capacity — single source of truth: the detection engine's
+// bounded channel (64k ConnectionEvents, ~4MB; fills in ~64ms at 1M eps).
 pub use ramshield_detection::CHANNEL_CAPACITY;
 const MAX_LINE_LENGTH: usize = 33_554_432; // 32MB max single line (batch reports)
 const CONNECTION_IDLE_TIMEOUT_MS: u64 = 30_000; // 30s idle

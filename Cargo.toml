@@ -37,8 +37,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
-otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry"]
-full = ["tokio/full", "tracing-subscriber/env-filter", "tracing-subscriber/fmt", "tower-http/cors", "clap/derive", "otel", "xdp"]
+full = ["tokio/full", "tracing-subscriber/env-filter", "tracing-subscriber/fmt", "tower-http/cors", "clap/derive", "xdp"]
 xdp = ["dep:aya", "dep:ramshield-xdp", "ramshield-enforcement/xdp"]
 
 [dependencies]
@@ -58,24 +57,16 @@ tracing           = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false }
 clap              = { version = "4", default-features = false, features = ["std", "derive"] }
 toml              = "1"
-num_cpus          = "1"
 axum              = "0.7"
 tower             = { version = "0.5", features = ["util"] }
 tower-http        = { version = "0.5", features = ["cors"] }
-futures-util      = "0.3"
-tokio-stream      = "0.1"
-ctrlc             = "3"
 sysinfo           = "0.39"
-shlex = "2.0.1"
 chrono = { version = "0.4", features = ["serde"] }
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 rand = "0.9"
 argon2 = "0.5"
-opentelemetry = { version = "0.32", optional = true }
-opentelemetry_sdk = { version = "0.32", optional = true, features = ["rt-tokio"] }
-tracing-opentelemetry = { version = "0.33", optional = true }
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 async-trait = "0.1"
 aya = { version = "0.14", optional = true }

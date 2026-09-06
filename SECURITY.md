@@ -55,7 +55,7 @@ RamShield is designed to operate in a **trusted network zone** (localhost or iso
 | Kernel eBPF verifier bypass | ✅ Mitigated | Minimal eBPF surface; verifier enforced |
 | Memory exhaustion | ✅ Mitigated | Hard RAM limit + promotion filter |
 | Blocklist replay | ✅ Mitigated | UUID `decision_id` idempotency |
-| IPC channel flood | ✅ Mitigated | 2M event capacity + 503 backpressure |
+| IPC channel flood | ✅ Mitigated | 64k event channel + drop-newest backpressure + per-connection byte cap |
 
 ## Security Best Practices for Operators
 

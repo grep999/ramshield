@@ -277,9 +277,9 @@ impl HypothesisTracker {
             .cloned()
             .fold(f64::NEG_INFINITY, f64::max);
         let mut sum_exp = 0.0f64;
-        for i in 0..H_COUNT {
-            self.priors[i] = (log_posterior[i] - max_ll).exp();
-            sum_exp += self.priors[i];
+        for (lp, p) in log_posterior.iter().zip(&mut self.priors) {
+            *p = (*lp - max_ll).exp();
+            sum_exp += *p;
         }
         for p in &mut self.priors {
             *p /= sum_exp;

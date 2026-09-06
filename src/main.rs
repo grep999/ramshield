@@ -4,11 +4,6 @@ use std::sync::Arc;
 use tracing::info; // Add debug
 use tracing_subscriber::EnvFilter;
 
-#[cfg(feature = "otel")]
-fn init_otel() -> opentelemetry_sdk::trace::SdkTracerProvider {
-    opentelemetry_sdk::trace::SdkTracerProvider::builder().build()
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     ramshield::install_panic_hook();
@@ -22,18 +17,7 @@ async fn main() -> Result<()> {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("ramshield=info"));
 
-    #[cfg(feature = "otel")]
-    {
-        use opentelemetry::trace::TracerProvider as _;
-        let provider = init_otel();
-        let _tracer = provider.tracer("ramshield");
-        tracing_subscriber::fmt().with_env_filter(env_filter).init();
-        let _ = (_tracer, provider);
-    }
-    #[cfg(not(feature = "otel"))]
-    {
-        tracing_subscriber::fmt().with_env_filter(env_filter).init();
-    }
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     let mut config_path: Option<String> = None;
 
