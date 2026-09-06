@@ -454,6 +454,128 @@ impl Store {
         Ok(())
     }
 
+    /// Atomic read-modify-write of an `IpRecord` under ONE shard lock.
+    ///
+    /// P0 fix (round-4 Q3): `merge_record` used `get()` -> clone -> mutate ->
+    /// `insert()` — two lock acquisitions. If the enforcement actor blocked an
+    /// IP inside that window, the flusher's stale snapshot (captured while
+    /// still `Clean`) re-inserted over the fresh `Blocked` state: active
+    /// attacker resurrected, exactly under flood conditions. The reverse
+    /// order also lost stat updates to last-writer-wins.
+    ///
+    /// Contract: `f` mutates only stat fields — it MUST NOT touch
+    /// `block_state` (that authority lives with the enforcement actor, which
+    /// keeps using `insert`). Because the record is mutated in place, other
+    /// writers' block transitions can never be clobbered by a stale copy.
+    ///
+    /// Returns `(f's result, stored)` — `stored=false` when a genuinely new
+    /// key was refused by the RAM budget (the mutated record is dropped;
+    /// matches `insert`'s CapacityExceeded behavior, which also only ever
+    /// rejects net-new keys).
+    pub fn update_ip<R>(
+        &self,
+        key: IpAddr,
+        default: IpRecord,
+        ram_limit_bytes: usize,
+        f: impl FnOnce(&mut IpRecord) -> R,
+    ) -> (R, bool) {
+        match self.inner.entry(key) {
+            dashmap::Entry::Occupied(mut o) => {
+                let e = o.get_mut();
+                // Live IpRecord: mutate in place, zero accounting changes
+                // (IpRecord is fixed-size, heap_bytes() == 0 by design).
+                if !e.is_expired() && let Value::IpRecord(rec) = &mut e.value {
+                    return (f(rec), true);
+                }
+                // Occupied but expired / wrong variant: replace in place with
+                // the same bookkeeping insert() does for a replacement.
+                let (was_blocked, old_size) = {
+                    let old_value =
+                        std::mem::replace(&mut e.value, Value::Counter(0));
+                    let wb = old_value.is_blocked();
+                    let os = std::mem::size_of::<Entry>()
+                        + old_value.heap_bytes()
+                        + std::mem::size_of::<IpAddr>();
+                    (wb, os)
+                };
+                let mut rec = default;
+                let out = f(&mut rec);
+                e.value = Value::IpRecord(rec);
+                e.expires_at = None;
+                drop(o); // release shard lock before touching blocked_set
+                let new_size =
+                    std::mem::size_of::<Entry>() + std::mem::size_of::<IpAddr>();
+                self.apply_growth(key, old_size, new_size, was_blocked, false);
+                (out, true)
+            }
+            dashmap::Entry::Vacant(v) => {
+                let mut rec = default;
+                let out = f(&mut rec);
+                let entry_size =
+                    std::mem::size_of::<IpAddr>() + std::mem::size_of::<Entry>(); // heap 0, Clean
+                // Net-new capacity gate: same CAS loop as insert()'s fresh path.
+                let mut current = self.ram_bytes.load(Ordering::Relaxed);
+                loop {
+                    if current + entry_size > ram_limit_bytes {
+                        tracing::warn!("Store::update_ip - CapacityExceeded for key: {}", key);
+                        return (out, false);
+                    }
+                    match self.ram_bytes.compare_exchange_weak(
+                        current,
+                        current + entry_size,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => break,
+                        Err(observed) => current = observed,
+                    }
+                }
+                v.insert(Entry {
+                    value: Value::IpRecord(rec),
+                    expires_at: None,
+                });
+                self.traffic
+                    .used_bytes
+                    .fetch_add(entry_size as u64, Ordering::Relaxed);
+                self.total_inserts.fetch_add(1, Ordering::Relaxed);
+                (out, true)
+            }
+        }
+    }
+
+    /// Shared growth/shrink bookkeeping for replacements (mirrors the tail
+    /// logic of `insert`: signed byte delta + blocked-index transition).
+    fn apply_growth(
+        &self,
+        key: IpAddr,
+        old_size: usize,
+        new_size: usize,
+        was_blocked: bool,
+        new_blocked: bool,
+    ) {
+        if new_size >= old_size {
+            self.ram_bytes
+                .fetch_add(new_size - old_size, Ordering::Relaxed);
+            self.traffic
+                .used_bytes
+                .fetch_add((new_size - old_size) as u64, Ordering::Relaxed);
+        } else {
+            self.ram_bytes
+                .fetch_sub(old_size - new_size, Ordering::Relaxed);
+            self.traffic
+                .used_bytes
+                .fetch_sub((old_size - new_size) as u64, Ordering::Relaxed);
+        }
+        if !was_blocked && new_blocked {
+            self.blocked_count.fetch_add(1, Ordering::Relaxed);
+            self.blocked_set.insert(key, ());
+        } else if was_blocked && !new_blocked {
+            self.blocked_count.fetch_sub(1, Ordering::Relaxed);
+            self.blocked_set.remove(&key);
+        }
+        self.total_inserts.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn get(&self, key: &IpAddr) -> Option<Value> {
         let entry = self.inner.get(key)?;
         if entry.is_expired() {
@@ -1031,5 +1153,79 @@ mod tests {
         assert_eq!(evicted, 1, "evict_expired must remove the expired entry");
         assert_eq!(store.len(), 0, "store empty after eviction");
         assert_eq!(store.ram_bytes(), 0, "ram_bytes zeroed after eviction");
+    }
+
+    /// P0 regression (round-4 Q3): `update_ip` mutating a live Blocked record
+    /// must NOT revert block_state — the merge_record get/insert race let a
+    /// stale Clean snapshot resurrect blocked attackers.
+    #[test]
+    fn update_ip_preserves_block_state() {
+        use std::net::Ipv4Addr;
+        let store = Store::new(16);
+        let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 98, 0, 1));
+        let ram_lim = 64 * 1024 * 1024;
+        store
+            .insert(ip, Value::IpRecord(blocked_record(ip)), None, ram_lim)
+            .unwrap();
+        let (n, stored) = store.update_ip(ip, blank_record(ip), ram_lim, |r| {
+            r.request_count += 5;
+            r.request_count
+        });
+        assert!(stored);
+        assert_eq!(n, 6);
+        match store.get(&ip) {
+            Some(Value::IpRecord(r)) => {
+                assert!(matches!(r.block_state, BlockState::Blocked { .. }),
+                    "update_ip clobbered block state");
+                assert_eq!(r.request_count, 6);
+            }
+            other => panic!("expected IpRecord, got {other:?}"),
+        }
+    }
+
+    /// Vacant path: creates the record, bumps accounting; capacity-exceeded
+    /// path must refuse (stored=false) and leave ram_bytes untouched.
+    #[test]
+    fn update_ip_vacant_and_capacity() {
+        use std::net::Ipv4Addr;
+        let store = Store::new(16);
+        let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 97, 0, 1));
+        let big = 64 * 1024 * 1024;
+        let (v, stored) = store.update_ip(ip, blank_record(ip), big, |r| {
+            r.request_count = 42;
+            r.request_count
+        });
+        assert!(stored);
+        assert_eq!(v, 42);
+        assert_eq!(store.len(), 1);
+        assert!(store.ram_bytes() > 0);
+        let ram_before = store.ram_bytes();
+        // Tiny budget: net-new key refused, nothing created, no leak.
+        let ip2: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 97, 0, 2));
+        let (_, stored2) = store.update_ip(ip2, blank_record(ip2), 1, |_r| ());
+        assert!(!stored2, "must refuse net-new when budget exhausted");
+        assert_eq!(store.ram_bytes(), ram_before, "refused insert leaked bytes");
+        assert_eq!(store.len(), 1);
+    }
+
+    fn blank_record(ip: IpAddr) -> IpRecord {
+        IpRecord {
+            ip,
+            request_count: 0,
+            ewma_rps: 0.0,
+            cusum_s: 0.0,
+            baseline_rps: 0.0,
+            prev_sample_hot: false,
+            sample_count: 0,
+            pulse_samples_in_window: 0,
+            pulse_window_start_ns: 0,
+            first_seen_ns: 0,
+            last_seen_ns: 0,
+            bytes_in: 0,
+            status_dist: [0; 5],
+            proto_fingerprint: 0,
+            threat_score: 0.0,
+            block_state: BlockState::Clean,
+        }
     }
 }

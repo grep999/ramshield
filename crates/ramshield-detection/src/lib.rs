@@ -570,14 +570,21 @@ impl DetectionEngine {
         now: u64,
         sk: Option<SubnetKey>,
     ) -> (f64, f32, bool, bool) {
-        let existing = self.store.get(&ip);
-        let was_blocked = match &existing {
-            Some(Value::IpRecord(r)) => matches!(r.block_state, BlockState::Blocked { .. }),
-            _ => false,
-        };
-        let mut rec = match existing {
-            Some(Value::IpRecord(r)) => r,
-            _ => IpRecord {
+        // P0 fix (round-4 Q3): was get() -> clone -> mutate -> insert(),
+        // spanning two shard locks. A block committed by the enforcement
+        // actor between the read and the write was silently reverted by
+        // this flusher's stale `Clean` snapshot (attacker resurrection
+        // under flood). Now everything happens inside Store::update_ip,
+        // under ONE shard lock, mutating the live record in place — and
+        // block_state is never written here (enforcement owns it).
+        let ip_agg = agg.clone();
+        let det_thr = det.rps_threshold;
+        let window_ns = det.rate_window_secs * 1_000_000_000;
+        let pulse_win = det.pulse_window_secs;
+        let pulse_thr = det.pulse_threshold_samples;
+        let ((was_blocked, (ewma_rps, threat, block)), _stored) = self.store.update_ip(
+            ip,
+            IpRecord {
                 ip,
                 request_count: 0,
                 ewma_rps: 0.0,
@@ -587,93 +594,91 @@ impl DetectionEngine {
                 sample_count: 0,
                 pulse_samples_in_window: 0,
                 pulse_window_start_ns: 0,
-                first_seen_ns: agg.first_ts_ns,
-                last_seen_ns: agg.last_ts_ns,
+                first_seen_ns: ip_agg.first_ts_ns,
+                last_seen_ns: ip_agg.last_ts_ns,
                 bytes_in: 0,
                 status_dist: [0; 5],
-                proto_fingerprint: agg.proto_fp,
+                proto_fingerprint: ip_agg.proto_fp,
                 threat_score: 0.0,
                 block_state: BlockState::Clean,
             },
-        };
+            ram_lim,
+            |rec| {
+                let was_blocked = matches!(rec.block_state, BlockState::Blocked { .. });
+                rec.request_count = rec.request_count.saturating_add(ip_agg.count as u64);
+                rec.last_seen_ns = ip_agg.last_ts_ns;
+                rec.bytes_in = rec.bytes_in.saturating_add(ip_agg.bytes);
+                for i in 0..5 {
+                    rec.status_dist[i] = rec.status_dist[i].saturating_add(ip_agg.status_dist[i]);
+                }
 
-        rec.request_count = rec.request_count.saturating_add(agg.count as u64);
-        rec.last_seen_ns = agg.last_ts_ns;
-        rec.bytes_in = rec.bytes_in.saturating_add(agg.bytes);
-        for i in 0..5 {
-            rec.status_dist[i] = rec.status_dist[i].saturating_add(agg.status_dist[i]);
-        }
+                // P1: true instantaneous rate from the batch's own time span — NOT the
+                // cumulative count/elapsed-since-first-seen (sawtooth after window
+                // halving poisoned the EWMA sample).
+                let span_ns = ip_agg.last_ts_ns.saturating_sub(ip_agg.first_ts_ns);
+                let inst_rps = if span_ns > 0 {
+                    ip_agg.count as f64 / (span_ns as f64 / 1e9)
+                } else {
+                    // whole batch inside one clock tick: assume 1s granularity floor
+                    ip_agg.count as f64
+                };
+                rec.ewma_rps = ewma(rec.ewma_rps, inst_rps);
 
-        // P1: true instantaneous rate from the batch's own time span — NOT the
-        // cumulative count/elapsed-since-first-seen (sawtooth after window
-        // halving poisoned the EWMA sample).
-        let span_ns = agg.last_ts_ns.saturating_sub(agg.first_ts_ns);
-        let inst_rps = if span_ns > 0 {
-            agg.count as f64 / (span_ns as f64 / 1e9)
-        } else {
-            // whole batch inside one clock tick: assume 1s granularity floor
-            agg.count as f64
-        };
-        rec.ewma_rps = ewma(rec.ewma_rps, inst_rps);
+                // P1: CUSUM companion (Page 1954) — catches sustained sub-threshold
+                // drift that absolute-EWMA can't see by construction.
+                let baseline = if rec.baseline_rps == 0.0 {
+                    rec.baseline_rps = rec.ewma_rps;
+                    rec.ewma_rps
+                } else {
+                    rec.baseline_rps = ewma_alpha_slow() * rec.ewma_rps
+                        + (1.0 - ewma_alpha_slow()) * rec.baseline_rps;
+                    rec.baseline_rps
+                };
+                rec.sample_count = rec.sample_count.saturating_add(1);
+                if rec.sample_count >= CUSUM_WARMUP_SAMPLES {
+                    let k = cusum_allowance(det_thr);
+                    rec.cusum_s =
+                        cusum_step_capped(rec.cusum_s, inst_rps, baseline + k, det_thr as f64);
+                }
 
-        // P1: CUSUM companion (Page 1954) — catches sustained sub-threshold
-        // drift that absolute-EWMA can't see by construction.
-        let baseline = if rec.baseline_rps == 0.0 {
-            rec.baseline_rps = rec.ewma_rps;
-            rec.ewma_rps
-        } else {
-            rec.baseline_rps =
-                ewma_alpha_slow() * rec.ewma_rps + (1.0 - ewma_alpha_slow()) * rec.baseline_rps;
-            rec.baseline_rps
-        };
-        rec.sample_count = rec.sample_count.saturating_add(1);
-        if rec.sample_count >= CUSUM_WARMUP_SAMPLES {
-            let k = cusum_allowance(det.rps_threshold);
-            rec.cusum_s = cusum_step_capped(
-                rec.cusum_s,
-                inst_rps,
-                baseline + k,
-                det.rps_threshold as f64,
-            );
-        }
+                let rps_score = (rec.ewma_rps / det_thr as f64).min(1.0);
+                let total: u32 = rec.status_dist.iter().sum();
+                let err_frac = rec.status_dist[4] as f64 / total.max(1) as f64;
+                rec.threat_score = (rps_score * 0.7 + err_frac * 0.3).min(1.0) as f32;
 
-        let rps_score = (rec.ewma_rps / det.rps_threshold as f64).min(1.0);
-        let total: u32 = rec.status_dist.iter().sum();
-        let err_frac = rec.status_dist[4] as f64 / total.max(1) as f64;
-        rec.threat_score = (rps_score * 0.7 + err_frac * 0.3).min(1.0) as f32;
+                if now.saturating_sub(rec.first_seen_ns) > window_ns {
+                    rec.request_count /= 2;
+                    rec.first_seen_ns = now;
+                }
 
-        let window_ns = det.rate_window_secs * 1_000_000_000;
-        if now.saturating_sub(rec.first_seen_ns) > window_ns {
-            rec.request_count /= 2;
-            rec.first_seen_ns = now;
-        }
-
-        let ewma_rps = rec.ewma_rps;
-        let threat = rec.threat_score;
-        let over_threshold = is_exceeded(ewma_rps, det.rps_threshold);
-        // Debounce: single noisy sample must not block. Fire on EWMA over
-        // threshold twice in a row, or on accumulated CUSUM drift.
-        let hot = over_threshold && rec.prev_sample_hot;
-        rec.prev_sample_hot = over_threshold;
-        // Pulse-wave correlation: catch 2s-on/3s-off patterns that the EWMA
-        // debounce misses (EWMA decays between bursts). Counts distinct
-        // over-threshold samples inside a sliding M-second window.
-        let (pulse_count, pulse_start, pulse_fired) = pulse_tracker_step(
-            rec.pulse_samples_in_window,
-            rec.pulse_window_start_ns,
-            now,
-            over_threshold,
-            det.pulse_window_secs,
-            det.pulse_threshold_samples,
+                let ewma_rps = rec.ewma_rps;
+                let threat = rec.threat_score;
+                let over_threshold = is_exceeded(ewma_rps, det_thr);
+                // Debounce: single noisy sample must not block. Fire on EWMA over
+                // threshold twice in a row, or on accumulated CUSUM drift.
+                let hot = over_threshold && rec.prev_sample_hot;
+                rec.prev_sample_hot = over_threshold;
+                // Pulse-wave correlation: catch 2s-on/3s-off patterns that the EWMA
+                // debounce misses (EWMA decays between bursts). Counts distinct
+                // over-threshold samples inside a sliding M-second window.
+                let (pulse_count, pulse_start, pulse_fired) = pulse_tracker_step(
+                    rec.pulse_samples_in_window,
+                    rec.pulse_window_start_ns,
+                    now,
+                    over_threshold,
+                    pulse_win,
+                    pulse_thr,
+                );
+                rec.pulse_samples_in_window = pulse_count;
+                rec.pulse_window_start_ns = pulse_start;
+                let block =
+                    hot || cusum_fired(rec.cusum_s, det_thr) || pulse_fired;
+                (was_blocked, (ewma_rps, threat, block))
+            },
         );
-        rec.pulse_samples_in_window = pulse_count;
-        rec.pulse_window_start_ns = pulse_start;
-        let block = hot || cusum_fired(rec.cusum_s, det.rps_threshold) || pulse_fired;
-
-        if let Err(e) = self.store.insert(ip, Value::IpRecord(rec), None, ram_lim) {
-            warn!("Failed to insert IP record for {}: {}", ip, e);
-        }
         self.store.update_subnet_index(ip, sk, false);
+        // block emitted even when already blocked: caller relies on the
+        // enforcement dedup to refresh TTL (semantics preserved from pre-fix).
         (ewma_rps, threat, block, was_blocked)
     }
 
