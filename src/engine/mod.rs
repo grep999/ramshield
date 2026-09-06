@@ -32,6 +32,9 @@ pub struct Engine {
     pub ipc_depth: Arc<AtomicU64>,
     /// Watch channel for async shutdown signaling (replaces AtomicBool polling).
     shutdown_tx: watch::Sender<bool>,
+    /// F9: set by boot_pipeline so main can JOIN the batch/subnet threads
+    /// (each final-flushes pre_aggs on exit) instead of sleeping blind 5s.
+    detection: std::sync::Mutex<Option<Arc<crate::detection::DetectionEngine>>>,
 }
 
 impl Engine {
@@ -43,6 +46,7 @@ impl Engine {
             store,
             metrics,
             shutdown: Arc::new(AtomicBool::new(false)),
+            detection: std::sync::Mutex::new(None),
             enforcement_tx,
             enforcement_rx: std::sync::Mutex::new(Some(enforcement_rx)),
             xdp_active: Arc::new(AtomicBool::new(false)),
@@ -98,6 +102,14 @@ impl Engine {
 
     pub fn is_shutting_down(&self) -> bool {
         self.shutdown.load(Ordering::Acquire)
+    }
+
+    /// F9: join detection batch/subnet threads with a grace cap. Call after
+    /// shutdown() — replaces the fixed sleep in main.
+    pub fn join_workers(&self, grace: std::time::Duration) {
+        if let Some(det) = self.detection.lock().unwrap().as_ref() {
+            det.join_workers(grace);
+        }
     }
 
     pub fn dashboard_snapshot(&self) -> DashboardSnapshot {
@@ -338,6 +350,7 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     detection
         .clone()
         .spawn_workers(cfg_snapshot.engine.worker_threads);
+    *engine.detection.lock().unwrap() = Some(detection.clone());
 
     let forecaster = Arc::new(Forecaster::new(
         store.clone(),

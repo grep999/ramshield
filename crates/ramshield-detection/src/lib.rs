@@ -147,6 +147,9 @@ pub struct DetectionEngine {
     last_pre_aggs_flush_ns: AtomicU64,
     /// F1: single-flusher gate (N batch workers share the flush trigger).
     flushing: AtomicBool,
+    /// F9: batch/subnet threads, joined at shutdown (was: detached + blind
+    /// 5s sleep in main). Each does a final flush before exit.
+    worker_handles: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
 /// Releases the single-flusher gate even on early return/panic.
@@ -185,6 +188,7 @@ impl DetectionEngine {
             pre_aggs: DashMap::with_shard_amount(shard_count),
             last_pre_aggs_flush_ns: AtomicU64::new(now_ns()),
             flushing: AtomicBool::new(false),
+            worker_handles: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -297,20 +301,57 @@ impl DetectionEngine {
 
         // crossbeam Receiver inside Arc — clone Arc for each worker (cheap refcount bump).
         // Each worker drains aggressively with try_recv() inside a recv_timeout window.
+        let mut handles = self.worker_handles.lock().unwrap();
         for i in 0..n_workers {
             let eng = self.clone();
             let rx = self.event_rx.clone();
-            std::thread::Builder::new()
-                .name(format!("rs-batch-{i}"))
-                .spawn(move || eng.batch_processor_loop_from(rx))
-                .expect("spawn batch processor");
+            handles.push(
+                std::thread::Builder::new()
+                    .name(format!("rs-batch-{i}"))
+                    .spawn(move || eng.batch_processor_loop_from(rx))
+                    .expect("spawn batch processor"),
+            );
         }
 
         let eng = self.clone();
-        std::thread::Builder::new()
-            .name("rs-subnet".into())
-            .spawn(move || eng.subnet_batch_loop())
-            .expect("spawn subnet batch loop");
+        handles.push(
+            std::thread::Builder::new()
+                .name("rs-subnet".into())
+                .spawn(move || eng.subnet_batch_loop())
+                .expect("spawn subnet batch loop"),
+        );
+        drop(handles);
+    }
+
+    /// F9: block until batch/subnet threads exit (each final-flushes on the
+    /// way out). Returns after `grace` elapses at worst.
+    pub fn join_workers(&self, grace: std::time::Duration) {
+        let handles: Vec<_> = self
+            .worker_handles
+            .lock()
+            .unwrap()
+            .drain(..)
+            .collect();
+        // Workers exit within recv_timeout (<= batch_window_ms) of the flag
+        // + one final flush; poll-until-finished gives the grace cap without
+        // inventing a join_timeout (std has none). Last-resort join() is safe
+        // because every worker path ends in break on the shutdown flag.
+        let deadline = std::time::Instant::now() + grace;
+        loop {
+            if handles.iter().all(|h| h.is_finished()) {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                warn!("join_workers: grace expired with workers still running");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        for h in handles {
+            if h.is_finished() {
+                let _ = h.join();
+            }
+        }
     }
 
     /// Core batch loop — takes an explicit Receiver so N workers can share the
@@ -318,6 +359,12 @@ impl DetectionEngine {
     fn batch_processor_loop_from(&self, rx: Arc<Receiver<ConnectionEvent>>) {
         loop {
             if self.shutdown.load(Ordering::Acquire) {
+                // P2 fix (F9): events sitting in pre_aggs at exit (up to one
+                // flush interval — 100ms in prod) were never promoted to the
+                // store; WAL persists blocks, not counts. Final flush on the
+                // way out; the single-flusher CAS gate makes N concurrent
+                // exit-flushes safe (one drains, others no-op).
+                self.flush_pre_aggs_to_store();
                 info!("Batch processor shutting down");
                 break;
             }
@@ -801,6 +848,80 @@ mod tests {
         let (etx, _erx) = mpsc::channel(64);
         let shutdown = Arc::new(AtomicBool::new(false));
         Arc::new(DetectionEngine::new(store, cfg, etx, metrics, shutdown))
+    }
+
+    /// P1 regression (F1): with N workers, the old iter_mut+take+clear flush
+    /// silently erased events inserted during the walk. Invariant:
+    /// ingested + left-in-pre_aggs == sent, exactly, under concurrent flush.
+    #[test]
+    fn concurrent_flush_never_loses_events() {
+        let cfg = Config::default().into_handle();
+        let store = Arc::new(Store::new(16));
+        let metrics = Arc::new(Metrics::new());
+        let (etx, _erx) = mpsc::channel(64);
+        let eng = Arc::new(DetectionEngine::new(
+            store,
+            cfg,
+            etx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        ));
+
+        const SENDERS: u64 = 8;
+        const PER_SENDER: u64 = 5_000;
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let flushers: Vec<_> = (0..4)
+            .map(|_| {
+                let e = eng.clone();
+                let s = stop.clone();
+                std::thread::spawn(move || {
+                    while !s.load(Ordering::Relaxed) {
+                        e.flush_pre_aggs_to_store();
+                        std::thread::sleep(std::time::Duration::from_micros(200));
+                    }
+                })
+            })
+            .collect();
+
+        let feeds: Vec<_> = (0..SENDERS)
+            .map(|w| {
+                let e = eng.clone();
+                std::thread::spawn(move || {
+                    for i in 0..PER_SENDER {
+                        let ip: IpAddr =
+                            format!("10.{}.0.{}", w, i % 251).parse().unwrap();
+                        e.process_event_into_pre_aggs(ConnectionEvent {
+                            ip,
+                            timestamp_ns: i * 1_000_000,
+                            bytes: 100,
+                            status_code: 200,
+                            proto_fingerprint: 0,
+                        });
+                    }
+                })
+            })
+            .collect();
+        for f in feeds {
+            f.join().unwrap();
+        }
+        stop.store(true, Ordering::Relaxed);
+        for f in flushers {
+            f.join().unwrap();
+        }
+        // Final drain (single-flusher now uncontended).
+        while !eng.pre_aggs.is_empty() {
+            eng.flush_pre_aggs_to_store();
+        }
+
+        let sent = SENDERS * PER_SENDER;
+        let ingested = metrics.events_ingested.load(Ordering::Relaxed);
+        let left: u64 = eng.pre_aggs.iter().map(|a| a.value().count as u64).sum();
+        assert_eq!(
+            ingested + left,
+            sent,
+            "F1 loss: ingested={ingested} left={left} sent={sent}"
+        );
     }
 
     #[test]
