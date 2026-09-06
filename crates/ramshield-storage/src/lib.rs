@@ -344,27 +344,33 @@ impl Store {
         ttl_secs: Option<u64>,
         ram_limit_bytes: usize,
     ) -> Result<()> {
-        tracing::debug!(
-            "Store::insert - key: {}, ram_limit_bytes: {}",
-            key,
-            ram_limit_bytes
-        );
         let expires_at = ttl_secs.map(|s| Instant::now() + Duration::from_secs(s));
-        // Snapshot old blocked state before insert for O(1) blocked_count tracking.
-        let was_blocked = self
-            .inner
-            .get(&key)
-            .is_some_and(|e| e.value().value.is_blocked());
         let new_entry = Entry { value, expires_at };
         let new_blocked = new_entry.value.is_blocked();
         let entry_size = std::mem::size_of::<IpAddr>()
             + std::mem::size_of::<Entry>()
             + new_entry.value.heap_bytes();
 
-        // Insert first, then check adjusted budget (replacement is free)
+        // Atomic insert: get old value from insert() return to avoid
+        // get()+insert() race (two separate shard lock acquisitions).
         let old_size = self.inner.insert(key, new_entry).map_or(0, |old| {
+            let was_blocked = old.value.is_blocked();
+            // Update blocked_count atomically based on actual old state.
+            if !was_blocked && new_blocked {
+                self.blocked_count.fetch_add(1, Ordering::Relaxed);
+                self.blocked_set.insert(key, ());
+            } else if was_blocked && !new_blocked {
+                self.blocked_count.fetch_sub(1, Ordering::Relaxed);
+                self.blocked_set.remove(&key);
+            }
             std::mem::size_of::<Entry>() + old.value.heap_bytes() + std::mem::size_of::<IpAddr>()
         });
+
+        // New insert (no old value): update blocked_count for fresh entry.
+        if old_size == 0 && new_blocked {
+            self.blocked_count.fetch_add(1, Ordering::Relaxed);
+            self.blocked_set.insert(key, ());
+        }
 
         let net_growth = entry_size.saturating_sub(old_size);
 
@@ -407,12 +413,14 @@ impl Store {
                     .fetch_sub(old_size - entry_size, Ordering::Relaxed);
             }
         }
-        let current = self.ram_bytes.load(Ordering::Relaxed);
-        tracing::debug!(
-            "Store::insert - current ram_bytes: {}, net_growth: {}",
-            current,
-            net_growth
-        );
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let current = self.ram_bytes.load(Ordering::Relaxed);
+            tracing::debug!(
+                "Store::insert - current ram_bytes: {}, net_growth: {}",
+                current,
+                net_growth
+            );
+        }
 
         // Mirror the ram_bytes change to used_bytes (AtomicU64 — pick the
         // signed direction explicitly so a shrink actually subtracts).
@@ -426,16 +434,7 @@ impl Store {
                 .fetch_sub((old_size - entry_size) as u64, Ordering::Relaxed);
         }
         self.total_inserts.fetch_add(1, Ordering::Relaxed);
-        // O(1) blocked_count tracking — only mutate on transition.
-        // Also maintain blocked_set index for O(B) get_all_blocked_ips.
-        if !was_blocked && new_blocked {
-            self.blocked_count.fetch_add(1, Ordering::Relaxed);
-            self.blocked_set.insert(key, ());
-        } else if was_blocked && !new_blocked {
-            self.blocked_count.fetch_sub(1, Ordering::Relaxed);
-            self.blocked_set.remove(&key);
-        }
-        tracing::debug!("Store::insert - Successfully inserted key: {}", key);
+        if tracing::enabled!(tracing::Level::DEBUG) { tracing::debug!("Store::insert - OK key: {}", key); }
         Ok(())
     }
 
