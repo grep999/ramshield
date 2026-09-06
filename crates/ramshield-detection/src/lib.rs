@@ -156,7 +156,7 @@ impl DetectionEngine {
         // head-of-line.
         // ponytail: hardcoded; lift to Config.detection.batch_channel_capacity
         // when traffic profiles diverge.
-        let (tx, rx) = bounded::<ConnectionEvent>(16_000);
+        let (tx, rx) = bounded::<ConnectionEvent>(64_000);
         let shard_count = (bloom_bits / 1024).max(1).next_power_of_two();
         Self {
             store,
@@ -591,6 +591,12 @@ impl DetectionEngine {
         // Without clear, every bit becomes set within hours and cold-skip dies.
         let bloom_clear_ns: u64 = 8 * 1_000_000_000;
         let mut last_bloom_clear_ns = now_ns();
+        // P1-6: periodic eviction of expired entries. Without this sweep,
+        // expired entries (~136 B each) stay in DashMap indefinitely, counted
+        // in ram_bytes, causing CapacityExceeded despite actual working-set
+        // being well under the limit.
+        let evict_interval_ns: u64 = 60 * 1_000_000_000;
+        let mut last_evict_ns = now_ns();
         loop {
             if self.shutdown.load(Ordering::Acquire) {
                 info!("Subnet batch loop shutting down");
@@ -604,6 +610,14 @@ impl DetectionEngine {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clear();
                 last_bloom_clear_ns = now_ns();
+            }
+            // P1-6: sweep expired entries every 60s.
+            if now_ns().saturating_sub(last_evict_ns) >= evict_interval_ns {
+                let evicted = self.store.evict_expired();
+                if evicted > 0 {
+                    debug!("evict_expired: removed {} expired entries", evicted);
+                }
+                last_evict_ns = now_ns();
             }
             let cfg = self.config.load();
             if !cfg.detection.batch_block_enabled {
@@ -668,6 +682,27 @@ impl DetectionEngine {
                     }
                 }
                 self.store.reset_subnet_window(sk);
+            }
+        }
+
+        // P1-10: Evict low-traffic subnet_table entries when table exceeds 100K.
+        // Prevents unbounded growth under DDoS with millions of attacker subnets.
+        let st = self.store.subnet_table();
+        if st.len() > 100_000 {
+            let mut candidates: Vec<_> = st.iter()
+                .filter_map(|e| {
+                    let r = e.value();
+                    // Only evict entries with zero activity in the current window
+                    if r.total_rps == 0 && r.unique_ips() == 0 {
+                        Some(*e.key())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            candidates.truncate(st.len() - 80_000);  // evict down to 80K
+            for key in candidates {
+                st.remove(&key);
             }
         }
     }

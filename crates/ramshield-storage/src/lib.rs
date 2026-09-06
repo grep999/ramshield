@@ -472,6 +472,14 @@ impl Store {
         }
     }
 
+    /// Sweep all entries and remove expired ones. Returns count of evicted entries.
+    pub fn evict_expired(&self) -> usize {
+        let before = self.inner.len();
+        let keys: Vec<IpAddr> = self.inner.iter().map(|e| *e.key()).collect();
+        self.evict_batch(&keys);
+        before.saturating_sub(self.inner.len())
+    }
+
     pub fn remove(&self, key: &IpAddr) -> Option<Value> {
         self.inner.remove(key).map(|(_k, e)| {
             let freed =
@@ -955,5 +963,23 @@ mod tests {
         }
         let total = store.subnet_table().get(&sk).unwrap().total_rps;
         assert_eq!(total, 16, "all 16 concurrent merges must be counted");
+    }
+
+    /// P1-6 regression: evict_expired must remove TTL-expired entries and
+    /// reclaim ram_bytes. Insert with TTL=1s, sleep, sweep, assert gone.
+    #[test]
+    fn evict_expired_removes_ttl_entries() {
+        use std::net::Ipv4Addr;
+        let store = Store::new(16);
+        let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 99, 0, 1));
+        let ram_lim = 64 * 1024 * 1024;
+        store.insert(ip, Value::Counter(42), Some(1), ram_lim).unwrap();
+        assert_eq!(store.len(), 1, "entry present before expiry");
+        assert!(store.ram_bytes() > 0, "ram_bytes non-zero after insert");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let evicted = store.evict_expired();
+        assert_eq!(evicted, 1, "evict_expired must remove the expired entry");
+        assert_eq!(store.len(), 0, "store empty after eviction");
+        assert_eq!(store.ram_bytes(), 0, "ram_bytes zeroed after eviction");
     }
 }
