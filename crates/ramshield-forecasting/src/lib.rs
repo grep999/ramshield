@@ -116,6 +116,93 @@ impl RingBuffer {
     }
 }
 
+// ── EWMA Variance ─────────────────────────────────────────────────────────────
+
+/// Exponentially weighted moving average variance tracker.
+/// Replaces RingBuffer with O(1) memory (3 floats = 24 bytes).
+/// Adapts to traffic phase changes within ~2 minutes (span=120).
+struct EwmAVar {
+    ewma: f64,
+    var_ewma: f64,
+    count: u64,
+    alpha: f64,
+}
+
+impl EwmAVar {
+    /// span: effective window length in ticks. alpha = 2/(span+1).
+    fn new(span: usize) -> Self {
+        let p = span.max(1);
+        let alpha = 2.0 / (p as f64 + 1.0);
+        Self {
+            ewma: 0.0,
+            var_ewma: 0.0,
+            count: 0,
+            alpha,
+        }
+    }
+
+    /// Feed a new observation, return the current residual z-score:
+    /// z = (observation - ewma) / sqrt(var_ewma).
+    /// After warmup (< 2 observations), returns 0.0.
+    fn update(&mut self, x: f64) -> f64 {
+        self.count += 1;
+        if self.count == 1 {
+            self.ewma = x;
+            return 0.0;
+        }
+        let diff = x - self.ewma;
+        self.ewma += self.alpha * diff;
+        self.var_ewma = (1.0 - self.alpha) * (self.var_ewma + self.alpha * diff * diff);
+        let sigma = self.var_ewma.sqrt();
+        if sigma < 1e-9 {
+            0.0
+        } else {
+            diff.abs() / sigma
+        }
+    }
+
+    #[allow(dead_code)] // used in tests
+    fn sigma(&self) -> f64 {
+        self.var_ewma.sqrt()
+    }
+}
+
+// ── CUSUM ─────────────────────────────────────────────────────────────────────
+
+/// Cumulative Sum control chart for detecting sustained drift.
+/// O(1) memory (4 floats = 32 bytes). Catches slow-ramp attacks that
+/// z-score misses entirely.
+struct CusumState {
+    s_upper: f64,
+    s_lower: f64,
+    k: f64,  // slack (allowance), in sigma units
+    h: f64,  // decision boundary, in sigma units
+}
+
+impl CusumState {
+    /// k: slack (typically 0.5). h: threshold (typically 4.0).
+    fn new(k: f64, h: f64) -> Self {
+        Self {
+            s_upper: 0.0,
+            s_lower: 0.0,
+            k,
+            h,
+        }
+    }
+
+    /// Feed a z-score (already normalized by sigma). Returns true if alarm.
+    fn update(&mut self, z: f64) -> bool {
+        self.s_upper = (self.s_upper + z - self.k).max(0.0);
+        self.s_lower = (self.s_lower - z - self.k).max(0.0);
+        self.s_upper > self.h || self.s_lower > self.h
+    }
+
+    fn reset(&mut self) {
+        self.s_upper = 0.0;
+        self.s_lower = 0.0;
+    }
+}
+
 // ── Forecaster — reads incremental counters, not full store scans ─────────────
 
 pub struct Forecaster {
@@ -124,8 +211,12 @@ pub struct Forecaster {
     enforcement_tx: mpsc::Sender<EnforceCommand>,
     metrics: Arc<Metrics>,
     hw: tokio::sync::Mutex<HoltWinters>,
-    history: tokio::sync::Mutex<RingBuffer>,
-    /// P2 SPOT-lite: peaks-over-threshold reservoir of (rps − mean)⁺ samples.
+    /// P1: EWMA variance tracks residual std in O(1) memory.
+    /// Replaces the old RingBuffer with 60-float window.
+    ewma_var: tokio::sync::Mutex<EwmAVar>,
+    /// P1: CUSUM detects sustained drift (slow-ramp attacks).
+    cusum: tokio::sync::Mutex<CusumState>,
+    /// P2 SPOT-lite: peaks-over-threshold reservoir of residual |deviation| samples.
     /// Extreme quantile estimated empirically instead of hand-tuned z cutoffs.
     peaks: tokio::sync::Mutex<PeakReservoir>,
 }
@@ -198,7 +289,8 @@ impl Forecaster {
             enforcement_tx,
             metrics,
             hw: tokio::sync::Mutex::new(hw),
-            history: tokio::sync::Mutex::new(RingBuffer::new(60)),
+            ewma_var: tokio::sync::Mutex::new(EwmAVar::new(120)),
+            cusum: tokio::sync::Mutex::new(CusumState::new(0.5, 4.0)),
             peaks: tokio::sync::Mutex::new(PeakReservoir::new(512)),
         }
     }
@@ -219,17 +311,22 @@ impl Forecaster {
         let rps = traffic.events_last_second.load(Ordering::Relaxed) as f64;
         let n = traffic.unique_ips_window.load(Ordering::Relaxed);
 
-        let (z, spot_alarm) = {
+        let (z, spot_alarm, cusum_alarm) = {
             let mut hw = self.hw.lock().await;
-            let mut hist = self.history.lock().await;
+            let mut ewma = self.ewma_var.lock().await;
+            let mut cusum = self.cusum.lock().await;
             let f = hw.update(rps);
-            let s = hist.std().max(1.0);
-            let z = hw.zscore(rps, f, s);
-            hist.push(rps);
+            let residual = rps - f;
+            // P1: EWMA variance normalizes residual — adapts to traffic phase.
+            // Old: RingBuffer(60) with equal-weight std — mixed night+day into one σ.
+            let z = ewma.update(residual);
+            let cusum_alarm = cusum.update(z);
 
-            // P2: feed deviation-above-forecast into the peak reservoir; alarm
-            // on empirical extreme quantile once warm, z-score before that.
-            let dev = (rps - f).max(0.0);
+            // P1: feed ABS residual into PeakReservoir (not raw rps - mean).
+            // The reservoir's extreme quantile now measures forecast-accuracy
+            // extremes, not raw traffic extremes. This self-calibrates the
+            // threshold to the model's actual error distribution.
+            let dev = residual.abs();
             let spot_alarm = {
                 let mut pk = self.peaks.lock().await;
                 pk.push(dev);
@@ -239,15 +336,17 @@ impl Forecaster {
                 }
             };
             self.metrics.set_forecast_hw(rps, z, f);
-            (z, spot_alarm)
+            (z, spot_alarm, cusum_alarm)
         };
 
-        debug!("HW rps={:.1} z={:.2} unique_ips={}", rps, z, n);
-        if spot_alarm && n > 10 {
+        debug!("HW rps={:.1} z={:.2} spot={} cusum={} n={}", rps, z, spot_alarm, cusum_alarm, n);
+        if cusum_alarm && n > 10 {
+            warn!("CUSUM ALARM z={:.2} rps={:.1}", z, rps);
+            self.preemptive_block().await;
+            self.cusum.lock().await.reset();
+        } else if spot_alarm && z > self.config.anomaly_zscore && n > 10 {
             warn!("ANOMALY z={:.2} rps={:.1}", z, rps);
-            if z > 3.5 {
-                self.preemptive_block().await;
-            }
+            self.preemptive_block().await;
         }
     }
 
@@ -473,5 +572,86 @@ mod tests {
             .build()
             .unwrap();
         rt.block_on(fc.tick_entropy());
+    }
+
+    // ── Phase 1: EWMA variance + CUSUM tests ──────────────────────────────
+
+    #[test]
+    fn ewma_var_adapts_to_phase_change() {
+        // Feed 100 ticks at RPS=1000 (stable). Then 100 ticks at RPS=5000.
+        // After transition, sigma should be near the new level (~500), not
+        // the old level (~1). The old RingBuffer would mix both into σ≈2000.
+        let mut ev = super::EwmAVar::new(120);
+        for _ in 0..100 {
+            ev.update(1000.0);
+        }
+        let sigma_low = ev.sigma();
+        assert!(sigma_low < 100.0, "stable traffic sigma should be small: {}", sigma_low);
+
+        // Transition to high traffic
+        for _ in 0..100 {
+            ev.update(5000.0);
+        }
+        let sigma_high = ev.sigma();
+        // sigma should adapt toward new level's variation (~500 per tick noise)
+        assert!(
+            sigma_high > 100.0,
+            "after phase change sigma should increase: low={} high={}",
+            sigma_low,
+            sigma_high
+        );
+    }
+
+    #[test]
+    fn ewma_var_residual_zscore_on_spike() {
+        // Constant traffic (residual = 0, z = 0). Then a spike (residual ≠ 0, z > 0).
+        let mut ev = super::EwmAVar::new(60);
+        for _ in 0..50 {
+            ev.update(0.0); // zero residual = forecast matches perfectly
+        }
+        let z_quiet = ev.update(0.0);
+        assert!(z_quiet < 0.1, "no anomaly: z={}", z_quiet);
+
+        // Spike: residual = 100 when sigma ≈ small
+        let z_spike = ev.update(100.0);
+        assert!(z_spike > 2.0, "spike should produce high z: {}", z_spike);
+    }
+
+    #[test]
+    fn cusum_fires_on_sustained_drift() {
+        // k=0.5, h=4.0. Feed z=1.5 for 12 ticks.
+        // CUSUM should accumulate: s_upper = (1.5 - 0.5) * 12 = 12 > 4.0 → alarm.
+        let mut cs = super::CusumState::new(0.5, 4.0);
+        let mut fired = false;
+        for _ in 0..12 {
+            if cs.update(1.5) {
+                fired = true;
+                break;
+            }
+        }
+        assert!(fired, "CUSUM must alarm on sustained z=1.5 drift over 12 ticks");
+    }
+
+    #[test]
+    fn cusum_stays_quiet_on_noise() {
+        // k=0.5, h=4.0. Alternating z: +1, -1, +1, -1 (symmetric noise).
+        // CUSUM should NOT alarm — deviations cancel.
+        let mut cs = super::CusumState::new(0.5, 4.0);
+        for i in 0..100 {
+            let z = if i % 2 == 0 { 1.0 } else { -1.0 };
+            assert!(!cs.update(z), "symmetric noise should not trigger CUSUM at tick {}", i);
+        }
+    }
+
+    #[test]
+    fn cusum_reset_clears_state() {
+        // Feed drift, trigger alarm, reset, verify clean.
+        let mut cs = super::CusumState::new(0.5, 4.0);
+        for _ in 0..10 {
+            cs.update(2.0);
+        }
+        assert!(cs.update(2.0), "should alarm before reset");
+        cs.reset();
+        assert!(!cs.update(0.0), "must be clean after reset");
     }
 }
