@@ -615,12 +615,17 @@ impl Forecaster {
         let cusum_alarm = self.cusum.lock().await.update(z);
 
         // ── Threat: drain sample + aggregate ─────────────────────────────────
+        // P0 fix: the drained sample is passed to preemptive_block below.
+        // Draining here AND again inside preemptive_block meant the second
+        // drain always saw an empty queue — forecast-driven blocking was
+        // dead code. The sample lives for the whole tick now.
+        let threat_sample = self.store.traffic.drain_threat_sample();
         let threat = {
-            let sample = self.store.traffic.drain_threat_sample();
+            let sample = &threat_sample;
             if sample.is_empty() { 0.0 }
             else {
                 let mut m = 0.0f32;
-                for (_, t) in &sample { if *t > m { m = *t; } }
+                for (_, t) in sample { if *t > m { m = *t; } }
                 m as f64
             }
         };
@@ -673,12 +678,12 @@ impl Forecaster {
             Some((Hypothesis::VolumetricDoS, conf)) => {
                 warn!("BAYESIAN H1 VOLUMETRIC conf={:.2} z={:.2} threat={:.2} rps={:.1}",
                     conf, z, threat, rps);
-                self.preemptive_block().await;
+                self.preemptive_block(&threat_sample).await;
             }
             Some((Hypothesis::SlowRampDoS, conf)) => {
                 warn!("BAYESIAN H2 SLOW-RAMP conf={:.2} z={:.2} cusum rps={:.1}",
                     conf, z, rps);
-                self.preemptive_block().await;
+                self.preemptive_block(&threat_sample).await;
                 self.cusum.lock().await.reset();
             }
             Some((Hypothesis::FlashCrowd, conf)) => {
@@ -698,21 +703,21 @@ impl Forecaster {
             });
         if spot_alarm && z > self.config.anomaly_zscore && hypothesis.is_none() {
             warn!("LEGACY SPOT z={:.2} rps={:.1}", z, rps);
-            self.preemptive_block().await;
+            self.preemptive_block(&threat_sample).await;
         }
     }
 
 
 
-    async fn preemptive_block(&self) {
-        // Atomic drain (crate primitive) — no pop+push-back race with detection.
-        let sample = self.store.traffic.drain_threat_sample();
+    async fn preemptive_block(&self, sample: &[(std::net::IpAddr, f32)]) {
+        // P0 fix: sample is passed in (drained once per tick by tick_hw).
+        // The old double-drain made this a no-op every time.
         if sample.is_empty() {
             return;
         }
 
         let mut n = 0usize;
-        for (ip, threat) in sample {
+        for &(ip, threat) in sample {
             if threat <= 0.7 {
                 continue;
             }
@@ -859,6 +864,30 @@ mod tests {
             .build()
             .unwrap();
         rt.block_on(fc.tick_hw());  // entropy now computed in tick_hw
+    }
+
+    /// P0 regression: preemptive_block used to re-drain the threat queue that
+    /// tick_hw had already emptied — it always saw an empty sample and
+    /// returned without blocking. It now takes the sample as a parameter, so
+    /// a high-threat IP in the sample must produce exactly one Block command.
+    #[test]
+    fn preemptive_block_emits_for_hot_threats() {
+        let store = Arc::new(Store::new(4));
+        let cfg = ForecastingConfig::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        let fc = Arc::new(Forecaster::new(store, cfg, tx, Arc::new(Metrics::new())));
+        let hot: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        let cold: std::net::IpAddr = "10.0.0.2".parse().unwrap();
+        let sample = vec![(hot, 0.9f32), (cold, 0.3f32)];
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(fc.preemptive_block(&sample));
+        let cmd = rx.try_recv().expect("hot threat must emit a Block command");
+        assert_eq!(cmd.ip, hot);
+        assert!(matches!(cmd.action, EnforceAction::Block));
+        assert!(rx.try_recv().is_err(), "sub-threshold threat must not emit");
     }
 
     // ── Phase 1: EWMA variance + CUSUM tests ──────────────────────────────
