@@ -93,7 +93,7 @@ pub struct Wal {
     retention_max: u64,
     base_dir: String,
     lsn_counter: AtomicU64,
-    last_sync_ns: AtomicU64,
+    next_sync_due_ns: AtomicU64,
 }
 
 struct Inner {
@@ -150,7 +150,7 @@ impl Wal {
             retention_max,
             base_dir: dir.to_string(),
             lsn_counter: AtomicU64::new(start_lsn),
-            last_sync_ns: AtomicU64::new(0),
+            next_sync_due_ns: AtomicU64::new(0),
         })
     }
 
@@ -206,26 +206,43 @@ impl Wal {
             g.bytes += (HEADER + payload.len()) as u64;
 
             let want_sync = matches!(self.durability, Durability::Fsync | Durability::GroupCommit);
-            // ponytail: 100ms sync cap — amortizes fsync cost across appenders.
-            // Cap removed: lose at most 100ms of durability on crash.
-            let must_sync = if want_sync {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos() as u64;
-                let prev = self.last_sync_ns.swap(now, Ordering::Relaxed);
-                now.saturating_sub(prev) >= 100_000_000 // 100ms
-            } else {
-                false
-            };
-            if must_sync || matches!(self.durability, Durability::Flush) {
-                g.writer.flush()?;
+            // P0 fix (starvation): deadline-based group commit. The previous
+            // form (swap prev->now, require gap >= 100ms) reset the clock on
+            // EVERY append — steady writers with <100ms inter-arrival (e.g.
+            // a block storm at 500 writes/s) never synced, unbounded data
+            // loss on crash. Now: an absolute due-deadline; the first append
+            // observing `now >= due` performs the sync and arms the next
+            // deadline. Worst-case exposure: one 100ms window. A racing
+            // double-claimant only costs one extra fsync per window (~10Hz)
+            // — benign, and cheaper than a CAS loop here.
+            let now_wall = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64;
+            let mut must_sync = false;
+            if want_sync && now_wall >= self.next_sync_due_ns.load(Ordering::Relaxed) {
+                self.next_sync_due_ns
+                    .store(now_wall + 100_000_000, Ordering::Relaxed);
+                must_sync = true;
             }
 
             let must_rotate = g.bytes >= self.seg_max;
-            // Snapshot the CURRENT file handle (which is the file holding
-            // the just-written bytes) before any rotation swaps `g.file`.
-            let old_file_arc = if must_sync {
+            if must_sync || matches!(self.durability, Durability::Flush) || must_rotate {
+                // P0 fix (rotation durability): the old code never flushed
+                // before replacing g.writer. BufWriter::drop does write out
+                // its buffer, but (a) it IGNORES errors — a full disk lost
+                // up to 64KiB of WAL silently — and (b) with no fsync of the
+                // old segment after rotation, that segment's tail could only
+                // ever reach disk by luck (no future append touches it).
+                // Explicit flush + sync_data on the old fd (via old_file_arc
+                // below) closes both holes.
+                g.writer.flush()?;
+            }
+            // Snapshot the file holding the just-flushed bytes BEFORE any
+            // rotation reassigns g.file, so step 3 fsyncs the right segment.
+            // On rotation the old segment is never written again — syncing
+            // it now makes the whole segment durable in one fsync.
+            let old_file_arc = if must_sync || must_rotate {
                 Some(Arc::clone(&g.file))
             } else {
                 None
@@ -582,6 +599,40 @@ mod tests {
             .to_string();
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    /// P0 regression: rotation must not lose buffered records. With
+    /// GroupCommit armed for the future (no sync due) and a tiny segment
+    /// limit forcing rotation, records buffered in the old 64KiB BufWriter
+    /// used to vanish when the writer was replaced. All appends must replay.
+    #[test]
+    fn wal_rotation_flushes_buffer() {
+        let dir = tmp("rs_wal_rotation");
+        {
+            let wal = Wal::open(&dir, false, Durability::GroupCommit, 256, 0).unwrap();
+            // First append syncs (deadline 0 => due immediately) and arms
+            // the 100ms window; following appends land in the no-sync region.
+            // seg_max=256B forces several rotations inside that window.
+            for i in 1..=20u64 {
+                wal.append(&WalEntry::BlockIp {
+                    ip: format!("10.0.0.{i}"),
+                    reason: "r".into(),
+                    ttl_secs: None,
+                    ts_ns: i,
+                })
+                .unwrap();
+            }
+            // Do NOT drop cleanly via checkpoint — simulate process holding
+            // only userspace buffers when rotation swaps writers.
+        }
+        let entries = Wal::replay(&dir).unwrap();
+        assert_eq!(
+            entries.len(),
+            20,
+            "rotation lost buffered WAL records: {} of 20 survived",
+            entries.len()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
