@@ -333,6 +333,11 @@ impl Default for DashboardConfig {
     }
 }
 
+/// Sentinel used by the dashboard's GET /api/config for secret fields.
+/// api_set_config rejects any patch containing it (POST-back of a viewed
+/// config must never boot an auth-less server). pub so both sides share it.
+pub const REDACTED_PLACEHOLDER: &str = "<redacted>";
+
 impl Config {
     pub fn from_toml_file(path: &str) -> anyhow::Result<Self> {
         let text = std::fs::read_to_string(path)?;
@@ -346,6 +351,12 @@ impl Config {
     pub fn load(path: &str) -> anyhow::Result<Self> {
         let mut cfg = Self::from_toml_file(path)?;
         cfg.apply_env_overrides();
+        // P1 fix: file validation ran BEFORE env overrides, and
+        // apply_env_overrides swallowed its own re-validation (let _ =).
+        // RAMSHIELD_IPC__TCP_ADDR=0.0.0.0:7890 (or dashboard addr) without
+        // auth keys/hash therefore silently defeated the fail-closed
+        // public-bind guard. Validate the FINAL config or fail startup.
+        cfg.validate()?;
         Ok(cfg)
     }
 
@@ -443,9 +454,9 @@ impl Config {
             self.forecasting.enabled = parsed;
         }
 
-        // ponytail: log-and-continue — env overrides are operator input;
-        // invalid combos surface at validate() call sites that return Result.
-        let _ = self.validate();
+        // Env-override validation now happens on the FINAL config at every
+        // entry point (Config::load, main's no-config branch). An earlier
+        // `let _ = self.validate()` here swallowed the result — bypass path.
     }
 
     /// Validate configuration with sensible bounds and error messages.
@@ -645,6 +656,25 @@ mod tests {
         std::fs::write(tmpfile, "").unwrap();
         let cfg = Config::load(tmpfile).unwrap();
         assert_eq!(cfg.detection.rps_threshold, 500);
+        clear_env_vars();
+    }
+
+    /// P1 regression: env override must not smuggle a public bind past the
+    /// fail-closed validation that only ran on the file. Before the fix,
+    /// Config::load validated the file, applied env overrides, and discarded
+    /// the re-validation result — so this env combo booted an open server.
+    #[test]
+    #[serial]
+    fn env_override_public_bind_is_rejected() {
+        clear_env_vars();
+        unsafe {
+            std::env::set_var("RAMSHIELD_IPC__TCP_ADDR", "0.0.0.0:7890");
+        }
+        let tmpfile = "/tmp/ramshield_test_config.toml";
+        std::fs::write(tmpfile, "").unwrap();
+        let err = Config::load(tmpfile)
+            .expect_err("public IPC bind without auth_keys must fail startup");
+        assert!(err.to_string().contains("auth_keys"), "{err}");
         clear_env_vars();
     }
 

@@ -67,6 +67,10 @@ async fn main() -> Result<()> {
             // Still honor env overrides in no-config mode (dashboard auth etc).
             let mut c = Config::default();
             c.apply_env_overrides();
+            // P1 fix (same class as Config::load): env overrides could set a
+            // public bind with no secrets; the fail-closed guard must run on
+            // the FINAL config here too, not just on the file path.
+            c.validate()?;
             c
         }
     };
@@ -147,11 +151,15 @@ async fn main() -> Result<()> {
     // Initiate graceful shutdown
     engine.shutdown();
 
-    // Give batch processor time to drain (5 seconds max)
-    let shutdown_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
-    while engine.is_shutting_down() && tokio::time::Instant::now() < shutdown_deadline {
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    }
+    // F9: real joins (workers final-flush pre_aggs on exit) with a 5s grace,
+    // instead of a fixed spin that neither guaranteed completion nor early-exit.
+    // Blocking joins go through spawn_blocking — must not park the RT.
+    let eng = engine.clone();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(6),
+        tokio::task::spawn_blocking(move || eng.join_workers(std::time::Duration::from_secs(5))),
+    )
+    .await;
 
     info!("Shutdown complete.");
     Ok(())
