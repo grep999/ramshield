@@ -4,8 +4,10 @@
 //! Semantics (see .hermes/plans/2026-08-22_enforcement-production.md):
 //! - fail-open at kernel: map update failure => Err, caller keeps in-band state
 //! - reconcile(): drain map, delete stale keys, insert missing
-//! - key contract: C stores `key[0] = saddr` as LE u64; Rust BlocklistKey(u128)
-//!   from u32 v4 is byte-identical in the first 8 bytes.
+//! - key contract: C stores `key[0] = saddr` (LE round-trip of BE octets =
+//!   original octet order at memory[0..4]); Rust must serialize the same
+//!   bytes — see BlocklistKey::from_ip (P0: u32::from_ne_bytes, NOT
+//!   u32::from, which byte-reverses and makes every lookup miss).
 
 use crate::{EnforcementError, ReconciliationState, XdpApplier};
 use aya::Ebpf;
@@ -35,9 +37,17 @@ unsafe impl aya::Pod for BlocklistValue {}
 impl BlocklistKey {
     pub fn from_ip(ip: IpAddr) -> Self {
         match ip {
-            // u32::from(v4) is host-order integer of the BE octets; identical to
-            // the register value the C side reads from ip->saddr.
-            IpAddr::V4(v4) => BlocklistKey(u128::from(u32::from(v4))),
+            // P0 fix: the kernel compares the RAW BYTES of this u128 against
+            // the C program's key. C does `key[0] = ip->saddr` — an LE load
+            // of the BE wire octets followed by an LE store back, which
+            // round-trips to the ORIGINAL octet order: 1.2.3.4 -> memory
+            // `01 02 03 04` + 12 zero bytes. The old value
+            // u128::from(u32::from(v4)) serialized to `04 03 02 01` — byte-
+            // reversed -> lookup NEVER hit -> XDP silently dropped nothing.
+            // u32::from_ne_bytes(octets) puts the octets at memory[0..4],
+            // matching C byte-for-byte on LE (all BPF targets we run:
+            // x86_64/ARM; bpfel).
+            IpAddr::V4(v4) => BlocklistKey(u128::from(u32::from_ne_bytes(v4.octets()))),
             // ponytail: v6 keys are inserted but the C program never matches
             // them (ETH_P_IP branch only) — v6 stays enforced in-band until the
             // BPF program grows an ETH_P_IPV6 path.
@@ -145,5 +155,23 @@ impl XdpApplier for AyaXdpApplier {
             tracing::info!(stale = stale_count, "XDP reconcile removed stale keys");
         }
         Ok(ReconciliationState::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    /// P0 regression: the kernel memcmp's the raw memory of BlocklistKey
+    /// against the C program's `key[0] = ip->saddr` layout — wire octets in
+    /// original order at bytes [0..4]. u32::from(v4) byte-reverses (04 03
+    /// 02 01) so every lookup missed and XDP silently dropped nothing.
+    #[test]
+    fn v4_key_bytes_match_dataplane_layout() {
+        let key = BlocklistKey::from_ip(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)));
+        let mem = key.0.to_ne_bytes(); // aya Pod sends this exact memory
+        assert_eq!(&mem[0..4], &[1, 2, 3, 4], "octet order reversed vs C");
+        assert_eq!(&mem[4..], &[0; 12], "padding must be zero");
     }
 }
