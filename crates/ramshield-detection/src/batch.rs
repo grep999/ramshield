@@ -18,8 +18,10 @@ impl IpAgg {
     pub fn absorb(&mut self, ev: &ConnectionEvent) {
         self.count += 1;
         self.bytes += ev.bytes;
-let bucket = super::status_bucket(ev.status_code) as usize;
-        self.status_dist[bucket] += 1;
+        let bucket = super::status_bucket(ev.status_code) as usize;
+        if bucket < self.status_dist.len() {
+            self.status_dist[bucket] += 1;
+        }
         if self.count == 1 {
             self.first_ts_ns = ev.timestamp_ns;
             self.proto_fp = ev.proto_fingerprint;
@@ -149,6 +151,26 @@ mod tests {
         }
         // Verify key packs to same value as the network address
         assert_eq!(key, net.pack());
+    }
+
+    #[test]
+    fn absorb_invalid_status_no_panic() {
+        use ramshield_types::events::ConnectionEvent;
+        use std::net::IpAddr;
+        use std::net::Ipv4Addr;
+
+        let mut agg = IpAgg::default();
+        let ev = ConnectionEvent {
+            ip: IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
+            timestamp_ns: 1,
+            bytes: 10,
+            status_code: 0, // invalid — status_bucket returns 255
+            proto_fingerprint: 0,
+        };
+        agg.absorb(&ev);
+        assert_eq!(agg.count, 1);
+        assert_eq!(agg.bytes, 10);
+        assert_eq!(agg.status_dist, [0, 0, 0, 0, 0]); // untouched
     }
 
     #[test]
