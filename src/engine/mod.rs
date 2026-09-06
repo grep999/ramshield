@@ -3,7 +3,7 @@ pub mod learning;
 use arc_swap::ArcSwap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::info;
 
 use crate::config::Config;
@@ -28,11 +28,14 @@ pub struct Engine {
     /// for StubXdpApplier (degraded mode: in-band enforcement only). Read by
     /// `dashboard_snapshot()` so the UI can surface a "XDP inactive" chip.
     xdp_active: Arc<AtomicBool>,
+    /// Watch channel for async shutdown signaling (replaces AtomicBool polling).
+    shutdown_tx: watch::Sender<bool>,
 }
 
 impl Engine {
     pub fn new(cfg: Config, store: Arc<Store>, metrics: Arc<Metrics>) -> Self {
         let (enforcement_tx, enforcement_rx) = mpsc::channel(4096);
+        let (shutdown_tx, _) = watch::channel(false);
         Self {
             config: Arc::new(ArcSwap::from_pointee(cfg)),
             store,
@@ -41,6 +44,7 @@ impl Engine {
             enforcement_tx,
             enforcement_rx: std::sync::Mutex::new(Some(enforcement_rx)),
             xdp_active: Arc::new(AtomicBool::new(false)),
+            shutdown_tx,
         }
     }
 
@@ -82,6 +86,11 @@ impl Engine {
 
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Release);
+        let _ = self.shutdown_tx.send(true);
+    }
+
+    pub fn shutdown_rx(&self) -> watch::Receiver<bool> {
+        self.shutdown_tx.subscribe()
     }
 
     pub fn is_shutting_down(&self) -> bool {
@@ -307,21 +316,15 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
             }
         }
     }
-    let engine_for_shutdown = engine.clone();
-    tokio::spawn(async move {
-        loop {
-            if engine_for_shutdown.is_shutting_down() {
-                enforcement_shutdown.store(true, Ordering::Release);
-                break;
+    let mut shutdown_rx = engine.shutdown_rx();
+    let enforcement_handle = {
+        let enforcement = enforcement;
+        tokio::spawn(async move {
+            if let Err(e) = enforcement.run(enforcement_rx).await {
+                tracing::error!("enforcement service: {}", e);
             }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-    });
-    tokio::spawn(async move {
-        if let Err(e) = enforcement.run(enforcement_rx).await {
-            tracing::error!("enforcement service: {}", e);
-        }
-    });
+        })
+    };
 
     let detection = Arc::new(DetectionEngine::new(
         store.clone(),
@@ -341,7 +344,18 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
         engine.enforcement_tx.clone(),
         metrics.clone(),
     ));
-    tokio::spawn(async move { forecaster.run().await }); // ponytail: orphan on shutdown; add CancellationToken to run() and join on engine shutdown.
+    let forecaster_handle = {
+        let fc = forecaster.clone();
+        let mut fc_rx = engine.shutdown_rx();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = fc.run() => {}
+                _ = fc_rx.changed() => {
+                    tracing::info!("forecaster: shutdown signal received");
+                }
+            }
+        })
+    };
 
     let server = crate::ipc::server::IpcServer::bind(
         &cfg_snapshot,
@@ -351,7 +365,29 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
         engine.enforcement_tx.clone(),
     )
     .await?;
-    server.start().await;
+
+    // Graceful shutdown: wait for signal, then join tasks.
+    tokio::select! {
+        _ = server.start() => {}
+        _ = shutdown_rx.changed() => {
+            tracing::info!("pipeline: shutdown signal received, draining...");
+            enforcement_shutdown.store(true, Ordering::Release);
+            // Join with timeout to avoid hanging on stuck tasks.
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+            tokio::select! {
+                _ = enforcement_handle => {}
+                _ = tokio::time::sleep_until(deadline) => {
+                    tracing::warn!("enforcement shutdown timed out");
+                }
+            }
+            tokio::select! {
+                _ = forecaster_handle => {}
+                _ = tokio::time::sleep_until(deadline) => {
+                    tracing::warn!("forecaster shutdown timed out");
+                }
+            }
+        }
+    }
     Ok(())
 }
 
