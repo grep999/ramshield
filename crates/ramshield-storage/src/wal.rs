@@ -392,6 +392,26 @@ impl Wal {
                         }
 
                         let decoded: Vec<u8> = if rh.flags & 0x01 != 0 {
+                            // Decompression-bomb guard: decompress_size_prepended
+                            // trusts the u32 LE size prefix and allocates it
+                            // eagerly (probe: 8-byte payload -> 4GB VmPeak ->
+                            // OOM-abort). Every legitimately written record was
+                            // <= MAX_RECORD_SIZE raw (append enforces it pre-
+                            // and post-compression), so a larger declared
+                            // decompressed size is corruption or an attack.
+                            let declared = payload
+                                .get(..4)
+                                .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
+                                .unwrap_or(usize::MAX);
+                            if declared > MAX_RECORD_SIZE {
+                                warn!(
+                                    "WAL record claims {declared} decompressed bytes \
+                                     (max {MAX_RECORD_SIZE}) in {:?} — treating as corrupt",
+                                    seg
+                                );
+                                corrupted = true;
+                                break;
+                            }
                             match decompress_size_prepended(payload) {
                                 Ok(d) => d,
                                 Err(e) => {
@@ -977,6 +997,58 @@ mod tests {
             "replay must be idempotent after truncation"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P1 regression: a compressed record whose LZ4 size prefix claims ~4GB
+    /// must be treated as corrupt, NOT decompressed. lz4_flex's
+    /// decompress_size_prepended allocates the declared size eagerly (probe:
+    /// 8-byte payload -> 4GB VmPeak). Header magic/CRC can be valid — only
+    /// the claimed decompressed length is hostile.
+    #[test]
+    fn wal_decompression_bomb_rejected() {
+        let dir = tmp("rs_wal_bomb");
+        let wal = Wal::open(&dir, true, Durability::None, 64 * 1024 * 1024, 0).unwrap();
+        wal.append(&WalEntry::BlockIp {
+            ip: "10.0.0.1".into(),
+            reason: "test".into(),
+            ttl_secs: None,
+            ts_ns: 1,
+        })
+        .unwrap();
+        drop(wal);
+
+        let seg_path = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "rshw"))
+            .expect("segment");
+        // payload: u32 LE claimed-size = 0xFFFFFFFE, plus a few filler bytes.
+        let mut payload = vec![0u8; 8];
+        payload[0..4].copy_from_slice(&0xFFFF_FFFEu32.to_le_bytes());
+        let mut h = crc32fast::Hasher::new();
+        h.update(&payload);
+        let hdr = RecordHeader {
+            magic: MAGIC,
+            version: 1,
+            lsn: 2,
+            payload_len: payload.len() as u32,
+            crc: h.finalize(),
+            flags: 0x01, // compressed
+        }
+        .to_bytes();
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&seg_path).unwrap();
+        f.write_all(&hdr).unwrap();
+        f.write_all(&payload).unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+
+        // Replay must return the 1 good record and flag the bomb as corrupt
+        // (pre-fix this panicked/OOM'd inside decompress_size_prepended).
+        let entries = Wal::replay(&dir).unwrap();
+        assert_eq!(entries.len(), 1, "bomb record must be truncated, not expanded");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
