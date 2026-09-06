@@ -129,6 +129,10 @@ const STATUS_BUCKET: [u8; 600] = {
 
 // ── Detection engine ─────────────────────────────────────────────────────────
 
+/// Capacity of the ingest channel. IPC telemetry imports this — do not
+/// duplicate the number elsewhere.
+pub const CHANNEL_CAPACITY: u64 = 64_000;
+
 pub struct DetectionEngine {
     store: Arc<Store>,
     config: ConfigHandle,
@@ -141,6 +145,16 @@ pub struct DetectionEngine {
     /// Pre-aggregation buffer — DashMap is internally thread-safe, no Arc needed
     pre_aggs: DashMap<IpAddr, IpAgg>,
     last_pre_aggs_flush_ns: AtomicU64,
+    /// F1: single-flusher gate (N batch workers share the flush trigger).
+    flushing: AtomicBool,
+}
+
+/// Releases the single-flusher gate even on early return/panic.
+struct FlushGuard<'a>(&'a AtomicBool);
+impl Drop for FlushGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl DetectionEngine {
@@ -152,13 +166,12 @@ impl DetectionEngine {
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         let bloom_bits = config.load().detection.bloom_bits;
-        // 16k cap ≈ 1MB RSS, fills in 16ms at 1M eps attack rate — keeps
-        // the batch processor honest. 256k was ~16MB of dead buffer that
-        // delayed inevitable drops and let legitimate events back up
-        // head-of-line.
+        // 64k cap ≈ 4MB RSS, fills in ~64ms at 1M eps — keeps the batch
+        // processor honest without megabytes of dead head-of-line buffer.
+        // Exported so IPC telemetry can't drift from the real size (F3).
         // ponytail: hardcoded; lift to Config.detection.batch_channel_capacity
         // when traffic profiles diverge.
-        let (tx, rx) = bounded::<ConnectionEvent>(64_000);
+        let (tx, rx) = bounded::<ConnectionEvent>(CHANNEL_CAPACITY as usize);
         let shard_count = (bloom_bits / 1024).max(1).next_power_of_two();
         Self {
             store,
@@ -171,6 +184,7 @@ impl DetectionEngine {
             shutdown,
             pre_aggs: DashMap::with_shard_amount(shard_count),
             last_pre_aggs_flush_ns: AtomicU64::new(now_ns()),
+            flushing: AtomicBool::new(false),
         }
     }
 
@@ -212,29 +226,52 @@ impl DetectionEngine {
     }
 
     fn flush_pre_aggs_to_store(&self) {
-        self.last_pre_aggs_flush_ns
-            .store(now_ns(), Ordering::Relaxed);
+        // P1 fix (F1 race + F7 rate): N workers can hit the flush trigger in
+        // the same tick. Old path: iter_mut + mem::take + clear() — a worker
+        // inserting during another's walk had its fresh event erased by the
+        // clear(), silently dropping up to walk_duration x rate events
+        // (~2K/flush at 1M eps) and pushing zero-ghost uniques. Now:
+        // (a) CAS gate — one flusher at a time, others skip (they'll retry
+        //     next loop iteration); (b) pop() drain — each entry removed
+        //     under its own shard lock, racy inserts survive to the next
+        //     flush instead of being cleared; (c) the real elapsed window is
+        //     passed to flush_batch so events_last_second is a true rate
+        //     even when prod flushes every 100ms (old code stored raw
+        //     per-flush counts, lieing 10x to the forecaster).
+        if self
+            .flushing
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+        let _flush_guard = FlushGuard(&self.flushing);
+
+        let now = now_ns();
+        let prev = self.last_pre_aggs_flush_ns.swap(now, Ordering::Relaxed);
+        let window_ns = now.saturating_sub(prev).max(1);
 
         if self.pre_aggs.is_empty() {
             return;
         }
 
-        // DashMap has no drain() — take ownership of each value via
-        // iter_mut() + mem::take, avoiding the per-IP clone of the
-        // `IpAgg` (~56 B) that the old `iter().map(|e| e.value().clone())`
-        // path produced. At 1M unique IPs/s the clone churn hit ~50 MB/s
-        // and held every shard lock for the full iter walk.
-        let mut aggs: Vec<(IpAddr, IpAgg)> = Vec::with_capacity(self.pre_aggs.len());
-        for mut e in self.pre_aggs.iter_mut() {
-            aggs.push((*e.key(), std::mem::take(e.value_mut())));
+        // (DashMap 6 has no pop() — reviewer snippet was aspirational.
+        // Collect keys, then per-key remove(): each remove is atomic under the
+        // shard lock and returns the CURRENT value, so events racing in between
+        // are either included here or survive as a fresh entry for next flush.)
+        let keys: Vec<IpAddr> = self.pre_aggs.iter().map(|e| *e.key()).collect();
+        let mut aggs: Vec<(IpAddr, IpAgg)> = Vec::with_capacity(keys.len());
+        for k in keys {
+            if let Some((ip, agg)) = self.pre_aggs.remove(&k) {
+                aggs.push((ip, agg));
+            }
         }
-        self.pre_aggs.clear();
 
         let total_events: u64 = aggs.iter().map(|a| a.1.count as u64).sum();
         self.metrics.inc_ingested(total_events);
 
         let subnet_counts = subnet_counts_of(&aggs);
-        self.flush_batch(&aggs, &subnet_counts, &HashMap::new(), total_events);
+        self.flush_batch(&aggs, &subnet_counts, &HashMap::new(), total_events, window_ns);
     }
 
     /// Spawns `n` batch-processor threads (default: CPU cores) consuming from the
@@ -319,7 +356,8 @@ impl DetectionEngine {
     pub fn flush_events(&self, events: &[ConnectionEvent]) {
         let a = aggregate(events);
         let aggs: Vec<(IpAddr, IpAgg)> = a.ips.into_iter().collect();
-        self.flush_batch(&aggs, &a.subnets, &a.networks, events.len() as u64);
+        // Synthetic batch: treat as a 1s window (caller-side tests assert counts, not rates).
+        self.flush_batch(&aggs, &a.subnets, &a.networks, events.len() as u64, 1_000_000_000);
     }
 
     /// Single pass over aggregates: promote, merge, emit blocks. No store access for cold IPs.
@@ -329,6 +367,8 @@ impl DetectionEngine {
         subnet_counts: &HashMap<SubnetKey, (u32, Vec<IpAddr>)>,
         networks: &HashMap<SubnetKey, IpNetwork>,
         total_events: u64,
+        // F7: wall-clock ns span these events were collected over.
+        window_ns: u64,
     ) {
         let cfg = self.config.load();
         let det = &cfg.detection;
@@ -337,9 +377,12 @@ impl DetectionEngine {
 
         // Incremental counters for forecasting (no full-store scan).
         let subnet_vals: Vec<u64> = subnet_counts.values().map(|&(ev, _)| ev as u64).collect();
+        // F7: events_last_second must be a RATE. Prod flushes every 100ms;
+        // storing the raw per-flush count lied 10x low to the forecaster.
+        let rate = total_events.saturating_mul(1_000_000_000) / window_ns;
         self.store
             .traffic
-            .record_flush(total_events, ip_aggs.len() as u64, &subnet_vals);
+            .record_flush(rate, ip_aggs.len() as u64, &subnet_vals);
 
         for (&sk, &(count, ref members)) in subnet_counts.iter() {
             let net = networks.get(&sk).copied().unwrap_or_else(|| {
