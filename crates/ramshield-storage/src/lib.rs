@@ -124,8 +124,14 @@ impl Value {
         match self {
             Value::Inline(v) => v.len(),
             Value::Blob(v) => v.len(),
-            Value::IpRecord(_) => std::mem::size_of::<IpRecord>(),
-            Value::SubnetRecord(_) => std::mem::size_of::<SubnetRecord>(),
+            // P1 fix: IpRecord/SubnetRecord live INSIDE the enum variant —
+            // size_of::<Entry>() already accounts for them. Returning
+            // size_of::<IpRecord>() here double-counted ~136 B per blocked
+            // IP, starving the RAM budget to roughly half its real size.
+            // Both structs are pure-value ([u32; 5], [u64; 4], fieldless
+            // enums) — zero heap side-allocation, so 0 is exact.
+            Value::IpRecord(_) => 0,
+            Value::SubnetRecord(_) => 0,
             _ => 0,
         }
     }
