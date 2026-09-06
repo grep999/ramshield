@@ -185,7 +185,7 @@ pub struct ConfigPatch {
 #[derive(Serialize)]
 struct ConfigResponse {
     ok: bool,
-    config: Config,
+    config: ConfigView,
 }
 
 async fn api_set_config(
@@ -213,7 +213,7 @@ async fn api_set_config(
             StatusCode::BAD_REQUEST,
             Json(ConfigResponse {
                 ok: false,
-                config: state.engine.config.load().as_ref().clone(),
+                config: ConfigView::from_config(&state.engine.config.load()),
             }),
         );
     }
@@ -222,7 +222,7 @@ async fn api_set_config(
         StatusCode::OK,
         Json(ConfigResponse {
             ok: true,
-            config: cfg,
+            config: ConfigView::from_config(&cfg),
         }),
     )
 }
@@ -231,7 +231,7 @@ async fn api_set_config(
 mod tests {
     use super::*;
     use crate::Config;
-    use axum::{Router, body::Body, http::Request, routing::get};
+    use axum::{Router, body::Body, http::Request, routing::{get, post}};
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -341,6 +341,35 @@ mod tests {
         assert!(
             raw.contains("k1:<redacted>"),
             "expected redacted key id marker"
+        );
+    }
+
+
+    /// P0 regression: POST /api/config must also redact HMAC keys.
+    #[tokio::test]
+    async fn post_config_redacts_hmac_keys() {
+        let mut state = test_app_state();
+        let mut cfg = state.engine.config.load().as_ref().clone();
+        cfg.ipc.auth_keys = vec!["k1:deadbeefcafebabe0123456789abcdef0123456789abcdef0123456789abcdef".into()];
+        state.engine.config.store(Arc::new(cfg));
+        let app = Router::new()
+            .route("/api/config", post(api_set_config))
+            .with_state(state);
+        let body = serde_json::json!({"engine": {"max_peers": 42}});
+        let response = app
+            .oneshot(
+                Request::post("/api/config")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
+        let raw = std::str::from_utf8(&body).unwrap();
+        assert!(
+            !raw.contains("deadbeefcafebabe"),
+            "POST /api/config leaked raw HMAC key"
         );
     }
 
