@@ -237,19 +237,35 @@ impl DetectionEngine {
         self.flush_batch(&aggs, &subnet_counts, &HashMap::new(), total_events);
     }
 
-    pub fn spawn_workers(self: Arc<Self>, _n: usize) {
+    /// Spawns `n` batch-processor threads (default: CPU cores) consuming from the
+    /// shared event channel, plus one subnet-analysis thread.  Each batch thread
+    /// writes to the same `pre_aggs` DashMap — sharded internally so concurrent
+    /// writers on different IPs don't block each other.
+    ///
+    /// ponytail: if `n == 0`, fall back to `num_cpus::get()`.  Add a config knob
+    /// when worker_threads tuning becomes a real SLO target.
+    pub fn spawn_workers(self: Arc<Self>, n: usize) {
         let det = self.config.load().detection.clone();
+        let n_workers = if n == 0 {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        } else {
+            n
+        };
         info!(
-            "Detection: batch processor (max {} events / {} ms window)",
-            det.batch_max_events, det.batch_window_ms
+            "Detection: spawning {} batch processors (max {} events / {} ms window), 1 subnet loop",
+            n_workers, det.batch_max_events, det.batch_window_ms
         );
 
-        // Dedicated OS thread — blocking recv, no Tokio spin (Disruptor / LMAX pattern).
-        {
+        // crossbeam Receiver inside Arc — clone Arc for each worker (cheap refcount bump).
+        // Each worker drains aggressively with try_recv() inside a recv_timeout window.
+        for i in 0..n_workers {
             let eng = self.clone();
+            let rx = self.event_rx.clone();
             std::thread::Builder::new()
-                .name("rs-batch".into())
-                .spawn(move || eng.batch_processor_loop())
+                .name(format!("rs-batch-{i}"))
+                .spawn(move || eng.batch_processor_loop_from(rx))
                 .expect("spawn batch processor");
         }
 
@@ -260,9 +276,9 @@ impl DetectionEngine {
             .expect("spawn subnet batch loop");
     }
 
-    fn batch_processor_loop(&self) {
-        let rx = self.event_rx.clone();
-
+    /// Core batch loop — takes an explicit Receiver so N workers can share the
+    /// same crossbeam channel (Receiver is Clone).
+    fn batch_processor_loop_from(&self, rx: Arc<Receiver<ConnectionEvent>>) {
         loop {
             if self.shutdown.load(Ordering::Acquire) {
                 info!("Batch processor shutting down");
