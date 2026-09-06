@@ -1,5 +1,6 @@
 use crossbeam_channel::Sender;
 use serde::{Deserialize, Serialize};
+use bytes::BytesMut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
@@ -278,7 +279,7 @@ async fn handle_connection(
     config: ConnectionConfig,
     dropped_events: Arc<AtomicU64>,
 ) -> Result<(), std::io::Error> {
-    let mut buf = Vec::with_capacity(8192);
+    let mut buf = BytesMut::with_capacity(8192);
     let mut chunk = [0u8; 8192];
     let mut total_bytes_read = 0usize;
     let mut last_activity = Instant::now();
@@ -329,18 +330,22 @@ async fn handle_connection(
                 );
                 return Ok(());
             }
-            let line: Vec<u8> = buf.drain(..=pos).collect();
-
-            // HMAC auth gate: enforced only when keys configured. The auth
-            // object rides OUTSIDE the Request enum so deny_unknown_fields
-            // on the wire contract stays intact.
-            let mut line = line;
-            if !config.auth_keys.is_empty() {
-                match verify_frame_auth(&config.auth_keys, &line, &config.replay_store) {
-                    Ok(sanitized) => {
+            // P2 fix: was `buf.drain(..=pos).collect()` — drain shifts the
+            // unread tail left, O(bytes-buffered) per line; a client that
+            // pipelines a batch pays quadratically in the buffered bytes.
+            // BytesMut::split_to is O(1) (advances the start pointer).
+            let frame = buf.split_to(pos + 1);
+            let mut sanitized: Vec<u8> = Vec::new();
+            let line: &[u8] = if !config.auth_keys.is_empty() {
+                // HMAC auth gate: enforced only when keys configured. The auth
+                // object rides OUTSIDE the Request enum so deny_unknown_fields
+                // on the wire contract stays intact.
+                match verify_frame_auth(&config.auth_keys, &frame, &config.replay_store) {
+                    Ok(s) => {
                         // Continue parsing the auth-stripped payload so
                         // Request's deny_unknown_fields never sees `auth`.
-                        line = sanitized;
+                        sanitized = s;
+                        &sanitized
                     }
                     Err(reason) => {
                         warn!("IPC auth rejected: {}", reason);
@@ -358,9 +363,11 @@ async fn handle_connection(
                         continue;
                     }
                 }
-            }
+            } else {
+                &frame
+            };
 
-            let req: Request = match serde_json::from_slice(&line) {
+            let req: Request = match serde_json::from_slice(line) {
                 Ok(r) => r,
                 Err(e) => {
                     let resp = Response::Error {

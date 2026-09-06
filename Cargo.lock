@@ -1214,6 +1214,7 @@ dependencies = [
  "async-trait",
  "axum",
  "aya 0.14.0",
+ "bytes",
  "chrono",
  "clap",
  "crc32fast",
