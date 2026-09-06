@@ -13,6 +13,7 @@ use ramshield_config::{ConfigHandle, DetectionConfig};
 use ramshield_metrics::Metrics;
 use ramshield_storage::{BlockState, IpRecord, Store, SubnetKey, Value, subnet_key_u128};
 use ramshield_types::BlockReason;
+use arc_swap::ArcSwap;
 use ramshield_types::{ConnectionEvent, EnforceAction, EnforceCommand, IpNetwork};
 use rate_tracker::{
     CUSUM_WARMUP_SAMPLES, cusum_allowance, cusum_fired, cusum_step_capped, ewma, ewma_alpha_slow,
@@ -23,7 +24,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
 use std::sync::{
-    Arc, RwLock,
+    Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -32,6 +33,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 // ── Bloom filter — 2-hash, no false negatives for inserted IPs ───────────────
+#[derive(Clone)]
 pub struct BloomFilter {
     bits: Vec<u64>,
     size: usize,
@@ -134,7 +136,7 @@ pub struct DetectionEngine {
     event_tx: Sender<ConnectionEvent>,
     event_rx: Arc<Receiver<ConnectionEvent>>,
     enforcement_tx: mpsc::Sender<EnforceCommand>,
-    bloom: Arc<RwLock<BloomFilter>>,
+    bloom: ArcSwap<BloomFilter>,
     shutdown: Arc<AtomicBool>,
     /// Pre-aggregation buffer — DashMap is internally thread-safe, no Arc needed
     pre_aggs: DashMap<IpAddr, IpAgg>,
@@ -165,7 +167,7 @@ impl DetectionEngine {
             event_tx: tx,
             event_rx: Arc::new(rx),
             enforcement_tx,
-            bloom: Arc::new(RwLock::new(BloomFilter::new(bloom_bits))),
+            bloom: ArcSwap::from_pointee(BloomFilter::new(bloom_bits)),
             shutdown,
             pre_aggs: DashMap::with_shard_amount(shard_count),
             last_pre_aggs_flush_ns: AtomicU64::new(now_ns()),
@@ -365,11 +367,8 @@ impl DetectionEngine {
             // ponytail: poison-recovery — bloom is advisory (false-positive
             // cache); a panic mid-hold leaves valid data, so recover instead
             // of panicking every future request. Upgrade: parking_lot.
-            let bloom_hit = self
-                .bloom
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .contains_hashed(a, b);
+            // ponytail: ArcSwap::load is lock-free, no poison risk.
+            let bloom_hit = self.bloom.load().contains_hashed(a, b);
 
             if agg.count < det.promote_min_events && !subnet_hot && !bloom_hit {
                 cold_skipped += 1;
@@ -399,14 +398,14 @@ impl DetectionEngine {
             }
         }
 
-        // Batch bloom insert — single write lock instead of per-block write lock.
+        // Batch bloom insert — ArcSwap clone+insert+store.
         if !blocks.is_empty() {
-            let mut bloom = self.bloom.write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut bf = (*self.bloom.load_full()).clone();
             for &(ip, _, _) in &blocks {
                 let (a, b) = BloomFilter::slots(&ip);
-                bloom.insert_hashed(a, b);
+                bf.insert_hashed(a, b);
             }
+            self.bloom.store(Arc::new(bf));
         }
         threat_sample.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         threat_sample.truncate(128);
@@ -604,11 +603,11 @@ impl DetectionEngine {
             }
             std::thread::sleep(tick);
             if now_ns().saturating_sub(last_bloom_clear_ns) >= bloom_clear_ns {
-                // ponytail: single write lock to clear, not held across flush.
-                self.bloom
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clear();
+                // ponytail: atomic swap — no lock held during clear.
+                // Old bloom is reclaimed when last reader releases its guard.
+                self.bloom.store(Arc::new(BloomFilter::new(
+                    self.config.load().detection.bloom_bits,
+                )));
                 last_bloom_clear_ns = now_ns();
             }
             // P1-6: sweep expired entries every 60s.
