@@ -106,7 +106,7 @@ fn subnet_counts_of(aggs: &[(IpAddr, IpAgg)]) -> HashMap<SubnetKey, (u32, Vec<Ip
 
 /// ponytail: status → bucket helper kept here because the const
 /// table lives next to its only consumer. Single L1 lookup; replaces per-event /100.
-const fn status_bucket(code: u16) -> u8 {
+pub(crate) const fn status_bucket(code: u16) -> u8 {
     if code >= 100 && code < 600 {
         (code / 100 - 1) as u8
     } else {

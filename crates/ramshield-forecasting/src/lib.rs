@@ -1,13 +1,24 @@
-//! Forecasting: Holt-Winters anomaly detection + entropy analysis.
-//! Unified: src engine semantics + crate's `drain_threat_sample` primitive
-//! (replaces racy pop+push-back) and all-zero counts guard.
+//! Forecasting: Holt-Winters time-series prediction + Bayesian Hypothesis Framework
+//! for unified anomaly detection.
+//!
+//! # Architecture
+//!
+//! - **HoltWinters**: Triple-exponential smoothing (level + trend + seasonality).
+//!   Produces point forecasts; z-score measures deviation from forecast.
+//! - **EwmAVar**: EWMA variance tracker (O(1) memory) replaces RingBuffer.
+//!   Feeds standard deviation to z-score calculation.
+//! - **CusumState**: Cumulative Sum drift detector for slow-ramp attacks
+//!   invisible to z-score.
+//! - **HypothesisTracker**: Bayesian posterior over 4 hypotheses (Normal,
+//!   VolumetricDoS, SlowRampDoS, FlashCrowd). Combines z-score, CUSUM,
+//!   threat score, and entropy delta into a single decision.
+//! - **PeakReservoir**: Empirical quantile of forecast residuals (legacy,
+//!   transitional — remove v0.4).
 
 use ramshield_config::ForecastingConfig;
 use ramshield_metrics::Metrics;
 use ramshield_storage::Store;
 use ramshield_types::{EnforceAction, EnforceCommand};
-use std::collections::VecDeque;
-// use std::net::IpAddr; // ponytail: removed — entropy_block deleted
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
@@ -21,7 +32,20 @@ use uuid::Uuid;
 /// spikes need more time to either materialize or get re-validated.
 const FORECAST_BLOCK_TTL_SECS: u64 = 300;
 
-// ── Traits ────────────────────────────────────────────────────────────────────
+// ── Holt-Winters ───────────────────────────────────────────────────────────
+
+/// Triple exponential smoothing forecaster.
+///
+/// Maintains `level`, `trend`, and `seasonal` components. Each `update(y)`
+/// returns the forecast for the NEXT tick (one-step-ahead). The forecast
+/// uses the future seasonal slot (not the just-updated slot) to avoid
+/// collapsing residuals to near-zero on regular cycles.
+///
+/// Parameters:
+///- `alpha` (level smoothing, typical 0.1–0.3)
+///- `beta` (trend smoothing, typical 0.01–0.1)
+///- `gamma` (seasonal smoothing, typical 0.01–0.1)
+///- `period` (seasonal cycle length in ticks)
 pub struct HoltWinters {
     pub level: f64,
     pub trend: f64,
@@ -34,6 +58,7 @@ pub struct HoltWinters {
 }
 
 impl HoltWinters {
+    /// Create a new Holt-Winters forecaster.
     pub fn new(alpha: f64, beta: f64, gamma: f64, period: usize) -> Self {
         let p = period.max(1);
         Self {
@@ -48,6 +73,7 @@ impl HoltWinters {
         }
     }
 
+    /// Ingest observation `y`, update state, return one-step-ahead forecast.
     pub fn update(&mut self, y: f64) -> f64 {
         if self.tick == 0 {
             self.level = y;
@@ -70,50 +96,15 @@ impl HoltWinters {
         (self.level + self.trend + ns).max(0.0)
     }
 
-    pub fn zscore(&self, actual: f64, forecast: f64, std: f64) -> f64 {
-        if std < 1e-9 {
-            return 0.0;
-        }
-        (actual - forecast).abs() / std
-    }
+
 }
 
-// ── Ring buffer ───────────────────────────────────────────────────────────────
 
-pub struct RingBuffer {
-    buf: VecDeque<f64>,
-    cap: usize,
-}
-
-impl RingBuffer {
-    pub fn new(cap: usize) -> Self {
-        Self {
-            buf: VecDeque::with_capacity(cap),
-            cap,
-        }
-    }
-
-    pub fn push(&mut self, v: f64) {
-        if self.buf.len() == self.cap {
-            self.buf.pop_front();
-        }
-        self.buf.push_back(v);
-    }
-
-    pub fn std(&self) -> f64 {
-        if self.buf.len() < 2 {
-            return 0.0;
-        }
-        let m = self.buf.iter().sum::<f64>() / self.buf.len() as f64;
-        let v = self.buf.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (self.buf.len() - 1) as f64;
-        v.sqrt()
-    }
-}
 
 // ── EWMA Variance ─────────────────────────────────────────────────────────────
 
 /// Exponentially weighted moving average variance tracker.
-/// Replaces RingBuffer with O(1) memory (3 floats = 24 bytes).
+/// O(1) memory (3 floats = 24 bytes).
 /// Adapts to traffic phase changes within ~2 minutes (span=120).
 pub struct EwmAVar {
     ewma: f64,
@@ -240,6 +231,8 @@ impl HypothesisTracker {
     const BASELINE: [f64; H_COUNT] = [0.90, 0.02, 0.02, 0.05];
     const DECAY: f64 = 0.98; // 98% old belief, 2% baseline
 
+    /// Create a new tracker with baseline priors. Uses cold start
+    /// threshold for the first 30 ticks.
     pub fn new() -> Self {
         Self {
             priors: Self::BASELINE,
@@ -495,6 +488,12 @@ fn log_likelihood_h3(z: f64, delta_h: f64, threat: f64, _cusum: bool) -> f64 {
 
 // ── Forecaster — reads incremental counters, not full store scans ─────────────
 
+/// Unified anomaly detection engine.
+///
+/// Runs two async loops:
+/// - tick_hw (1 Hz): Holt-Winters forecast → z-score → CUSUM → Bayesian
+///   hypothesis update → enforcement decision
+/// - tick_entropy (0.2 Hz): Shannon entropy delta for Bayesian input
 pub struct Forecaster {
     store: Arc<Store>,
     config: ForecastingConfig,
@@ -542,14 +541,14 @@ impl PeakReservoir {
     }
 
     /// Empirical (1 − tail) quantile of observed peaks, e.g. tail=0.001 → q99.9.
-    fn extreme_quantile(&self, tail: f64) -> Option<f64> {
+    fn extreme_quantile(&mut self, tail: f64) -> Option<f64> {
         if self.ticks < Self::WARM_TICKS || self.vals.len() < 10 {
             return None;
         }
-        let mut sorted = self.vals.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let idx = ((sorted.len() as f64) * (1.0 - tail)).clamp(0.0, (sorted.len() - 1) as f64);
-        Some(sorted[idx as usize])
+        // ponytail: sort in-place, O(n) allocation saved per tick
+        self.vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let idx = ((self.vals.len() as f64) * (1.0 - tail)).clamp(0.0, (self.vals.len() - 1) as f64);
+        Some(self.vals[idx as usize])
     }
 
     #[allow(dead_code)] // used in tests

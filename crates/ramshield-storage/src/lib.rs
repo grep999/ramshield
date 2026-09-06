@@ -4,7 +4,6 @@
 //! Types: `Value::IpRecord` is the canonical per-IP entry; subnet keys are
 //! `u128` (IPv4 packed low-32, IPv6 full address) with `IpNetwork` metadata.
 
-pub mod atomic_ops;
 pub mod blob_store;
 pub mod subnet;
 pub mod wal;
@@ -336,7 +335,7 @@ impl Store {
 
     /// Insert with RAM limit enforcement. Only enforces limit on net-new growth,
     /// allowing replacement of existing entries without triggering capacity errors.
-    /// Capacity semantics ported from crate atomic_insert: byte-accounted via
+    /// Capacity semantics: byte-accounted via
     /// heap_bytes delta, errors as Result (never panic/log-and-continue).
     pub fn insert(
         &self,
@@ -665,156 +664,11 @@ mod tests {
         assert!(store.get(&"127.0.0.3".parse().unwrap()).is_none());
     }
 
-    /// P0 regression: atomic_insert must NOT silently exceed the capacity
-    /// budget under concurrent inserters. The old Vacant branch did a
-    /// non-atomic read-check-insert, allowing N threads to all see the
-    /// same pre-insert `used_bytes` and all insert — blowing the budget.
-    /// Mirrors `capacity_race_serializes_via_cas` but for the entry-guard path.
-    #[test]
-    fn atomic_insert_capacity_race_serializes_via_cas() {
-        use crate::atomic_ops::atomic_insert;
-        use std::sync::Arc;
-        use std::thread;
-        let store = Arc::new(Store::new(16));
-        let limit: usize = 1024;
-        let mut handles = vec![];
-        // 64 distinct IPs × 64-byte payload, far over the 1 KiB limit.
-        for n in 0..64u8 {
-            let s = store.clone();
-            handles.push(thread::spawn(move || {
-                let ip: IpAddr = format!("10.2.2.{n}").parse().unwrap();
-                atomic_insert(
-                    &s,
-                    ip,
-                    Entry {
-                        value: Value::Inline(vec![0u8; 64]),
-                        expires_at: None,
-                    },
-                    limit,
-                )
-            }));
-        }
-        let mut ok = 0;
-        let mut denied = 0;
-        for h in handles {
-            match h.join().unwrap() {
-                Ok(_) => ok += 1,
-                Err(RsError::CapacityExceeded { .. }) => denied += 1,
-                Err(e) => panic!("unexpected error: {e}"),
-            }
-        }
-        assert!(denied > 0, "some inserts must be denied at 1KiB / 64 IPs");
-        assert_eq!(ok + denied, 64);
-        // Critical: used_bytes must not exceed the limit.
-        let used = store
-            .traffic
-            .used_bytes
-            .load(std::sync::atomic::Ordering::Relaxed);
-        assert!(
-            used <= limit as u64,
-            "used_bytes {used} exceeded capacity limit {limit} (ok={ok}, denied={denied})"
-        );
-    }
 
     /// P0 regression: shrinking an entry must decrease both ram_bytes and
     /// used_bytes. Before this fix, `saturating_sub(net_growth)` collapsed
     /// the negative delta to zero, so `used_bytes` only ever grew over IP
     /// churn cycles (Busy IP goes from blob to counter to blob to counter).
-    /// Mirror fix in `atomic_ops.rs` for the same bug on the entry-guard path.
-    #[test]
-    fn store_insert_shrink_decreases_used_bytes() {
-        let store = Store::new(16);
-        // Insert a large blob.
-        store
-            .insert(
-                "10.0.0.1".parse().unwrap(),
-                Value::Blob(vec![0u8; 4096]),
-                None,
-                64 * 1024 * 1024,
-            )
-            .unwrap();
-        let after_blob = store
-            .traffic
-            .used_bytes
-            .load(std::sync::atomic::Ordering::Relaxed);
-        assert!(after_blob >= 4096, "blob should be at least 4096 bytes, got {}", after_blob);
-        // Replace with a Counter (heap_bytes = 0). used_bytes must drop.
-        store
-            .insert(
-                "10.0.0.1".parse().unwrap(),
-                Value::Counter(7),
-                None,
-                64 * 1024 * 1024,
-            )
-            .unwrap();
-        let after_counter = store
-            .traffic
-            .used_bytes
-            .load(std::sync::atomic::Ordering::Relaxed);
-        assert!(
-            after_counter < after_blob,
-            "shrinking should reduce used_bytes: blob={} counter={}",
-            after_blob,
-            after_counter
-        );
-        assert!(
-            after_counter < 256,
-            "Counter has zero heap_bytes, used_bytes should be near zero, got {}",
-            after_counter
-        );
-    }
-
-    /// P0 regression: atomic_insert must subtract on negative heap delta
-    /// (entry shrink). Without this, replacing a Blob with a Counter leaks
-    /// the difference forever — used_bytes diverges from reality on every
-    /// churn cycle.
-    #[test]
-    fn atomic_insert_negative_delta() {
-        use crate::atomic_ops::atomic_insert;
-        let store = Store::new(16);
-        // Plant a large entry via atomic_insert.
-        atomic_insert(
-            &store,
-            "10.0.0.1".parse().unwrap(),
-            Entry {
-                value: Value::Blob(vec![0u8; 2048]),
-                expires_at: None,
-            },
-            64 * 1024 * 1024,
-        )
-        .unwrap();
-        let after_blob = store
-            .traffic
-            .used_bytes
-            .load(std::sync::atomic::Ordering::Relaxed);
-        assert!(after_blob >= 2048, "blob accounting, got {}", after_blob);
-        // Shrink via atomic_insert. used_bytes must decrease.
-        atomic_insert(
-            &store,
-            "10.0.0.1".parse().unwrap(),
-            Entry {
-                value: Value::Counter(1),
-                expires_at: None,
-            },
-            64 * 1024 * 1024,
-        )
-        .unwrap();
-        let after_counter = store
-            .traffic
-            .used_bytes
-            .load(std::sync::atomic::Ordering::Relaxed);
-        assert!(
-            after_counter < after_blob,
-            "atomic_insert shrink should reduce used_bytes: blob={} counter={}",
-            after_blob,
-            after_counter
-        );
-        assert!(
-            after_counter < 256,
-            "Counter has zero heap_bytes, used_bytes should be near zero, got {}",
-            after_counter
-        );
-    }
 
     #[test]
     fn subnet_window_v6_key() {

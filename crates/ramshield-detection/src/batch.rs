@@ -18,7 +18,7 @@ impl IpAgg {
     pub fn absorb(&mut self, ev: &ConnectionEvent) {
         self.count += 1;
         self.bytes += ev.bytes;
-        let bucket = ((ev.status_code / 100).saturating_sub(1)).min(4) as usize;
+let bucket = super::status_bucket(ev.status_code) as usize;
         self.status_dist[bucket] += 1;
         if self.count == 1 {
             self.first_ts_ns = ev.timestamp_ns;
