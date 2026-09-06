@@ -93,6 +93,7 @@ pub struct Wal {
     retention_max: u64,
     base_dir: String,
     lsn_counter: AtomicU64,
+    last_sync_ns: AtomicU64,
 }
 
 struct Inner {
@@ -149,6 +150,7 @@ impl Wal {
             retention_max,
             base_dir: dir.to_string(),
             lsn_counter: AtomicU64::new(start_lsn),
+            last_sync_ns: AtomicU64::new(0),
         })
     }
 
@@ -203,7 +205,19 @@ impl Wal {
             g.writer.write_all(&payload)?;
             g.bytes += (HEADER + payload.len()) as u64;
 
-            let must_sync = matches!(self.durability, Durability::Fsync | Durability::GroupCommit);
+            let want_sync = matches!(self.durability, Durability::Fsync | Durability::GroupCommit);
+            // ponytail: 100ms sync cap — amortizes fsync cost across appenders.
+            // Cap removed: lose at most 100ms of durability on crash.
+            let must_sync = if want_sync {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64;
+                let prev = self.last_sync_ns.swap(now, Ordering::Relaxed);
+                now.saturating_sub(prev) >= 100_000_000 // 100ms
+            } else {
+                false
+            };
             if must_sync || matches!(self.durability, Durability::Flush) {
                 g.writer.flush()?;
             }
