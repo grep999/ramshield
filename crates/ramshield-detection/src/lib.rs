@@ -634,6 +634,32 @@ impl DetectionEngine {
                 }
                 last_evict_ns = now_ns();
             }
+            // P1-10 fix: prune subnet_table when > 100K entries. This must
+            // run INSIDE the loop — the original placement after `break`
+            // made it a shutdown-only statement, so the table grew without
+            // bound under spoofed-subnet floods until the host OOMed. Runs
+            // before the batch_block_enabled `continue` so pruning cannot
+            // be skipped when batch blocking is off. DashMap::len() is a
+            // per-shard sum — cheap enough for the 500ms tick.
+            let st = self.store.subnet_table();
+            if st.len() > 100_000 {
+                let mut candidates: Vec<_> = st
+                    .iter()
+                    .filter_map(|e| {
+                        let r = e.value();
+                        // Only evict entries with zero activity in the current window
+                        if r.total_rps == 0 && r.unique_ips() == 0 {
+                            Some(*e.key())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                candidates.truncate(st.len().saturating_sub(80_000)); // evict down to 80K
+                for key in candidates {
+                    st.remove(&key);
+                }
+            }
             let cfg = self.config.load();
             if !cfg.detection.batch_block_enabled {
                 continue;
@@ -697,27 +723,6 @@ impl DetectionEngine {
                     }
                 }
                 self.store.reset_subnet_window(sk);
-            }
-        }
-
-        // P1-10: Evict low-traffic subnet_table entries when table exceeds 100K.
-        // Prevents unbounded growth under DDoS with millions of attacker subnets.
-        let st = self.store.subnet_table();
-        if st.len() > 100_000 {
-            let mut candidates: Vec<_> = st.iter()
-                .filter_map(|e| {
-                    let r = e.value();
-                    // Only evict entries with zero activity in the current window
-                    if r.total_rps == 0 && r.unique_ips() == 0 {
-                        Some(*e.key())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            candidates.truncate(st.len() - 80_000);  // evict down to 80K
-            for key in candidates {
-                st.remove(&key);
             }
         }
     }
