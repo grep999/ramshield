@@ -3,20 +3,19 @@
 //! dashboard stays open (dev/loopback default).
 use axum::{
     Form, Router,
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::{StatusCode, header},
     middleware::Next,
     response::{Html, IntoResponse, Json, Response},
     routing::get,
 };
+use dashmap::DashMap;
 use rand::RngCore;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicU32, Ordering},
-    },
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tracing::warn;
@@ -31,10 +30,22 @@ pub struct AuthState {
     sessions: Arc<std::sync::Mutex<HashMap<String, Instant>>>,
     max_login_attempts: u32,
     max_password_length: usize,
-    /// Process-wide failed-login counter. thread_local was a no-op under
-    /// tokio (each worker sees 0); one AtomicU32 covers every request.
-    failed_logins: Arc<AtomicU32>,
+    /// Per-IP failed-login counters. A global counter let any host lock out
+    /// every admin with 50 garbage POSTs (process-wide DoS). Windowed per IP:
+    /// failures older than LOCKOUT_WINDOW decay and the slot is reclaimed.
+    failures: Arc<DashMap<IpAddr, FailureWindow>>,
 }
+
+/// Rolling failure window for one client IP.
+#[derive(Clone)]
+struct FailureWindow {
+    count: u32,
+    first_fail: Instant,
+}
+
+/// Failed attempts older than this decay to zero — transient brute force
+/// stops locking the IP after a cool-down instead of until restart.
+const LOCKOUT_WINDOW: Duration = Duration::from_secs(15 * 60);
 
 impl AuthState {
     pub fn new(
@@ -49,7 +60,7 @@ impl AuthState {
             sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
             max_login_attempts,
             max_password_length,
-            failed_logins: Arc::new(AtomicU32::new(0)),
+            failures: Arc::new(DashMap::new()),
         }
     }
 
@@ -57,7 +68,46 @@ impl AuthState {
         self.password_hash.is_some()
     }
 
-    fn login(&self, password: &str) -> Option<String> {
+    /// True when this IP is currently locked out. Entries for IPs whose
+    /// window has fully decayed are removed here (opportunistic sweep —
+    /// the map is bounded by distinct IPs that actually POST /login).
+    fn is_locked(&self, ip: IpAddr) -> bool {
+        let expired = match self.failures.get(&ip) {
+            None => return false,
+            Some(e) => e.first_fail.elapsed() >= LOCKOUT_WINDOW,
+        };
+        if expired {
+            self.failures.remove(&ip);
+            return false;
+        }
+        self.failures
+            .get(&ip)
+            .is_some_and(|e| e.count >= self.max_login_attempts)
+    }
+
+    fn note_failure(&self, ip: IpAddr) {
+        self.failures
+            .entry(ip)
+            .and_modify(|w| {
+                if w.first_fail.elapsed() >= LOCKOUT_WINDOW {
+                    // Window expired — restart it with this failure.
+                    w.count = 1;
+                    w.first_fail = Instant::now();
+                } else {
+                    w.count += 1;
+                }
+            })
+            .or_insert(FailureWindow {
+                count: 1,
+                first_fail: Instant::now(),
+            });
+    }
+
+    /// Pure password verification — no shared state, safe to run on a
+    /// blocking thread. Argon2 verify burns ~50-100ms of CPU; calling it
+    /// inline on an async handler blocks the Tokio worker for every other
+    /// request on that thread.
+    fn verify_password(&self, password: &str) -> Option<String> {
         let hash = self.password_hash.as_ref()?;
         let parsed = argon2::PasswordHash::new(hash).ok()?;
         // Constant-time verify inside argon2; cap work on garbage input.
@@ -73,18 +123,19 @@ impl AuthState {
         if !ok {
             return None;
         }
-        // Reset lockout counter on successful login — otherwise one
-        // temporary typo permanently locks the owner out of the dashboard
-        // until process restart.
-        self.failed_logins.store(0, Ordering::Relaxed);
         let mut token = [0u8; 32];
         rand::rng().fill_bytes(&mut token);
-        let token = hex::encode(token);
+        Some(hex::encode(token))
+    }
+
+    /// Record a verified token as an active session. Split out of the login
+    /// flow so the async handler can verify on a blocking thread and register
+    /// here.
+    fn register_session(&self, token: &str) {
         self.sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(token.clone(), Instant::now());
-        Some(token)
+            .insert(token.to_string(), Instant::now());
     }
 
     fn validate(&self, token: &str) -> bool {
@@ -100,16 +151,6 @@ impl AuthState {
         // Opportunistic sweep of expired sessions.
         map.retain(|_, t| t.elapsed() < self.ttl);
         map.contains_key(token)
-    }
-
-    fn failed_logins(&self) -> u32 {
-        // ponytail: process-wide counter, resets on restart. Swap for a
-        // per-IP limiter when the dashboard faces hostile networks.
-        self.failed_logins.load(Ordering::Relaxed)
-    }
-
-    fn note_failure(&self) {
-        self.failed_logins.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -186,17 +227,33 @@ struct LoginForm {
 
 async fn login_submit(
     State(auth): State<AuthState>,
+    addr: Option<ConnectInfo<SocketAddr>>,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    if auth.failed_logins() >= auth.max_login_attempts {
+    // Per-IP lockout: one hostile host can no longer lock every admin out.
+    // Option extractor: absent ConnectInfo (unit tests) falls back to ::,
+    // which still rate-limits the un-identified path.
+    let ip = addr
+        .map(|c| c.0.ip())
+        .unwrap_or(IpAddr::from([0, 0, 0, 0]));
+    if auth.is_locked(ip) {
         warn!(
-            "dashboard login locked out ({}+ failures)",
+            "dashboard login locked out from {ip} ({}+ failures)",
             auth.max_login_attempts
         );
         return (StatusCode::TOO_MANY_REQUESTS, "locked").into_response();
     }
-    match auth.login(&form.password) {
+    // Argon2 verify burns ~50-100 ms of CPU. Inline on an async handler it
+    // blocks the Tokio worker — 20 concurrent bad logins stall every route
+    // on those workers. Run it on the blocking pool.
+    let blocking_auth = auth.clone();
+    let password = form.password.clone();
+    let verified = tokio::task::spawn_blocking(move || blocking_auth.verify_password(&password))
+        .await
+        .unwrap_or(None);
+    match verified {
         Some(token) => {
+            auth.register_session(&token);
             let cookie = format!(
                 "{}={}; HttpOnly; SameSite=Lax; Secure; Max-Age={}",
                 COOKIE_NAME,
@@ -222,7 +279,7 @@ async fn login_submit(
             }
         }
         None => {
-            auth.note_failure();
+            auth.note_failure(ip);
             (
                 StatusCode::UNAUTHORIZED,
                 Html("<html><body><p>wrong password</p></body></html>"),
@@ -251,12 +308,20 @@ mod tests {
             .to_string()
     }
 
+    /// Helper mirroring what login_submit does: verify on (here: inline),
+    /// then register.
+    fn login(a: &AuthState, pw: &str) -> Option<String> {
+        let tok = a.verify_password(pw)?;
+        a.register_session(&tok);
+        Some(tok)
+    }
+
     #[test]
     fn login_sets_session_and_validates() {
         let a = AuthState::new(Some(hash_of("hunter2")), 3600, 50, 1024);
         assert!(a.enabled());
-        assert!(a.login("wrong").is_none());
-        let tok = a.login("hunter2").expect("good pw logs in");
+        assert!(login(&a, "wrong").is_none());
+        let tok = login(&a, "hunter2").expect("good pw logs in");
         assert!(a.validate(&tok));
         assert!(!a.validate("deadbeef"));
     }
@@ -265,19 +330,22 @@ mod tests {
     fn disabled_auth_has_no_sessions() {
         let a = AuthState::new(None, 3600, 50, 1024);
         assert!(!a.enabled());
-        assert!(a.login("x").is_none()); // no hash → nothing validates
+        assert!(login(&a, "x").is_none()); // no hash → nothing validates
     }
 
     #[test]
-    fn lockout_is_process_wide_not_thread_local() {
+    fn lockout_is_per_ip_not_global() {
         let a = AuthState::new(Some(hash_of("hunter2")), 3600, 3, 1024);
+        let attacker = IpAddr::from([1, 2, 3, 4]);
+        let admin = IpAddr::from([5, 6, 7, 8]);
         for _ in 0..4 {
-            assert!(a.login("wrong").is_none());
-            a.note_failure();
+            a.note_failure(attacker);
         }
-        assert!(a.failed_logins() >= a.max_login_attempts);
-        // Same AuthState cloned across "threads" still sees the counter.
+        assert!(a.is_locked(attacker));
+        // Attacker burning attempts must NOT lock out a different IP.
+        assert!(!a.is_locked(admin));
+        // Same Arc-shared state seen through a clone.
         let b = a.clone();
-        assert!(b.failed_logins() >= b.max_login_attempts);
+        assert!(b.is_locked(attacker));
     }
 }

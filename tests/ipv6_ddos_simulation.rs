@@ -125,7 +125,7 @@ fn ipv6_random_64s_no_single_subnet_dual_gate() {
     );
     let agg = aggregate(&events);
     assert_eq!(agg.ips.len(), 10 * 50, "500 unique IPs aggregated");
-    for (_, (_, members)) in agg.subnets.iter() {
+    for (_, members) in agg.subnets.values() {
         assert_eq!(members.len(), 50, "50 unique hosts per /64");
     }
 }

@@ -11,6 +11,7 @@ use axum::{
     routing::get,
 };
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tracing::info;
@@ -64,7 +65,14 @@ pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), 
         .await
         .map_err(|e| e.to_string())?;
     info!("Dashboard http://{}", addr);
-    axum::serve(listener, app).await.map_err(|e| e.to_string())
+    // into_make_service_with_connect_info surfaces the peer SocketAddr to
+    // handlers via ConnectInfo — login_submit needs it for per-IP lockout.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 async fn index() -> Html<&'static str> {
@@ -324,7 +332,7 @@ mod tests {
     /// ipc.auth_keys entry and forge signed IPC frames.
     #[tokio::test]
     async fn config_redacts_hmac_keys() {
-        let mut state = test_app_state();
+        let state = test_app_state();
         // Plant a fake key into the live config; should appear as <redacted>.
         let mut cfg = state.engine.config.load().as_ref().clone();
         cfg.ipc.auth_keys = vec!["k1:deadbeefcafebabe0123456789abcdef0123456789abcdef0123456789abcdef".into()];
@@ -355,7 +363,7 @@ mod tests {
     /// P0 regression: POST /api/config must also redact HMAC keys.
     #[tokio::test]
     async fn post_config_redacts_hmac_keys() {
-        let mut state = test_app_state();
+        let state = test_app_state();
         let mut cfg = state.engine.config.load().as_ref().clone();
         cfg.ipc.auth_keys = vec!["k1:deadbeefcafebabe0123456789abcdef0123456789abcdef0123456789abcdef".into()];
         state.engine.config.store(Arc::new(cfg));

@@ -884,7 +884,7 @@ mod tests {
         // Append 3 valid records
         for i in 1..=3u64 {
             wal.append(&WalEntry::BlockIp {
-                ip: format!("10.0.0.{i}").into(),
+                ip: format!("10.0.0.{i}"),
                 reason: "test".into(),
                 ttl_secs: None,
                 ts_ns: i,
