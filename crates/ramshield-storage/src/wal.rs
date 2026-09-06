@@ -278,7 +278,12 @@ impl Wal {
             fsync_dir(&self.base_dir)?;
         }
 
-        if self.retention_max > 0 {
+        // P2 fix (F5): retention was scanned on EVERY append — read_dir +
+        // metadata() per segment + sort, hundreds of syscalls during a
+        // subnet-burst block storm. Total size only crosses the cap at
+        // rotation (appends add ≤seg_max to one file), so scanning only on
+        // rotation is both cheaper and sufficient.
+        if needs_dir_sync && self.retention_max > 0 {
             enforce_retention(&self.base_dir, self.retention_max);
         }
 
