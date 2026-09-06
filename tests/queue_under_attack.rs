@@ -1,18 +1,20 @@
 //! RED test: detection channel MUST be bounded and drop-newest under attack.
 //! Bug: at 256k capacity, channel drains too slowly under sustained attack;
 //! legitimate events get head-of-line-blocked. RFC 9411 heavy-impact condition.
-//! GREEN: capacity=16k, drop-newest via try_send, dropped_events counter
+//! GREEN: bounded capacity, drop-newest via try_send, dropped_events counter
 //! exposed in IpcServerStats, dropped > 0 after burst > capacity.
+//! Capacity raised 16k -> 64k (P1-7: single-flusher drain math at 1M eps);
+//! the invariant under test is BOUNDED + DROP-NEWEST, not the exact number.
 
-const CAPACITY: usize = 16_000;
+const CAPACITY: usize = 16_000; // local simulation size
 const BURST: usize = 100_000;
 
 #[test]
 fn channel_capacity_is_bounded_and_drops_newest_under_attack() {
     use ramshield::ipc::server::{CHANNEL_CAPACITY, IpcServerStats};
 
-    // Verify the channel capacity constant matches expectations
-    assert_eq!(CHANNEL_CAPACITY, CAPACITY as u64);
+    // Production channel: bounded, 64k, and telemetry can't drift (F3)
+    assert_eq!(CHANNEL_CAPACITY, 64_000);
 
     // Verify stats struct has channel_capacity field
     let s = IpcServerStats {
@@ -21,9 +23,9 @@ fn channel_capacity_is_bounded_and_drops_newest_under_attack() {
         rejected_connections: 0,
         max_connections: 16,
         dropped_events: 0,
-        channel_capacity: CAPACITY as u64,
+        channel_capacity: CHANNEL_CAPACITY,
     };
-    assert_eq!(s.channel_capacity, CAPACITY as u64);
+    assert_eq!(s.channel_capacity, 64_000);
 }
 
 #[test]
