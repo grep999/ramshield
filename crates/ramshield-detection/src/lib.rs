@@ -379,7 +379,7 @@ impl DetectionEngine {
 
             // ponytail: merge_record does the single store lookup (is_blocked check
             // was a second DashMap hit on the same key).
-            let (ewma_rps, threat, should_block, _was_blocked) =
+            let (_ewma_rps, threat, should_block, _was_blocked) =
                 self.merge_record(ip, agg, det, ram_lim, now, sk);
             // Note: we do NOT skip already-blocked IPs here. The pulse-wave
             // tracker needs to keep running on every batch to count distinct
@@ -394,7 +394,7 @@ impl DetectionEngine {
                 threat_sample.push((ip, threat));
             }
 
-            if should_block || is_exceeded(ewma_rps, det.rps_threshold) {
+            if should_block {  // ponytail: debounce removed single-sample is_exceeded bypass
                 self.bloom
                     .write()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)

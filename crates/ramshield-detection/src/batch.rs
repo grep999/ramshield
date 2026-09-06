@@ -31,14 +31,14 @@ let bucket = super::status_bucket(ev.status_code) as usize;
 /// Pack IPv4 /24 prefix into u32 for subnet-scale counters (no string keys).
 /// Network byte order (big-endian): octet[0] in highest bits.
 #[inline]
-pub fn subnet_key_v4(octets: [u8; 4]) -> u32 {
+fn subnet_key_v4(octets: [u8; 4]) -> u32 {
     (octets[0] as u32) << 24 | (octets[1] as u32) << 16 | (octets[2] as u32) << 8
 }
 
 /// Pack IPv6 /64 prefix into u128 for subnet-scale counters.
 /// Network byte order: first 8 bytes in high bits, host bits zeroed.
 #[inline]
-pub fn subnet_key_v6(octets: [u8; 16]) -> u128 {
+fn subnet_key_v6(octets: [u8; 16]) -> u128 {
     let full = u128::from_be_bytes(octets);
     // Zero out the lower 64 bits (host part of /64)
     full & 0xFFFF_FFFF_FFFF_FFFF_0000_0000_0000_0000
@@ -47,7 +47,7 @@ pub fn subnet_key_v6(octets: [u8; 16]) -> u128 {
 /// Get network key as u128 for both address families.
 /// IPv4 keys are in lower 32 bits; IPv6 keys use full 128 bits.
 #[inline]
-pub fn subnet_key(ip: IpAddr) -> Option<(u128, IpNetwork)> {
+pub(crate) fn subnet_key(ip: IpAddr) -> Option<(u128, IpNetwork)> {
     match ip {
         IpAddr::V4(v4) => {
             let net = IpNetwork::ipv4_subnet(v4);
@@ -62,7 +62,8 @@ pub fn subnet_key(ip: IpAddr) -> Option<(u128, IpNetwork)> {
 
 /// Check if IP is within a given IPv4 subnet prefix (legacy /24 compat).
 #[inline]
-pub fn ip_in_subnet(ip: IpAddr, prefix: [u8; 3]) -> bool {
+#[cfg(test)]
+pub(crate) fn ip_in_subnet(ip: IpAddr, prefix: [u8; 3]) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             // u32 compare is one 4-byte load + one cmp; array compare
@@ -76,7 +77,8 @@ pub fn ip_in_subnet(ip: IpAddr, prefix: [u8; 3]) -> bool {
 }
 
 #[inline]
-pub fn subnet_prefix(key: u32) -> [u8; 3] {
+#[cfg(test)]
+pub(crate) fn subnet_prefix(key: u32) -> [u8; 3] {
     [(key >> 24) as u8, (key >> 16) as u8, (key >> 8) as u8]
 }
 

@@ -1,4 +1,4 @@
-pub const ALPHA: f64 = 0.3;
+const ALPHA: f64 = 0.3;
 
 /// Slow-EWMA weight for the CUSUM baseline (≈30-sample memory).
 pub const fn ewma_alpha_slow() -> f64 {

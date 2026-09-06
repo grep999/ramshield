@@ -204,6 +204,7 @@ const H0: usize = Hypothesis::Normal as usize;
 const H1: usize = Hypothesis::VolumetricDoS as usize;
 const H2: usize = Hypothesis::SlowRampDoS as usize;
 const H3: usize = Hypothesis::FlashCrowd as usize;
+const CLAMP_LL: f64 = 4.0;  // ponytail: was 3.0, raised for multi-signal coherence
 
 /// Bayesian tracker over 4 hypotheses. O(1) memory (36 bytes).
 ///
@@ -228,7 +229,7 @@ impl Default for HypothesisTracker {
 impl HypothesisTracker {
     /// Baseline priors: P(normal)=0.90, P(volumetric)=0.02, P(slow_ramp)=0.02,
     /// P(flash_crowd)=0.05.
-    const BASELINE: [f64; H_COUNT] = [0.90, 0.02, 0.02, 0.05];
+    const BASELINE: [f64; H_COUNT] = [0.91, 0.02, 0.02, 0.05];  // sums to 1.0
     const DECAY: f64 = 0.98; // 98% old belief, 2% baseline
 
     /// Create a new tracker with baseline priors. Uses cold start
@@ -371,7 +372,7 @@ fn log_likelihood_h0(z: f64, delta_h: f64, threat: f64, cusum_alarm: bool) -> f6
         ll -= 2.0;
     }
 
-    clamp_ll(ll, 3.0)
+    clamp_ll(ll, CLAMP_LL)
 }
 
 /// H₁: Volumetric DDoS. Evidence: z high, entropy DOWN, threat high.
@@ -411,7 +412,7 @@ fn log_likelihood_h1(z: f64, delta_h: f64, threat: f64, _cusum: bool) -> f64 {
         0.0
     };
 
-    clamp_ll(ll, 3.0)
+    clamp_ll(ll, CLAMP_LL)
 }
 
 /// H₂: Slow-ramp DDoS. Evidence: low z (gradual), CUSUM alarm (primary).
@@ -444,7 +445,7 @@ fn log_likelihood_h2(z: f64, delta_h: f64, threat: f64, cusum_alarm: bool) -> f6
         ll += 2.5;
     }
 
-    clamp_ll(ll, 3.0)
+    clamp_ll(ll, CLAMP_LL)
 }
 
 /// H₃: Flash crowd. Evidence: moderate z (high RPS), entropy UP (diverse IPs),
@@ -483,7 +484,7 @@ fn log_likelihood_h3(z: f64, delta_h: f64, threat: f64, _cusum: bool) -> f64 {
         0.0
     };
 
-    clamp_ll(ll, 3.0)
+    clamp_ll(ll, CLAMP_LL)
 }
 
 // ── Forecaster — reads incremental counters, not full store scans ─────────────
@@ -493,7 +494,7 @@ fn log_likelihood_h3(z: f64, delta_h: f64, threat: f64, _cusum: bool) -> f64 {
 /// Runs two async loops:
 /// - tick_hw (1 Hz): Holt-Winters forecast → z-score → CUSUM → Bayesian
 ///   hypothesis update → enforcement decision
-/// - tick_entropy (0.2 Hz): Shannon entropy delta for Bayesian input
+/// - Shannon entropy computed inline in tick_hw for Bayesian input
 pub struct Forecaster {
     store: Arc<Store>,
     config: ForecastingConfig,
@@ -586,12 +587,10 @@ impl Forecaster {
 
     pub async fn run(self: Arc<Self>) {
         let mut t1 = tokio::time::interval(std::time::Duration::from_secs(1));
-        let mut t5 = tokio::time::interval(std::time::Duration::from_secs(5));
-        loop {
+                loop {
             tokio::select! {
                 _ = t1.tick() => { self.tick_hw().await; }
-                _ = t5.tick() => { self.tick_entropy().await; }
-            }
+                }
         }
     }
 
@@ -628,11 +627,14 @@ impl Forecaster {
 
         // ── Entropy delta: current Shannon entropy minus baseline ────────────
         let delta_h = {
-            let counts: Vec<u64> = self.store.traffic.subnet_window
-                .iter()
-                .map(|a| a.load(Ordering::Relaxed))
-                .collect();
-            let total: u64 = counts.iter().sum();
+            // ponytail: stack array, no heap alloc per tick
+            let mut counts = [0u64; 256];
+            let mut total = 0u64;
+            for (i, slot) in self.store.traffic.subnet_window.iter().enumerate() {
+                let v = slot.load(Ordering::Relaxed);
+                counts[i] = v;
+                total += v;
+            }
             let h = if total > 100 {
                 shannon_entropy(&counts, total)
             } else {
@@ -700,20 +702,7 @@ impl Forecaster {
         }
     }
 
-    async fn tick_entropy(&self) {
-        // Entropy is now computed inline in tick_hw (Bayesian framework).
-        // This function only logs the current entropy value for dashboard visibility.
-        let counts: Vec<u64> = self.store.traffic.subnet_window
-            .iter()
-            .map(|a| a.load(Ordering::Relaxed))
-            .collect();
-        let total: u64 = counts.iter().sum();
-        if total > 100 {
-            let h = shannon_entropy(&counts, total);
-            self.metrics.set_entropy(h);
-            debug!("entropy H={:.3} bits (dashboard-only)", h);
-        }
-    }
+
 
     async fn preemptive_block(&self) {
         // Atomic drain (crate primitive) — no pop+push-back race with detection.
@@ -869,7 +858,7 @@ mod tests {
             .enable_time()
             .build()
             .unwrap();
-        rt.block_on(fc.tick_entropy());
+        rt.block_on(fc.tick_hw());  // entropy now computed in tick_hw
     }
 
     // ── Phase 1: EWMA variance + CUSUM tests ──────────────────────────────
