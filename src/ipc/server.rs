@@ -335,7 +335,7 @@ async fn handle_connection(
             // pipelines a batch pays quadratically in the buffered bytes.
             // BytesMut::split_to is O(1) (advances the start pointer).
             let frame = buf.split_to(pos + 1);
-            let mut sanitized: Vec<u8> = Vec::new();
+            let sanitized: Vec<u8>;
             let line: &[u8] = if !config.auth_keys.is_empty() {
                 // HMAC auth gate: enforced only when keys configured. The auth
                 // object rides OUTSIDE the Request enum so deny_unknown_fields
