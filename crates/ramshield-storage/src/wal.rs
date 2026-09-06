@@ -3,7 +3,7 @@ use lz4_flex::{compress_prepend_size, decompress_size_prepended};
 use ramshield_types::{Durability, Result, RsError};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -298,21 +298,19 @@ impl Wal {
         let quarantine_dir = PathBuf::from(dir).join(QUARANTINE_DIR);
 
         for seg in &segs {
-            let file = File::open(seg)?;
-            let mut reader = BufReader::with_capacity(64 * 1024, file);
+            let mut file = File::open(seg)?;
             let mut payload_buf = vec![0u8; MAX_RECORD_SIZE];
             let mut corrupted = false;
+            let mut last_valid_offset: u64 = 0;
 
             loop {
-                // Peek to see if there are any bytes left
                 let mut peek = [0u8; 1];
-                match reader.read(&mut peek) {
+                match file.read(&mut peek) {
                     Ok(0) => break, // Clean EOF
                     Ok(_) => {
-                        // There's at least one byte, try to read the rest of the header
                         let mut hdr_buf = [0u8; HEADER];
                         hdr_buf[0] = peek[0];
-                        if let Err(e) = reader.read_exact(&mut hdr_buf[1..]) {
+                        if let Err(e) = file.read_exact(&mut hdr_buf[1..]) {
                             warn!("WAL partial header in {:?}: {}", seg, e);
                             corrupted = true;
                             break;
@@ -342,7 +340,7 @@ impl Wal {
                         if plen > payload_buf.len() {
                             payload_buf.resize(plen, 0);
                         }
-                        if let Err(e) = reader.read_exact(&mut payload_buf[..plen]) {
+                        if let Err(e) = file.read_exact(&mut payload_buf[..plen]) {
                             warn!("WAL truncated payload in {:?}: {}", seg, e);
                             corrupted = true;
                             break;
@@ -371,7 +369,10 @@ impl Wal {
                         };
 
                         match serde_json::from_slice::<WalEntry>(&decoded) {
-                            Ok(entry) => out.push((rh.lsn, entry)),
+                            Ok(entry) => {
+                                last_valid_offset = file.stream_position()?;
+                                out.push((rh.lsn, entry));
+                            }
                             Err(e) => {
                                 warn!("WAL deser error in {:?}: {}", seg, e);
                                 corrupted = true;
@@ -388,13 +389,30 @@ impl Wal {
             }
 
             if corrupted {
-                // Quarantine the corrupt tail segment
-                let _ = std::fs::create_dir_all(&quarantine_dir);
-                let dest = quarantine_dir.join(seg.file_name().unwrap_or_default());
-                if let Err(e) = std::fs::rename(seg, &dest) {
-                    warn!("WAL quarantine rename failed: {}", e);
+                drop(file); // close read-only handle before reopening for write
+                if last_valid_offset > 0 {
+                    // P2 fix: truncate at last valid byte offset instead of
+                    // quarantining the entire segment. This preserves all
+                    // valid records before the corrupt tail. Idempotent:
+                    // if corruption is re-detected on next replay, the same
+                    // truncation point is applied (no data loss, no double count).
+                    let f = OpenOptions::new().write(true).open(seg)?;
+                    f.set_len(last_valid_offset)?;
+                    info!(
+                        "WAL truncated {:?} at {} bytes (corrupt tail removed)",
+                        seg, last_valid_offset
+                    );
                 } else {
-                    info!("WAL quarantined {:?} → {:?}", seg, dest);
+                    // No valid records were recovered — quarantine the entire
+                    // segment (corruption from the start). This is the original
+                    // behavior for an all-corrupt segment.
+                    let _ = std::fs::create_dir_all(&quarantine_dir);
+                    let dest = quarantine_dir.join(seg.file_name().unwrap_or_default());
+                    if let Err(e) = std::fs::rename(seg, &dest) {
+                        warn!("WAL quarantine rename failed: {}", e);
+                    } else {
+                        info!("WAL quarantined {:?} → {:?}", seg, dest);
+                    }
                 }
             }
         }
@@ -671,14 +689,21 @@ mod tests {
             f.write_all(b"GARBAGE_DATA_HERE").unwrap();
         }
 
-        // Replay should succeed with valid entries, quarantine corrupt segment
-        let _entries = Wal::replay(&dir).unwrap();
-        // Valid entry survives (it was before the corrupt tail)
-        // But since the entire segment gets quarantined on first corruption...
-        // The valid records before corruption are lost since we quarantine the whole segment
-        // This is the conservative approach — we could be smarter, but YAGNI for now
+        // P2 fix: when the segment has 1 valid record before a corrupt tail,
+        // the new code truncates the segment (preserving the valid record)
+        // instead of quarantining the whole file. The valid entry must survive.
+        let entries = Wal::replay(&dir).unwrap();
+        assert_eq!(
+            entries.len(),
+            1,
+            "valid record before corrupt tail must survive truncation"
+        );
+        // No quarantine needed — the segment was truncated in place.
         let quarantine = PathBuf::from(&dir).join(QUARANTINE_DIR);
-        assert!(quarantine.exists());
+        assert!(
+            !quarantine.exists(),
+            "no quarantine dir needed when truncation is sufficient"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -830,6 +855,63 @@ mod tests {
         let e1 = Wal::replay(&dir).unwrap();
         let e2 = Wal::replay(&dir).unwrap();
         assert_eq!(e1.len(), e2.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P2 regression: corrupt records in a segment must NOT cause loss of
+    /// valid records that came before them. Old code quarantined the whole
+    /// segment on any corruption, throwing away every valid record. New code
+    /// truncates the segment at the last valid byte offset, preserving the
+    /// pre-corruption valid records.
+    #[test]
+    fn wal_replay_preserves_valid_records_before_corruption() {
+        let dir = tmp("rs_wal_partial_corrupt");
+        let wal = Wal::open(&dir, true, Durability::None, 64 * 1024 * 1024, 0).unwrap();
+        // Append 3 valid records
+        for i in 1..=3u64 {
+            wal.append(&WalEntry::BlockIp {
+                ip: format!("10.0.0.{i}").into(),
+                reason: "test".into(),
+                ttl_secs: None,
+                ts_ns: i,
+            })
+            .unwrap();
+        }
+        drop(wal);
+
+        // Find the segment file and append a corrupt record (wrong magic).
+        let seg_path = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "rshw"))
+            .expect("at least one .rshw segment must exist");
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&seg_path)
+            .unwrap();
+        // 23 bytes of garbage: 0xFF as a bad magic.
+        f.write_all(&[0xFF; HEADER]).unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+
+        // Replay must recover all 3 valid records, not 0.
+        let entries = Wal::replay(&dir).unwrap();
+        assert_eq!(
+            entries.len(),
+            3,
+            "replay must preserve valid records before the corrupt tail"
+        );
+
+        // Re-replay (after truncation) must also recover all 3 — idempotency.
+        let entries2 = Wal::replay(&dir).unwrap();
+        assert_eq!(
+            entries2.len(),
+            3,
+            "replay must be idempotent after truncation"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
