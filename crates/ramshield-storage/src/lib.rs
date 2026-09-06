@@ -571,14 +571,21 @@ impl Store {
         let Some(sk) = subnet_key else { return };
 
         if is_removal {
-            // Take a copy of the value (the DashSet Arc) to avoid holding
-            // the outer shard read lock across the inner DashSet mutation.
-            // The inner write lock is independent of the outer read lock.
-            let inner_set = self.subnet_index.get(&sk).map(|r| r.value().clone());
-            if let Some(inner) = inner_set {
-                inner.remove(&ip_key);
-                if inner.is_empty() {
-                    self.subnet_index.remove(&sk);
+            // P0 fix: the old path cloned the inner DashSet
+            // (DashSet::clone is a DEEP clone, not an Arc handle), removed the
+            // IP from the throwaway copy, and emptiness-tested the copy too.
+            // The real index entry was NEVER modified — every evicted/unblocked
+            // IP leaked into subnet_index forever, and get_ips_in_subnet kept
+            // returning dead hosts for subnet batch-block. Removal is now a
+            // conditional remove_if on the live entry: removes the IP, drops
+            // the subnet key only if the set went empty, and a concurrent
+            // insert into the same set makes the predicate false so the key
+            // stays. One shard lock per step, no TOCTOU.
+            use dashmap::mapref::entry::Entry;
+            if let Entry::Occupied(mut e) = self.subnet_index.entry(sk) {
+                e.get_mut().remove(&ip_key);
+                if e.get().is_empty() {
+                    e.remove(); // consumes the entry; shard lock held throughout
                 }
             }
         } else {
