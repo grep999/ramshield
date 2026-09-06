@@ -242,6 +242,10 @@ pub struct Store {
     /// Reverse index: subnet key -> list of IPs for efficient subnet-based lookups.
     /// Maintained during batch flush to avoid O(store_size) scans.
     subnet_index: Arc<DashMap<SubnetKey, DashSet<IpAddr>>>,
+    /// P0 index: currently-blocked IPs. Maintained during insert/remove/evict
+    /// to make `get_all_blocked_ips` O(B) instead of O(N) on XDP reconcile.
+    /// B = number of blocked IPs (typically 50-200), N = total store size (100k+).
+    blocked_set: Arc<DashSet<IpAddr>>,
     ram_bytes: Arc<AtomicUsize>,
     /// O(1) blocked count — updated on BlockState transitions in insert().
     /// ponytail: does not track pre-existing blocked IPs from WAL replay unless
@@ -264,6 +268,7 @@ impl Store {
             inner: Arc::new(DashMap::with_shard_amount(shards)),
             subnet_table: Arc::new(DashMap::with_shard_amount(32)),
             subnet_index: Arc::new(DashMap::with_shard_amount(32)),
+            blocked_set: Arc::new(DashMap::with_shard_amount(32)),
             ram_bytes: Arc::new(AtomicUsize::new(0)),
             blocked_count: Arc::new(AtomicU64::new(0)),
             traffic: Arc::new(TrafficCounters::new()),
@@ -423,10 +428,13 @@ impl Store {
         }
         self.total_inserts.fetch_add(1, Ordering::Relaxed);
         // O(1) blocked_count tracking — only mutate on transition.
+        // Also maintain blocked_set index for O(B) get_all_blocked_ips.
         if !was_blocked && new_blocked {
             self.blocked_count.fetch_add(1, Ordering::Relaxed);
+            self.blocked_set.insert(key, ());
         } else if was_blocked && !new_blocked {
             self.blocked_count.fetch_sub(1, Ordering::Relaxed);
+            self.blocked_set.remove(&key);
         }
         tracing::debug!("Store::insert - Successfully inserted key: {}", key);
         Ok(())
@@ -458,6 +466,7 @@ impl Store {
                 self.total_evictions.fetch_add(1, Ordering::Relaxed);
                 if was_blocked {
                     self.blocked_count.fetch_sub(1, Ordering::Relaxed);
+                    self.blocked_set.remove(key);
                 }
                 // P0 fix: stale subnet_index entries leaked forever.
                 self.update_subnet_index(*key, subnet_key_u128(*key), true);
@@ -476,6 +485,7 @@ impl Store {
             self.total_evictions.fetch_add(1, Ordering::Relaxed);
             if e.value.is_blocked() {
                 self.blocked_count.fetch_sub(1, Ordering::Relaxed);
+                self.blocked_set.remove(key);
             }
             // P0 fix: subnet_index must be cleaned here too, same reason
             // as evict_batch — stale entries leak without this.
@@ -565,12 +575,11 @@ impl Store {
     }
 
     /// Get all currently blocked IPs for XDP reconciliation.
+    /// O(B) via the `blocked_set` index — maintained on every block/unblock
+    /// transition in `insert`, `remove`, and `evict_batch`.
+    /// B = number of blocked IPs, NOT total store size.
     pub fn get_all_blocked_ips(&self) -> Vec<IpAddr> {
-        self.inner
-            .iter()
-            .filter(|e| e.value().value.is_blocked())
-            .map(|e| *e.key())
-            .collect()
+        self.blocked_set.iter().map(|e| *e.key()).collect()
     }
 }
 
@@ -587,6 +596,31 @@ pub struct StoreStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test helper: create an IpRecord with `block_state = Blocked`.
+    fn blocked_record(ip: IpAddr) -> IpRecord {
+        IpRecord {
+            ip,
+            request_count: 1,
+            ewma_rps: 0.0,
+            cusum_s: 0.0,
+            baseline_rps: 0.0,
+            prev_sample_hot: false,
+            sample_count: 0,
+            pulse_samples_in_window: 0,
+            pulse_window_start_ns: 0,
+            first_seen_ns: 0,
+            last_seen_ns: 0,
+            bytes_in: 0,
+            status_dist: [0; 5],
+            proto_fingerprint: 0,
+            threat_score: 0.0,
+            block_state: BlockState::Blocked {
+                reason: ramshield_types::BlockReason::HighRps,
+                since_ns: 0,
+            },
+        }
+    }
 
     #[test]
     fn inline_for_small() {
@@ -916,6 +950,128 @@ mod tests {
         assert!(
             store.get_ips_in_subnet(sk).is_empty(),
             "subnet_index must be empty after remove; stale entries leak memory"
+        );
+    }
+
+    /// P0 regression: get_all_blocked_ips must be O(blocked) not O(store).
+    /// Old code did `self.inner.iter().filter(|e| e.value().is_blocked())`
+    /// which walks every IP in the store. The fix maintains a `blocked_set`
+    /// DashSet updated on BlockState transitions, making the lookup O(B).
+    /// This test plants 1000 clean IPs and 5 blocked, asserts the function
+    /// returns exactly the 5 blocked IPs.
+    #[test]
+    fn get_all_blocked_ips_uses_index() {
+        let store = Store::new(16);
+        // 1000 clean IPs
+        for n in 0..1000u16 {
+            let ip: IpAddr = format!("10.5.{}.{}", n / 256, n % 256).parse().unwrap();
+            store
+                .insert(ip, Value::Counter(1), None, 64 * 1024 * 1024)
+                .unwrap();
+        }
+        // 5 blocked IPs
+        let blocked_ips: Vec<IpAddr> = (0..5u16)
+            .map(|n| format!("10.99.0.{}", n).parse().unwrap())
+            .collect();
+        for ip in &blocked_ips {
+            store
+                .insert(*ip, Value::IpRecord(blocked_record(*ip)), None, 64 * 1024 * 1024)
+                .unwrap();
+        }
+        let got: std::collections::HashSet<IpAddr> =
+            store.get_all_blocked_ips().into_iter().collect();
+        let want: std::collections::HashSet<IpAddr> = blocked_ips.into_iter().collect();
+        assert_eq!(got, want, "get_all_blocked_ips must return exactly the blocked set");
+    }
+
+    /// P0 regression: get_all_blocked_ips must reflect unblock transitions.
+    /// Insert blocked, then replace with clean — set should remove the IP.
+    #[test]
+    fn get_all_blocked_ips_tracks_unblock() {
+        let store = Store::new(16);
+        let ip: IpAddr = "10.6.6.6".parse().unwrap();
+        store
+            .insert(ip, Value::IpRecord(blocked_record(ip)), None, 64 * 1024 * 1024)
+            .unwrap();
+        assert_eq!(store.get_all_blocked_ips(), vec![ip]);
+        // Replace with clean
+        store
+            .insert(ip, Value::Counter(1), None, 64 * 1024 * 1024)
+            .unwrap();
+        assert!(store.get_all_blocked_ips().is_empty());
+    }
+
+    /// P0 regression: blocked_set must stay in sync across all 4 mutation paths.
+    /// Insert, replace (clean→blocked), replace (blocked→clean), remove.
+    #[test]
+    fn blocked_set_consistent_across_mutations() {
+        let store = Store::new(16);
+        let ip: IpAddr = "10.7.7.7".parse().unwrap();
+        // 1. Insert clean — set must NOT contain ip.
+        store
+            .insert(ip, Value::Counter(1), None, 64 * 1024 * 1024)
+            .unwrap();
+        assert!(store.get_all_blocked_ips().is_empty());
+        // 2. Replace clean→blocked — set must contain ip.
+        store
+            .insert(ip, Value::IpRecord(blocked_record(ip)), None, 64 * 1024 * 1024)
+            .unwrap();
+        assert_eq!(store.get_all_blocked_ips(), vec![ip]);
+        // 3. Replace blocked→clean — set must NOT contain ip.
+        store
+            .insert(ip, Value::Counter(1), None, 64 * 1024 * 1024)
+            .unwrap();
+        assert!(store.get_all_blocked_ips().is_empty());
+        // 4. Re-block, then remove — set must NOT contain ip.
+        store
+            .insert(ip, Value::IpRecord(blocked_record(ip)), None, 64 * 1024 * 1024)
+            .unwrap();
+        assert_eq!(store.get_all_blocked_ips(), vec![ip]);
+        store.remove(&ip);
+        assert!(store.get_all_blocked_ips().is_empty());
+    }
+
+    /// P0 regression: blocked_set must stay correct under concurrent transitions.
+    /// 8 threads racing to insert (clean or blocked) the same IP — final set
+    /// state must match the actual `is_blocked()` state of the entry.
+    #[test]
+    fn blocked_set_concurrent_transitions_converge() {
+        use std::sync::Arc;
+        use std::thread;
+        let store = Arc::new(Store::new(16));
+        let ip: IpAddr = "10.8.8.8".parse().unwrap();
+        let mut handles = vec![];
+        for n in 0..8u32 {
+            let s = store.clone();
+            handles.push(thread::spawn(move || {
+                for i in 0..100u32 {
+                    if (n + i) % 2 == 0 {
+                        s.insert(ip, Value::Counter(1), None, 64 * 1024 * 1024)
+                            .unwrap();
+                    } else {
+                        s.insert(
+                            ip,
+                            Value::IpRecord(blocked_record(ip)),
+                            None,
+                            64 * 1024 * 1024,
+                        )
+                        .unwrap();
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        // Final state of the entry decides whether the set contains ip.
+        let entry_blocked = store
+            .get(&ip)
+            .map(|v| v.is_blocked())
+            .unwrap_or(false);
+        let set_contains = !store.get_all_blocked_ips().is_empty();
+        assert_eq!(
+            entry_blocked, set_contains,
+            "blocked_set membership must match the entry's is_blocked() state"
         );
     }
 
