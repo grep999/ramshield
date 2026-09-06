@@ -33,23 +33,39 @@ pub fn atomic_insert(
                     .traffic
                     .used_bytes
                     .fetch_add(delta as u64, std::sync::atomic::Ordering::Relaxed);
+            } else if delta < 0 {
+                store
+                    .traffic
+                    .used_bytes
+                    .fetch_sub((-delta) as u64, std::sync::atomic::Ordering::Relaxed);
             }
         }
         dashmap::mapref::entry::Entry::Vacant(v) => {
-            let current_bytes = store
+            // P1 fix: capacity check must be atomic. Without CAS, two
+            // threads can both read the same `current_bytes`, both pass
+            // the check, and both insert — silently exceeding the budget.
+            // Mirror the compare_exchange_weak loop from Store::insert.
+            let mut current = store
                 .traffic
                 .used_bytes
                 .load(std::sync::atomic::Ordering::Relaxed);
-            if current_bytes as usize + entry_size > ram_limit_bytes {
-                return Err(ramshield_types::RsError::CapacityExceeded {
-                    limit_mb: ram_limit_bytes / (1024 * 1024),
-                });
+            loop {
+                if current + entry_size as u64 > ram_limit_bytes as u64 {
+                    return Err(ramshield_types::RsError::CapacityExceeded {
+                        limit_mb: ram_limit_bytes / (1024 * 1024),
+                    });
+                }
+                match store.traffic.used_bytes.compare_exchange_weak(
+                    current,
+                    current + entry_size as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(observed) => current = observed,
+                }
             }
             v.insert(entry);
-            store
-                .traffic
-                .used_bytes
-                .fetch_add(entry_size as u64, std::sync::atomic::Ordering::Relaxed);
         }
     }
 

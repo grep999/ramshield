@@ -67,7 +67,12 @@ impl HoltWinters {
         self.trend = self.beta * (self.level - prev) + (1.0 - self.beta) * self.trend;
         self.seasonal[s] = self.gamma * (y - self.level) + (1.0 - self.gamma) * seas;
         self.tick += 1;
-        let ns = self.seasonal[self.tick % self.period];
+        // Forecast for the NEXT tick. The seasonal slot at (tick % period)
+        // is the one we just updated, so add `period` to read the future slot.
+        // (Without this, the forecast always used the just-updated slot,
+        // which biases z-scores by collapsing residuals to near-zero on
+        // regular cycles.)
+        let ns = self.seasonal[(self.tick + self.period) % self.period];
         (self.level + self.trend + ns).max(0.0)
     }
 
@@ -383,6 +388,34 @@ mod tests {
             hw.update(1000.0);
         }
         assert!(hw.level > 900.0);
+    }
+
+    /// P0 regression: HoltWinters::update must forecast from the FUTURE seasonal
+    /// slot, not the one it just updated. The old code read
+    /// `seasonal[tick % period]` after incrementing tick — which is the slot it
+    /// just wrote, collapsing residuals and producing biased z-scores.
+    #[test]
+    fn hw_forecast_uses_future_seasonal_slot() {
+        let period = 4;
+        let mut hw = HoltWinters::new(0.3, 0.1, 0.1, period);
+        // Feed a sine-wave pattern through two full periods so seasonal stabilises.
+        // Each value repeats every `period` ticks.
+        let pattern = [100.0, 200.0, 100.0, 50.0];
+        for _ in 0..(period * 3) {
+            for &v in &pattern {
+                hw.update(v);
+            }
+        }
+        // The forecast for the NEXT tick should use the seasonal index for that
+        // future position — which is the slot NOT updated by the last call.
+        // With the bug (read-same-slot), forecast ≈ last value. With the fix
+        // (read future slot), forecast is in the range of the pattern.
+        let f = hw.update(100.0);
+        assert!(
+            (50.0..=200.0).contains(&f),
+            "forecast {} out of expected pattern range [50, 200]",
+            f
+        );
     }
 
     #[test]

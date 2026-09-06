@@ -341,7 +341,7 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
         engine.enforcement_tx.clone(),
         metrics.clone(),
     ));
-    tokio::spawn(async move { forecaster.run().await });
+    tokio::spawn(async move { forecaster.run().await }); // ponytail: orphan on shutdown; add CancellationToken to run() and join on engine shutdown.
 
     let server = crate::ipc::server::IpcServer::bind(
         &cfg_snapshot,
