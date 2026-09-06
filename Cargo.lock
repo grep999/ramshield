@@ -1276,6 +1276,7 @@ name = "ramshield-detection"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "crossbeam-channel",
  "dashmap",
  "ramshield-config",

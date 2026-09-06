@@ -148,13 +148,13 @@ impl IpcServer {
             active_connections: Arc::new(AtomicU64::new(0)),
             rejected_connections: Arc::new(AtomicU64::new(0)),
             dropped_events: Arc::new(AtomicU64::new(0)),
-            // 256 entries × 10s TTL = bounded memory, tight enough to close
+            // 256 entries × 35s TTL = bounded memory, covers full 30s clock-skew
             // the clock-skew window. Honest comment: cap is per-key not global
             // because the store is shared across keys; tune if one key churns
             // hard. Add global cap when a second key_id lands in prod.
             replay_store: Arc::new(ramshield_protocol::auth::ReplayStore::new(
                 256,
-                Duration::from_secs(10),
+                Duration::from_secs(35),
             )),
         })
     }

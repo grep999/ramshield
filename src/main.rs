@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use ramshield::{Config, Engine, dashboard};
 use std::sync::Arc;
-use tracing::{debug, info}; // Add debug
+use tracing::info; // Add debug
 use tracing_subscriber::EnvFilter;
 
 #[cfg(feature = "otel")]
@@ -73,8 +73,9 @@ async fn main() -> Result<()> {
     // ponytail: Config::load() already calls apply_env_overrides() once
     // internally. A second call here was harmless (idempotent) but wasteful
     // and confusing — removed.
-    info!("Loaded config: {:#?}", config);
-    debug!("Loaded config: {:#?}", config);
+    // ponytail: Debug on Config leaks auth_keys. Print summary, not raw.
+    info!("Loaded config: ipc.auth_keys={}, dashboard.bind={}",
+        config.ipc.auth_keys.len(), config.dashboard.http_addr);
 
     // Start RamShield normally
     let store = Arc::new(ramshield::storage::Store::new(config.engine.shard_count));

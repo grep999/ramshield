@@ -162,7 +162,14 @@ impl ConfigView {
             detection: c.detection.clone(),
             ipc,
             forecasting: c.forecasting.clone(),
-            dashboard: c.dashboard.clone(),
+            dashboard: {
+                let mut d = c.dashboard.clone();
+                // ponytail: admin_password_hash is Argon2 PHC — never expose.
+                if d.admin_password_hash.is_some() {
+                    d.admin_password_hash = Some("<redacted>".into());
+                }
+                d
+            },
             auth_enabled: !c.ipc.auth_keys.is_empty(),
         }
     }

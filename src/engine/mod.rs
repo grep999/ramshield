@@ -2,7 +2,7 @@ pub mod learning;
 
 use arc_swap::ArcSwap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{mpsc, watch};
 use tracing::info;
 
@@ -21,13 +21,15 @@ pub struct Engine {
     pub config: Arc<arc_swap::ArcSwap<Config>>,
     pub store: Arc<Store>,
     pub metrics: Arc<Metrics>,
-    shutdown: AtomicBool,
+    shutdown: Arc<AtomicBool>,
     enforcement_tx: mpsc::Sender<EnforceCommand>,
     enforcement_rx: std::sync::Mutex<Option<mpsc::Receiver<EnforceCommand>>>,
     /// True only when the kernel XDP dataplane is loaded and attached. False
     /// for StubXdpApplier (degraded mode: in-band enforcement only). Read by
     /// `dashboard_snapshot()` so the UI can surface a "XDP inactive" chip.
     xdp_active: Arc<AtomicBool>,
+    /// Shared depth counter for IPC event channel.
+    pub ipc_depth: Arc<AtomicU64>,
     /// Watch channel for async shutdown signaling (replaces AtomicBool polling).
     shutdown_tx: watch::Sender<bool>,
 }
@@ -40,10 +42,11 @@ impl Engine {
             config: Arc::new(ArcSwap::from_pointee(cfg)),
             store,
             metrics,
-            shutdown: AtomicBool::new(false),
+            shutdown: Arc::new(AtomicBool::new(false)),
             enforcement_tx,
             enforcement_rx: std::sync::Mutex::new(Some(enforcement_rx)),
             xdp_active: Arc::new(AtomicBool::new(false)),
+            ipc_depth: Arc::new(AtomicU64::new(0)),
             shutdown_tx,
         }
     }
@@ -115,9 +118,8 @@ impl Engine {
             + metrics.blocks_subnet.load(Ordering::Relaxed)
             + metrics.blocks_forecast.load(Ordering::Relaxed);
         let channel_depth = 0usize;
-        // ponytail: tokio::sync::mpsc::Sender has no len(). Real depth
-        // requires an AtomicU64 gauge in IPC send + enforcement receive
-        // paths. Add when dashboard_channel_depth becomes a real SLO target.
+        // ponytail: ipc_depth field exists but needs IPC server plumbing.
+        // Add increment/decrement in try_send + recv paths when ready.
 
         DashboardSnapshot {
             ts_ms: crate::metrics::now_ms(),
@@ -204,9 +206,8 @@ impl Engine {
         let stats = self.store.get_stats();
         let ingested = self.metrics.events_ingested.load(Ordering::Relaxed);
         let channel_depth = 0usize;
-        // ponytail: tokio::sync::mpsc::Sender has no len(). Real depth
-        // requires an AtomicU64 gauge in IPC send + enforcement receive
-        // paths. Add when dashboard_channel_depth becomes a real SLO target.
+        // ponytail: ipc_depth field exists but needs IPC server plumbing.
+        // Add increment/decrement in try_send + recv paths when ready.
         self.metrics.get_module_stats_data(
             stats.uptime_secs,
             ingested,
@@ -331,7 +332,7 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
         cfg_handle.clone(),
         engine.enforcement_tx.clone(),
         metrics.clone(),
-        Arc::new(AtomicBool::new(false)),
+        engine.shutdown.clone(),
     ));
     let event_tx = detection.event_sender();
     detection
