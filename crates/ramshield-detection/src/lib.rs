@@ -686,12 +686,22 @@ impl DetectionEngine {
             // per-shard sum — cheap enough for the 500ms tick.
             let st = self.store.subnet_table();
             if st.len() > 100_000 {
+                // P2 fix (F6): the old predicate (total_rps==0 &&
+                // unique_ips()==0) is dead against the very attack that
+                // motivated the prune — a spoofed-subnet flood sends one
+                // burst per /24 then goes silent; total_rps only zeroes on a
+                // NEW merge rollover >2s later, so flooded entries never
+                // match and the table grows toward 16.7M /24s while every
+                // 500ms full-iter (prune + hot()) slows down. Evict on
+                // staleness instead: silent >8s = 4 gate-windows = functionally
+                // zero for the 2s dual gate, so a live swarm can't be pruned.
+                let now = now_ns();
+                let stale_ns = 8_000_000_000;
                 let mut candidates: Vec<_> = st
                     .iter()
                     .filter_map(|e| {
                         let r = e.value();
-                        // Only evict entries with zero activity in the current window
-                        if r.total_rps == 0 && r.unique_ips() == 0 {
+                        if now.saturating_sub(r.last_updated_ns) > stale_ns {
                             Some(*e.key())
                         } else {
                             None
