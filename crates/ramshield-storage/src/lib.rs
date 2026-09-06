@@ -353,24 +353,24 @@ impl Store {
 
         // Atomic insert: get old value from insert() return to avoid
         // get()+insert() race (two separate shard lock acquisitions).
-        let old_size = self.inner.insert(key, new_entry).map_or(0, |old| {
-            let was_blocked = old.value.is_blocked();
-            // Update blocked_count atomically based on actual old state.
-            if !was_blocked && new_blocked {
-                self.blocked_count.fetch_add(1, Ordering::Relaxed);
-                self.blocked_set.insert(key, ());
-            } else if was_blocked && !new_blocked {
-                self.blocked_count.fetch_sub(1, Ordering::Relaxed);
-                self.blocked_set.remove(&key);
-            }
-            std::mem::size_of::<Entry>() + old.value.heap_bytes() + std::mem::size_of::<IpAddr>()
-        });
-
-        // New insert (no old value): update blocked_count for fresh entry.
-        if old_size == 0 && new_blocked {
-            self.blocked_count.fetch_add(1, Ordering::Relaxed);
-            self.blocked_set.insert(key, ());
-        }
+        //
+        // P1 fix: `was_blocked` is captured here but the blocked indexes are
+        // NOT updated yet. The CapacityExceeded rollback below removes the
+        // entry from `inner`; if blocked_count/blocked_set had already been
+        // bumped, the rollback would leave them permanently over-counted — an
+        // index that never converges (and `unblock_all`/`blocked_list` then
+        // act on phantom IPs). Deferred until the insert is known to stick.
+        let (old_size, was_blocked) =
+            self.inner
+                .insert(key, new_entry)
+                .map_or((0, false), |old| {
+                    (
+                        std::mem::size_of::<Entry>()
+                            + old.value.heap_bytes()
+                            + std::mem::size_of::<IpAddr>(),
+                        old.value.is_blocked(),
+                    )
+                });
 
         let net_growth = entry_size.saturating_sub(old_size);
 
@@ -412,6 +412,17 @@ impl Store {
                 self.ram_bytes
                     .fetch_sub(old_size - entry_size, Ordering::Relaxed);
             }
+        }
+
+        // Insert stuck — now safe to update the blocked indexes. Delta applies
+        // whether this was a fresh insert or a replacement: `was_blocked` is
+        // false for a fresh insert, so the (false → true) case bumps the count.
+        if !was_blocked && new_blocked {
+            self.blocked_count.fetch_add(1, Ordering::Relaxed);
+            self.blocked_set.insert(key, ());
+        } else if was_blocked && !new_blocked {
+            self.blocked_count.fetch_sub(1, Ordering::Relaxed);
+            self.blocked_set.remove(&key);
         }
         if tracing::enabled!(tracing::Level::DEBUG) {
             let current = self.ram_bytes.load(Ordering::Relaxed);
@@ -626,6 +637,33 @@ mod tests {
                 since_ns: 0,
             },
         }
+    }
+
+    /// P1 regression: a CapacityExceeded rollback removes the entry from
+    /// `inner` but must NOT leave the blocked indexes incremented. Before
+    /// the fix, blocked accounting ran before the capacity gate, so every
+    /// denied blocked-insert permanently inflated blocked_count and
+    /// blocked_set — phantom IPs that `get_all_blocked_ips` (and downstream
+    /// unblock-all) would act on.
+    #[test]
+    fn capacity_denial_does_not_pollute_blocked_indexes() {
+        let store = Store::new(16);
+        let ip: IpAddr = "10.9.9.9".parse().unwrap();
+        // ~1 byte budget: any blocked IpRecord insert must be denied.
+        let err = store
+            .insert(ip, Value::IpRecord(blocked_record(ip)), None, 1)
+            .unwrap_err();
+        assert!(matches!(err, RsError::CapacityExceeded { .. }));
+        assert_eq!(store.get_stats().blocked, 0, "blocked_count leaked on rollback");
+        assert!(store.get_all_blocked_ips().is_empty(), "blocked_set leaked on rollback");
+        assert!(!store.inner().contains_key(&ip), "entry itself must be rolled back");
+
+        // Control: a successful blocked insert DOES register in both indexes.
+        store
+            .insert(ip, Value::IpRecord(blocked_record(ip)), None, 64 * 1024 * 1024)
+            .unwrap();
+        assert_eq!(store.get_stats().blocked, 1);
+        assert_eq!(store.get_all_blocked_ips(), vec![ip]);
     }
 
     #[test]
