@@ -65,3 +65,12 @@ RamShield is designed to operate in a **trusted network zone** (localhost or iso
 4. **Use dedicated NIC for XDP** — isolate from management traffic
 5. **Monitor RAM usage** — alert at 80% of `ram_limit_mb`
 6. **Rotate logs** — structured JSON logs via `RUST_LOG`
+
+## Dashboard behind a reverse proxy
+
+Login lockout is keyed on the TCP peer address (`ConnectInfo<SocketAddr>`).
+RamShield deliberately does NOT trust `X-Forwarded-For`. Deployed behind
+nginx/traefik, every admin shares the proxy IP — one attacker exhausting
+`max_login_attempts` locks out all administrators until the window decays
+(15 min). Run the dashboard direct-connected, or terminate proxy identity at
+the proxy and rate-limit there.

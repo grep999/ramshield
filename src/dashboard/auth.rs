@@ -54,6 +54,16 @@ impl AuthState {
         max_login_attempts: u32,
         max_password_length: usize,
     ) -> Self {
+        // P3 fix: an unparseable PHC hash made verify_password() return
+        // None forever — indistinguishable from a wrong password, i.e. a
+        // silently un-loginable dashboard. Fail loudly at startup instead.
+        if let Some(h) = password_hash.as_deref() {
+            if argon2::PasswordHash::new(h).is_err() {
+                tracing::error!(
+                    "dashboard.admin_password_hash is not a valid PHC string —                      logins WILL fail until fixed"
+                );
+            }
+        }
         Self {
             password_hash,
             ttl: Duration::from_secs(ttl_secs.max(60)),
@@ -86,6 +96,13 @@ impl AuthState {
     }
 
     fn note_failure(&self, ip: IpAddr) {
+        // P3 fix: entries were only reclaimed when the SAME ip returned —
+        // a many-source (IPv6-rotating) bad-password flood grew the map
+        // without bound. Cheap cap: sweep expired windows past 10k entries.
+        if self.failures.len() > 10_000 {
+            self.failures
+                .retain(|_, w| w.first_fail.elapsed() < LOCKOUT_WINDOW);
+        }
         self.failures
             .entry(ip)
             .and_modify(|w| {
