@@ -125,7 +125,12 @@ impl IpcServer {
                     Ok(k) if !k.is_empty() => auth_keys.push((id.trim().to_string(), k)),
                     _ => warn!("ipc.auth_keys: invalid hex key for '{}', skipped", id),
                 },
-                None => warn!("ipc.auth_keys: expected 'key_id:hex_key', got '{}'", entry),
+                // P2 fix: entry may be a mistyped real secret — log length,
+                // never content.
+                None => warn!(
+                    "ipc.auth_keys: expected 'key_id:hex_key', got colon-less entry of len {}",
+                    entry.len()
+                ),
             }
         }
         if !auth_keys.is_empty() {
@@ -154,9 +159,14 @@ impl IpcServer {
             // the clock-skew window. Honest comment: cap is per-key not global
             // because the store is shared across keys; tune if one key churns
             // hard. Add global cap when a second key_id lands in prod.
+            // P2 fix (replay-hole): a signer clock +30s fast (max tolerated
+            // skew) makes a captured frame replayable for skew+TTL = 60s of
+            // verifier time, while a 35s store window expired at +35s — a 25s
+            // replay gap at max drift. TTL now 2*MAX_CLOCK_SKEW + 5s slack;
+            // cap raised to 1024 (32B digests => ~33KB, trivial).
             replay_store: Arc::new(ramshield_protocol::auth::ReplayStore::new(
-                256,
-                Duration::from_secs(35),
+                1024,
+                Duration::from_secs(65),
             )),
         })
     }
