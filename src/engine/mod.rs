@@ -202,14 +202,11 @@ impl Engine {
             .iter()
             .map(|e| {
                 let rec = e.value();
-                // ponytail: pre-sized — IPv4 /24 never exceeds 15 chars.
-                let mut prefix = String::with_capacity(15);
-                let _ = std::fmt::Write::write_fmt(
-                    &mut prefix,
-                    format_args!("{}.{}.{}", rec.prefix[0], rec.prefix[1], rec.prefix[2]),
-                );
+                // Task 1: IpNetwork Display = family-complete CIDR
+                // ("198.51.100.0/24" / "2001:db8::/64"); the old hand-rolled
+                // "{}.{}.{}" rendered v6 as garbage and had no /24 suffix.
                 SubnetRow {
-                    prefix,
+                    prefix: rec.network.to_string(),
                     events: rec.total_rps,
                 }
             })

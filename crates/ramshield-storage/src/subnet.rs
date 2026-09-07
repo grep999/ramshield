@@ -54,7 +54,7 @@ mod tests {
         let (key, net) = subnet_key(ip).unwrap();
         assert_eq!(key, (10u32 << 24 | 20 << 16 | 30 << 8) as u128);
         assert_eq!(net.prefix_len, 24);
-        assert_eq!(net.prefix_octets(), [10, 20, 30]);
+        assert_eq!(net.to_string(), "10.20.30.0/24");
     }
 
     #[test]

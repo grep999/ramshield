@@ -57,21 +57,6 @@ impl IpNetwork {
         }
     }
 
-    /// First three significant octets for display/aggregation metadata.
-    /// v4: octets[0..3]; v6: first 3 bytes of the /64 network prefix.
-    pub fn prefix_octets(&self) -> [u8; 3] {
-        match self.addr {
-            IpAddr::V4(v4) => {
-                let o = v4.octets();
-                [o[0], o[1], o[2]]
-            }
-            IpAddr::V6(v6) => {
-                let o = v6.octets();
-                [o[0], o[1], o[2]]
-            }
-        }
-    }
-
     /// Canonical subnet for any IP: v4 → /24, v6 → /64.
     pub fn of_ip(ip: IpAddr) -> Self {
         match ip {

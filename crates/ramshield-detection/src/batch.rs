@@ -81,26 +81,13 @@ pub(crate) fn subnet_key(ip: IpAddr) -> Option<(u128, IpNetwork)> {
     }
 }
 
-/// Check if IP is within a given IPv4 subnet prefix (legacy /24 compat).
-#[inline]
+/// Check if an IP is in the canonical subnet of `ref_ip` (v4 /24, v6 /64) —
+/// Task 1: was ip_in_subnet([u8;3]) + subnet_prefix(key), which could not
+/// express v6. IpNetwork::contains is the family-complete equivalent.
 #[cfg(test)]
-pub(crate) fn ip_in_subnet(ip: IpAddr, prefix: [u8; 3]) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            // u32 compare is one 4-byte load + one cmp; array compare
-            // would be 3 short-circuited byte loads on the same address.
-            let o = v4.octets();
-            u32::from_be_bytes([o[0], o[1], o[2], 0]) & 0xFFFFFF00
-                == u32::from_be_bytes([prefix[0], prefix[1], prefix[2], 0])
-        }
-        IpAddr::V6(_) => false,
-    }
-}
-
 #[inline]
-#[cfg(test)]
-pub(crate) fn subnet_prefix(key: u32) -> [u8; 3] {
-    [(key >> 24) as u8, (key >> 16) as u8, (key >> 8) as u8]
+pub(crate) fn same_subnet(ref_ip: IpAddr, ip: IpAddr) -> bool {
+    IpNetwork::of_ip(ref_ip).contains(ip)
 }
 
 /// Aggregate a slice of connection events into IP and subnet maps in one pass.
@@ -150,11 +137,23 @@ mod tests {
     fn subnet_key_roundtrip() {
         let ip = IpAddr::V4(Ipv4Addr::new(10, 20, 30, 40));
         let (key, net) = subnet_key(ip).unwrap();
-        assert_eq!(subnet_prefix(key as u32), [10, 20, 30]);
-        assert!(ip_in_subnet(ip, [10, 20, 30]));
-        assert!(!ip_in_subnet(ip, [10, 20, 31]));
+        assert_eq!(net.to_string(), "10.20.30.0/24");
+        assert!(same_subnet(ip, ip));
+        assert!(!same_subnet(ip, IpAddr::V4(Ipv4Addr::new(10, 20, 31, 1))));
         assert_eq!(net.prefix_len, 24);
         assert_eq!(net.family(), 4);
+        assert_eq!(key, net.pack(), "subnet key == packed network address");
+    }
+
+    /// Task 1: the old [u8;3] helper could not express v6 membership at all
+    /// (always false). same_subnet must — this is the behavior delta pinned.
+    #[test]
+    fn same_subnet_covers_v6() {
+        let a: IpAddr = "2001:db8:abcd::5".parse().unwrap();
+        let b: IpAddr = "2001:db8:abcd::ff".parse().unwrap();
+        let c: IpAddr = "2001:db8:abce::1".parse().unwrap();
+        assert!(same_subnet(a, b), "same /64");
+        assert!(!same_subnet(a, c), "different /64");
     }
 
     #[test]

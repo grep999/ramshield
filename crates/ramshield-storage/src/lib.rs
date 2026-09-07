@@ -182,11 +182,12 @@ pub enum BlockState {
     Blocked { reason: BlockReason, since_ns: u64 },
 }
 
-/// Subnet aggregate. `prefix` metadata carried by `IpNetwork` (v4 /24, v6 /64);
-/// `prefix_octets` kept for dashboard display of v4 subnets.
+/// Subnet aggregate. `network` carries family-complete CIDR metadata
+/// (v4 /24, v6 /64) — the single source for display (Task 1: replaces the
+/// old v4-shaped `prefix: [u8;3]` that rendered v6 as garbage).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubnetRecord {
-    pub prefix: [u8; 3],
+    pub network: IpNetwork,
     pub total_rps: u64,
     /// Distinct-source signal for the current window (v4 only): 256-bit map of
     /// seen host octets, 32 B flat. The real swarm signal — one abuser at 500
@@ -314,7 +315,6 @@ impl Store {
         now_ns: u64,
     ) {
         const WINDOW_NS: u64 = 2 * 1_000_000_000; // ponytail: fixed 2s window vs config plumbing — matches pre_aggs flush cadence; add per-subnet window cfg when justified.
-        let prefix = net.prefix_octets();
         // P0 fix: hold the shard lock for the full read-modify-write.
         // The old get().map(|e| e.value().clone()) → mutate → insert pattern
         // dropped the lock between read and write, so two concurrent
@@ -337,7 +337,7 @@ impl Store {
             })
             .or_insert_with(|| {
                 let mut rec = SubnetRecord {
-                    prefix,
+                    network: net,
                     total_rps: 0,
                     host_bitmap: [0; 4],
                     last_updated_ns: now_ns,
@@ -357,6 +357,15 @@ impl Store {
             e.total_rps = 0;
             e.host_bitmap = [0; 4];
         }
+    }
+
+    /// CIDR string for a subnet key ("198.51.100.0/24", "2001:db8::/64").
+    /// Task 1: single display source for dashboard + batch-block logs.
+    /// Empty string for unknown keys (log path only, never gates).
+    pub fn subnet_cidr(&self, key: SubnetKey) -> String {
+        self.subnet_table
+            .get(&key)
+            .map_or(String::new(), |e| e.network.to_string())
     }
 
     /// Insert with RAM limit enforcement. Only enforces limit on net-new growth,
@@ -898,10 +907,21 @@ mod tests {
     }
 
 
-    /// P0 regression: shrinking an entry must decrease both ram_bytes and
-    /// used_bytes. Before this fix, `saturating_sub(net_growth)` collapsed
-    /// the negative delta to zero, so `used_bytes` only ever grew over IP
-    /// churn cycles (Busy IP goes from blob to counter to blob to counter).
+    /// IPv6 plan Task 1: subnet records must carry family-complete CIDR
+    /// metadata. The old `prefix: [u8;3]` (v4-shaped) rendered v6 /64s as
+    /// garbage three-octet strings in the dashboard and batch-block logs.
+    #[test]
+    fn subnet_record_cidr_display_both_families() {
+        let store = Store::new(8);
+        let v4: IpAddr = "198.51.100.7".parse().unwrap();
+        let v6: IpAddr = "2001:db8:abcd::5".parse().unwrap();
+        let (k4, n4) = subnet::subnet_key(v4).unwrap();
+        let (k6, n6) = subnet::subnet_key(v6).unwrap();
+        store.merge_subnet_window(k4, n4, 5, Some(&[v4]), 0);
+        store.merge_subnet_window(k6, n6, 5, Some(&[v6]), 0);
+        assert_eq!(store.subnet_cidr(k4), "198.51.100.0/24");
+        assert_eq!(store.subnet_cidr(k6), "2001:db8:abcd::/64");
+    }
 
     #[test]
     fn subnet_window_v6_key() {

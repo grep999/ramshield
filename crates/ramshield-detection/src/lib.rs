@@ -813,24 +813,24 @@ impl DetectionEngine {
             let ip_threshold = cfg.detection.subnet_batch_threshold as u64;
             let ev_threshold = cfg.detection.subnet_batch_min_events;
 
-            let hot: Vec<(SubnetKey, u64, u64, [u8; 3])> = self
+            let hot: Vec<(SubnetKey, u64, u64, String)> = self
                 .store
                 .subnet_table()
                 .iter()
                 .filter_map(|e| {
                     let r = e.value();
                     if r.unique_ips() >= ip_threshold && r.total_rps >= ev_threshold {
-                        Some((*e.key(), r.unique_ips(), r.total_rps, r.prefix))
+                        Some((*e.key(), r.unique_ips(), r.total_rps, r.network.to_string()))
                     } else {
                         None
                     }
                 })
                 .collect();
 
-            for (sk, uniq, count, prefix) in hot {
+            for (sk, uniq, count, cidr) in hot {
                 warn!(
-                    "Batch block subnet {:?}.{}.{} ({} IPs / {} events in window)",
-                    prefix[0], prefix[1], prefix[2], uniq, count
+                    "Batch block subnet {} ({} IPs / {} events in window)",
+                    cidr, uniq, count
                 );
                 info!("Batch blocking subnet key {:#x}", sk);
 
