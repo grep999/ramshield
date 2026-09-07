@@ -53,6 +53,23 @@ const DEFAULT_MAX_CONNECTION_BYTES: usize = 1_048_576; // 1MB per connection
 const DEFAULT_READ_TIMEOUT_MS: u64 = 5000;
 const DEFAULT_WRITE_TIMEOUT_MS: u64 = 5000;
 const BATCH_MAX: usize = 1_000_000;
+/// Upper bound on a block TTL. 1 year in seconds — the panic class here is
+/// `Instant::now() + Duration::from_secs(u64::MAX)` overflowing; the clamp
+/// keeps every TTL arithmetic in the enforcement task well inside range.
+const MAX_TTL_SECS: u64 = 31_536_000;
+
+/// Clamp a block TTL to a sane ceiling. `u64::MAX` used to reach
+/// `Instant::now() + Duration` and overflow-panic the enforcement task —
+/// the single writer for blocks/expiries. Returns the clamped value.
+fn sanitize_ttl(ttl: Option<u64>) -> Result<u64, String> {
+    match ttl {
+        Some(t) if t > MAX_TTL_SECS => Err(format!(
+            "ttl_secs {t} exceeds max {MAX_TTL_SECS} (1 year)"
+        )),
+        Some(t) => Ok(t),
+        None => Ok(0),
+    }
+}
 // Ingest channel capacity — single source of truth: the detection engine's
 // bounded channel (64k ConnectionEvents, ~4MB; fills in ~64ms at 1M eps).
 pub use ramshield_detection::CHANNEL_CAPACITY;
@@ -492,13 +509,22 @@ fn process_request(
             } else {
                 reason.clone()
             };
+            let ttl_secs = match sanitize_ttl(ttl_secs) {
+                Ok(t) => t,
+                Err(msg) => {
+                    return Response::Error {
+                        code: 400,
+                        message: msg,
+                    };
+                }
+            };
             let cmd = EnforceCommand {
                 decision_id: Uuid::new_v4(),
                 policy_version: 1,
                 source: "ipc".into(),
                 actor: "admin".into(),
                 timestamp_utc: epoch_ns() as i64 / 1_000_000_000,
-                ttl_seconds: ttl_secs.unwrap_or(0),
+                ttl_seconds: ttl_secs,
                 reason,
                 ip: ip_addr,
                 action: EnforceAction::Block,
@@ -721,4 +747,20 @@ fn verify_frame_auth(
     let payload = serde_json::to_vec(&v).map_err(|_| "reserialize failed")?;
     ramshield_protocol::auth::verify(keys, key_id, ts_ms, sig, &payload, Some(replay))?;
     Ok(payload)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_ttl;
+
+    #[test]
+    fn sanitize_ttl_clamps_overflow_class() {
+        // P1-1 go-live guard: u64::MAX used to reach `Instant::now() +
+        // Duration::from_secs(u64::MAX)` and panic the enforcement task.
+        assert!(sanitize_ttl(Some(u64::MAX)).is_err());
+        assert!(sanitize_ttl(Some(31_536_001)).is_err());
+        assert_eq!(sanitize_ttl(Some(31_536_000)), Ok(31_536_000));
+        assert_eq!(sanitize_ttl(Some(60)), Ok(60));
+        assert_eq!(sanitize_ttl(None), Ok(0));
+    }
 }

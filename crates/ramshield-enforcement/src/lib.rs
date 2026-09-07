@@ -29,6 +29,11 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+/// Fallback expiry horizon when TTL arithmetic overflows (belt-and-suspenders;
+/// all entry points clamp, so this should never fire). 24h keeps a runaway
+/// block bounded instead of permanent.
+const MAX_EXPIRY_FALLBACK_SECS: u64 = 86_400;
+
 #[cfg(feature = "xdp")]
 pub mod xdp;
 
@@ -378,7 +383,13 @@ impl EnforcementService {
                 // Ring schedule/detach are both O(1) — TTL refresh moves the
                 // card between buckets instead of appending a duplicate.
                 if cmd.ttl_seconds > 0 {
-                    let at = Instant::now() + Duration::from_secs(cmd.ttl_seconds);
+                    // TTL is clamped at every entry point (IPC boundary,
+                    // config validate) — checked_add is the belt-and-suspenders
+                    // guard so a future path can never overflow into a panic
+                    // and kill the enforcement task (blocks silently die).
+                    let at = Instant::now()
+                        .checked_add(Duration::from_secs(cmd.ttl_seconds))
+                        .unwrap_or_else(|| Instant::now() + Duration::from_secs(MAX_EXPIRY_FALLBACK_SECS));
                     self.schedule_expiration(cmd.ip, at);
                 } else {
                     self.detach_expiration(cmd.ip);
