@@ -103,9 +103,13 @@ pub enum Response {
 }
 
 /// Connection report for batch ingestion.
+///
+/// `ip` is a typed `IpAddr`, not a `String` (RAM-for-CPU item 2): serde
+/// renders it as the same wire string, but the per-event path no longer
+/// mallocs a String, parses it, and frees it — 4-byte copy instead.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ConnectionReport {
-    pub ip: String,
+    pub ip: std::net::IpAddr,
     pub bytes: u64,
     pub status_code: u16,
     pub proto_fp: u32,
@@ -143,5 +147,22 @@ mod tests {
     fn message_version_roundtrip() {
         let msg = Message::request(Request::GetStatus);
         assert_eq!(msg.version, PROTOCOL_VERSION);
+    }
+
+    /// Item 2 wire contract: `ip` became a typed IpAddr, so the JSON bytes
+    /// must stay byte-identical to the old String field — existing clients
+    /// (README example, bench scripts) keep working with zero changes.
+    #[test]
+    fn connection_report_wire_format_unchanged() {
+        let json = r#"{"ip":"198.51.100.7","bytes":42,"status_code":200,"proto_fp":9}"#;
+        let r: ConnectionReport = serde_json::from_str(json).unwrap();
+        assert_eq!(r.ip.to_string(), "198.51.100.7");
+        assert_eq!(serde_json::to_string(&r).unwrap(), json);
+        // Malformed IPs are a serde error at parse time (frame rejected),
+        // no longer a per-event String::parse in the server loop.
+        assert!(serde_json::from_str::<ConnectionReport>(
+            r#"{"ip":"999.1.1.1","bytes":0,"status_code":0,"proto_fp":0}"#
+        )
+        .is_err());
     }
 }

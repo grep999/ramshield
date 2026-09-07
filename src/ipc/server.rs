@@ -647,13 +647,7 @@ fn process_request(
             let mut rejected = 0u32;
             for cr in events {
                 let ev = ConnectionEvent {
-                    ip: match cr.ip.parse() {
-                        Ok(addr) => addr,
-                        Err(_) => {
-                            rejected += 1;
-                            continue;
-                        }
-                    },
+                    ip: cr.ip, // typed on the wire (item 2): no per-event String alloc + parse
                     timestamp_ns: now,
                     bytes: cr.bytes,
                     status_code: cr.status_code,
