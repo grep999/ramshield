@@ -104,7 +104,10 @@ impl Engine {
     /// F9: join detection batch/subnet threads with a grace cap. Call after
     /// shutdown() — replaces the fixed sleep in main.
     pub fn join_workers(&self, grace: std::time::Duration) {
-        if let Some(det) = self.detection.lock().unwrap().as_ref() {
+        // no-unwrap gate (CI lint-no-unwrap scans src/): poisoning must not
+        // abort shutdown — a panicked holder still left a valid Option<Arc>
+        // behind, and join is exactly what shutdown needs to do then.
+        if let Some(det) = self.detection.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             det.join_workers(grace);
         }
     }
@@ -355,7 +358,7 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     detection
         .clone()
         .spawn_workers(cfg_snapshot.engine.worker_threads);
-    *engine.detection.lock().unwrap() = Some(detection.clone());
+    *engine.detection.lock().unwrap_or_else(|e| e.into_inner()) = Some(detection.clone());
 
     let forecaster = Arc::new(Forecaster::new(
         store.clone(),
