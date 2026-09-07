@@ -1242,6 +1242,33 @@ mod tests {
         assert_eq!(store.ram_bytes(), 0, "ram_bytes zeroed after eviction");
     }
 
+    /// IPv6 plan Task 5: the v6 gate leg (Task 2) reads `subnet_index`
+    /// cardinality — stale members would count as ghosts forever if any
+    /// eviction path skipped index cleanup. v6 must behave exactly like v4.
+    #[test]
+    fn v6_eviction_cleans_subnet_index() {
+        let store = Store::new(16);
+        let ram_lim = 64 * 1024 * 1024;
+        let hosts: Vec<IpAddr> = (1..=3u16)
+            .map(|o| IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, o)))
+            .collect();
+        let sk = subnet_key_u128(hosts[0]).unwrap();
+        for h in &hosts {
+            store
+                .insert(*h, Value::Counter(1), Some(1), ram_lim)
+                .unwrap();
+            store.update_subnet_index(*h, Some(sk), false);
+        }
+        assert_eq!(store.subnet_member_count(sk), 3, "index seeded");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        assert_eq!(store.evict_expired(), 3);
+        assert_eq!(
+            store.subnet_member_count(sk),
+            0,
+            "evicted v6 hosts must leave zero gate-countable ghosts"
+        );
+    }
+
     /// P0 regression (round-4 Q3): `update_ip` mutating a live Blocked record
     /// must NOT revert block_state — the merge_record get/insert race let a
     /// stale Clean snapshot resurrect blocked attackers.

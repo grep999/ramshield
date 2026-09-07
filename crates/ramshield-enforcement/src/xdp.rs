@@ -71,6 +71,21 @@ fn xdp_map_for(ip: IpAddr) -> &'static str {
     }
 }
 
+/// Task 5: split expected blocks per map, keyed. Pure — reconcile() keeps
+/// only the map IO; the family routing (the part that leaked v6 keys into
+/// the v4 sweep pre-fix) is unit-testable here.
+fn split_by_family(expected_blocks: &[IpAddr]) -> (Vec<BlocklistKey>, Vec<BlocklistKey>) {
+    let mut v4 = Vec::new();
+    let mut v6 = Vec::new();
+    for ip in expected_blocks {
+        match ip {
+            IpAddr::V4(_) => v4.push(BlocklistKey::from_ip(*ip)),
+            IpAddr::V6(_) => v6.push(BlocklistKey::from_ip(*ip)),
+        }
+    }
+    (v4, v6)
+}
+
 fn map_err(e: impl std::fmt::Display) -> EnforcementError {
     EnforcementError::Xdp(e.to_string())
 }
@@ -153,12 +168,10 @@ impl XdpApplier for AyaXdpApplier {
         // drains its stale keys against its family's expected set only. The
         // old single-map sweep would have deleted every live v6 key when the
         // expected set was v4-only, and vice versa.
-        for (name, family) in [("BLOCKLIST", false), ("BLOCKLIST6", true)] {
-            let expected: std::collections::HashSet<BlocklistKey> = expected_blocks
-                .iter()
-                .filter(|ip| ip.is_ipv6() == family)
-                .map(|ip| BlocklistKey::from_ip(*ip))
-                .collect();
+        let (v4_keys, v6_keys) = split_by_family(expected_blocks);
+        for (name, expected) in [("BLOCKLIST", v4_keys), ("BLOCKLIST6", v6_keys)] {
+            let expected: std::collections::HashSet<BlocklistKey> =
+                expected.into_iter().collect();
             let mut stale_count = 0usize;
             self.with_map(name, |m| {
                 let stale: Vec<BlocklistKey> = m
@@ -222,6 +235,23 @@ mod tests {
         assert_eq!(
             super::xdp_map_for("2001:db8::1".parse().unwrap()),
             "BLOCKLIST6"
+        );
+    }
+
+    /// Task 5: reconcile must never sweep one family's keys against the
+    /// other's expected set — pins the split itself (map IO stays thin).
+    #[test]
+    fn split_by_family_never_crosses_maps() {
+        let mixed = ["1.2.3.4", "2001:db8::1", "5.6.7.8", "fd00::9"];
+        let ips: Vec<IpAddr> = mixed.iter().map(|s| s.parse().unwrap()).collect();
+        let (v4, v6) = split_by_family(&ips);
+        assert_eq!(v4.len(), 2);
+        assert_eq!(v6.len(), 2);
+        assert_eq!(v6[0].0, BlocklistKey::from_ip(ips[1]).0);
+        assert_eq!(v6[1].0, BlocklistKey::from_ip(ips[3]).0);
+        assert!(
+            !v4.iter().any(|k| v6.contains(k)),
+            "a key must not appear in both sweeps"
         );
     }
 }
