@@ -555,8 +555,8 @@ impl Metrics {
             "Current IP entropy.",
             "gauge"
         ));
-        println!(); // trailing newline flushes stanza
-
+        // No trailing println! here — every emit stanza already ends in '\n',
+        // and stdout writes from a render fn were a stray-syscall bug (2026-09).
         out
     }
 }
