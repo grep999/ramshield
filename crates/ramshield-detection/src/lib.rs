@@ -840,7 +840,13 @@ impl DetectionEngine {
                 let uniq = if r.network.family() == 4 {
                     r.unique_ips()
                 } else {
-                    self.store.subnet_member_count(*e.key())
+                    // Windowed: the raw index counts LIFETIME members (never
+                    // pruned on unblock) — a cooled /64 with 60 historical
+                    // hosts plus a small fresh burst would pass the gate and
+                    // batch-block ~55 innocent IPs (review P1-2).
+                    let now = now_ns();
+                    self.store
+                        .subnet_member_count_windowed(*e.key(), 2 * 1_000_000_000, now)
                 };
                 if uniq >= ip_threshold && r.total_rps >= ev_threshold {
                     Some((*e.key(), uniq, r.total_rps, r.network.to_string()))
@@ -858,7 +864,10 @@ impl DetectionEngine {
             info!("Batch blocking subnet key {:#x}", sk);
 
             // O(1) lookup for IPs in the hot subnet instead of full scan
-            let ips_in_subnet = self.store.get_ips_in_subnet(sk);
+            let now = now_ns();
+            let ips_in_subnet = self
+                .store
+                .get_ips_in_subnet_windowed(sk, 2 * 1_000_000_000, now);
             for key in ips_in_subnet {
                 if let Some(e) = self.store.inner().get(&key)
                     && let Value::IpRecord(ref r) = e.value().value
@@ -1134,7 +1143,10 @@ mod tests {
             .collect();
         let events: Vec<_> = hosts
             .iter()
-            .flat_map(|ip| (0..3u64).map(move |i| ev_at(*ip, i)))
+            .flat_map(|ip| {
+                let base = now_ns();
+                (0..3u64).map(move |i| ev_at(*ip, base + i))
+            })
             .collect();
         eng.flush_events(&events);
         // Drain the flush's per-IP blocks (inst_rps is huge in synthetic
@@ -1156,6 +1168,93 @@ mod tests {
             v6_blocks.len(),
             60,
             "v6 /64 swarm must batch-block every member IP, got {v6_blocks:?}",
+        );
+    }
+
+    /// P1-2 regression: a cooled-off /64 (60 historical members in the
+    /// lifetime reverse index) plus a small fresh burst (5 hosts, 15 events)
+    /// must NOT pass the dual gate and batch-block ~55 innocent hosts.
+    /// Pre-fix: v6 gate read lifetime cardinality (60 >= 50) and the block
+    /// leg swept the same stale index. Post-fix: both are window-scoped by
+    /// `last_seen_ns`, so only the 5 fresh hosts count and get blocked.
+    #[test]
+    fn v6_cooled_subnet_does_not_block_stale_members() {
+        use tokio::sync::mpsc;
+        let mut cfg = Config::default();
+        cfg.detection.subnet_window_threshold = 1;
+        let cfg = cfg.into_handle();
+        let store = Arc::new(Store::new(16));
+        let metrics = Arc::new(Metrics::new());
+        let (etx, mut erx) = mpsc::channel(64);
+        let eng = Arc::new(DetectionEngine::new(
+            store.clone(),
+            cfg,
+            etx,
+            metrics,
+            Arc::new(AtomicBool::new(false)),
+        ));
+        let v6 = |o: u16| {
+            IpAddr::V6(std::net::Ipv6Addr::new(
+                0x2001, 0xdb8, 0xbeef, 0, 0, 0, 0, o,
+            ))
+        };
+        // Historical members: promoted with near-zero timestamps, so their
+        // last_seen_ns is a long time before `now_ns()`.
+        let old: Vec<IpAddr> = (1..=60u16).map(v6).collect();
+        let old_events: Vec<_> = old
+            .iter()
+            .flat_map(|ip| (0..2u64).map(move |i| ev_at(*ip, i)))
+            .collect();
+        eng.flush_events(&old_events);
+        while erx.try_recv().is_ok() {}
+        // Assert they actually landed in the reverse index (else the test
+        // is not exercising the cooling path).
+        assert!(
+            store
+                .subnet_table()
+                .iter()
+                .map(|e| e.value().total_rps)
+                .sum::<u64>()
+                > 0,
+            "historical burst must populate the subnet table"
+        );
+        // Fresh burst: 5 hosts just now, 3 events each = 15 events total.
+        let fresh: Vec<IpAddr> = (101..=105u16).map(v6).collect();
+        let base = now_ns();
+        let fresh_events: Vec<_> = fresh
+            .iter()
+            .flat_map(|ip| (0..3u64).map(move |i| ev_at(*ip, base + i)))
+            .collect();
+        eng.flush_events(&fresh_events);
+        while erx.try_recv().is_ok() {}
+        eng.subnet_batch_scan();
+        let cmds: Vec<_> = {
+            let mut v = Vec::new();
+            while let Ok(c) = erx.try_recv() {
+                v.push(c);
+            }
+            v
+        };
+        let v6_blocks: Vec<_> = cmds
+            .iter()
+            .filter(|c| c.ip.is_ipv6() && c.reason == "subnet_burst")
+            .collect();
+        // Exactly the fresh hosts may be blocked — never the 60 stale ones.
+        assert!(
+            v6_blocks.len() <= 5,
+            "stale members must not be batch-blocked, got {} blocks: {:?}",
+            v6_blocks.len(),
+            v6_blocks
+        );
+        assert!(
+            v6_blocks.iter().all(|c| fresh.contains(&c.ip)),
+            "only window-fresh hosts may be blocked, got {:?}",
+            v6_blocks
+        );
+        // And the gate must not have fired on the lifetime count alone.
+        assert!(
+            v6_blocks.len() < 50,
+            "dual gate must not pass on 60 lifetime members + 5 fresh",
         );
     }
 

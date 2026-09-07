@@ -381,6 +381,36 @@ impl Store {
             .map_or(0, |ips| ips.len() as u64)
     }
 
+    /// Windowed variant used by the batch gate for v6: counts only members
+    /// whose store record was seen within `window_ns` of `now_ns`. The raw
+    /// index counts LIFETIME hosts (never pruned on unblock), so without
+    /// this a cooled-off /64 with 60 historical members plus a tiny fresh
+    /// burst (5 hosts, 100 events) passes the dual gate and batch-blocks
+    /// ~55 innocent hosts. O(members) per call — acceptable: gates run on
+    /// flush cadence, subnets are small.
+    pub fn subnet_member_count_windowed(
+        &self,
+        key: SubnetKey,
+        window_ns: u64,
+        now_ns: u64,
+    ) -> u64 {
+        self.subnet_index
+            .get(&key)
+            .map_or(0, |ips| {
+                ips.iter()
+                    .filter(|e| {
+                        self.inner.get(e.key()).is_some_and(|v| {
+                            let ls = match &v.value().value {
+                                Value::IpRecord(rec) => rec.last_seen_ns,
+                                _ => 0,
+                            };
+                            now_ns.saturating_sub(ls) <= window_ns
+                        })
+                    })
+                    .count() as u64
+            })
+    }
+
     /// Insert with RAM limit enforcement. Only enforces limit on net-new growth,
     /// allowing replacement of existing entries without triggering capacity errors.
     /// Capacity semantics: byte-accounted via
@@ -799,6 +829,35 @@ impl Store {
         self.subnet_index
             .get(&subnet_key)
             .map(|ips| ips.iter().map(|e| *e.key()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Windowed variant for the batch-block leg: only IPs whose store record
+    /// was seen within `window_ns` — same rationale as
+    /// `subnet_member_count_windowed` (lifetime index must not let a cooled
+    /// /64's historical members get batch-blocked by a small fresh burst).
+    pub fn get_ips_in_subnet_windowed(
+        &self,
+        subnet_key: SubnetKey,
+        window_ns: u64,
+        now_ns: u64,
+    ) -> Vec<IpAddr> {
+        self.subnet_index
+            .get(&subnet_key)
+            .map(|ips| {
+                ips.iter()
+                    .filter(|e| {
+                        self.inner.get(e.key()).is_some_and(|v| {
+                            let ls = match &v.value().value {
+                                Value::IpRecord(rec) => rec.last_seen_ns,
+                                _ => 0,
+                            };
+                            now_ns.saturating_sub(ls) <= window_ns
+                        })
+                    })
+                    .map(|e| *e.key())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
