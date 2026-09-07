@@ -1,13 +1,13 @@
 #![no_std]
 #![no_main]
 
+use aya_ebpf::bindings::xdp_md;
 use aya_ebpf::{
     bindings::xdp_action,
     macros::{map, xdp},
     maps::HashMap,
     programs::XdpContext,
 };
-use aya_ebpf::bindings::xdp_md;
 use core::mem;
 use network_types::{
     eth::{EthHdr, EtherType},
@@ -30,8 +30,7 @@ static BLOCKLIST: HashMap<u32, u8> = HashMap::with_max_entries(blocklist_cap_env
 // (__u64[2] wire-order key) + enforcement/xdp.rs from_le_bytes. This Rust
 // program's names/layouts must be reconciled before it can ship.
 #[map]
-static BLOCKLIST_V6: HashMap<[u8; 16], u8> =
-    HashMap::with_max_entries(blocklist_cap_env(), 0);
+static BLOCKLIST6: HashMap<[u8; 16], u8> = HashMap::with_max_entries(blocklist_cap_env(), 0);
 
 #[inline(always)]
 const fn blocklist_cap_env() -> u32 {
@@ -93,7 +92,7 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
         // (see try_ramshield_xdp outer catch-all).
         if unsafe { (*ip6).version() } == 6 {
             let src = unsafe { (*ip6).src_addr };
-            if unsafe { BLOCKLIST_V6.get(&src) }.is_some() {
+            if unsafe { BLOCKLIST6.get(&src) }.is_some() {
                 return Ok(xdp_action::XDP_DROP);
             }
         }
