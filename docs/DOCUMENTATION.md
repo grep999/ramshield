@@ -736,8 +736,7 @@ Default filter: `ramshield=info`
 2. **WAL not connected** — blocks are not persisted across restart
 3. ~~**IPv6 subnets** — subnet key logic is IPv4-only~~ — CLOSED: /64 swarm
    gate (index cardinality), CIDR-correct records, and an ETH_P_IPV6 XDP
-   drop path landed; kernel-side DROP not yet runtime-verified (needs root;
-   host/kernel byte contract pinned by tests)
+   drop path landed; kernel-side DROP runtime-verified (scripts/verify_v6_drop.sh, `sudo ./scripts/verify_v6_drop.sh lo` — blocked src silent, control passes, v4 leg + unblock intact)
 4. **Single batch thread** — `worker_threads` config is informational
 5. **Entropy block** still scans promoted IpRecords (smaller set than before)
 6. **No TLS on IPC** — intended for localhost or trusted network

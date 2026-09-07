@@ -69,7 +69,7 @@ fi
 
 # 3. v4 leg sanity — same program, other map, endianness the other way.
 ip addr add 192.0.2.7/32 dev "$IFACE" 2>/dev/null || true
-V4KEY=$(python3 -c "import ipaddress; print(' '.join(f'{b:02x}' for b in ipaddress.IPv4Address('192.0.2.7').packed))")
+V4KEY=$(python3 -c "import ipaddress,sys; print(' '.join(f'{b:02x}' for b in ipaddress.IPv4Address('192.0.2.7').packed + b'\0'*12))")
 bpftool map update name BLOCKLIST key hex $V4KEY value hex 01
 if ping -4 -I 192.0.2.7 127.0.0.1 -c1 -W2 >/dev/null 2>&1; then
   echo "FAIL: v4 blocked src answered — BLOCKLIST key missed"; fails=1
