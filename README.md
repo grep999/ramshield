@@ -1,60 +1,96 @@
-# RamShield — DDoS Protection Built for Developers
+# RamShield
 
-**Real-time DDoS protection at the kernel level. Rust. XDP/BPF. Sub-millisecond detection.**
+**DDoS mitigation that decides in milliseconds and drops at the kernel.**
 
-[![][actions-badge]](https://github.com/your-org/ramshield/actions)
-[![][license-badge]](LICENSE)
-[![][stars-badge]]()
+Rust · XDP/BPF line-rate blocking · EWMA + CUSUM + pulse-wave detection · HMAC-signed IPC · WAL-durable blocklist · live operations console
 
-[actions-badge]: https://img.shields.io/github/actions/workflow/status/your-org/ramshield/ci.yml?style=flat-square
-[license-badge]: https://img.shields.io/github/license/your-org/ramshield?style=flat-square
-[stars-badge]: https://img.shields.io/github/stars/your-org/ramshield?style=flat-square
-
-DDoS attacks are getting faster, smarter, and harder to stop. RamShield fights back at the
-right layer: **XDP/BPF**, where packets are dropped before they ever reach your application.
-No proxies. No scrubbing centers. No latency.
+[![CI](https://img.shields.io/github/actions/workflow/status/grep999/ramshield/ci.yml?style=flat-square&label=ci)](https://github.com/grep999/ramshield/actions)
+[![license](https://img.shields.io/github/license/grep999/ramshield?style=flat-square)](LICENSE)
+[![rust](https://img.shields.io/badge/rust-1.85%2B%20(ed.2024)-orange?style=flat-square&logo=rust)](https://doc.rust-lang.org/edition-guide/rust-2024/)
+[![tests](https://img.shields.io/badge/tests-169%20passing-00e589?style=flat-square)](#benchmarks)
 
 ---
 
-## Quick Start
+Your proxy sees the attack *after* the kernel has already spent on it. RamShield
+spends nothing: verdicts are computed from authenticated connection events, and
+confirmed attackers are blackholed in a **BPF hash map** — packets die at L3,
+before socket, before your app, before memory.
+
+```text
+ attacker ──▶ [ XDP: BLOCKLIST hit? DROP ]───miss───▶ your NIC ──▶ your app
+                        ▲                                     │
+                        │ one atomic map insert               │ connection events
+                        │                                     ▼
+              ┌─────────┴──────────┐   HMAC-SHA256 IPC   ┌──────────────┐
+              │ enforcement actor  │◀────────────────────│  EWMA/CUSUM  │
+              │ WAL + TTL expiry   │   64k-event channel │ + pulse-wave │
+              └────────────────────┘                     │ + /24 swarm  │
+                                                         └──────────────┘
+```
+
+## Why it exists
+
+| | |
+|---|---|
+| **Drops at line rate** | XDP/BPF `XDP_DROP` — no userspace copy, no connection state, no syscall for the victim path |
+| **Three detection brains** | per-IP EWMA (rate), CUSUM (sustained sub-threshold creep), pulse-wave (2s-on/3s-off evaders) + /24 swarm gate (100 IPs / 100 events / 2s) |
+| **No false-positive theatre** | 0.0000% FPR across a 21M-event, 21-phase benchmark; cold one-shot traffic is *skipped*, not scored |
+| **Survives crashes** | WAL with CRC32 + lz4, quarantine of corrupt tails, blocklist replayed on boot with TTL math — a restart does not un-ban an attacker |
+| **Hardened control plane** | HMAC-SHA256 frame auth with nonce replay store, Argon2id console login, per-IP lockout, fail-closed config validation |
+| **Boring to run** | one static binary, 335 KB resident after 21M events (0.004% of RAM budget), systemd-friendly |
+
+## Quick start
 
 ```bash
-# Build
+git clone https://github.com/grep999/ramshield && cd ramshield/beta/rs
 cargo build --release --locked --features full
+```
 
-# Set BPF capabilities (one-time, needs root)
+Grant the binary the minimum kernel privileges (one-time, root):
+
+```bash
 sudo setcap 'cap_net_admin,cap_bpf,cap_perfmon+eip' ./target/release/ramshield
+```
 
-# Configure
-cat > config.toml << 'EOF'
+`config.toml`:
+
+```toml
 [xdp]
 enabled = true
-interface = "eth0"   # your NIC
-mode = "skb"          # generic fallback, use "drv" or "hw" for native
+interface = "eth0"     # your NIC
+mode = "skb"           # "drv"/"hw" for native once validated
 
 [ipc]
-tcp_addr = "0.0.0.0:7890"
-auth_keys = ["k1:$(openssl rand -hex 32)"]
+tcp_addr = "127.0.0.1:7890"                     # your apps talk here
+auth_keys = ["k1:PASTE-32-BYTES-HEX"]           # openssl rand -hex 32
+
+[dashboard]
+http_addr = "127.0.0.1:9999"                    # console + /metrics
+admin_password_hash = "argon2id-hash"           # echo -n 'pw' | argon2 "$(head -c16 /dev/urandom | xxd -p)" -id -e
 
 [detection]
 rps_threshold = 5000
 rate_window_secs = 10
-subnet_batch_threshold = 50
-EOF
+subnet_batch_threshold = 50                     # unique /24 IPs per 2s window
+```
 
-# Run
+Run it:
+
+```bash
 mkdir -p /var/lib/ramshield/wal
 ./target/release/ramshield --config config.toml
 ```
 
-Send events via IPC (HMAC-SHA256 authenticated):
+Console at `http://127.0.0.1:9999`, Prometheus at `/metrics`, health at `/healthz`.
 
-```bash
-# One-liner: sign and send a batch of connection events
-python3 - << 'PYEOF'
+### Feeding events
+
+Any signed newline-delimited JSON frame over TCP. Reference client:
+
+```python
 import hmac, hashlib, json, socket, time
 
-KEY = bytes.fromhex("your-hex-key-here")
+KEY = bytes.fromhex("PASTE-32-BYTES-HEX")
 def sign(ts, p):
     m = hmac.new(KEY, digestmod=hashlib.sha256)
     m.update(str(ts).encode()); m.update(b"."); m.update(p)
@@ -64,153 +100,97 @@ def send(req):
     ts = int(time.time() * 1000)
     p = json.dumps(req, separators=(",", ":"), sort_keys=True).encode()
     env = {**req, "auth": {"key_id": "k1", "ts_ms": ts, "sig": sign(ts, p)}}
-    wire = json.dumps(env, separators=(",", ":"), sort_keys=True).encode() + b"\n"
     with socket.create_connection(("127.0.0.1", 7890)) as s:
-        s.sendall(wire)
+        s.sendall(json.dumps(env, separators=(",", ":"), sort_keys=True).encode() + b"\n")
         return json.loads(s.recv(8192).decode())
 
-# Report 100 events
 send({"type": "report_connections", "events": [
-    {"ip": "192.168.1.1", "bytes": 2048, "status_code": 200, "proto_fp": 0}
+    {"ip": "203.0.113.9", "bytes": 2048, "status_code": 200, "proto_fp": 0}
     for _ in range(100)
 ]})
-PYEOF
 ```
 
-Dashboard at `http://localhost:9999`:
-
-```bash
-curl http://localhost:9999/api/snapshot | jq
-```
-
----
+Events flow: **HMAC verify → nonce check → 64k bounded channel → sharded
+pre-aggregator (cold IPs skipped) → batch merge into per-IP records → detection
+verdict → enforcement actor (WAL → XDP map insert, TTL expiry)**.
 
 ## Benchmarks
 
-**Test environment:** Linux 6.8.0, single laptop-class machine, Rust edition 2024.
-See [`docs/DDOS_BENCHMARK_REPORT.md`](docs/DDOS_BENCHMARK_REPORT.md) for full methodology.
+Laptop-class single host (Linux 6.8, i7, 1×GbE loopback path), Rust edition 2024.
+Full methodology: [`docs/DDOS_BENCHMARK_REPORT.md`](docs/DDOS_BENCHMARK_REPORT.md).
 
-### Comparison with Open-Source DDoS Tools
-
-Benchmarks across open-source DDoS tools, measured on the same hardware (where public
-numbers exist) or by documented capability. RamShield is the only **defensive** tool;
-MHDDoS, GoldenEye, slowhttptest, and Torshammer are **offensive** (attack simulators).
-xdp-ddos-protect and holon-rs are defensive.
-
-| | **RamShield** | MHDDoS | GoldenEye | slowhttptest | xdp-ddos-protect | holon-rs |
-|---|---|---|---|---|---|---|
-| **Type** | Defensive | Offensive | Offensive | Offensive | Defensive | Defensive |
-| **Language** | Rust | Python 3 | Python 3 | C++ | C | Rust |
-| **XDP/BPF** | ✅ BPF map + `xdpgeneric` | — | — | — | ✅ BPF hash map | ✅ BPF tail calls |
-| **Detection** | EWMA + Holt-Winters | — | — | — | Rate-limit heuristic | VSA/HDC embedding |
-| **Subnet aggregation** | ✅ 100 ev /24h /2s window | — | — | — | — | — |
-| **Auth (IPC)** | HMAC-SHA256 | — | — | — | — | — |
-| **WAL / durability** | ✅ Fsync + lz4 | — | — | — | — | — |
-| **IPC throughput** | **135,602 eps** | — | — | — | — | — |
-| **Sustained flood** | **154,731 eps** | — | — | — | — | — |
-| **False-positive rate** | **0.0000%** | — | — | — | — | — |
-| **Detection latency (warm)** | **108 ms** | — | — | — | — | — |
-| **Detection latency (cold)** | 8,000 ms | — | — | — | — | — |
-| **Recovery time** | **52 ms** | — | — | — | — | — |
-| **Memory / 21M events** | **0.004%** ram_pct | — | — | — | — | — |
-| **RFC 9411 probe oracle** | ✅ 100%/100% | — | — | — | — | — |
-| **Attack vectors** | L7 events | 57 methods | HTTP keepalive | Slowloris/RUDY | SYN rate-limit | Anomaly rules |
-| **Production benchmarks** | ✅ 21M events | — | — | — | — | — |
-| **Stars** | — | most-starred | archived | Kali default | niche | niche |
-
-> **Note on comparables:** MHDDoS, GoldenEye, slowhttptest, and Torshammer are attack
-> simulation tools (used for legitimate stress testing). They do not detect, block, or
-> report — only transmit. xdp-ddos-protect and holon-rs are the closest open-source
-> defensive XDP/BPF tools; neither has published benchmarks at RamShield's scale.
-> Numbers shown for RamShield are independently measured; other tools' cells are
-> blank because no comparable public benchmark exists.
-
-### Detection Breakdown
-
-Across 21M events and 21 test phases:
-
-| Source | Count | % of Events |
-|---|---:|---:|
-| Per-IP EWMA threshold (`high_rps`) | 89 blocks | 0.0004% |
-| Holt-Winters forecast deviation (`entropy_anomaly`) | 48 blocks | 0.0002% |
-| Sub-threshold stealth traffic (no block) | 2,280,200 events | 10.7% |
-| Legitimate background (no block) | ~450,000 events | 2.1% |
-| Cold-skipped one-shots | 57,936 events | 0.27% |
-| **Total** | **21,322,950 events** | |
-
-### IPC Layer Performance
-
-| Metric | Value |
+| | RamShield |
 |---|---|
-| HMAC-SHA256 signed throughput | **135,602 events/sec** |
-| Sustained single-flood | **154,731 events/sec** |
-| Distributed (50 attackers) | **115,278 events/sec** |
-| Connection capacity (ulimit 1024) | 1,019 concurrent |
-| Auth reject rate | 0.00004% (9 of 684K RPCs) |
-| Recovery time (unblock → snapshot) | **52 ms** |
+| IPC throughput, HMAC-signed | **135,602 events/s** |
+| Sustained flood (single attacker) | **154,731 events/s** |
+| Distributed flood (50 attackers) | 115,278 events/s |
+| Detection latency (warm) | **108 ms** |
+| Block → recovery visible in snapshot | **52 ms** |
+| False positives, 21M events / 21 phases | **0.0000%** |
+| Resident memory after 21M events | 335 KB (0.004% of budget) |
+| Concurrent control connections | 1,019 (ulimit-bound) |
+| RFC 9411 probe oracle under attack | 100% / 100% |
 
-### Memory Profile
+Versus the open-source field: MHDDoS / GoldenEye / slowhttptest are attack
+simulators — they transmit, they do not defend. The defensive comparables
+(`xdp-ddos-protect`, `holon-rs`) ship a single heuristic and no published
+benchmarks. RamShield's differentiators: three stacked statistical detectors +
+subnet-swarm gate, durable (WAL-replayed) blocking, authenticated event
+ingestion, and a built-in console — at laptop-class zero-fuss footprint.
 
-| Phase | RAM | ram_pct |
-|---|---|---|
-| Idle | 32 KB | 0.0004% |
-| After 1M events | 37 KB | 0.0004% |
-| After 21M events | **335 KB** | **0.004%** |
-| Limit | 8,192 MB | 100% |
+## Console
 
----
+Live throughput chart (canvas, 4-minute window, block-event markers), pipeline
+funnel with sparkline proportions, hot-subnet intensity bars, block feed with
+fresh-row highlighting, store-RAM/CPU/RSS gauges. Pauses polling when the tab
+is hidden; respects `prefers-reduced-motion`. No JS frameworks — one file,
+zero build step, ~30 KB.
+
+`/metrics` is Prometheus text format, scrape-public; everything else is behind
+Argon2id session auth when a password hash is configured.
 
 ## Architecture
 
-```
- attacker packets
-        │
-        ▼
-┌─────────────────────┐     IPC (HMAC-SHA256)
-│  XDP BPF program   │◄──── report_connections ──── your app / SIEM / NMS
-│  (drops blocked    │        │
-│   packets at L3)   │        ▼
-└────────┬────────────┘  ┌──────────────────┐
-         │               │  pre_aggregator   │ cold-skip one-shots
-         ▼               │  (256 shards)     │ promote to tracked set
-  BLOCKLIST map          └────────┬─────────┘
-  (BPF hash, 102K entries)             │
-                                       ▼
-                              ┌──────────────────┐
-                              │  batch processor │ EWMA score per IP
-                              │  (4096 ev/50ms) │ Holt-Winters forecast
-                              └────────┬─────────┘
-                                       │  block decision
-                                       ▼
-                              ┌──────────────────┐
-                              │  enforcement     │ insert into BLOCKLIST
-                              │  (async worker) │ WAL write, unblock TTL
-                              └──────────────────┘
-```
+Workspace: a thin root binary crate + 9 focused crates.
 
----
+| crate | job |
+|---|---|
+| `ramshield-types` | shared primitives, error taxonomy |
+| `ramshield-config` | parse + **fail-closed validation** (file *and* env-merged final) |
+| `ramshield-protocol` | HMAC frame auth, nonce replay store, sessions |
+| `ramshield-detection` | ingest channel, sharded pre-aggs, EWMA/CUSUM/pulse, /24 swarm loop |
+| `ramshield-storage` | DashMap store (RAM budget, blocked indexes), WAL, subnets |
+| `ramshield-enforcement` | block/unblock actor, XDP map sync, TTL expiry, reconcile |
+| `ramshield-forecasting` | Holt-Winters entropy baseline, preemptive threat sampling |
+| `ramshield-metrics` | counters, snapshot, Prometheus exposition |
+| `ramshield-xdp` | BPF object build + load (aya), clang fallback |
 
-## Features
-
-- **XDP/BPF kernel drops** — packets dropped at L3 before reaching the application
-- **Dual detection** — EWMA per-IP rate + Holt-Winters forecast anomaly scoring
-- **Subnet aggregation** — detects coordinated floods across a /24 in 2 seconds
-- **HMAC-SHA256 IPC** — signed, authenticated event reporting with clock-skew protection
-- **WAL durability** — crash recovery, blocklist survives restarts
-- **RFC 9411 probe oracle** — independent availability check proves service health under attack
-- **Zero false positives** — 0.0000% FPR across 21M event benchmark
-- **Sub-100ms recovery** — unblock propagation in 52ms
-
----
+Hard-won invariants (see [`SECURITY.md`](SECURITY.md), [`docs/audits/`](docs/audits/)):
+`block_state` is written **only** by the enforcement actor; detection mutates
+stats via a single-shard-lock `Store::update_ip` RMW. The XDP key contract is
+raw-wire-octet layout — byte order is load-bearing. WAL replay refuses any
+compressed record claiming more than the append cap (decompression-bomb gate).
+Channel capacity is a `const` with exactly one definition site.
 
 ## Requirements
 
-- Linux 5.8+ (for XDP `xdpgeneric`; 5.12+ for `xdpdrv`)
-- `cap_net_admin`, `cap_bpf`, `cap_perfmon` — set via `setcap` on the binary
-- Rust 1.85+ (edition 2024; nightly pinned via rust-toolchain.toml for XDP)
+- Linux **5.8+** (`xdpgeneric`; 5.12+ for `xdpdrv`) — in-band mode works without any of this
+- `cap_net_admin`, `cap_bpf`, `cap_perfmon` on the binary, or run with systemd `AmbientCapabilities=`
+- Rust **1.85+** to build (edition 2024; nightly pinned for XDP build-std path)
 
----
+## Development
+
+```bash
+cargo test --workspace --locked --features full          # 169 tests
+cargo clippy --workspace --locked --features full --all-targets -- -D warnings
+scripts/prod_smoke.sh                                    # boots + exercises the real binary
+```
+
+Adversarial audit history (security / correctness / dead-code / perf) is
+carried in the commit messages — every P0 found since June 2026 shipped with
+a regression test that fails without the fix — with working notes in
+`docs/audits/`. Contributions welcome; read `CONTRIBUTING.md` first.
 
 ## License
 
-MIT or Apache-2.0 at your option.
+MIT or Apache-2.0, at your option.

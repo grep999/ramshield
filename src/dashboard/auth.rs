@@ -228,13 +228,15 @@ pub async fn require_auth(
     }
 }
 
-async fn login_page(State(auth): State<AuthState>) -> Html<&'static str> {
+async fn login_page(State(auth): State<AuthState>) -> Response {
     if !auth.enabled() {
-        return Html(
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
             "<html><body><p>Auth disabled — set [dashboard] admin_password_hash.</p></body></html>",
-        );
+        )
+            .into_response();
     }
-    Html(include_str!("login.html"))
+    Html(include_str!("login.html").replace("{{ERR}}", "")).into_response()
 }
 
 #[derive(Deserialize)]
@@ -297,11 +299,12 @@ async fn login_submit(
         }
         None => {
             auth.note_failure(ip);
-            (
-                StatusCode::UNAUTHORIZED,
-                Html("<html><body><p>wrong password</p></body></html>"),
-            )
-                .into_response()
+            // Same page, inline error — no context-switch to a bare HTML stub.
+            let page = include_str!("login.html").replace(
+                "{{ERR}}",
+                "<p class=\"err\">Invalid credentials.</p>",
+            );
+            (StatusCode::UNAUTHORIZED, Html(page)).into_response()
         }
     }
 }

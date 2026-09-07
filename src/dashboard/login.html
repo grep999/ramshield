@@ -1,13 +1,77 @@
 <!DOCTYPE html>
-<html><head><title>RamShield Login</title>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RamShield // Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap" onload="this.rel='stylesheet'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap"></noscript>
 <style>
-body{font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#0d1117;color:#c9d1d9}
-form{background:#161b22;padding:2rem;border-radius:8px;border:1px solid #30363d}
-input{display:block;width:100%;margin:.5rem 0 1rem;padding:.5rem;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:4px}
-button{width:100%;padding:.5rem;background:#238636;color:white;border:none;border-radius:4px;cursor:pointer}
-</style></head>
-<body><form method="post" action="/login">
-<h2>RamShield</h2>
-<input type="password" name="password" placeholder="admin password" autofocus>
-<button>Sign in</button>
-</form></body></html>
+:root { --bg:#050507; --panel:#0b0d12; --border:#1c2230; --fg:#e8ecf1; --dim:#9aa3af; --muted:#5c6672; --neon:#00e5ff; --violet:#7f7fff; --danger:#ff3366; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { color-scheme: dark; }
+body {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  background:
+    radial-gradient(900px 500px at 50% -20%, rgba(0,229,255,.08), transparent 60%),
+    radial-gradient(700px 400px at 80% 120%, rgba(127,127,255,.07), transparent 60%),
+    var(--bg);
+  color: var(--fg); min-height: 100vh;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.card {
+  width: 100%; max-width: 360px;
+  background: linear-gradient(180deg, #10131a, var(--panel));
+  border: 1px solid var(--border); border-radius: 14px;
+  padding: 34px 30px 30px;
+  box-shadow: 0 24px 60px rgba(0,0,0,.55), 0 0 0 1px rgba(0,229,255,.03);
+  animation: rise .45s cubic-bezier(.2,.9,.3,1);
+}
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+.brand { display: flex; align-items: center; gap: 10px; justify-content: center; margin-bottom: 6px; }
+.brand svg { width: 26px; height: 26px; filter: drop-shadow(0 0 8px rgba(0,229,255,.5)); }
+.brand svg path { fill: none; stroke: url(#g); stroke-width: 1.6; }
+h1 { font-size: 15px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase;
+  background: linear-gradient(90deg, var(--neon), var(--violet));
+  -webkit-background-clip: text; background-clip: text; color: transparent; }
+.sub { text-align: center; font-size: 11px; color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 26px; }
+label { display: block; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); margin-bottom: 8px; }
+input {
+  width: 100%; padding: 12px 14px; margin-bottom: 18px;
+  background: #08090d; color: var(--fg);
+  border: 1px solid var(--border); border-radius: 9px;
+  font: inherit; font-size: 14px; letter-spacing: 1px;
+  transition: border-color .18s, box-shadow .18s;
+}
+input:focus { outline: none; border-color: rgba(0,229,255,.6); box-shadow: 0 0 0 3px rgba(0,229,255,.12); }
+button {
+  width: 100%; padding: 12px; border: none; border-radius: 9px; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: #031014;
+  background: linear-gradient(90deg, var(--neon), #4ff0d0);
+  transition: transform .12s ease, filter .12s ease;
+}
+button:hover { filter: brightness(1.1); }
+button:active { transform: translateY(1px); }
+.err { font-size: 12px; color: var(--danger); text-align: center; margin-bottom: 14px; }
+.foot { margin-top: 22px; text-align: center; font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+@media (prefers-reduced-motion: reduce) { .card { animation: none; } }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#00e5ff"/><stop offset="1" stop-color="#7f7fff"/></linearGradient></defs><path d="M12 2l8 3.5v5.2c0 5-3.2 9.3-8 11.3-4.8-2-8-6.3-8-11.3V5.5L12 2z"/><path d="M8.2 12.2l2.6 2.6 5-5.4"/></svg>
+    <h1>RamShield</h1>
+  </div>
+  <div class="sub">Operations Console</div>
+  {{ERR}}
+  <form method="post" action="/login">
+    <label for="password">Admin password</label>
+    <input type="password" id="password" name="password" placeholder="••••••••••••" autocomplete="current-password" autofocus required>
+    <button type="submit">Sign in</button>
+  </form>
+  <div class="foot">HMAC-authenticated IPC · Argon2id · per-IP lockout</div>
+</div>
+</body>
+</html>
