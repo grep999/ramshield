@@ -48,11 +48,26 @@ impl BlocklistKey {
             // matching C byte-for-byte on LE (all BPF targets we run:
             // x86_64/ARM; bpfel).
             IpAddr::V4(v4) => BlocklistKey(u128::from(u32::from_ne_bytes(v4.octets()))),
-            // ponytail: v6 keys are inserted but the C program never matches
-            // them (ETH_P_IP branch only) — v6 stays enforced in-band until the
-            // BPF program grows an ETH_P_IPV6 path.
-            IpAddr::V6(v6) => BlocklistKey(u128::from_be_bytes(v6.octets())),
+            // IPv6 plan Task 3 (G4): same P0 class as the v4 comment above.
+            // The C program memcpy's the raw 16 saddr octets into the key, so
+            // memory must equal wire order. from_be_bytes produced the value
+            // with octets[0] as the MSB — serialized on LE that is REVERSED
+            // bytes, every v6 lookup would miss forever. from_le_bytes is
+            // the exact inverse of to_ne_bytes on LE (all BPF targets we run:
+            // x86_64/ARM; bpfel), pinned by v6_key_bytes_match_dataplane_layout.
+            // v6 keys go ONLY to BLOCKLIST6 (xdp_map_for) — never the v4 map.
+            IpAddr::V6(v6) => BlocklistKey(u128::from_le_bytes(v6.octets())),
         }
+    }
+}
+
+/// Map a v6 address must never share with a v4 key: the 16-byte v6 layout
+/// can collide numerically with a v4-shaped key (D2), so isolation is by
+/// map, not bytes. Single source of truth for routing (apply + reconcile).
+fn xdp_map_for(ip: IpAddr) -> &'static str {
+    match ip {
+        IpAddr::V4(_) => "BLOCKLIST",
+        IpAddr::V6(_) => "BLOCKLIST6",
     }
 }
 
@@ -100,6 +115,7 @@ impl AyaXdpApplier {
 
     fn with_map<R>(
         &mut self,
+        name: &str,
         f: impl FnOnce(
             &mut HashMap<&mut aya::maps::MapData, BlocklistKey, BlocklistValue>,
         ) -> Result<R, MapError>,
@@ -109,8 +125,8 @@ impl AyaXdpApplier {
             .as_mut()
             .ok_or_else(|| EnforcementError::Xdp("not loaded".into()))?;
         let map = bpf
-            .map_mut("BLOCKLIST")
-            .ok_or_else(|| EnforcementError::Xdp("BLOCKLIST map missing".into()))?;
+            .map_mut(name)
+            .ok_or_else(|| EnforcementError::Xdp(format!("{name} map missing")))?;
         let mut m: HashMap<_, BlocklistKey, BlocklistValue> =
             HashMap::try_from(map).map_err(map_err)?;
         f(&mut m).map_err(map_err)
@@ -120,39 +136,48 @@ impl AyaXdpApplier {
 #[async_trait::async_trait]
 impl XdpApplier for AyaXdpApplier {
     fn apply_block(&mut self, ip: IpAddr, _decision_id: Uuid) -> Result<(), EnforcementError> {
-        self.with_map(|m| m.insert(BlocklistKey::from_ip(ip), BlocklistValue(1), 0))
+        self.with_map(xdp_map_for(ip), |m| {
+            m.insert(BlocklistKey::from_ip(ip), BlocklistValue(1), 0)
+        })
     }
 
     fn apply_unblock(&mut self, ip: IpAddr, _decision_id: Uuid) -> Result<(), EnforcementError> {
-        self.with_map(|m| m.remove(&BlocklistKey::from_ip(ip)))
+        self.with_map(xdp_map_for(ip), |m| m.remove(&BlocklistKey::from_ip(ip)))
     }
 
     fn reconcile(
         &mut self,
         expected_blocks: &[IpAddr],
     ) -> Result<ReconciliationState, EnforcementError> {
-        let expected: std::collections::HashSet<BlocklistKey> = expected_blocks
-            .iter()
-            .map(|ip| BlocklistKey::from_ip(*ip))
-            .collect();
-        let mut stale_count = 0usize;
-        self.with_map(|m| {
-            let stale: Vec<BlocklistKey> = m
-                .keys()
-                .filter_map(|k| k.ok())
-                .filter(|k| !expected.contains(k))
+        // IPv6 plan Task 3: the two maps are reconciled independently — each
+        // drains its stale keys against its family's expected set only. The
+        // old single-map sweep would have deleted every live v6 key when the
+        // expected set was v4-only, and vice versa.
+        for (name, family) in [("BLOCKLIST", false), ("BLOCKLIST6", true)] {
+            let expected: std::collections::HashSet<BlocklistKey> = expected_blocks
+                .iter()
+                .filter(|ip| ip.is_ipv6() == family)
+                .map(|ip| BlocklistKey::from_ip(*ip))
                 .collect();
-            for k in stale {
-                m.remove(&k)?;
-                stale_count += 1;
+            let mut stale_count = 0usize;
+            self.with_map(name, |m| {
+                let stale: Vec<BlocklistKey> = m
+                    .keys()
+                    .filter_map(|k| k.ok())
+                    .filter(|k| !expected.contains(k))
+                    .collect();
+                for k in stale {
+                    m.remove(&k)?;
+                    stale_count += 1;
+                }
+                for k in &expected {
+                    m.insert(*k, BlocklistValue(1), 0)?;
+                }
+                Ok(())
+            })?;
+            if stale_count > 0 {
+                tracing::info!(map = name, stale = stale_count, "XDP reconcile removed stale keys");
             }
-            for k in &expected {
-                m.insert(*k, BlocklistValue(1), 0)?;
-            }
-            Ok(())
-        })?;
-        if stale_count > 0 {
-            tracing::info!(stale = stale_count, "XDP reconcile removed stale keys");
         }
         Ok(ReconciliationState::default())
     }
@@ -173,5 +198,30 @@ mod tests {
         let mem = key.0.to_ne_bytes(); // aya Pod sends this exact memory
         assert_eq!(&mem[0..4], &[1, 2, 3, 4], "octet order reversed vs C");
         assert_eq!(&mem[4..], &[0; 12], "padding must be zero");
+    }
+
+    /// IPv6 plan Task 3 (G4): same P0 class as the v4 byte-reversal. The C
+    /// program memcpy's the raw 16 saddr octets into the key; userspace must
+    /// serialize the same memory. from_be_bytes put octets REVERSED on LE —
+    /// every v6 lookup would miss forever.
+    #[test]
+    fn v6_key_bytes_match_dataplane_layout() {
+        let key = BlocklistKey::from_ip("2001:db8::1".parse().unwrap());
+        let mem = key.0.to_ne_bytes();
+        assert_eq!(&mem[0..2], &[0x20, 0x01]);
+        assert_eq!(&mem[2..4], &[0x0d, 0xb8]);
+        assert_eq!(mem[15], 1, "last octet at memory[15] = wire order");
+    }
+
+    /// IPv6 plan D2: v6 keys must NEVER enter the v4 map (a 16-byte v6 key
+    /// can collide numerically with a v4-shaped key), so isolation is by
+    /// map, not bytes. Pins the routing both apply and reconcile use.
+    #[test]
+    fn family_routes_to_dedicated_map() {
+        assert_eq!(super::xdp_map_for("1.2.3.4".parse().unwrap()), "BLOCKLIST");
+        assert_eq!(
+            super::xdp_map_for("2001:db8::1".parse().unwrap()),
+            "BLOCKLIST6"
+        );
     }
 }

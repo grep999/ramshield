@@ -25,6 +25,10 @@ static BLOCKLIST: HashMap<u32, u8> = HashMap::with_max_entries(blocklist_cap_env
 // IPv6 source: 16 raw octets of src_addr (network-order). Byte-for-byte
 // identical to userspace BlocklistKey::from_ip(V6) low 128 bits
 // (u128::from_be_bytes(v6.octets())). Same capacity budget; tune via env too.
+// STALE (IPv6 plan Task 4): this aya path needs bpf-linker, which is absent
+// (build.rs falls back to C main.c). Shipping contract is main.c's BLOCKLIST6
+// (__u64[2] wire-order key) + enforcement/xdp.rs from_le_bytes. This Rust
+// program's names/layouts must be reconciled before it can ship.
 #[map]
 static BLOCKLIST_V6: HashMap<[u8; 16], u8> =
     HashMap::with_max_entries(blocklist_cap_env(), 0);
