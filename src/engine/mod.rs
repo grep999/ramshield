@@ -375,23 +375,31 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
         .spawn_workers(cfg_snapshot.engine.worker_threads);
     *engine.detection.lock().unwrap_or_else(|e| e.into_inner()) = Some(detection.clone());
 
-    let forecaster = Arc::new(Forecaster::new(
-        store.clone(),
-        cfg_snapshot.forecasting.clone(),
-        engine.enforcement_tx.clone(),
-        metrics.clone(),
-    ));
-    let forecaster_handle = {
+    let mut forecaster = if cfg_snapshot.forecasting.enabled {
+        let forecaster = Arc::new(Forecaster::new(
+            store.clone(),
+            cfg_snapshot.forecasting.clone(),
+            engine.enforcement_tx.clone(),
+            metrics.clone(),
+        ));
         let fc = forecaster.clone();
         let mut fc_rx = engine.shutdown_rx();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             tokio::select! {
                 _ = fc.run() => {}
                 _ = fc_rx.changed() => {
                     tracing::info!("forecaster: shutdown signal received");
                 }
             }
-        })
+        });
+        Some((forecaster, handle))
+    } else {
+        // P1-9: honoring `forecasting.enabled` — previously the flag was
+        // read nowhere and the span always ran (queue feed kept growing).
+        tracing::info!(
+            "forecasting.enabled=false — forecaster span not started (threat_sample queue not fed)"
+        );
+        None
     };
 
     let server = crate::ipc::server::IpcServer::bind(
@@ -417,12 +425,14 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
                     tracing::warn!("enforcement shutdown timed out");
                 }
             }
-            tokio::select! {
-                _ = forecaster_handle => {}
-                _ = tokio::time::sleep_until(deadline) => {
-                    tracing::warn!("forecaster shutdown timed out");
+            if let Some((_, handle)) = forecaster.as_mut() {
+                    tokio::select! {
+                        _ = handle => {}
+                        _ = tokio::time::sleep_until(deadline) => {
+                            tracing::warn!("forecaster shutdown timed out");
+                        }
+                    }
                 }
-            }
         }
     }
     Ok(())

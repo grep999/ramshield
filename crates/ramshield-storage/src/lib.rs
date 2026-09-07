@@ -78,6 +78,13 @@ impl TrafficCounters {
     /// Push multiple threat samples into the queue.
     pub fn push_threat_samples(&self, samples: Vec<(IpAddr, f32)>) {
         for item in samples {
+            // P1-9: bound the queue. The only drainer is the forecaster (may
+            // be disabled/stalled); without a cap a sustained feed grows
+            // ~180MB/hr. 1024 samples ≈ 8 flushes of slack — the newest
+            // threat signals win, stale ones are dropped.
+            if self.threat_sample.len() >= 1024 {
+                break;
+            }
             self.threat_sample.push(item);
         }
     }
@@ -1420,5 +1427,20 @@ mod tests {
             threat_score: 0.0,
             block_state: BlockState::Clean,
         }
+    }
+
+    #[test]
+    fn threat_sample_queue_is_bounded() {
+        // P1-9: the queue must not grow unbounded when the forecaster (its
+        // only drainer) is stalled or disabled.
+        let s = TrafficCounters::new();
+        let ip: IpAddr = "10.98.0.1".parse().unwrap();
+        let many: Vec<(IpAddr, f32)> = (0..3000u32).map(|i| (ip, i as f32 + 0.5)).collect();
+        s.push_threat_samples(many);
+        assert!(
+            s.threat_sample.len() <= 1024,
+            "queue exceeded bound: {}",
+            s.threat_sample.len()
+        );
     }
 }
