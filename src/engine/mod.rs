@@ -133,8 +133,12 @@ impl Engine {
         let blocks_applied = metrics.blocks_detection.load(Ordering::Relaxed)
             + metrics.blocks_subnet.load(Ordering::Relaxed)
             + metrics.blocks_forecast.load(Ordering::Relaxed);
-        let channel_depth = 0usize;
-        // Add increment/decrement in try_send + recv paths when ready.
+        let channel_depth = self
+            .detection
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map_or(0, |d| d.event_queue_depth());
 
         DashboardSnapshot {
             ts_ms: crate::metrics::now_ms(),
@@ -227,8 +231,12 @@ impl Engine {
     pub fn get_module_stats(&self) -> Vec<ModuleStats> {
         let stats = self.store.get_stats();
         let ingested = self.metrics.events_ingested.load(Ordering::Relaxed);
-        let channel_depth = 0usize;
-        // Add increment/decrement in try_send + recv paths when ready.
+        let channel_depth = self
+            .detection
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map_or(0, |d| d.event_queue_depth());
         self.metrics.get_module_stats_data(
             stats.uptime_secs,
             ingested,

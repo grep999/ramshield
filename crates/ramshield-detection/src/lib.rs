@@ -210,6 +210,12 @@ impl DetectionEngine {
         self.event_tx.clone()
     }
 
+    /// P1-8: real ingest-channel depth for the dashboard/healthz backpressure
+    /// signal (was a hardcoded 0 stub). tokio mpsc len() is O(1) atomic.
+    pub fn event_queue_depth(&self) -> usize {
+        self.event_rx.len()
+    }
+
     /// Move a worker's local buffer into shared `pre_aggs` (RAM-for-CPU
     /// item 3). Runs once per flush boundary, not per event. Same-IP
     /// consolidation across workers uses IpAgg::merge_with, so the batch
