@@ -40,8 +40,8 @@ else
 fi
 bpftool map list name BLOCKLIST6 >/dev/null || { echo "FAIL: no BLOCKLIST6 in kernel"; exit 1; }
 
-ip -6 addr add "$BLOCKED/128" dev "$IFACE"
-ip -6 addr add "$CONTROL/128" dev "$IFACE"
+ip -6 addr add "$BLOCKED/128" dev "$IFACE" nodad
+ip -6 addr add "$CONTROL/128" dev "$IFACE" nodad
 
 ping_ok() { ping -6 -I "$1" "$DST6" -c1 -W2 >/dev/null 2>&1; }
 
