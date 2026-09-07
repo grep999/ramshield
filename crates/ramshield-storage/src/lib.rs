@@ -192,10 +192,9 @@ pub struct SubnetRecord {
     /// Distinct-source signal for the current window (v4 only): 256-bit map of
     /// seen host octets, 32 B flat. The real swarm signal — one abuser at 500
     /// events is a single offender; 40 distinct IPs × 12 events is an attack.
-    /// v6 /64s are too large to bitmap; they report `unique_ips == 0` and rely
-    /// on per-IP EWMA + volume gates.
-    /// ponytail: 32B/24-bit-host ceiling; swap for HLL when v6 swarm detection
-    /// is actually needed.
+    /// v6 /64s are too large to bitmap; the batch gate reads exact
+    /// `subnet_index` cardinality for them instead (IPv6 plan D1), so
+    /// `unique_ips()` returning 0 only means "not the v4 fast path".
     pub host_bitmap: [u64; 4],
     pub last_updated_ns: u64,
 }
@@ -366,6 +365,20 @@ impl Store {
         self.subnet_table
             .get(&key)
             .map_or(String::new(), |e| e.network.to_string())
+    }
+
+    /// Exact distinct-host count for a subnet (IPv6 plan Task 2, G1/D1).
+    /// Reads the reverse index (`subnet_index`), which every store insert
+    /// and eviction already maintains for BOTH families — so v6 /64s, which
+    /// no bitmap can cover, get exact cardinality for free.
+    /// ponytail ceiling: index membership lives until store eviction, not
+    /// the 2s gate window. Acceptable because the second gate leg
+    /// (`total_rps`) IS windowed, so a stale swarm can't pass both. Upgrade
+    /// path if v6 false positives appear: per-subnet last-seen window.
+    pub fn subnet_member_count(&self, key: SubnetKey) -> u64 {
+        self.subnet_index
+            .get(&key)
+            .map_or(0, |ips| ips.len() as u64)
     }
 
     /// Insert with RAM limit enforcement. Only enforces limit on net-new growth,

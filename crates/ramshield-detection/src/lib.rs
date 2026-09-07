@@ -803,31 +803,47 @@ impl DetectionEngine {
                     st.remove(&key);
                 }
             }
-            let cfg = self.config.load();
-            if !cfg.detection.batch_block_enabled {
-                continue;
-            }
-            // Dual gate: unique-IP swarm signal AND raw event volume. Either
-            // alone mis-fires (single flood IP trips volume; slow drip from
-            // many IPs trips uniqueness).
-            let ip_threshold = cfg.detection.subnet_batch_threshold as u64;
-            let ev_threshold = cfg.detection.subnet_batch_min_events;
+            self.subnet_batch_scan();
+        }
+    }
 
-            let hot: Vec<(SubnetKey, u64, u64, String)> = self
-                .store
-                .subnet_table()
-                .iter()
-                .filter_map(|e| {
-                    let r = e.value();
-                    if r.unique_ips() >= ip_threshold && r.total_rps >= ev_threshold {
-                        Some((*e.key(), r.unique_ips(), r.total_rps, r.network.to_string()))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+    /// One pass of the subnet dual gate + batch-block emit. Split out of
+    /// `subnet_batch_loop` so tests can fire the scan deterministically.
+    fn subnet_batch_scan(&self) {
+        let cfg = self.config.load();
+        if !cfg.detection.batch_block_enabled {
+            return;
+        }
+        // Dual gate: unique-IP swarm signal AND raw event volume. Either
+        // alone mis-fires (single flood IP trips volume; slow drip from
+        // many IPs trips uniqueness).
+        let ip_threshold = cfg.detection.subnet_batch_threshold as u64;
+        let ev_threshold = cfg.detection.subnet_batch_min_events;
 
-            for (sk, uniq, count, cidr) in hot {
+        let hot: Vec<(SubnetKey, u64, u64, String)> = self
+            .store
+            .subnet_table()
+            .iter()
+            .filter_map(|e| {
+                let r = e.value();
+                // IPv6 plan Task 2 (G1): v4 uniques come from the 256-bit
+                // host bitmap (free inside the iter shard lock); a v6 /64
+                // has no bitmap — exact count is subnet_index cardinality
+                // (separate DashMap, no lock nesting).
+                let uniq = if r.network.family() == 4 {
+                    r.unique_ips()
+                } else {
+                    self.store.subnet_member_count(*e.key())
+                };
+                if uniq >= ip_threshold && r.total_rps >= ev_threshold {
+                    Some((*e.key(), uniq, r.total_rps, r.network.to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (sk, uniq, count, cidr) in hot {
                 warn!(
                     "Batch block subnet {} ({} IPs / {} events in window)",
                     cidr, uniq, count
@@ -867,7 +883,6 @@ impl DetectionEngine {
                 }
                 self.store.reset_subnet_window(sk);
             }
-        }
     }
 }
 
@@ -1078,6 +1093,64 @@ mod tests {
         // v6 /64 landed in subnet table
         let sk = subnet_key_u128(ip).unwrap();
         assert!(eng.store.subnet_table().contains_key(&sk));
+    }
+
+    /// IPv6 plan Task 2 (G1): the dual gate must fire for a v6 /64 swarm.
+    /// v4 counts uniques via the 256-bit host bitmap; a /64 has no bitmap —
+    /// exactness lives in `subnet_index` cardinality (plan D1).
+    #[test]
+    fn v6_subnet_swarm_blocks_via_index_cardinality() {
+        use tokio::sync::mpsc;
+        let mut cfg = Config::default();
+        // Default window threshold (500 ev) exceeds this synthetic swarm;
+        // without promotion no host reaches the store, so the reverse index
+        // the gate reads stays empty. Same knob v4 tests tune implicitly.
+        cfg.detection.subnet_window_threshold = 1;
+        let cfg = cfg.into_handle();
+        let store = Arc::new(Store::new(16));
+        let metrics = Arc::new(Metrics::new());
+        let (etx, mut erx) = mpsc::channel(64);
+        let eng = Arc::new(DetectionEngine::new(
+            store,
+            cfg,
+            etx,
+            metrics,
+            Arc::new(AtomicBool::new(false)),
+        ));
+        // 60 distinct hosts in 2001:db8:abcd::/64, 3 events each =
+        // 60 uniq / 180 events >= (50, 100) dual gate.
+        let hosts: Vec<IpAddr> = (1..=60u16)
+            .map(|o| {
+                IpAddr::V6(std::net::Ipv6Addr::new(
+                    0x2001, 0xdb8, 0xabcd, 0, 0, 0, 0, o,
+                ))
+            })
+            .collect();
+        let events: Vec<_> = hosts
+            .iter()
+            .flat_map(|ip| (0..3u64).map(move |i| ev_at(*ip, i)))
+            .collect();
+        eng.flush_events(&events);
+        // Drain the flush's per-IP blocks (inst_rps is huge in synthetic
+        // tests) so what remains is only the scan's subnet_burst output.
+        while erx.try_recv().is_ok() {}
+        eng.subnet_batch_scan();
+        let cmds: Vec<_> = {
+            let mut v = Vec::new();
+            while let Ok(c) = erx.try_recv() {
+                v.push(c);
+            }
+            v
+        };
+        let v6_blocks: Vec<_> = cmds
+            .iter()
+            .filter(|c| c.ip.is_ipv6() && c.reason == "subnet_burst")
+            .collect();
+        assert_eq!(
+            v6_blocks.len(),
+            60,
+            "v6 /64 swarm must batch-block every member IP, got {v6_blocks:?}",
+        );
     }
 
     fn ev_at(ip: IpAddr, ts: u64) -> ConnectionEvent {
