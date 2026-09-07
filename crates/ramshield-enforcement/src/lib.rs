@@ -17,7 +17,7 @@ use ramshield_storage::{
 use ramshield_types::{
     BlockReason, EnforceAction, EnforceCommand, EnforceResult, EnforcementError,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::sync::{
     Arc,
@@ -79,14 +79,23 @@ pub struct EnforcementService {
     processed_decisions: HashSet<Uuid>,
     processed_order: VecDeque<Uuid>,
     blocked_ips: HashSet<IpAddr>,
-    /// P1 fix: was Vec<(Instant, IpAddr)> — every re-block did an O(N)
-    /// `.retain()` sweep and expire_due scanned all N every 250ms. Hash
-    /// keyed by IP: dedup becomes O(1) insert-overwrite (HashMap naturally
-    /// upholds the one-expiration-per-IP invariant), and expiry is a
-    /// collect-then-remove walk over the map. BinaryHeap was the reviewer
-    /// suggestion but needs a rebuild on every re-block (stale-entry lazy
-    /// delete) — same asymptotics for the sweep, worse for re-blocks.
-    expirations: HashMap<IpAddr, Instant>,
+    /// TTL expiry index: IP -> (second-bucket, position in that bucket's Vec).
+    /// RAM-for-CPU item 14: was a flat HashMap swept with `retain()` every
+    /// 250ms — O(all pending expirations) per tick to usually find zero due.
+    /// Now `expire_due` drains only buckets whose second has passed: O(due).
+    /// The (bucket,pos) pair makes re-block (TTL refresh) O(1): detach via
+    /// swap-remove from the old bucket, attach to the new — no stale cards,
+    /// so a refresh storm (unconditional block emissions every flush) cannot
+    /// accumulate garbage the way a lazy-generation ring would. BinaryHeap
+    /// was rejected earlier (rebuild on re-block); this is the bucketed-PQ
+    /// trick with position tracking instead.
+    /// Resolution is one second (bucket fires at the first whole second at or
+    /// after the deadline — never early, at most ~1s late). ponytail: if
+    /// sub-second TTL precision ever matters, switch buckets to a ms-grained
+    /// ring over a fixed horizon.
+    expirations: HashMap<IpAddr, (u64, usize)>,
+    buckets: BTreeMap<u64, Vec<IpAddr>>,
+    epoch: Instant,
     shutdown: Arc<AtomicBool>,
 }
 
@@ -106,6 +115,8 @@ impl EnforcementService {
             processed_order: VecDeque::with_capacity(65_536),
             blocked_ips: HashSet::new(),
             expirations: HashMap::new(),
+            buckets: BTreeMap::new(),
+            epoch: Instant::now(),
             shutdown,
         }
     }
@@ -154,16 +165,21 @@ impl EnforcementService {
     }
 
     async fn expire_due(&mut self) {
-        let now = Instant::now();
+        // O(due): only buckets whose (whole-second) deadline has passed are
+        // touched — previously every 250ms tick re-examined ALL expirations.
+        let now_ts = self.epoch.elapsed().as_secs();
         let mut due = Vec::new();
-        self.expirations.retain(|&ip, &mut at| {
-            if at <= now {
-                due.push(ip);
-                false
-            } else {
-                true
+        while let Some((&b, _)) = self.buckets.first_key_value() {
+            if b > now_ts {
+                break;
             }
-        });
+            if let Some((_, vec)) = self.buckets.pop_first() {
+                for ip in vec {
+                    self.expirations.remove(&ip);
+                    due.push(ip);
+                }
+            }
+        }
         for ip in due {
             let cmd = EnforceCommand {
                 decision_id: Uuid::new_v4(),
@@ -180,6 +196,67 @@ impl EnforcementService {
                 warn!(%ip, "TTL unblock failed: {}", e);
             }
         }
+    }
+
+    /// Bucket for a deadline: ceil to whole seconds from epoch, so a bucket
+    /// only drains when the exact deadline has passed (never early).
+    fn bucket_of(&self, at: Instant) -> u64 {
+        let d = at.saturating_duration_since(self.epoch);
+        d.as_secs() + u64::from(d.subsec_nanos() > 0)
+    }
+
+    /// Remove an IP's pending expiration (O(1)); swap-remove keeps bucket
+    /// vectors dense — the moved neighbour's position index is fixed up.
+    fn detach_expiration(&mut self, ip: IpAddr) {
+        if let Some((b, pos)) = self.expirations.remove(&ip)
+            && let Some(vec) = self.buckets.get_mut(&b)
+        {
+            if pos < vec.len() {
+                // Self-heal guard: a drifting index (bug elsewhere) would
+                // silently remove the WRONG card and orphan this IP forever.
+                // Assert the card identity; on mismatch, scan the bucket.
+                let detach_pos = if vec[pos] == ip {
+                    Some(pos)
+                } else {
+                    vec.iter().position(|&candidate| candidate == ip)
+                };
+                if let Some(p) = detach_pos {
+                    vec.swap_remove(p);
+                    if let Some(&moved) = vec.get(p)
+                        && let Some(slot) = self.expirations.get_mut(&moved)
+                    {
+                        slot.1 = p;
+                    }
+                }
+            }
+            if vec.is_empty() {
+                self.buckets.remove(&b);
+            }
+        }
+    }
+
+    fn schedule_expiration(&mut self, ip: IpAddr, at: Instant) {
+        self.detach_expiration(ip);
+        let b = self.bucket_of(at);
+        let idx = {
+            let vec = self.buckets.entry(b).or_default();
+            vec.push(ip);
+            vec.len() - 1
+        };
+        self.expirations.insert(ip, (b, idx));
+    }
+
+    #[cfg(test)]
+    fn check_ring_invariant(&self) {
+        for (&ip, &(b, pos)) in &self.expirations {
+            let vec = self.buckets.get(&b).unwrap_or_else(|| panic!("{ip} bucket {b} gone"));
+            assert_eq!(vec.get(pos), Some(&ip), "index drift for {ip}");
+        }
+        assert_eq!(
+            self.expirations.len(),
+            self.buckets.values().map(Vec::len).sum::<usize>(),
+            "ring/map size diverged"
+        );
     }
 
     fn remember_decision(&mut self, id: Uuid) {
@@ -294,13 +371,13 @@ impl EnforcementService {
                 self.blocked_ips.insert(cmd.ip);
                 // Invariant: at most one expiration per IP. A re-block must not
                 // inherit a stale TTL from a previous block/unblock cycle.
-                // HashMap keyed by IP: insert overwrites any stale TTL
-                // (O(1), was an O(N) retain+sweep).
+                // Ring schedule/detach are both O(1) — TTL refresh moves the
+                // card between buckets instead of appending a duplicate.
                 if cmd.ttl_seconds > 0 {
-                    self.expirations
-                        .insert(cmd.ip, Instant::now() + Duration::from_secs(cmd.ttl_seconds));
+                    let at = Instant::now() + Duration::from_secs(cmd.ttl_seconds);
+                    self.schedule_expiration(cmd.ip, at);
                 } else {
-                    self.expirations.remove(&cmd.ip);
+                    self.detach_expiration(cmd.ip);
                 }
 
                 // Step 3: dataplane.
@@ -336,7 +413,7 @@ impl EnforcementService {
                 }
                 self.blocked_ips.remove(&cmd.ip);
                 // Purge any pending TTL so a later re-block starts clean.
-                self.expirations.remove(&cmd.ip);
+                self.detach_expiration(cmd.ip);
                 let xdp_applied = match self.xdp.apply_unblock(cmd.ip, cmd.decision_id) {
                     Ok(()) => true,
                     Err(e) => {
@@ -617,6 +694,66 @@ mod tests {
         s.enforce(block_cmd(target, 0)).await.unwrap();
         assert!(!s.expirations.contains_key(&target));
         assert!(s.blocked_ips.contains(&target));
+    }
+
+    /// Item 14 regression: re-block must MOVE the ring card, not stack a
+    /// second one. Block with 1s TTL, immediately refresh to 3600s; after the
+    /// first deadline passes, the IP must still be blocked (the long TTL won).
+    /// A lazy/duplicate-card design would expire the stale 1s entry here.
+    #[tokio::test]
+    async fn reblock_moves_card_not_duplicates() {
+        let mut s = svc(Box::new(RecordingApplier::new()));
+        let target = ip([9, 9, 9, 5]);
+        s.enforce(block_cmd(target, 1)).await.unwrap();
+        s.enforce(block_cmd(target, 3600)).await.unwrap();
+        assert_eq!(s.expirations.len(), 1, "exactly one card pending");
+        s.check_ring_invariant();
+        tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+        s.expire_due().await;
+        assert!(
+            s.blocked_ips.contains(&target),
+            "refreshed TTL must win — stale 1s card must not expire the IP"
+        );
+        // Clean up: manual unblock leaves no residue.
+        s.enforce(unblock_cmd(target)).await.unwrap();
+        assert!(s.expirations.is_empty() && s.buckets.is_empty());
+    }
+
+    /// Item 14: a short TTL actually fires through the bucket drain.
+    #[tokio::test]
+    async fn ring_expires_short_ttl() {
+        let mut s = svc(Box::new(RecordingApplier::new()));
+        let target = ip([9, 9, 9, 4]);
+        s.enforce(block_cmd(target, 1)).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+        s.expire_due().await;
+        assert!(!s.blocked_ips.contains(&target), "TTL expiry must unblock");
+        assert!(s.expirations.is_empty() && s.buckets.is_empty());
+    }
+
+    /// Dense-bucket surgery: swap-remove fixups must keep every remaining
+    /// card's (bucket, pos) exact. Churn several IPs across two buckets,
+    /// unblock the middle ones, then expire: only true-TTL entries unblock.
+    #[tokio::test]
+    async fn ring_positions_survive_detach_storm() {
+        let mut s = svc(Box::new(RecordingApplier::new()));
+        let a = ip([9, 9, 8, 1]);
+        let b = ip([9, 9, 8, 2]);
+        let c = ip([9, 9, 8, 3]);
+        let d = ip([9, 9, 8, 4]);
+        s.enforce(block_cmd(a, 3600)).await.unwrap();
+        s.enforce(block_cmd(b, 3600)).await.unwrap(); // same bucket as a
+        s.enforce(block_cmd(c, 1)).await.unwrap(); // short bucket
+        s.enforce(block_cmd(d, 1)).await.unwrap(); // same short bucket as c
+        s.enforce(unblock_cmd(a)).await.unwrap(); // detach front of long bucket
+        s.enforce(unblock_cmd(c)).await.unwrap(); // detach front of short bucket
+        s.check_ring_invariant();
+        tokio::time::sleep(std::time::Duration::from_millis(2100)).await;
+        s.expire_due().await;
+        assert!(s.blocked_ips.contains(&b), "long TTL untouched by drains");
+        assert!(!s.blocked_ips.contains(&d), "short TTL fired");
+        assert_eq!(s.expirations.len(), 1);
+        s.check_ring_invariant();
     }
 
     #[tokio::test]

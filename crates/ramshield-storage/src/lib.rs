@@ -249,6 +249,15 @@ pub struct Store {
     pub traffic: Arc<TrafficCounters>,
     pub total_inserts: Arc<AtomicU64>,
     pub total_evictions: Arc<AtomicU64>,
+    /// Count of live entries with `expires_at: Some(_)`. RAM-for-CPU item 14:
+    /// production inserts pass ttl=None (block TTL lives in the enforcement
+    /// actor), so the 60s `evict_expired` janitor walked the whole store to
+    /// find zero. This gate makes the no-TTL case O(1). Bookkeeping is
+    /// conservative by construction: increments only after a ttl-bearing
+    /// insert sticks; every destroy path decrements on an observed Some.
+    /// A missed decrement over-counts (scan still runs = old behavior);
+    /// an over-decrement is impossible while the invariant holds.
+    ttl_entries: Arc<AtomicU64>,
 }
 
 /// Minimal single-value set over DashMap (avoids pulling dashmap-set feature).
@@ -268,6 +277,7 @@ impl Store {
             traffic: Arc::new(TrafficCounters::new()),
             total_inserts: Arc::new(AtomicU64::new(0)),
             total_evictions: Arc::new(AtomicU64::new(0)),
+            ttl_entries: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -340,6 +350,7 @@ impl Store {
         ram_limit_bytes: usize,
     ) -> Result<()> {
         let expires_at = ttl_secs.map(|s| Instant::now() + Duration::from_secs(s));
+        let new_has_ttl = expires_at.is_some();
         let new_entry = Entry { value, expires_at };
         let new_blocked = new_entry.value.is_blocked();
         let entry_size = std::mem::size_of::<IpAddr>()
@@ -355,15 +366,16 @@ impl Store {
         // bumped, the rollback would leave them permanently over-counted — an
         // index that never converges (and `unblock_all`/`blocked_list` then
         // act on phantom IPs). Deferred until the insert is known to stick.
-        let (old_size, was_blocked) =
+        let (old_size, was_blocked, old_had_ttl) =
             self.inner
                 .insert(key, new_entry)
-                .map_or((0, false), |old| {
+                .map_or((0, false, false), |old| {
                     (
                         std::mem::size_of::<Entry>()
                             + old.value.heap_bytes()
                             + std::mem::size_of::<IpAddr>(),
                         old.value.is_blocked(),
+                        old.expires_at.is_some(),
                     )
                 });
 
@@ -418,6 +430,18 @@ impl Store {
         } else if was_blocked && !new_blocked {
             self.blocked_count.fetch_sub(1, Ordering::Relaxed);
             self.blocked_set.remove(&key);
+        }
+        // Same deferral rule for the TTL population counter (item 14 gate):
+        // only after the insert is known to stick (rollback above removed
+        // without touching it).
+        match (old_had_ttl, new_has_ttl) {
+            (false, true) => {
+                self.ttl_entries.fetch_add(1, Ordering::Relaxed);
+            }
+            (true, false) => {
+                self.ttl_entries.fetch_sub(1, Ordering::Relaxed);
+            }
+            _ => {}
         }
         if tracing::enabled!(tracing::Level::DEBUG) {
             let current = self.ram_bytes.load(Ordering::Relaxed);
@@ -490,8 +514,13 @@ impl Store {
                 };
                 let mut rec = default;
                 let out = f(&mut rec);
+                let old_had_ttl = e.expires_at.is_some();
                 e.value = Value::IpRecord(rec);
                 e.expires_at = None;
+                if old_had_ttl {
+                    // Replaced a ttl-bearing entry with a permanent one.
+                    self.ttl_entries.fetch_sub(1, Ordering::Relaxed);
+                }
                 drop(o); // release shard lock before touching blocked_set
                 let new_size =
                     std::mem::size_of::<Entry>() + std::mem::size_of::<IpAddr>();
@@ -581,7 +610,11 @@ impl Store {
                 && e.get().is_expired()
             {
                 let was_blocked = e.get().value.is_blocked();
+                let had_ttl = e.get().expires_at.is_some();
                 let (_, removed) = e.remove_entry();
+                if had_ttl {
+                    self.ttl_entries.fetch_sub(1, Ordering::Relaxed);
+                }
                 let freed = std::mem::size_of::<IpAddr>()
                     + std::mem::size_of::<Entry>()
                     + removed.value.heap_bytes();
@@ -601,7 +634,14 @@ impl Store {
     }
 
     /// Sweep all entries and remove expired ones. Returns count of evicted entries.
+    /// RAM-for-CPU item 14: O(1) early return when nothing carries a TTL —
+    /// the production case (block TTLs live in the enforcement actor; store
+    /// inserts pass None). Without the gate this was a full-store key
+    /// collection + per-key rehash every 60s to evict exactly zero.
     pub fn evict_expired(&self) -> usize {
+        if self.ttl_entries.load(Ordering::Relaxed) == 0 {
+            return 0;
+        }
         let before = self.inner.len();
         let keys: Vec<IpAddr> = self.inner.iter().map(|e| *e.key()).collect();
         self.evict_batch(&keys);
@@ -610,6 +650,9 @@ impl Store {
 
     pub fn remove(&self, key: &IpAddr) -> Option<Value> {
         self.inner.remove(key).map(|(_k, e)| {
+            if e.expires_at.is_some() {
+                self.ttl_entries.fetch_sub(1, Ordering::Relaxed);
+            }
             let freed =
                 std::mem::size_of::<IpAddr>() + std::mem::size_of::<Entry>() + e.value.heap_bytes();
             self.ram_bytes.fetch_sub(freed, Ordering::Relaxed);
