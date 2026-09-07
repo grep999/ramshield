@@ -87,4 +87,60 @@ ip addr del 192.0.2.7/32 dev "$IFACE" 2>/dev/null || true
 # 4. drop counter, informational (generic path may not increment it)
 ip -s link show dev "$IFACE" | grep -A1 "RX:" | head -2
 
+# 5. VLAN-tagged probe (P1-6): a tagged frame with the blocked src must
+#    still be dropped — the pre-fix program saw h_proto=0x8100 and PASSed.
+#    veth pair datapath: TX tap on rs_v1, XDP on rs_v0, RX tap on rs_v0.
+#    lo's AF_PACKET tap can't see passed frames, so a real veth RX path is
+#    required to distinguish DROP from no-delivery. lo XDP is detached
+#    first so the veth attach owns the ONLY BLOCKLIST6 map instance
+#    (attaches create per-program map sets).
+if command -v python3 >/dev/null 2>&1 && command -v bpftool >/dev/null 2>&1; then
+  ip link set dev "$IFACE" xdp off 2>/dev/null || true
+  V0=rs_v0; V1=rs_v1
+  ip link add $V0 type veth peer name $V1
+  ip link set $V0 up; ip link set $V1 up
+  ( ip link set dev $V0 xdp obj "$ELF" sec xdp 2>/dev/null \
+    || ip link set dev $V0 xdpgeneric obj "$ELF" sec xdp )
+  bpftool map update name BLOCKLIST6 key hex $KEYHEX value hex 01
+  python3 - "$BLOCKED" "$CONTROL" <<'PYEOF' || { echo "FAIL: VLAN probe"; fails=1; }
+import socket, struct, sys, ipaddress, time
+blocked, control = sys.argv[1], sys.argv[2]
+V0, V1 = "rs_v0", "rs_v1"
+SMAC = bytes.fromhex("021122334455"); DMAC = bytes.fromhex("0266778899aa")
+
+def ip6_frame(src):
+    s = ipaddress.IPv6Address(src).packed
+    ip6 = struct.pack("!IHBB", 0x60000000, 0, 59, 64) + s + ipaddress.IPv6Address("::1").packed
+    # dst + src + 0x8100 tag(TCI, encap=0x86dd) + ipv6 header (src at bytes 8..24)
+    return DMAC + SMAC + struct.pack("!H", 0x8100) + struct.pack("!HH", 0xabcd, 0x86dd) + ip6
+
+TX = socket.socket(socket.AF_PACKET, socket.SOCK_RAW); TX.bind((V1, 0))
+RX = socket.socket(socket.AF_PACKET, socket.SOCK_RAW); RX.bind((V0, 0))
+RX.settimeout(1.0)
+
+def arrived(n=3):
+    got = 0
+    for _ in range(n):
+        try:
+            RX.recv(4096); got += 1
+        except socket.timeout:
+            break
+    return got
+
+for src in (blocked, control):
+    for _ in range(3):
+        TX.send(ip6_frame(src))
+    time.sleep(0.2)
+    got = arrived()
+    if src == blocked:
+        assert got == 0, f"blocked tagged frame ARRIVED ({got}) — VLAN bypass"
+    else:
+        assert got > 0, "control tagged frame never arrived — harness broken"
+    print(f"PASS vlan {src}: {'dropped' if got == 0 else 'passed'}")
+PYEOF
+  ip link del $V0 2>/dev/null || true
+else
+  echo "skipped: no python3/bpftool for VLAN probe"
+fi
+
 exit $fails

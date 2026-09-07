@@ -34,8 +34,29 @@ int ramshield_xdp(struct xdp_md *ctx) {
     if ((void *)(eth + 1) > data_end) {
         return XDP_PASS;
     }
-    if (eth->h_proto == bpf_htons(ETH_P_IPV6)) {
-        struct ipv6hdr *ip6 = (void *)(eth + 1);
+    /* 802.1Q/802.1ad tag: 4 bytes = {TCI, encapsulated ethertype}.
+     * Local struct — linux/if_vlan.h's vlan_hdr isn't visible under this
+     * clang -target bpf include set. */
+    struct vlan_tag {
+        __be16 tci;
+        __be16 encap;
+    };
+    __u16 proto = eth->h_proto;
+    void *l3 = (void *)(eth + 1);
+    for (int i = 0; i < 4; i++) {
+        if (proto != bpf_htons(ETH_P_8021Q) &&
+            proto != bpf_htons(ETH_P_8021AD)) {
+            break;
+        }
+        struct vlan_tag *vh = l3;
+        if ((void *)(vh + 1) > data_end) {
+            return XDP_PASS;
+        }
+        proto = vh->encap;
+        l3 = (void *)(vh + 1);
+    }
+    if (proto == bpf_htons(ETH_P_IPV6)) {
+        struct ipv6hdr *ip6 = l3;
         if ((void *)(ip6 + 1) > data_end) {
             return XDP_PASS;
         }
@@ -46,11 +67,11 @@ int ramshield_xdp(struct xdp_md *ctx) {
         }
         return XDP_PASS;
     }
-    if (eth->h_proto != bpf_htons(ETH_P_IP)) {
+    if (proto != bpf_htons(ETH_P_IP)) {
         return XDP_PASS;
     }
 
-    struct iphdr *ip = (void *)(eth + 1);
+    struct iphdr *ip = l3;
     if ((void *)(ip + 1) > data_end) {
         return XDP_PASS;
     }
