@@ -361,18 +361,29 @@ async fn handle_connection(
             // pipelines a batch pays quadratically in the buffered bytes.
             // BytesMut::split_to is O(1) (advances the start pointer).
             let frame = buf.split_to(pos + 1);
-            let sanitized: Vec<u8>;
-            let line: &[u8] = if !config.auth_keys.is_empty() {
+            let req: Request = if !config.auth_keys.is_empty() {
                 // HMAC auth gate: enforced only when keys configured. The auth
                 // object rides OUTSIDE the Request enum so deny_unknown_fields
                 // on the wire contract stays intact.
                 match verify_frame_auth(&config.auth_keys, &frame, &config.replay_store) {
-                    Ok(s) => {
-                        // Continue parsing the auth-stripped payload so
-                        // Request's deny_unknown_fields never sees `auth`.
-                        sanitized = s;
-                        &sanitized
-                    }
+                    // P1-5: verify_frame_auth returns the auth-stripped Value;
+                    // from_value deserializes without a second JSON parse.
+                    Ok(v) => match serde_json::from_value::<Request>(v) {
+                        Ok(req) => req,
+                        Err(e) => {
+                            let resp = Response::Error {
+                                code: 1,
+                                message: format!("parse: {e}"),
+                            };
+                            if timeout(config.write_timeout, write_resp(&mut socket, &resp))
+                                .await
+                                .is_err()
+                            {
+                                return Ok(());
+                            }
+                            continue;
+                        }
+                    },
                     Err(reason) => {
                         warn!("IPC auth rejected: {}", reason);
                         engine.metrics.inc_rejected(1);
@@ -390,24 +401,22 @@ async fn handle_connection(
                     }
                 }
             } else {
-                &frame
-            };
-
-            let req: Request = match serde_json::from_slice(line) {
-                Ok(r) => r,
-                Err(e) => {
-                    let resp = Response::Error {
-                        code: 1,
-                        message: format!("parse: {}", e),
-                    };
-                    if timeout(config.write_timeout, write_resp(&mut socket, &resp))
-                        .await
-                        .is_err()
-                    {
-                        debug!("Write timeout on error response");
-                        return Ok(());
+                match serde_json::from_slice(&frame) {
+                    Ok(req) => req,
+                    Err(e) => {
+                        let resp = Response::Error {
+                            code: 1,
+                            message: format!("parse: {e}"),
+                        };
+                        if timeout(config.write_timeout, write_resp(&mut socket, &resp))
+                            .await
+                            .is_err()
+                        {
+                            debug!("Write timeout on error response");
+                            return Ok(());
+                        }
+                        continue;
                     }
-                    continue;
                 }
             };
 
@@ -721,7 +730,7 @@ fn verify_frame_auth(
     keys: &[(String, Vec<u8>)],
     line: &[u8],
     replay: &ramshield_protocol::auth::ReplayStore,
-) -> Result<Vec<u8>, &'static str> {
+) -> Result<serde_json::Value, &'static str> {
     let mut v: serde_json::Value =
         serde_json::from_slice(line).map_err(|_| "frame is not valid JSON")?;
     let auth = v
@@ -746,7 +755,7 @@ fn verify_frame_auth(
     // Payload = compact serialization of the frame without the auth object.
     let payload = serde_json::to_vec(&v).map_err(|_| "reserialize failed")?;
     ramshield_protocol::auth::verify(keys, key_id, ts_ms, sig, &payload, Some(replay))?;
-    Ok(payload)
+    Ok(v)
 }
 
 #[cfg(test)]
