@@ -734,11 +734,15 @@ Default filter: `ramshield=info`
 
 1. **TTL wheel not started** — expired entries only disappear on read; no background eviction
 2. **WAL not connected** — blocks are not persisted across restart
-3. **IPv6 subnets** — subnet key logic is IPv4-only
+3. ~~**IPv6 subnets** — subnet key logic is IPv4-only~~ — CLOSED: /64 swarm
+   gate (index cardinality), CIDR-correct records, and an ETH_P_IPV6 XDP
+   drop path landed; kernel-side DROP not yet runtime-verified (needs root;
+   host/kernel byte contract pinned by tests)
 4. **Single batch thread** — `worker_threads` config is informational
 5. **Entropy block** still scans promoted IpRecords (smaller set than before)
 6. **No TLS on IPC** — intended for localhost or trusted network
-7. **Subnet batch block** may affect innocent IPs in same /24 (by design for aggressive mitigation)
+7. **Subnet batch block** may affect innocent IPs in same /24 (v4) or /64
+   (v6 — up to an entire site's LAN; short TTL + re-fire, same policy)
 8. **XDP Rust BPF** requires LLVM 21 + `bpf-linker` (clang fallback available)
 9. **XDP requires root/CAP_SYS_ADMIN** — not available in unprivileged containers
 10. **Enforcement reconciliation** on startup only; no periodic resync

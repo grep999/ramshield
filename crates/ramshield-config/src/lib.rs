@@ -559,6 +559,20 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    /// IPv6 plan Task 6: bracketed v6 binds are the documented form
+    /// ("[::]:7890"); the public-exposure guard must see through the
+    /// brackets or an unauthenticated dashboard binds all-interfaces
+    /// while validate() thinks it's loopback-only.
+    #[test]
+    fn public_bind_covers_v6_forms() {
+        assert!(is_public_bind("[::]:7890"), "bracketed any-v6");
+        assert!(is_public_bind(":::7890"), "unbracketed any-v6 host '::' + port");
+        assert!(is_public_bind("[*]:7890"), "bracketed star");
+        assert!(is_public_bind("[0.0.0.0]:80"), "bracketed v4-any");
+        assert!(!is_public_bind("[::1]:7890"), "bracketed loopback is private");
+        assert!(!is_public_bind("127.0.0.1:7890"), "v4 loopback stays private");
+    }
+
     #[cfg(test)]
     fn clear_env_vars() {
         let keys = [
