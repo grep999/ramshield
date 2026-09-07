@@ -252,6 +252,18 @@ impl EnforcementService {
         self.expirations.insert(ip, (b, idx));
     }
 
+    /// P1-4: re-arm the TTL ring with blocks restored from WAL replay.
+    /// `replay_wal_into_store` returns remaining-TTL pairs; call before
+    /// `run()` so restored blocks expire on schedule instead of forever.
+    pub fn restore_expirations(&mut self, pairs: impl IntoIterator<Item = (IpAddr, u64)>) {
+        for (ip, remaining_secs) in pairs {
+            if remaining_secs == 0 {
+                continue;
+            }
+            self.schedule_expiration(ip, Instant::now() + Duration::from_secs(remaining_secs));
+        }
+    }
+
     #[cfg(test)]
     fn check_ring_invariant(&self) {
         for (&ip, &(b, pos)) in &self.expirations {
@@ -389,7 +401,9 @@ impl EnforcementService {
                     // and kill the enforcement task (blocks silently die).
                     let at = Instant::now()
                         .checked_add(Duration::from_secs(cmd.ttl_seconds))
-                        .unwrap_or_else(|| Instant::now() + Duration::from_secs(MAX_EXPIRY_FALLBACK_SECS));
+                        .unwrap_or_else(|| {
+                            Instant::now() + Duration::from_secs(MAX_EXPIRY_FALLBACK_SECS)
+                        });
                     self.schedule_expiration(cmd.ip, at);
                 } else {
                     self.detach_expiration(cmd.ip);
@@ -464,10 +478,13 @@ fn reason_to_block_reason(reason: &str) -> BlockReason {
 }
 
 /// Replay WAL entries into the store: fold BlockIp/UnblockIp in LSN order to
-/// the final block set, skipping blocks whose TTL already elapsed. Returns the
-/// count of still-live blocks restored. Call before `run()` so the XDP
-/// reconciliation inside it picks the recovered state up.
-pub fn replay_wal_into_store(store: &Arc<Store>, wal: &Wal) -> anyhow::Result<usize> {
+/// the final block set, skipping blocks whose TTL already elapsed. Returns
+/// the still-live blocks as `(ip, ttl_secs)` pairs — the caller re-arms the
+/// enforcement TTL schedule with them (P1-4: blocks restored WITHOUT an
+/// expiry card never expire; expirations/buckets are empty at boot).
+/// Call before `run()` so the XDP reconciliation inside it picks the
+/// recovered state up.
+pub fn replay_wal_into_store(store: &Arc<Store>, wal: &Wal) -> anyhow::Result<Vec<(IpAddr, u64)>> {
     let entries = Wal::replay(&wal_dir(wal))?;
     let now_ns = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -499,7 +516,7 @@ pub fn replay_wal_into_store(store: &Arc<Store>, wal: &Wal) -> anyhow::Result<us
     }
 
     let ram_lim = store.traffic.ram_limit_mb.load(Ordering::Relaxed).max(1) * 1024 * 1024;
-    let mut restored = 0usize;
+    let mut restored: Vec<(IpAddr, u64)> = Vec::new();
     for (ip, (reason, ts_ns, ttl_secs)) in blocked {
         // Expired TTL → don't resurrect.
         if let Some(ttl) = ttl_secs
@@ -540,9 +557,21 @@ pub fn replay_wal_into_store(store: &Arc<Store>, wal: &Wal) -> anyhow::Result<us
         store
             .insert(ip, Value::IpRecord(rec), None, ram_lim)
             .map_err(|e| anyhow::anyhow!("WAL replay insert {ip}: {e}"))?;
-        restored += 1;
+        // Remaining TTL = original minus time already served (P1-4 re-arm).
+        let remaining = match ttl_secs {
+            Some(0) | None => 0,
+            Some(ttl) => {
+                let elapsed = now_ns.saturating_sub(ts_ns) / 1_000_000_000;
+                ttl.saturating_sub(elapsed).max(1)
+            }
+        };
+        restored.push((ip, remaining));
     }
-    info!("WAL replay: restored {restored} live blocks");
+    info!(
+        "WAL replay: restored {} live blocks ({} with TTL)",
+        restored.len(),
+        restored.iter().filter(|(_, t)| *t > 0).count()
+    );
     Ok(restored)
 }
 
@@ -857,7 +886,8 @@ mod tests {
             .unwrap(),
         );
         let restored = replay_wal_into_store(&fresh, &wal).unwrap();
-        assert_eq!(restored, 1);
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].1, 3600, "restored block must carry full TTL");
         match fresh.get(&target) {
             Some(Value::IpRecord(r)) => assert!(
                 matches!(r.block_state, BlockState::Blocked { .. }),
@@ -891,7 +921,7 @@ mod tests {
             )
             .unwrap(),
         );
-        assert_eq!(replay_wal_into_store(&fresh, &wal).unwrap(), 0);
+        assert_eq!(replay_wal_into_store(&fresh, &wal).unwrap().len(), 0);
         assert!(fresh.get(&target).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -932,10 +962,53 @@ mod tests {
             )
             .unwrap(),
         );
-        assert_eq!(replay_wal_into_store(&fresh, &wal2).unwrap(), 0);
+        assert_eq!(replay_wal_into_store(&fresh, &wal2).unwrap().len(), 0);
         assert!(
             fresh.get(&"10.79.0.7".parse().unwrap()).is_none(),
             "expired block must not resurrect"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// P1-4: replay returns remaining TTLs; restore_expirations re-arms the
+    /// ring so a restored block actually expires (previously: forever).
+    #[tokio::test]
+    async fn replay_then_restore_expirations_arms_ring() {
+        let dir = std::env::temp_dir().join(format!("rs_wal_ream_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut s = svc_with_wal(Box::new(RecordingApplier::new()), dir.to_str().unwrap());
+        let target = ip([10, 80, 0, 9]);
+        s.enforce(block_cmd(target, 3600)).await.unwrap();
+        drop(s);
+
+        let fresh = Arc::new(Store::new(16));
+        let wal = Arc::new(
+            Wal::open(
+                dir.to_str().unwrap(),
+                false,
+                ramshield_types::Durability::None,
+                64 * 1024 * 1024,
+                0,
+            )
+            .unwrap(),
+        );
+        let pairs = replay_wal_into_store(&fresh, &wal).unwrap();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].1, 3600, "block written seconds ago keeps full TTL");
+
+        // New service instance (empty ring) restores + re-arms.
+        let mut s2 = EnforcementService::new(
+            fresh,
+            Arc::new(Metrics::new()),
+            Box::new(RecordingApplier::new()),
+            Arc::new(AtomicBool::new(false)),
+        );
+        s2.restore_expirations(pairs);
+        assert!(
+            s2.expirations.contains_key(&target),
+            "restored block must be scheduled in the TTL ring"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

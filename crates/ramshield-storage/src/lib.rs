@@ -388,27 +388,20 @@ impl Store {
     /// burst (5 hosts, 100 events) passes the dual gate and batch-blocks
     /// ~55 innocent hosts. O(members) per call — acceptable: gates run on
     /// flush cadence, subnets are small.
-    pub fn subnet_member_count_windowed(
-        &self,
-        key: SubnetKey,
-        window_ns: u64,
-        now_ns: u64,
-    ) -> u64 {
-        self.subnet_index
-            .get(&key)
-            .map_or(0, |ips| {
-                ips.iter()
-                    .filter(|e| {
-                        self.inner.get(e.key()).is_some_and(|v| {
-                            let ls = match &v.value().value {
-                                Value::IpRecord(rec) => rec.last_seen_ns,
-                                _ => 0,
-                            };
-                            now_ns.saturating_sub(ls) <= window_ns
-                        })
+    pub fn subnet_member_count_windowed(&self, key: SubnetKey, window_ns: u64, now_ns: u64) -> u64 {
+        self.subnet_index.get(&key).map_or(0, |ips| {
+            ips.iter()
+                .filter(|e| {
+                    self.inner.get(e.key()).is_some_and(|v| {
+                        let ls = match &v.value().value {
+                            Value::IpRecord(rec) => rec.last_seen_ns,
+                            _ => 0,
+                        };
+                        now_ns.saturating_sub(ls) <= window_ns
                     })
-                    .count() as u64
-            })
+                })
+                .count() as u64
+        })
     }
 
     /// Insert with RAM limit enforcement. Only enforces limit on net-new growth,

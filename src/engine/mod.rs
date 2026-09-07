@@ -318,11 +318,17 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
             Ok(wal) => {
                 let wal = Arc::new(wal);
                 match ramshield_enforcement::replay_wal_into_store(&store, &wal) {
-                    Ok(n) => tracing::info!(
-                        "WAL enabled at {} — {} blocks restored",
-                        cfg_snapshot.wal.dir,
-                        n
-                    ),
+                    Ok(pairs) => {
+                        tracing::info!(
+                            "WAL enabled at {} — {} blocks restored ({} with TTL)",
+                            cfg_snapshot.wal.dir,
+                            pairs.len(),
+                            pairs.iter().filter(|(_, t)| *t > 0).count()
+                        );
+                        // P1-4: restored blocks must expire on schedule — re-arm
+                        // the TTL ring (expirations/buckets are empty at boot).
+                        enforcement.restore_expirations(pairs);
+                    }
                     Err(e) => {
                         tracing::error!("WAL replay failed: {} — starting with empty block set", e)
                     }

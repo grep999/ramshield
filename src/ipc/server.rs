@@ -63,9 +63,9 @@ const MAX_TTL_SECS: u64 = 31_536_000;
 /// the single writer for blocks/expiries. Returns the clamped value.
 fn sanitize_ttl(ttl: Option<u64>) -> Result<u64, String> {
     match ttl {
-        Some(t) if t > MAX_TTL_SECS => Err(format!(
-            "ttl_secs {t} exceeds max {MAX_TTL_SECS} (1 year)"
-        )),
+        Some(t) if t > MAX_TTL_SECS => {
+            Err(format!("ttl_secs {t} exceeds max {MAX_TTL_SECS} (1 year)"))
+        }
         Some(t) => Ok(t),
         None => Ok(0),
     }
