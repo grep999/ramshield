@@ -18,8 +18,7 @@ use rate_tracker::{
     CUSUM_WARMUP_SAMPLES, cusum_allowance, cusum_fired, cusum_step_capped, ewma, ewma_alpha_slow,
     is_exceeded, pulse_tracker_step,
 };
-use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
+use ahash::AHashMap as HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
 use std::sync::{
@@ -56,7 +55,10 @@ impl BloomFilter {
     }
 
     pub fn slots(ip: &IpAddr) -> (usize, usize) {
-        let mut h = DefaultHasher::new();
+        // ahash, not DefaultHasher (SipHash): slots() runs once per event at
+        // ingest rate. Collision-storm resistance is not a property the bloom
+        // needs (false positives are its whole design); speed is.
+        let mut h = ahash::AHasher::default();
         ip.hash(&mut h);
         let x = h.finish();
         let a = x as usize;
@@ -141,8 +143,9 @@ pub struct DetectionEngine {
     enforcement_tx: mpsc::Sender<EnforceCommand>,
     bloom: ArcSwap<BloomFilter>,
     shutdown: Arc<AtomicBool>,
-    /// Pre-aggregation buffer — DashMap is internally thread-safe, no Arc needed
-    pre_aggs: DashMap<IpAddr, IpAgg>,
+    /// Pre-aggregation buffer — DashMap is internally thread-safe, no Arc needed.
+    /// ahash (item 1): every event hashes its IP here under attacker volume.
+    pre_aggs: DashMap<IpAddr, IpAgg, ahash::RandomState>,
     last_pre_aggs_flush_ns: AtomicU64,
     /// F1: single-flusher gate (N batch workers share the flush trigger).
     flushing: AtomicBool,
@@ -190,7 +193,7 @@ impl DetectionEngine {
             enforcement_tx,
             bloom: ArcSwap::from_pointee(BloomFilter::new(bloom_bits)),
             shutdown,
-            pre_aggs: DashMap::with_shard_amount(64),
+            pre_aggs: DashMap::with_hasher_and_shard_amount(ahash::RandomState::new(), 64),
             last_pre_aggs_flush_ns: AtomicU64::new(now_ns()),
             flushing: AtomicBool::new(false),
             worker_handles: std::sync::Mutex::new(Vec::new()),

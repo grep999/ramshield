@@ -33,7 +33,7 @@ pub struct AuthState {
     /// Per-IP failed-login counters. A global counter let any host lock out
     /// every admin with 50 garbage POSTs (process-wide DoS). Windowed per IP:
     /// failures older than LOCKOUT_WINDOW decay and the slot is reclaimed.
-    failures: Arc<DashMap<IpAddr, FailureWindow>>,
+    failures: Arc<DashMap<IpAddr, FailureWindow, ahash::RandomState>>,
 }
 
 /// Rolling failure window for one client IP.
@@ -70,7 +70,7 @@ impl AuthState {
             sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
             max_login_attempts,
             max_password_length,
-            failures: Arc::new(DashMap::new()),
+            failures: Arc::new(DashMap::with_hasher(ahash::RandomState::new())),
         }
     }
 

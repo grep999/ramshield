@@ -17,7 +17,8 @@ use ramshield_storage::{
 use ramshield_types::{
     BlockReason, EnforceAction, EnforceCommand, EnforceResult, EnforcementError,
 };
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use ahash::{AHashMap as HashMap, AHashSet as HashSet};
+use std::collections::{BTreeMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::{
     Arc,

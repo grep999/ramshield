@@ -228,14 +228,19 @@ impl Entry {
 
 /// Subnet key: IPv4 packed into low 32 bits, IPv6 full 128 bits.
 pub type SubnetKey = u128;
-type SubnetTable = DashMap<SubnetKey, SubnetRecord>;
+/// ahash everywhere IPs/subnets are keys (RAM-for-CPU item 1): attacker
+/// volume multiplies every SipHash. RandomState seeds per-process from the
+/// OS — collision-DoS resistant, unlike fixed seeds.
+type SubnetTable = DashMap<SubnetKey, SubnetRecord, ahash::RandomState>;
+type IpEntryMap = DashMap<IpAddr, Entry, ahash::RandomState>;
+type SubnetIndex = DashMap<SubnetKey, DashSet<IpAddr>, ahash::RandomState>;
 
 pub struct Store {
-    inner: Arc<DashMap<IpAddr, Entry>>,
+    inner: Arc<IpEntryMap>,
     subnet_table: Arc<SubnetTable>,
     /// Reverse index: subnet key -> list of IPs for efficient subnet-based lookups.
     /// Maintained during batch flush to avoid O(store_size) scans.
-    subnet_index: Arc<DashMap<SubnetKey, DashSet<IpAddr>>>,
+    subnet_index: Arc<SubnetIndex>,
     /// P0 index: currently-blocked IPs. Maintained during insert/remove/evict
     /// to make `get_all_blocked_ips` O(B) instead of O(N) on XDP reconcile.
     /// B = number of blocked IPs (typically 50-200), N = total store size (100k+).
@@ -261,17 +266,33 @@ pub struct Store {
 }
 
 /// Minimal single-value set over DashMap (avoids pulling dashmap-set feature).
-type DashSet<T> = DashMap<T, ()>;
+/// ahash: keys are attacker-controlled IPs/subnets — SipHash (DashMap's
+/// RandomState default) burns ~20-30 cycles/hash on the per-event path and
+/// invites collision probing. ahash's RandomState seeds from the OS at
+/// startup (not fixed), so no key-recovery attack on the seed.
+type DashSet<T> = DashMap<T, (), ahash::RandomState>;
 
 impl Store {
     pub fn new(shard_count: usize) -> Self {
         let shards = shard_count.next_power_of_two();
         tracing::debug!("Store::new - Initializing store with {} shards", shards);
         Self {
-            inner: Arc::new(DashMap::with_shard_amount(shards)),
-            subnet_table: Arc::new(DashMap::with_shard_amount(32)),
-            subnet_index: Arc::new(DashMap::with_shard_amount(32)),
-            blocked_set: Arc::new(DashMap::with_shard_amount(32)),
+            inner: Arc::new(IpEntryMap::with_hasher_and_shard_amount(
+                ahash::RandomState::new(),
+                shards,
+            )),
+            subnet_table: Arc::new(SubnetTable::with_hasher_and_shard_amount(
+                ahash::RandomState::new(),
+                32,
+            )),
+            subnet_index: Arc::new(SubnetIndex::with_hasher_and_shard_amount(
+                ahash::RandomState::new(),
+                32,
+            )),
+            blocked_set: Arc::new(DashSet::with_hasher_and_shard_amount(
+                ahash::RandomState::new(),
+                32,
+            )),
             ram_bytes: Arc::new(AtomicUsize::new(0)),
             blocked_count: Arc::new(AtomicU64::new(0)),
             traffic: Arc::new(TrafficCounters::new()),
@@ -690,7 +711,7 @@ impl Store {
     pub fn set_ram_bytes_for_testing(&self, bytes: usize) {
         self.ram_bytes.store(bytes, Ordering::Relaxed);
     }
-    pub fn inner(&self) -> &DashMap<IpAddr, Entry> {
+    pub fn inner(&self) -> &IpEntryMap {
         &self.inner
     }
     pub fn subnet_table(&self) -> &SubnetTable {
@@ -745,7 +766,7 @@ impl Store {
         } else {
             self.subnet_index
                 .entry(sk)
-                .or_insert_with(|| DashMap::with_capacity(64))
+                .or_insert_with(|| DashSet::with_hasher(ahash::RandomState::new()))
                 .insert(ip_key, ());
         }
     }

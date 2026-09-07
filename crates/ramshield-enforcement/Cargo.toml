@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ahash = "0.8"
 ramshield-metrics = { path = "../ramshield-metrics" }
 ramshield-types = { path = "../ramshield-types" }
 ramshield-storage = { path = "../ramshield-storage" }
