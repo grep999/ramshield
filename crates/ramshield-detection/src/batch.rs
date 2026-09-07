@@ -18,15 +18,34 @@ impl IpAgg {
     pub fn absorb(&mut self, ev: &ConnectionEvent) {
         self.count += 1;
         self.bytes += ev.bytes;
-        let bucket = super::status_bucket(ev.status_code) as usize;
-        if bucket < self.status_dist.len() {
-            self.status_dist[bucket] += 1;
+        // 600B L1-resident const table beats the /100 division per event.
+        if ev.status_code < 600 {
+            let b = super::STATUS_BUCKET[ev.status_code as usize];
+            if b != 255 {
+                self.status_dist[b as usize] += 1;
+            }
         }
         if self.count == 1 {
             self.first_ts_ns = ev.timestamp_ns;
             self.proto_fp = ev.proto_fingerprint;
         }
         self.last_ts_ns = ev.timestamp_ns;
+    }
+
+    /// Consolidate another aggregate for the SAME IP (worker-local buffer
+    /// merged into the shared pre_aggs — RAM-for-CPU item 3). Counters add;
+    /// timestamps take window min/max; first non-zero proto_fp wins.
+    pub fn merge_with(&mut self, other: &Self) {
+        self.count = self.count.saturating_add(other.count);
+        self.bytes = self.bytes.saturating_add(other.bytes);
+        for (d, o) in self.status_dist.iter_mut().zip(other.status_dist.iter()) {
+            *d = d.saturating_add(*o);
+        }
+        self.first_ts_ns = self.first_ts_ns.min(other.first_ts_ns);
+        self.last_ts_ns = self.last_ts_ns.max(other.last_ts_ns);
+        if self.proto_fp == 0 {
+            self.proto_fp = other.proto_fp;
+        }
     }
 }
 

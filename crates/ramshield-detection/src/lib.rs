@@ -134,6 +134,12 @@ const STATUS_BUCKET: [u8; 600] = {
 /// duplicate the number elsewhere.
 pub const CHANNEL_CAPACITY: u64 = 64_000;
 
+/// Item 3: worker-local buffers merge into shared pre_aggs at least this
+/// often even if neither time nor shared-size triggers fire — bounds the
+/// per-worker head-of-line to ~8k uniques (~600KB) during an
+/// extreme IP-fanout burst.
+const LOCAL_MERGE_SOFT_CAP: usize = 8_192;
+
 pub struct DetectionEngine {
     store: Arc<Store>,
     config: ConfigHandle,
@@ -204,27 +210,41 @@ impl DetectionEngine {
         self.event_tx.clone()
     }
 
+    /// Move a worker's local buffer into shared `pre_aggs` (RAM-for-CPU
+    /// item 3). Runs once per flush boundary, not per event. Same-IP
+    /// consolidation across workers uses IpAgg::merge_with, so the batch
+    /// that reaches flush_batch keeps the exact old cross-worker semantics
+    /// (one entry per IP per flush window, summed counts).
+    fn merge_local(&self, local: &mut HashMap<IpAddr, IpAgg>) {
+        if local.is_empty() {
+            return;
+        }
+        for (ip, agg) in local.drain() {
+            self.pre_aggs
+                .entry(ip)
+                .and_modify(|cur| cur.merge_with(&agg))
+                .or_insert(agg);
+        }
+    }
+
+    /// Test/diagnostic entry: absorb straight into the shared map (what the
+    /// pre-item-3 stream path did). Production workers absorb into a local
+    /// buffer and merge via `merge_local`.
+    #[cfg(test)]
+    fn absorb_shared(&self, ev: ConnectionEvent) {
+        self.pre_aggs
+            .entry(ev.ip)
+            .and_modify(|a| a.absorb(&ev))
+            .or_insert_with(|| {
+                let mut a = IpAgg::default();
+                a.absorb(&ev);
+                a
+            });
+    }
+
     fn pre_aggs_needs_flush_due_to_timeout(&self, interval_ms: u64) -> bool {
         let last_flush = self.last_pre_aggs_flush_ns.load(Ordering::Relaxed);
         now_ns().saturating_sub(last_flush) >= interval_ms * 1_000_000
-    }
-
-    fn process_event_into_pre_aggs(&self, ev: ConnectionEvent) {
-        let mut entry = self.pre_aggs.entry(ev.ip).or_default();
-        let agg = entry.value_mut();
-        agg.count += 1;
-        if agg.count == 1 {
-            agg.first_ts_ns = ev.timestamp_ns;
-        }
-        agg.bytes += ev.bytes;
-        agg.last_ts_ns = ev.timestamp_ns;
-        // ponytail: table lookup replaces per-event /100 - 600B const table.
-        if ev.status_code < 600 {
-            let b = STATUS_BUCKET[ev.status_code as usize];
-            if b != 255 {
-                agg.status_dist[b as usize] += 1;
-            }
-        }
     }
 
     fn flush_pre_aggs_to_store(&self) {
@@ -354,7 +374,19 @@ impl DetectionEngine {
 
     /// Core batch loop — takes an explicit Receiver so N workers can share the
     /// same crossbeam channel (Receiver is Clone).
+    ///
+    /// RAM-for-CPU item 3: events are absorbed into a worker-LOCAL
+    /// open-addressed map — zero shared locks on the per-event path (the old
+    /// shared DashMap took a shard write-lock per event, ping-ponging cache
+    /// lines between workers). The buffer merges into `pre_aggs` only at the
+    /// flush boundary (interval grain), and the flush itself is the F1
+    /// single-flusher CAS path, so cross-worker counts keep the old
+    /// semantics: one entry per IP per flush window.
+    /// ponytail: memory guard stays on shared pre_aggs.len() only; local
+    /// buffers add ≤ one flush interval of uniques per worker (~100ms of
+    /// fanout). Revisit if pre_aggs_max_size tuning becomes an SLO.
     fn batch_processor_loop_from(&self, rx: Arc<Receiver<ConnectionEvent>>) {
+        let mut local: HashMap<IpAddr, IpAgg> = HashMap::new();
         loop {
             if self.shutdown.load(Ordering::Acquire) {
                 // P2 fix (F9): events sitting in pre_aggs at exit (up to one
@@ -362,6 +394,7 @@ impl DetectionEngine {
                 // store; WAL persists blocks, not counts. Final flush on the
                 // way out; the single-flusher CAS gate makes N concurrent
                 // exit-flushes safe (one drains, others no-op).
+                self.merge_local(&mut local);
                 self.flush_pre_aggs_to_store();
                 info!("Batch processor shutting down");
                 break;
@@ -372,26 +405,33 @@ impl DetectionEngine {
             let window = Duration::from_millis(cfg.detection.batch_window_ms);
             let max = cfg.detection.batch_max_events;
 
-            // Drain events from channel into pre_aggs
+            // Drain events into the worker-local buffer — no shared lock.
             match rx.recv_timeout(window) {
-                Ok(ev) => self.process_event_into_pre_aggs(ev),
+                Ok(ev) => local.entry(ev.ip).or_default().absorb(&ev),
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Disconnected) => {
+                    // Senders all gone: deliver what we hold, then exit.
+                    self.merge_local(&mut local);
+                    self.flush_pre_aggs_to_store();
+                    break;
+                }
             }
 
             // Drain remaining events up to batch_max_events
             for _ in 0..max.saturating_sub(1) {
                 match rx.try_recv() {
-                    Ok(ev) => self.process_event_into_pre_aggs(ev),
+                    Ok(ev) => local.entry(ev.ip).or_default().absorb(&ev),
                     Err(_) => break,
                 }
             }
 
             // Flush pre_aggs to main store when size or timeout threshold hit
             if self.pre_aggs.len() >= cfg.detection.pre_aggs_max_size
+                || local.len() >= LOCAL_MERGE_SOFT_CAP
                 || self
                     .pre_aggs_needs_flush_due_to_timeout(cfg.detection.pre_aggs_flush_interval_ms)
             {
+                self.merge_local(&mut local);
                 self.flush_pre_aggs_to_store();
             }
         }
@@ -853,6 +893,42 @@ mod tests {
         Arc::new(DetectionEngine::new(store, cfg, etx, metrics, shutdown))
     }
 
+    /// Item 3 regression: worker-local merge must equal the old shared-map
+    /// semantics — same-IP counts/statuses summed, window timestamps min/max,
+    /// local buffer emptied into shared.
+    #[test]
+    fn local_merge_preserves_cross_worker_semantics() {
+        let eng = engine();
+        let mut a: HashMap<IpAddr, IpAgg> = HashMap::new();
+        let mut b: HashMap<IpAddr, IpAgg> = HashMap::new();
+        let ip: IpAddr = "1.2.3.4".parse().unwrap();
+        a.entry(ip).or_default().absorb(&ConnectionEvent {
+            ip,
+            timestamp_ns: 500,
+            bytes: 10,
+            status_code: 404,
+            proto_fingerprint: 7,
+        });
+        b.entry(ip).or_default().absorb(&ConnectionEvent {
+            ip,
+            timestamp_ns: 200, // earlier than a's first
+            bytes: 15,
+            status_code: 200,
+            proto_fingerprint: 0,
+        });
+        eng.merge_local(&mut a);
+        eng.merge_local(&mut b);
+        let agg = eng.pre_aggs.get(&ip).unwrap();
+        assert_eq!(agg.count, 2);
+        assert_eq!(agg.bytes, 25);
+        assert_eq!(agg.first_ts_ns, 200, "window min across workers");
+        assert_eq!(agg.last_ts_ns, 500, "window max across workers");
+        assert_eq!(agg.status_dist[3], 1, "4xx from worker a");
+        assert_eq!(agg.status_dist[1], 1, "2xx from worker b");
+        assert_eq!(agg.proto_fp, 7, "first non-zero fingerprint wins");
+        assert!(a.is_empty(), "local buffer is drained into shared");
+    }
+
     /// P1 regression (F1): with N workers, the old iter_mut+take+clear flush
     /// silently erased events inserted during the walk. Invariant:
     /// ingested + left-in-pre_aggs == sent, exactly, under concurrent flush.
@@ -894,7 +970,7 @@ mod tests {
                     for i in 0..PER_SENDER {
                         let ip: IpAddr =
                             format!("10.{}.0.{}", w, i % 251).parse().unwrap();
-                        e.process_event_into_pre_aggs(ConnectionEvent {
+                        e.absorb_shared(ConnectionEvent {
                             ip,
                             timestamp_ns: i * 1_000_000,
                             bytes: 100,
