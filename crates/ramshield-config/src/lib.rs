@@ -566,11 +566,20 @@ mod tests {
     #[test]
     fn public_bind_covers_v6_forms() {
         assert!(is_public_bind("[::]:7890"), "bracketed any-v6");
-        assert!(is_public_bind(":::7890"), "unbracketed any-v6 host '::' + port");
+        assert!(
+            is_public_bind(":::7890"),
+            "unbracketed any-v6 host '::' + port"
+        );
         assert!(is_public_bind("[*]:7890"), "bracketed star");
         assert!(is_public_bind("[0.0.0.0]:80"), "bracketed v4-any");
-        assert!(!is_public_bind("[::1]:7890"), "bracketed loopback is private");
-        assert!(!is_public_bind("127.0.0.1:7890"), "v4 loopback stays private");
+        assert!(
+            !is_public_bind("[::1]:7890"),
+            "bracketed loopback is private"
+        );
+        assert!(
+            !is_public_bind("127.0.0.1:7890"),
+            "v4 loopback stays private"
+        );
     }
 
     #[cfg(test)]
@@ -686,8 +695,8 @@ mod tests {
         }
         let tmpfile = "/tmp/ramshield_test_config.toml";
         std::fs::write(tmpfile, "").unwrap();
-        let err = Config::load(tmpfile)
-            .expect_err("public IPC bind without auth_keys must fail startup");
+        let err =
+            Config::load(tmpfile).expect_err("public IPC bind without auth_keys must fail startup");
         assert!(err.to_string().contains("auth_keys"), "{err}");
         clear_env_vars();
     }

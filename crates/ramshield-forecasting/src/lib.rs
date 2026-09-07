@@ -95,11 +95,7 @@ impl HoltWinters {
         let ns = self.seasonal[(self.tick + self.period) % self.period];
         (self.level + self.trend + ns).max(0.0)
     }
-
-
 }
-
-
 
 // ── EWMA Variance ─────────────────────────────────────────────────────────────
 
@@ -160,8 +156,8 @@ impl EwmAVar {
 pub struct CusumState {
     s_upper: f64,
     s_lower: f64,
-    k: f64,  // slack (allowance), in sigma units
-    h: f64,  // decision boundary, in sigma units
+    k: f64, // slack (allowance), in sigma units
+    h: f64, // decision boundary, in sigma units
 }
 
 impl CusumState {
@@ -204,7 +200,7 @@ const H0: usize = Hypothesis::Normal as usize;
 const H1: usize = Hypothesis::VolumetricDoS as usize;
 const H2: usize = Hypothesis::SlowRampDoS as usize;
 const H3: usize = Hypothesis::FlashCrowd as usize;
-const CLAMP_LL: f64 = 4.0;  // ponytail: was 3.0, raised for multi-signal coherence
+const CLAMP_LL: f64 = 4.0; // ponytail: was 3.0, raised for multi-signal coherence
 
 /// Bayesian tracker over 4 hypotheses. O(1) memory (36 bytes).
 ///
@@ -223,13 +219,15 @@ pub struct HypothesisTracker {
 }
 
 impl Default for HypothesisTracker {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HypothesisTracker {
     /// Baseline priors: P(normal)=0.90, P(volumetric)=0.02, P(slow_ramp)=0.02,
     /// P(flash_crowd)=0.05.
-    const BASELINE: [f64; H_COUNT] = [0.91, 0.02, 0.02, 0.05];  // sums to 1.0
+    const BASELINE: [f64; H_COUNT] = [0.91, 0.02, 0.02, 0.05]; // sums to 1.0
     const DECAY: f64 = 0.98; // 98% old belief, 2% baseline
 
     /// Create a new tracker with baseline priors. Uses cold start
@@ -357,11 +355,7 @@ fn log_likelihood_h0(z: f64, delta_h: f64, threat: f64, cusum_alarm: bool) -> f6
     };
 
     // threat evidence
-    ll += if threat < 0.3 {
-        0.0
-    } else {
-        -0.3 * threat
-    };
+    ll += if threat < 0.3 { 0.0 } else { -0.3 * threat };
 
     // CUSUM evidence
     if cusum_alarm {
@@ -416,25 +410,13 @@ fn log_likelihood_h2(z: f64, delta_h: f64, threat: f64, cusum_alarm: bool) -> f6
     let mut ll = 0.0;
 
     // z-score: neutral if low (slow ramp hasn't spiked yet)
-    ll += if z > 2.5 {
-        -0.3
-    } else {
-        0.0
-    };
+    ll += if z > 2.5 { -0.3 } else { 0.0 };
 
     // entropy: slight support if dropping
-    ll += if delta_h < -0.3 {
-        0.3
-    } else {
-        0.0
-    };
+    ll += if delta_h < -0.3 { 0.3 } else { 0.0 };
 
     // threat: moderate support if elevated
-    ll += if threat > 0.3 {
-        0.5
-    } else {
-        0.0
-    };
+    ll += if threat > 0.3 { 0.5 } else { 0.0 };
 
     // CUSUM: PRIMARY signal for H₂
     if cusum_alarm {
@@ -543,8 +525,10 @@ impl PeakReservoir {
             return None;
         }
         // ponytail: sort in-place, O(n) allocation saved per tick
-        self.vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let idx = ((self.vals.len() as f64) * (1.0 - tail)).clamp(0.0, (self.vals.len() - 1) as f64);
+        self.vals
+            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let idx =
+            ((self.vals.len() as f64) * (1.0 - tail)).clamp(0.0, (self.vals.len() - 1) as f64);
         Some(self.vals[idx as usize])
     }
 
@@ -583,10 +567,10 @@ impl Forecaster {
 
     pub async fn run(self: Arc<Self>) {
         let mut t1 = tokio::time::interval(std::time::Duration::from_secs(1));
-                loop {
+        loop {
             tokio::select! {
-                _ = t1.tick() => { self.tick_hw().await; }
-                }
+            _ = t1.tick() => { self.tick_hw().await; }
+            }
         }
     }
 
@@ -618,10 +602,15 @@ impl Forecaster {
         let threat_sample = self.store.traffic.drain_threat_sample();
         let threat = {
             let sample = &threat_sample;
-            if sample.is_empty() { 0.0 }
-            else {
+            if sample.is_empty() {
+                0.0
+            } else {
                 let mut m = 0.0f32;
-                for (_, t) in sample { if *t > m { m = *t; } }
+                for (_, t) in sample {
+                    if *t > m {
+                        m = *t;
+                    }
+                }
                 m as f64
             }
         };
@@ -672,38 +661,43 @@ impl Forecaster {
         }
         match hypothesis {
             Some((Hypothesis::VolumetricDoS, conf)) => {
-                warn!("BAYESIAN H1 VOLUMETRIC conf={:.2} z={:.2} threat={:.2} rps={:.1}",
-                    conf, z, threat, rps);
+                warn!(
+                    "BAYESIAN H1 VOLUMETRIC conf={:.2} z={:.2} threat={:.2} rps={:.1}",
+                    conf, z, threat, rps
+                );
                 self.preemptive_block(&threat_sample).await;
             }
             Some((Hypothesis::SlowRampDoS, conf)) => {
-                warn!("BAYESIAN H2 SLOW-RAMP conf={:.2} z={:.2} cusum rps={:.1}",
-                    conf, z, rps);
+                warn!(
+                    "BAYESIAN H2 SLOW-RAMP conf={:.2} z={:.2} cusum rps={:.1}",
+                    conf, z, rps
+                );
                 self.preemptive_block(&threat_sample).await;
                 self.cusum.lock().await.reset();
             }
             Some((Hypothesis::FlashCrowd, conf)) => {
-                info!("BAYESIAN H3 FLASH-CROWD conf={:.2} ΔH={:.2} rps={:.1} — no block",
-                    conf, delta_h, rps);
+                info!(
+                    "BAYESIAN H3 FLASH-CROWD conf={:.2} ΔH={:.2} rps={:.1} — no block",
+                    conf, delta_h, rps
+                );
                 // intentional: flash crowd = legitimate traffic surge, no blocking
             }
             _ => {}
         }
 
         // ── Legacy fallback: EWMA peak alarm (transitional, remove in v0.4) ─
-        let spot_alarm = self.peaks.lock().await
-            .extreme_quantile(0.001)
-            .map_or(z > self.config.anomaly_zscore, |q| {
+        let spot_alarm = self.peaks.lock().await.extreme_quantile(0.001).map_or(
+            z > self.config.anomaly_zscore,
+            |q| {
                 let dev = (rps - f).abs();
                 dev > q
-            });
+            },
+        );
         if spot_alarm && z > self.config.anomaly_zscore && hypothesis.is_none() {
             warn!("LEGACY SPOT z={:.2} rps={:.1}", z, rps);
             self.preemptive_block(&threat_sample).await;
         }
     }
-
-
 
     async fn preemptive_block(&self, sample: &[(std::net::IpAddr, f32)]) {
         // P0 fix: sample is passed in (drained once per tick by tick_hw).
@@ -859,7 +853,7 @@ mod tests {
             .enable_time()
             .build()
             .unwrap();
-        rt.block_on(fc.tick_hw());  // entropy now computed in tick_hw
+        rt.block_on(fc.tick_hw()); // entropy now computed in tick_hw
     }
 
     /// P0 regression: preemptive_block used to re-drain the threat queue that
@@ -898,7 +892,11 @@ mod tests {
             ev.update(1000.0);
         }
         let sigma_low = ev.sigma();
-        assert!(sigma_low < 100.0, "stable traffic sigma should be small: {}", sigma_low);
+        assert!(
+            sigma_low < 100.0,
+            "stable traffic sigma should be small: {}",
+            sigma_low
+        );
 
         // Transition to high traffic
         for _ in 0..100 {
@@ -941,7 +939,10 @@ mod tests {
                 break;
             }
         }
-        assert!(fired, "CUSUM must alarm on sustained z=1.5 drift over 12 ticks");
+        assert!(
+            fired,
+            "CUSUM must alarm on sustained z=1.5 drift over 12 ticks"
+        );
     }
 
     #[test]
@@ -951,7 +952,11 @@ mod tests {
         let mut cs = super::CusumState::new(0.5, 4.0);
         for i in 0..100 {
             let z = if i % 2 == 0 { 1.0 } else { -1.0 };
-            assert!(!cs.update(z), "symmetric noise should not trigger CUSUM at tick {}", i);
+            assert!(
+                !cs.update(z),
+                "symmetric noise should not trigger CUSUM at tick {}",
+                i
+            );
         }
     }
 
@@ -977,7 +982,11 @@ mod tests {
             bt.bayesian_update(0.2, 0.0, 0.0, false);
         }
         let priors = bt.priors();
-        assert!(priors[0] > 0.85, "H0 should dominate quiet traffic: {:?}", priors);
+        assert!(
+            priors[0] > 0.85,
+            "H0 should dominate quiet traffic: {:?}",
+            priors
+        );
         // H1 should be below baseline (0.02) since z is low and threat is low
         assert!(priors[1] < 0.03, "H1 should stay low: {:?}", priors);
     }
@@ -990,10 +999,18 @@ mod tests {
             bt.bayesian_update(4.0, -0.8, 0.9, false);
         }
         let priors = bt.priors();
-        assert!(priors[1] > priors[0],
-            "H1 (volumetric) should exceed H0 (normal): H0={:.3} H1={:.3}", priors[0], priors[1]);
-        assert!(priors[1] > priors[3],
-            "H1 should exceed H3 (flash): H1={:.3} H3={:.3}", priors[1], priors[3]);
+        assert!(
+            priors[1] > priors[0],
+            "H1 (volumetric) should exceed H0 (normal): H0={:.3} H1={:.3}",
+            priors[0],
+            priors[1]
+        );
+        assert!(
+            priors[1] > priors[3],
+            "H1 should exceed H3 (flash): H1={:.3} H3={:.3}",
+            priors[1],
+            priors[3]
+        );
     }
 
     #[test]
@@ -1005,10 +1022,18 @@ mod tests {
             bt.bayesian_update(2.5, 0.8, 0.1, false);
         }
         let priors = bt.priors();
-        assert!(priors[3] > priors[1],
-            "H3 (flash) should exceed H1 (volumetric): H1={:.3} H3={:.3}", priors[1], priors[3]);
-        assert!(priors[3] > priors[2],
-            "H3 (flash) should exceed H2 (slow-ramp): H2={:.3} H3={:.3}", priors[2], priors[3]);
+        assert!(
+            priors[3] > priors[1],
+            "H3 (flash) should exceed H1 (volumetric): H1={:.3} H3={:.3}",
+            priors[1],
+            priors[3]
+        );
+        assert!(
+            priors[3] > priors[2],
+            "H3 (flash) should exceed H2 (slow-ramp): H2={:.3} H3={:.3}",
+            priors[2],
+            priors[3]
+        );
     }
 
     #[test]
@@ -1019,10 +1044,18 @@ mod tests {
             bt.bayesian_update(0.8, -0.1, 0.4, true);
         }
         let priors = bt.priors();
-        assert!(priors[2] > priors[0],
-            "H2 (slow-ramp) should exceed H0: H0={:.3} H2={:.3}", priors[0], priors[2]);
-        assert!(priors[2] > priors[1],
-            "H2 should exceed H1 (no CUSUM signal for H1): H1={:.3} H2={:.3}", priors[1], priors[2]);
+        assert!(
+            priors[2] > priors[0],
+            "H2 (slow-ramp) should exceed H0: H0={:.3} H2={:.3}",
+            priors[0],
+            priors[2]
+        );
+        assert!(
+            priors[2] > priors[1],
+            "H2 should exceed H1 (no CUSUM signal for H1): H1={:.3} H2={:.3}",
+            priors[1],
+            priors[2]
+        );
     }
 
     #[test]
@@ -1032,8 +1065,10 @@ mod tests {
         for _ in 0..100 {
             bt.bayesian_update(0.1, 0.0, 0.0, false);
         }
-        assert!(bt.best_above_threshold().is_none(),
-            "should not trigger any action on normal traffic");
+        assert!(
+            bt.best_above_threshold().is_none(),
+            "should not trigger any action on normal traffic"
+        );
     }
 
     #[test]
@@ -1053,7 +1088,10 @@ mod tests {
         }
         let warm_decision = bt_warm.best_above_threshold();
         // Warm system should detect the attack more easily (lower threshold)
-        assert!(warm_decision.is_some(),
-            "warm system should detect sustained attack: {:?}", warm_decision);
+        assert!(
+            warm_decision.is_some(),
+            "warm system should detect sustained attack: {:?}",
+            warm_decision
+        );
     }
 }

@@ -160,9 +160,11 @@ mod tests {
         assert_eq!(serde_json::to_string(&r).unwrap(), json);
         // Malformed IPs are a serde error at parse time (frame rejected),
         // no longer a per-event String::parse in the server loop.
-        assert!(serde_json::from_str::<ConnectionReport>(
-            r#"{"ip":"999.1.1.1","bytes":0,"status_code":0,"proto_fp":0}"#
-        )
-        .is_err());
+        assert!(
+            serde_json::from_str::<ConnectionReport>(
+                r#"{"ip":"999.1.1.1","bytes":0,"status_code":0,"proto_fp":0}"#
+            )
+            .is_err()
+        );
     }
 }

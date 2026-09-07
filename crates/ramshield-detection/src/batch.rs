@@ -1,6 +1,6 @@
+use ahash::AHashMap as HashMap;
 use ramshield_types::IpNetwork;
 use ramshield_types::events::ConnectionEvent;
-use ahash::AHashMap as HashMap;
 use std::net::IpAddr;
 
 /// In-memory aggregation for one flush window — no store access until flush completes.

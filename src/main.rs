@@ -62,8 +62,11 @@ async fn main() -> Result<()> {
     // internally. A second call here was harmless (idempotent) but wasteful
     // and confusing — removed.
     // ponytail: Debug on Config leaks auth_keys. Print summary, not raw.
-    info!("Loaded config: ipc.auth_keys={}, dashboard.bind={}",
-        config.ipc.auth_keys.len(), config.dashboard.http_addr);
+    info!(
+        "Loaded config: ipc.auth_keys={}, dashboard.bind={}",
+        config.ipc.auth_keys.len(),
+        config.dashboard.http_addr
+    );
 
     // Start RamShield normally
     let store = Arc::new(ramshield::storage::Store::new(config.engine.shard_count));

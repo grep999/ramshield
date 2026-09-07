@@ -507,7 +507,9 @@ impl Store {
                 .fetch_sub((old_size - entry_size) as u64, Ordering::Relaxed);
         }
         self.total_inserts.fetch_add(1, Ordering::Relaxed);
-        if tracing::enabled!(tracing::Level::DEBUG) { tracing::debug!("Store::insert - OK key: {}", key); }
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            tracing::debug!("Store::insert - OK key: {}", key);
+        }
         Ok(())
     }
 
@@ -541,14 +543,15 @@ impl Store {
                 let e = o.get_mut();
                 // Live IpRecord: mutate in place, zero accounting changes
                 // (IpRecord is fixed-size, heap_bytes() == 0 by design).
-                if !e.is_expired() && let Value::IpRecord(rec) = &mut e.value {
+                if !e.is_expired()
+                    && let Value::IpRecord(rec) = &mut e.value
+                {
                     return (f(rec), true);
                 }
                 // Occupied but expired / wrong variant: replace in place with
                 // the same bookkeeping insert() does for a replacement.
                 let (was_blocked, old_size) = {
-                    let old_value =
-                        std::mem::replace(&mut e.value, Value::Counter(0));
+                    let old_value = std::mem::replace(&mut e.value, Value::Counter(0));
                     let wb = old_value.is_blocked();
                     let os = std::mem::size_of::<Entry>()
                         + old_value.heap_bytes()
@@ -565,16 +568,14 @@ impl Store {
                     self.ttl_entries.fetch_sub(1, Ordering::Relaxed);
                 }
                 drop(o); // release shard lock before touching blocked_set
-                let new_size =
-                    std::mem::size_of::<Entry>() + std::mem::size_of::<IpAddr>();
+                let new_size = std::mem::size_of::<Entry>() + std::mem::size_of::<IpAddr>();
                 self.apply_growth(key, old_size, new_size, was_blocked, false);
                 (out, true)
             }
             dashmap::Entry::Vacant(v) => {
                 let mut rec = default;
                 let out = f(&mut rec);
-                let entry_size =
-                    std::mem::size_of::<IpAddr>() + std::mem::size_of::<Entry>(); // heap 0, Clean
+                let entry_size = std::mem::size_of::<IpAddr>() + std::mem::size_of::<Entry>(); // heap 0, Clean
                 // Net-new capacity gate: same CAS loop as insert()'s fresh path.
                 let mut current = self.ram_bytes.load(Ordering::Relaxed);
                 loop {
@@ -864,13 +865,28 @@ mod tests {
             .insert(ip, Value::IpRecord(blocked_record(ip)), None, 1)
             .unwrap_err();
         assert!(matches!(err, RsError::CapacityExceeded { .. }));
-        assert_eq!(store.get_stats().blocked, 0, "blocked_count leaked on rollback");
-        assert!(store.get_all_blocked_ips().is_empty(), "blocked_set leaked on rollback");
-        assert!(!store.inner().contains_key(&ip), "entry itself must be rolled back");
+        assert_eq!(
+            store.get_stats().blocked,
+            0,
+            "blocked_count leaked on rollback"
+        );
+        assert!(
+            store.get_all_blocked_ips().is_empty(),
+            "blocked_set leaked on rollback"
+        );
+        assert!(
+            !store.inner().contains_key(&ip),
+            "entry itself must be rolled back"
+        );
 
         // Control: a successful blocked insert DOES register in both indexes.
         store
-            .insert(ip, Value::IpRecord(blocked_record(ip)), None, 64 * 1024 * 1024)
+            .insert(
+                ip,
+                Value::IpRecord(blocked_record(ip)),
+                None,
+                64 * 1024 * 1024,
+            )
             .unwrap();
         assert_eq!(store.get_stats().blocked, 1);
         assert_eq!(store.get_all_blocked_ips(), vec![ip]);
@@ -918,7 +934,6 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(2));
         assert!(store.get(&"127.0.0.3".parse().unwrap()).is_none());
     }
-
 
     /// IPv6 plan Task 1: subnet records must carry family-complete CIDR
     /// metadata. The old `prefix: [u8;3]` (v4-shaped) rendered v6 /64s as
@@ -968,12 +983,7 @@ mod tests {
             let s = store.clone();
             handles.push(thread::spawn(move || {
                 let ip: IpAddr = format!("10.1.1.{}", n).parse().unwrap();
-                s.insert(
-                    ip,
-                    Value::Inline(vec![0u8; 64]),
-                    None,
-                    limit,
-                )
+                s.insert(ip, Value::Inline(vec![0u8; 64]), None, limit)
             }));
         }
         let mut ok = 0;
@@ -1056,14 +1066,7 @@ mod tests {
         let store = Store::new(16);
         let ip: IpAddr = "10.0.0.2".parse().unwrap();
         let sk = subnet_key_u128(ip).unwrap();
-        store
-            .insert(
-                ip,
-                Value::Counter(1),
-                None,
-                1 << 20,
-            )
-            .unwrap();
+        store.insert(ip, Value::Counter(1), None, 1 << 20).unwrap();
         store.update_subnet_index(ip, Some(sk), false);
         assert_eq!(store.get_ips_in_subnet(sk).len(), 1);
         store.remove(&ip);
@@ -1095,13 +1098,21 @@ mod tests {
             .collect();
         for ip in &blocked_ips {
             store
-                .insert(*ip, Value::IpRecord(blocked_record(*ip)), None, 64 * 1024 * 1024)
+                .insert(
+                    *ip,
+                    Value::IpRecord(blocked_record(*ip)),
+                    None,
+                    64 * 1024 * 1024,
+                )
                 .unwrap();
         }
         let got: std::collections::HashSet<IpAddr> =
             store.get_all_blocked_ips().into_iter().collect();
         let want: std::collections::HashSet<IpAddr> = blocked_ips.into_iter().collect();
-        assert_eq!(got, want, "get_all_blocked_ips must return exactly the blocked set");
+        assert_eq!(
+            got, want,
+            "get_all_blocked_ips must return exactly the blocked set"
+        );
     }
 
     /// P0 regression: get_all_blocked_ips must reflect unblock transitions.
@@ -1111,7 +1122,12 @@ mod tests {
         let store = Store::new(16);
         let ip: IpAddr = "10.6.6.6".parse().unwrap();
         store
-            .insert(ip, Value::IpRecord(blocked_record(ip)), None, 64 * 1024 * 1024)
+            .insert(
+                ip,
+                Value::IpRecord(blocked_record(ip)),
+                None,
+                64 * 1024 * 1024,
+            )
             .unwrap();
         assert_eq!(store.get_all_blocked_ips(), vec![ip]);
         // Replace with clean
@@ -1134,7 +1150,12 @@ mod tests {
         assert!(store.get_all_blocked_ips().is_empty());
         // 2. Replace clean→blocked — set must contain ip.
         store
-            .insert(ip, Value::IpRecord(blocked_record(ip)), None, 64 * 1024 * 1024)
+            .insert(
+                ip,
+                Value::IpRecord(blocked_record(ip)),
+                None,
+                64 * 1024 * 1024,
+            )
             .unwrap();
         assert_eq!(store.get_all_blocked_ips(), vec![ip]);
         // 3. Replace blocked→clean — set must NOT contain ip.
@@ -1144,7 +1165,12 @@ mod tests {
         assert!(store.get_all_blocked_ips().is_empty());
         // 4. Re-block, then remove — set must NOT contain ip.
         store
-            .insert(ip, Value::IpRecord(blocked_record(ip)), None, 64 * 1024 * 1024)
+            .insert(
+                ip,
+                Value::IpRecord(blocked_record(ip)),
+                None,
+                64 * 1024 * 1024,
+            )
             .unwrap();
         assert_eq!(store.get_all_blocked_ips(), vec![ip]);
         store.remove(&ip);
@@ -1184,10 +1210,7 @@ mod tests {
             h.join().unwrap();
         }
         // Final state of the entry decides whether the set contains ip.
-        let entry_blocked = store
-            .get(&ip)
-            .map(|v| v.is_blocked())
-            .unwrap_or(false);
+        let entry_blocked = store.get(&ip).map(|v| v.is_blocked()).unwrap_or(false);
         let set_contains = !store.get_all_blocked_ips().is_empty();
         assert_eq!(
             entry_blocked, set_contains,
@@ -1232,7 +1255,9 @@ mod tests {
         let store = Store::new(16);
         let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 99, 0, 1));
         let ram_lim = 64 * 1024 * 1024;
-        store.insert(ip, Value::Counter(42), Some(1), ram_lim).unwrap();
+        store
+            .insert(ip, Value::Counter(42), Some(1), ram_lim)
+            .unwrap();
         assert_eq!(store.len(), 1, "entry present before expiry");
         assert!(store.ram_bytes() > 0, "ram_bytes non-zero after insert");
         std::thread::sleep(std::time::Duration::from_secs(2));
@@ -1289,8 +1314,10 @@ mod tests {
         assert_eq!(n, 6);
         match store.get(&ip) {
             Some(Value::IpRecord(r)) => {
-                assert!(matches!(r.block_state, BlockState::Blocked { .. }),
-                    "update_ip clobbered block state");
+                assert!(
+                    matches!(r.block_state, BlockState::Blocked { .. }),
+                    "update_ip clobbered block state"
+                );
                 assert_eq!(r.request_count, 6);
             }
             other => panic!("expected IpRecord, got {other:?}"),

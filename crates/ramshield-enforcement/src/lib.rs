@@ -8,6 +8,7 @@
 //! appended to the WAL BEFORE the storage mutation, and the returned LSN is
 //! set on `EnforceResult.wal_lsn`. Order: WAL → storage → TTL schedule → XDP.
 
+use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 use anyhow::Result;
 use ramshield_metrics::Metrics;
 use ramshield_storage::{
@@ -17,7 +18,6 @@ use ramshield_storage::{
 use ramshield_types::{
     BlockReason, EnforceAction, EnforceCommand, EnforceResult, EnforcementError,
 };
-use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 use std::collections::{BTreeMap, VecDeque};
 use std::net::IpAddr;
 use std::sync::{
@@ -250,7 +250,10 @@ impl EnforcementService {
     #[cfg(test)]
     fn check_ring_invariant(&self) {
         for (&ip, &(b, pos)) in &self.expirations {
-            let vec = self.buckets.get(&b).unwrap_or_else(|| panic!("{ip} bucket {b} gone"));
+            let vec = self
+                .buckets
+                .get(&b)
+                .unwrap_or_else(|| panic!("{ip} bucket {b} gone"));
             assert_eq!(vec.get(pos), Some(&ip), "index drift for {ip}");
         }
         assert_eq!(

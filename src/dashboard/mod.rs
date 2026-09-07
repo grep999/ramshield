@@ -56,10 +56,7 @@ pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), 
         } else {
             CorsLayer::permissive()
         })
-        .layer(axum_mw::from_fn_with_state(
-            app_state,
-            auth::require_auth,
-        ));
+        .layer(axum_mw::from_fn_with_state(app_state, auth::require_auth));
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -116,7 +113,9 @@ async fn api_snapshot(State(state): State<AppState>) -> Json<DashboardSnapshot> 
     Json(state.engine.dashboard_snapshot())
 }
 
-async fn api_history_batches(State(state): State<AppState>) -> ([(axum::http::header::HeaderName, &'static str); 1], String) {
+async fn api_history_batches(
+    State(state): State<AppState>,
+) -> ([(axum::http::header::HeaderName, &'static str); 1], String) {
     use axum::http::header;
     (
         [(header::CONTENT_TYPE, "application/json")],
@@ -124,7 +123,9 @@ async fn api_history_batches(State(state): State<AppState>) -> ([(axum::http::he
     )
 }
 
-async fn api_history_blocks(State(state): State<AppState>) -> ([(axum::http::header::HeaderName, &'static str); 1], String) {
+async fn api_history_blocks(
+    State(state): State<AppState>,
+) -> ([(axum::http::header::HeaderName, &'static str); 1], String) {
     use axum::http::header;
     (
         [(header::CONTENT_TYPE, "application/json")],
@@ -272,9 +273,14 @@ async fn api_set_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::{BatchRecord, BlockRecord};
     use crate::Config;
-    use axum::{Router, body::Body, http::Request, routing::{get, post}};
+    use crate::metrics::{BatchRecord, BlockRecord};
+    use axum::{
+        Router,
+        body::Body,
+        http::Request,
+        routing::{get, post},
+    };
     use std::sync::Arc;
     use tower::ServiceExt;
 
@@ -363,7 +369,8 @@ mod tests {
         let state = test_app_state();
         // Plant a fake key into the live config; should appear as <redacted>.
         let mut cfg = state.engine.config.load().as_ref().clone();
-        cfg.ipc.auth_keys = vec!["k1:deadbeefcafebabe0123456789abcdef0123456789abcdef0123456789abcdef".into()];
+        cfg.ipc.auth_keys =
+            vec!["k1:deadbeefcafebabe0123456789abcdef0123456789abcdef0123456789abcdef".into()];
         state.engine.config.store(Arc::new(cfg));
         let app = Router::new()
             .route("/api/config", get(api_get_config))
@@ -387,13 +394,13 @@ mod tests {
         );
     }
 
-
     /// P0 regression: POST /api/config must also redact HMAC keys.
     #[tokio::test]
     async fn post_config_redacts_hmac_keys() {
         let state = test_app_state();
         let mut cfg = state.engine.config.load().as_ref().clone();
-        cfg.ipc.auth_keys = vec!["k1:deadbeefcafebabe0123456789abcdef0123456789abcdef0123456789abcdef".into()];
+        cfg.ipc.auth_keys =
+            vec!["k1:deadbeefcafebabe0123456789abcdef0123456789abcdef0123456789abcdef".into()];
         state.engine.config.store(Arc::new(cfg));
         let app = Router::new()
             .route("/api/config", post(api_set_config))
@@ -408,7 +415,9 @@ mod tests {
             )
             .await
             .unwrap();
-        let body = axum::body::to_bytes(response.into_body(), 100_000).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 100_000)
+            .await
+            .unwrap();
         let raw = std::str::from_utf8(&body).unwrap();
         assert!(
             !raw.contains("deadbeefcafebabe"),
@@ -527,19 +536,12 @@ mod tests {
             .merge(login)
             .with_state(state)
             .layer(CorsLayer::new())
-            .layer(axum_mw::from_fn_with_state(
-                app_state,
-                auth::require_auth,
-            ));
+            .layer(axum_mw::from_fn_with_state(app_state, auth::require_auth));
 
         // Auth disabled in test_app_state (None password hash) — request
         // passes the middleware, lands in api_snapshot, returns 200.
         let response = app
-            .oneshot(
-                Request::get("/api/snapshot")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/api/snapshot").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);

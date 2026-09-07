@@ -170,8 +170,7 @@ impl XdpApplier for AyaXdpApplier {
         // expected set was v4-only, and vice versa.
         let (v4_keys, v6_keys) = split_by_family(expected_blocks);
         for (name, expected) in [("BLOCKLIST", v4_keys), ("BLOCKLIST6", v6_keys)] {
-            let expected: std::collections::HashSet<BlocklistKey> =
-                expected.into_iter().collect();
+            let expected: std::collections::HashSet<BlocklistKey> = expected.into_iter().collect();
             let mut stale_count = 0usize;
             self.with_map(name, |m| {
                 let stale: Vec<BlocklistKey> = m
@@ -189,7 +188,11 @@ impl XdpApplier for AyaXdpApplier {
                 Ok(())
             })?;
             if stale_count > 0 {
-                tracing::info!(map = name, stale = stale_count, "XDP reconcile removed stale keys");
+                tracing::info!(
+                    map = name,
+                    stale = stale_count,
+                    "XDP reconcile removed stale keys"
+                );
             }
         }
         Ok(ReconciliationState::default())

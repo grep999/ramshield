@@ -9,14 +9,14 @@
 //!
 //! Bounds: 1M events total. Must complete in <30s. No infinite loops.
 
-use ramshield_detection::batch::aggregate;
 use ramshield_detection::DetectionEngine;
+use ramshield_detection::batch::aggregate;
 use ramshield_metrics::Metrics;
 use ramshield_storage::Store;
 use ramshield_types::ConnectionEvent;
 use std::net::{IpAddr, Ipv6Addr};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::sync::mpsc;
 
@@ -60,7 +60,14 @@ fn ipv6_single_64_swarm_aggregates() {
     let events: Vec<_> = (0..60u8)
         .flat_map(|n| {
             let ip = IpAddr::V6(Ipv6Addr::new(
-                0x2001, 0xdb8, 0, 0, 0, 0, 0, u16::from(n) + 1,
+                0x2001,
+                0xdb8,
+                0,
+                0,
+                0,
+                0,
+                0,
+                u16::from(n) + 1,
             ));
             (0..100u64).map(move |i| ev(ip, i))
         })
@@ -109,7 +116,13 @@ fn ipv6_random_64s_no_single_subnet_dual_gate() {
         .flat_map(|subnet| {
             (0..50u8).flat_map(move |host| {
                 let ip = IpAddr::V6(Ipv6Addr::new(
-                    0x2001, 0xdb8, 0, subnet, 0, 0, 0,
+                    0x2001,
+                    0xdb8,
+                    0,
+                    subnet,
+                    0,
+                    0,
+                    0,
                     u16::from(host) + 1,
                 ));
                 (0..2u64).map(move |i| ev(ip, i))
@@ -137,14 +150,28 @@ fn ipv6_mixed_legit_and_attack() {
     // 10 legit IPs at 1 event each — should be cold-skipped.
     for n in 0..10u8 {
         let ip = IpAddr::V6(Ipv6Addr::new(
-            0x2001, 0xdb8, 0xcafe, 0, 0, 0, 0, u16::from(n) + 1,
+            0x2001,
+            0xdb8,
+            0xcafe,
+            0,
+            0,
+            0,
+            0,
+            u16::from(n) + 1,
         ));
         events.push(ev(ip, 0));
     }
     // 60 attacker IPs at 50 events each in one /64 — should be promoted.
     for n in 0..60u8 {
         let ip = IpAddr::V6(Ipv6Addr::new(
-            0x2001, 0xdb8, 0, 1, 0, 0, 0, u16::from(n) + 1,
+            0x2001,
+            0xdb8,
+            0,
+            1,
+            0,
+            0,
+            0,
+            u16::from(n) + 1,
         ));
         for i in 0..50u64 {
             events.push(ev(ip, i));
@@ -177,10 +204,14 @@ fn ipv6_dos_report() {
     let events: Vec<_> = (0..1000u32)
         .flat_map(|n| {
             let ip = IpAddr::V6(Ipv6Addr::new(
-                0x2001, 0xdb8,
+                0x2001,
+                0xdb8,
                 (n >> 16) as u16,
                 (n & 0xFFFF) as u16,
-                0, 0, 0, 1,
+                0,
+                0,
+                0,
+                1,
             ));
             (0..100u64).map(move |i| ev(ip, i))
         })

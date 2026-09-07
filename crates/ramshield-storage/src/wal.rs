@@ -1039,7 +1039,10 @@ mod tests {
         }
         .to_bytes();
         use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().append(true).open(&seg_path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&seg_path)
+            .unwrap();
         f.write_all(&hdr).unwrap();
         f.write_all(&payload).unwrap();
         f.sync_all().unwrap();
@@ -1048,7 +1051,11 @@ mod tests {
         // Replay must return the 1 good record and flag the bomb as corrupt
         // (pre-fix this panicked/OOM'd inside decompress_size_prepended).
         let entries = Wal::replay(&dir).unwrap();
-        assert_eq!(entries.len(), 1, "bomb record must be truncated, not expanded");
+        assert_eq!(
+            entries.len(),
+            1,
+            "bomb record must be truncated, not expanded"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

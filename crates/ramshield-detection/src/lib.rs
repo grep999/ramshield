@@ -5,6 +5,8 @@
 pub mod batch;
 pub mod rate_tracker;
 
+use ahash::AHashMap as HashMap;
+use arc_swap::ArcSwap;
 use batch::{IpAgg, aggregate};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded};
 use dashmap::DashMap;
@@ -12,13 +14,11 @@ use ramshield_config::{ConfigHandle, DetectionConfig};
 use ramshield_metrics::Metrics;
 use ramshield_storage::{BlockState, IpRecord, Store, SubnetKey, Value, subnet_key_u128};
 use ramshield_types::BlockReason;
-use arc_swap::ArcSwap;
 use ramshield_types::{ConnectionEvent, EnforceAction, EnforceCommand, IpNetwork};
 use rate_tracker::{
     CUSUM_WARMUP_SAMPLES, cusum_allowance, cusum_fired, cusum_step_capped, ewma, ewma_alpha_slow,
     is_exceeded, pulse_tracker_step,
 };
-use ahash::AHashMap as HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
 use std::sync::{
@@ -293,7 +293,13 @@ impl DetectionEngine {
         self.metrics.inc_ingested(total_events);
 
         let subnet_counts = subnet_counts_of(&aggs);
-        self.flush_batch(&aggs, &subnet_counts, &HashMap::new(), total_events, window_ns);
+        self.flush_batch(
+            &aggs,
+            &subnet_counts,
+            &HashMap::new(),
+            total_events,
+            window_ns,
+        );
     }
 
     /// Spawns `n` batch-processor threads (default: CPU cores) consuming from the
@@ -344,12 +350,7 @@ impl DetectionEngine {
     /// F9: block until batch/subnet threads exit (each final-flushes on the
     /// way out). Returns after `grace` elapses at worst.
     pub fn join_workers(&self, grace: std::time::Duration) {
-        let handles: Vec<_> = self
-            .worker_handles
-            .lock()
-            .unwrap()
-            .drain(..)
-            .collect();
+        let handles: Vec<_> = self.worker_handles.lock().unwrap().drain(..).collect();
         // Workers exit within recv_timeout (<= batch_window_ms) of the flag
         // + one final flush; poll-until-finished gives the grace cap without
         // inventing a join_timeout (std has none). Last-resort join() is safe
@@ -442,7 +443,13 @@ impl DetectionEngine {
         let a = aggregate(events);
         let aggs: Vec<(IpAddr, IpAgg)> = a.ips.into_iter().collect();
         // Synthetic batch: treat as a 1s window (caller-side tests assert counts, not rates).
-        self.flush_batch(&aggs, &a.subnets, &a.networks, events.len() as u64, 1_000_000_000);
+        self.flush_batch(
+            &aggs,
+            &a.subnets,
+            &a.networks,
+            events.len() as u64,
+            1_000_000_000,
+        );
     }
 
     /// Single pass over aggregates: promote, merge, emit blocks. No store access for cold IPs.
@@ -537,7 +544,8 @@ impl DetectionEngine {
                 threat_sample.push((ip, threat));
             }
 
-            if should_block {  // ponytail: debounce removed single-sample is_exceeded bypass
+            if should_block {
+                // ponytail: debounce removed single-sample is_exceeded bypass
                 blocks.push((ip, BlockReason::HighRps, det.block_ttl_secs));
             }
         }
@@ -720,8 +728,7 @@ impl DetectionEngine {
                 );
                 rec.pulse_samples_in_window = pulse_count;
                 rec.pulse_window_start_ns = pulse_start;
-                let block =
-                    hot || cusum_fired(rec.cusum_s, det_thr) || pulse_fired;
+                let block = hot || cusum_fired(rec.cusum_s, det_thr) || pulse_fired;
                 (was_blocked, (ewma_rps, threat, block))
             },
         );
@@ -844,45 +851,45 @@ impl DetectionEngine {
             .collect();
 
         for (sk, uniq, count, cidr) in hot {
-                warn!(
-                    "Batch block subnet {} ({} IPs / {} events in window)",
-                    cidr, uniq, count
-                );
-                info!("Batch blocking subnet key {:#x}", sk);
+            warn!(
+                "Batch block subnet {} ({} IPs / {} events in window)",
+                cidr, uniq, count
+            );
+            info!("Batch blocking subnet key {:#x}", sk);
 
-                // O(1) lookup for IPs in the hot subnet instead of full scan
-                let ips_in_subnet = self.store.get_ips_in_subnet(sk);
-                for key in ips_in_subnet {
-                    if let Some(e) = self.store.inner().get(&key)
-                        && let Value::IpRecord(ref r) = e.value().value
-                    {
-                        if matches!(r.block_state, BlockState::Blocked { .. }) {
-                            continue;
-                        }
-
-                        let cmd = EnforceCommand {
-                            decision_id: Uuid::new_v4(),
-                            policy_version: 1,
-                            source: "detection".into(),
-                            actor: "system".into(),
-                            timestamp_utc: (now_ns() / 1_000_000_000) as i64,
-                            // Subnet blocks cover up to 253 hosts of shared
-                            // egress — short TTL, re-fires on continued abuse.
-                            ttl_seconds: cfg.detection.subnet_burst_ttl_secs,
-                            reason: "subnet_burst".into(),
-                            ip: r.ip,
-                            action: EnforceAction::Block,
-                        };
-                        if self.enforcement_tx.try_send(cmd).is_err() {
-                            warn!(ip=%r.ip, "enforcement queue full; subnet block rejected");
-                        }
-                        self.metrics
-                            .record_block_ip(&r.ip, "subnet_batch", "detection");
-                        self.metrics.blocks_subnet.fetch_add(1, Ordering::Relaxed);
+            // O(1) lookup for IPs in the hot subnet instead of full scan
+            let ips_in_subnet = self.store.get_ips_in_subnet(sk);
+            for key in ips_in_subnet {
+                if let Some(e) = self.store.inner().get(&key)
+                    && let Value::IpRecord(ref r) = e.value().value
+                {
+                    if matches!(r.block_state, BlockState::Blocked { .. }) {
+                        continue;
                     }
+
+                    let cmd = EnforceCommand {
+                        decision_id: Uuid::new_v4(),
+                        policy_version: 1,
+                        source: "detection".into(),
+                        actor: "system".into(),
+                        timestamp_utc: (now_ns() / 1_000_000_000) as i64,
+                        // Subnet blocks cover up to 253 hosts of shared
+                        // egress — short TTL, re-fires on continued abuse.
+                        ttl_seconds: cfg.detection.subnet_burst_ttl_secs,
+                        reason: "subnet_burst".into(),
+                        ip: r.ip,
+                        action: EnforceAction::Block,
+                    };
+                    if self.enforcement_tx.try_send(cmd).is_err() {
+                        warn!(ip=%r.ip, "enforcement queue full; subnet block rejected");
+                    }
+                    self.metrics
+                        .record_block_ip(&r.ip, "subnet_batch", "detection");
+                    self.metrics.blocks_subnet.fetch_add(1, Ordering::Relaxed);
                 }
-                self.store.reset_subnet_window(sk);
             }
+            self.store.reset_subnet_window(sk);
+        }
     }
 }
 
@@ -983,8 +990,7 @@ mod tests {
                 let e = eng.clone();
                 std::thread::spawn(move || {
                     for i in 0..PER_SENDER {
-                        let ip: IpAddr =
-                            format!("10.{}.0.{}", w, i % 251).parse().unwrap();
+                        let ip: IpAddr = format!("10.{}.0.{}", w, i % 251).parse().unwrap();
                         e.absorb_shared(ConnectionEvent {
                             ip,
                             timestamp_ns: i * 1_000_000,

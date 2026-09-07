@@ -252,9 +252,7 @@ async fn login_submit(
     // Per-IP lockout: one hostile host can no longer lock every admin out.
     // Option extractor: absent ConnectInfo (unit tests) falls back to ::,
     // which still rate-limits the un-identified path.
-    let ip = addr
-        .map(|c| c.0.ip())
-        .unwrap_or(IpAddr::from([0, 0, 0, 0]));
+    let ip = addr.map(|c| c.0.ip()).unwrap_or(IpAddr::from([0, 0, 0, 0]));
     if auth.is_locked(ip) {
         warn!(
             "dashboard login locked out from {ip} ({}+ failures)",
@@ -300,10 +298,8 @@ async fn login_submit(
         None => {
             auth.note_failure(ip);
             // Same page, inline error — no context-switch to a bare HTML stub.
-            let page = include_str!("login.html").replace(
-                "{{ERR}}",
-                "<p class=\"err\">Invalid credentials.</p>",
-            );
+            let page = include_str!("login.html")
+                .replace("{{ERR}}", "<p class=\"err\">Invalid credentials.</p>");
             (StatusCode::UNAUTHORIZED, Html(page)).into_response()
         }
     }

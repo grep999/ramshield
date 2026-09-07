@@ -590,7 +590,10 @@ impl Metrics {
     /// re-rendering 18 stanzas per scrape is pure waste. Staleness ≤ 1s is
     /// the documented Prometheus compromise (same trade as get_system_usage).
     pub fn render_prometheus_cached(&self) -> Arc<str> {
-        let mut cache = self.metrics_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut cache = self
+            .metrics_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((at, text)) = &*cache
             && at.elapsed() < std::time::Duration::from_secs(1)
         {
@@ -629,7 +632,9 @@ impl Metrics {
         // (text newer than stamp) only costs one extra render, never staleness.
         let want = seq.load(Ordering::Acquire);
         {
-            let guard = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let guard = cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some((s, text)) = &*guard
                 && *s == want
             {
@@ -638,7 +643,9 @@ impl Metrics {
         }
         let text: Arc<str> = render().into();
         if seq.load(Ordering::Acquire) == want {
-            *cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            *cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
                 Some((want, Arc::clone(&text)));
         }
         text
@@ -696,7 +703,10 @@ mod cache_tests {
         let m = Metrics::new();
         let a = m.render_prometheus_cached();
         let b = m.render_prometheus_cached();
-        assert!(Arc::ptr_eq(&a, &b), "second scrape within 1s must not re-render");
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "second scrape within 1s must not re-render"
+        );
         assert!(a.contains("ramshield_"));
         // Item 15 regression: the rendered text is the whole output — no
         // stray stdout writes happened (println! would not appear here, but

@@ -1,6 +1,6 @@
+use bytes::BytesMut;
 use crossbeam_channel::Sender;
 use serde::{Deserialize, Serialize};
-use bytes::BytesMut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;

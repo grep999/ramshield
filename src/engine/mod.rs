@@ -1,4 +1,3 @@
-
 use arc_swap::ArcSwap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -107,7 +106,12 @@ impl Engine {
         // no-unwrap gate (CI lint-no-unwrap scans src/): poisoning must not
         // abort shutdown — a panicked holder still left a valid Option<Arc>
         // behind, and join is exactly what shutdown needs to do then.
-        if let Some(det) = self.detection.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if let Some(det) = self
+            .detection
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
             det.join_workers(grace);
         }
     }
