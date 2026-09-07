@@ -539,6 +539,30 @@ impl Config {
         Ok(())
     }
 
+    /// Go-live exposure notes (P1-7): the stack has NO TLS. A public bind
+    /// sends admin credentials plaintext and Secure cookies are never set.
+    /// validate() still permits it (operator may front a TLS reverse proxy);
+    /// these warnings make the exposure visible at startup.
+    pub fn exposure_warnings(&self) -> Vec<String> {
+        let mut w = Vec::new();
+        if is_public_bind(&self.dashboard.http_addr) {
+            w.push(format!(
+                "dashboard.http_addr={} is a public bind and RamShield has no TLS — admin \
+                 credentials traverse plaintext and Secure cookies are never set. Bind \
+                 127.0.0.1 or front with a TLS reverse proxy.",
+                self.dashboard.http_addr
+            ));
+        }
+        if is_public_bind(&self.ipc.tcp_addr) {
+            w.push(format!(
+                "ipc.tcp_addr={} is a public bind — IPC traffic (incl. HMAC frames) is \
+                 plaintext. Bind 127.0.0.1 or front with a TLS reverse proxy.",
+                self.ipc.tcp_addr
+            ));
+        }
+        w
+    }
+
     pub fn into_handle(self) -> ConfigHandle {
         Arc::new(ArcSwap::from_pointee(self))
     }
@@ -610,6 +634,30 @@ mod tests {
     fn default_config_validates() {
         let cfg = Config::default();
         cfg.validate().unwrap();
+        assert!(
+            cfg.exposure_warnings().is_empty(),
+            "loopback-only config must warn about nothing"
+        );
+    }
+
+    #[test]
+    fn public_binds_produce_exposure_warnings() {
+        let mut cfg = Config::default();
+        cfg.dashboard.http_addr = "0.0.0.0:9999".into();
+        cfg.dashboard.admin_password_hash = Some("x".into());
+        cfg.ipc.tcp_addr = "0.0.0.0:7890".into();
+        cfg.ipc.auth_keys = vec!["k1".into()];
+        // validate() still permits (operator may TLS-front); warnings must flag it.
+        cfg.validate().unwrap();
+        let w = cfg.exposure_warnings();
+        assert!(
+            w.iter().any(|s| s.contains("dashboard.http_addr")),
+            "expected dashboard warning, got {w:?}"
+        );
+        assert!(
+            w.iter().any(|s| s.contains("ipc.tcp_addr")),
+            "expected ipc warning, got {w:?}"
+        );
     }
 
     #[test]

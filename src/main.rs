@@ -67,6 +67,10 @@ async fn main() -> Result<()> {
         config.ipc.auth_keys.len(),
         config.dashboard.http_addr
     );
+    // P1-7: no TLS in the stack — surface any public-bind exposure at boot.
+    for w in config.exposure_warnings() {
+        tracing::warn!("{w}");
+    }
 
     // Start RamShield normally
     let store = Arc::new(ramshield::storage::Store::new(config.engine.shard_count));
