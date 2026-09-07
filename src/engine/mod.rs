@@ -172,6 +172,16 @@ impl Engine {
         self.metrics.get_batch_history()
     }
 
+    /// Pre-serialized JSON variants for the dashboard polling endpoints
+    /// (RAM-for-CPU item 16): unchanged data costs one Arc clone per poll.
+    pub fn get_batch_history_json(&self) -> std::sync::Arc<str> {
+        self.metrics.get_batch_history_json()
+    }
+
+    pub fn get_block_log_json(&self) -> std::sync::Arc<str> {
+        self.metrics.get_block_log_json()
+    }
+
     pub fn get_block_log(&self) -> Vec<BlockRecord> {
         self.metrics.get_block_log()
     }

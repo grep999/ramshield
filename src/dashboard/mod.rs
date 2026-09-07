@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tracing::info;
 
-use crate::metrics::{BatchRecord, BlockRecord, DashboardSnapshot, ModuleStats, SubnetRow};
+use crate::metrics::{DashboardSnapshot, ModuleStats, SubnetRow};
 
 /// Single state type so one Router::with_state call satisfies all handlers.
 #[derive(Clone)]
@@ -108,7 +108,7 @@ async fn api_metrics(
     use axum::http::header;
     (
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        state.engine.metrics.render_prometheus(),
+        state.engine.metrics.render_prometheus_cached().to_string(),
     )
 }
 
@@ -116,12 +116,20 @@ async fn api_snapshot(State(state): State<AppState>) -> Json<DashboardSnapshot> 
     Json(state.engine.dashboard_snapshot())
 }
 
-async fn api_history_batches(State(state): State<AppState>) -> Json<Vec<BatchRecord>> {
-    Json(state.engine.get_batch_history())
+async fn api_history_batches(State(state): State<AppState>) -> ([(axum::http::header::HeaderName, &'static str); 1], String) {
+    use axum::http::header;
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        state.engine.get_batch_history_json().to_string(),
+    )
 }
 
-async fn api_history_blocks(State(state): State<AppState>) -> Json<Vec<BlockRecord>> {
-    Json(state.engine.get_block_log())
+async fn api_history_blocks(State(state): State<AppState>) -> ([(axum::http::header::HeaderName, &'static str); 1], String) {
+    use axum::http::header;
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        state.engine.get_block_log_json().to_string(),
+    )
 }
 
 async fn api_traffic_subnets(State(state): State<AppState>) -> Json<Vec<SubnetRow>> {
@@ -264,6 +272,7 @@ async fn api_set_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::{BatchRecord, BlockRecord};
     use crate::Config;
     use axum::{Router, body::Body, http::Request, routing::{get, post}};
     use std::sync::Arc;

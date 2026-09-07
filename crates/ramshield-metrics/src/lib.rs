@@ -211,6 +211,16 @@ pub struct Metrics {
     pub batch_history: Arc<Mutex<VecDeque<Arc<BatchRecord>>>>,
     pub block_log: Arc<Mutex<VecDeque<BlockRecord>>>,
     pub block_log_cap: usize,
+    /// Write-path sequence for the JSON caches (RAM-for-CPU item 16): bumped
+    /// under the same mutex the ring mutation holds, read by get_*_json.
+    /// Plain atomics — Metrics itself always lives behind an Arc.
+    block_seq: AtomicU64,
+    batch_seq: AtomicU64,
+    // Per-instance caches, not function statics: several Metrics objects
+    // exist in tests/embedded use; a shared static leaks one instance's text.
+    metrics_cache: Mutex<Option<(std::time::Instant, Arc<str>)>>,
+    blocks_json_cache: Mutex<Option<(u64, Arc<str>)>>,
+    batches_json_cache: Mutex<Option<(u64, Arc<str>)>>,
     started_ms: u64,
 }
 
@@ -247,6 +257,11 @@ impl Metrics {
             batch_history: Arc::new(Mutex::new(VecDeque::with_capacity(HISTORY))),
             block_log: Arc::new(Mutex::new(VecDeque::with_capacity(block_log_size.max(1)))),
             block_log_cap: block_log_size.max(1),
+            block_seq: AtomicU64::new(0),
+            batch_seq: AtomicU64::new(0),
+            metrics_cache: Mutex::new(None),
+            blocks_json_cache: Mutex::new(None),
+            batches_json_cache: Mutex::new(None),
             started_ms: now_ms(),
         }
     }
@@ -285,6 +300,7 @@ impl Metrics {
                 h.pop_front();
             }
             h.push_back(Arc::clone(&shared));
+            self.batch_seq.fetch_add(1, Ordering::Release);
         }
         if let Ok(mut lb) = self.last_batch.lock() {
             *lb = Some(shared);
@@ -302,6 +318,7 @@ impl Metrics {
                 reason: reason.to_string(),
                 module: module.to_string(),
             });
+            self.block_seq.fetch_add(1, Ordering::Release);
         }
     }
 
@@ -321,6 +338,7 @@ impl Metrics {
                 reason: reason.to_string(),
                 module: module.to_string(),
             });
+            self.block_seq.fetch_add(1, Ordering::Release);
         }
     }
 
@@ -564,6 +582,126 @@ impl Metrics {
 impl Default for Metrics {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Metrics {
+    /// Cached /metrics text (1s TTL): counters move on a second grain, so
+    /// re-rendering 18 stanzas per scrape is pure waste. Staleness ≤ 1s is
+    /// the documented Prometheus compromise (same trade as get_system_usage).
+    pub fn render_prometheus_cached(&self) -> Arc<str> {
+        let mut cache = self.metrics_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((at, text)) = &*cache
+            && at.elapsed() < std::time::Duration::from_secs(1)
+        {
+            return Arc::clone(text);
+        }
+        let text: Arc<str> = self.render_prometheus().into();
+        *cache = Some((std::time::Instant::now(), Arc::clone(&text)));
+        text
+    }
+
+    /// Pre-serialized dashboard JSON, invalidated by write-path sequence
+    /// bumps. A 2s poll with no new blocks costs one Arc clone instead of
+    /// ~3k String clones + a serde pass. Worst case a poll is one record stale.
+    pub fn get_block_log_json(&self) -> Arc<str> {
+        self.seq_cached_json(&self.block_seq, &self.blocks_json_cache, || {
+            serde_json::to_string(&self.get_block_log()).unwrap_or_default()
+        })
+    }
+
+    pub fn get_batch_history_json(&self) -> Arc<str> {
+        self.seq_cached_json(&self.batch_seq, &self.batches_json_cache, || {
+            serde_json::to_string(&self.get_batch_history()).unwrap_or_default()
+        })
+    }
+
+    fn seq_cached_json(
+        &self,
+        seq: &AtomicU64,
+        cache: &Mutex<Option<(u64, Arc<str>)>>,
+        render: impl Fn() -> String,
+    ) -> Arc<str> {
+        // Invariant: a cached pair is stamped with a seq read BEFORE its
+        // render. Stamping after would let a write racing mid-render hide
+        // behind stale text forever. A raced render simply goes unpublished
+        // (seq moved -> skip store); a later reader re-renders. Overserving
+        // (text newer than stamp) only costs one extra render, never staleness.
+        let want = seq.load(Ordering::Acquire);
+        {
+            let guard = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some((s, text)) = &*guard
+                && *s == want
+            {
+                return Arc::clone(text);
+            }
+        }
+        let text: Arc<str> = render().into();
+        if seq.load(Ordering::Acquire) == want {
+            *cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Some((want, Arc::clone(&text)));
+        }
+        text
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn block_log_json_invalidates_on_new_block() {
+        let m = Metrics::new();
+        let a = m.get_block_log_json();
+        assert_eq!(a.as_ref(), "[]");
+        // No writes: cache hit — same Arc, zero re-render.
+        let b = m.get_block_log_json();
+        assert!(Arc::ptr_eq(&a, &b), "unchanged seq must reuse cached Arc");
+        // A write bumps seq: next read must reflect it (no stale text).
+        m.record_block_ip(&"1.2.3.4".parse().unwrap(), "flood", "detection");
+        let c = m.get_block_log_json();
+        assert!(!Arc::ptr_eq(&b, &c), "record_block must invalidate cache");
+        assert!(c.contains("1.2.3.4"));
+        // And re-caches at the new seq.
+        let d = m.get_block_log_json();
+        assert!(Arc::ptr_eq(&c, &d));
+        let parsed: serde_json::Value = serde_json::from_str(&d).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn batch_history_json_invalidates_on_new_batch() {
+        let m = Metrics::new();
+        let a = m.get_batch_history_json();
+        let b = m.get_batch_history_json();
+        assert!(Arc::ptr_eq(&a, &b));
+        m.record_batch(BatchRecord {
+            ts_ms: now_ms(),
+            events: 10,
+            unique_ips: 3,
+            promoted: 1,
+            cold_skipped: 2,
+            promoted_events: 8,
+            cold_skipped_events: 2,
+            blocks: 0,
+            hot_subnets: 0,
+        });
+        let c = m.get_batch_history_json();
+        assert!(!Arc::ptr_eq(&a, &c));
+        assert!(c.contains("\"events\":10"));
+    }
+
+    #[test]
+    fn prometheus_cache_reuses_within_ttl() {
+        let m = Metrics::new();
+        let a = m.render_prometheus_cached();
+        let b = m.render_prometheus_cached();
+        assert!(Arc::ptr_eq(&a, &b), "second scrape within 1s must not re-render");
+        assert!(a.contains("ramshield_"));
+        // Item 15 regression: the rendered text is the whole output — no
+        // stray stdout writes happened (println! would not appear here, but
+        // the old bug also added nothing to `out`; assert clean termination).
+        assert!(a.ends_with('\n') && !a.ends_with("\n\n"));
     }
 }
 
