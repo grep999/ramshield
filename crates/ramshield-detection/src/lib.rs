@@ -174,7 +174,13 @@ impl DetectionEngine {
         // ponytail: hardcoded; lift to Config.detection.batch_channel_capacity
         // when traffic profiles diverge.
         let (tx, rx) = bounded::<ConnectionEvent>(CHANNEL_CAPACITY as usize);
-        let shard_count = (bloom_bits / 1024).max(1).next_power_of_two();
+        // pre_aggs writers = batch workers (≤ cores), so 64 shards removes
+        // every realistic cross-thread collision. The old derivation
+        // (bloom_bits/1024) sized the shard array off an UNRELATED
+        // structure: prod 1M-bit bloom -> 1024 shards, stress 8M -> 8192 —
+        // every shard lookup chased a huge array of cache lines it could
+        // never reuse (TLB tax per event). Shards should track worker
+        // count, not bloom size. ponytail: revisit if workers ever > 64.
         Self {
             store,
             config,
@@ -184,7 +190,7 @@ impl DetectionEngine {
             enforcement_tx,
             bloom: ArcSwap::from_pointee(BloomFilter::new(bloom_bits)),
             shutdown,
-            pre_aggs: DashMap::with_shard_amount(shard_count),
+            pre_aggs: DashMap::with_shard_amount(64),
             last_pre_aggs_flush_ns: AtomicU64::new(now_ns()),
             flushing: AtomicBool::new(false),
             worker_handles: std::sync::Mutex::new(Vec::new()),
