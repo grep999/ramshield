@@ -1,115 +1,141 @@
 # ramshield-storage
 
-## Problem
+```text
+                    ┌───────────────────────────────┐
+                    │          Store                  │
+                    │  ┌─────────────┐ ┌───────────┐ │
+Detection ──→ insert│  │ IpEntryMap  │ │ SubnetMap │ │
+                    │  │ DashMap<IP> │ │ DashMap<SN>│ │
+Forecaster ──→ update│  └─────────────┘ └───────────┘ │
+Enforcement ←── get  │  ┌─────────────┐ ┌───────────┐ │
+Dashboard   ←── query│  │ BlockedSet  │ │ SubnetIdx │ │
+                    │  │ DashSet<IP> │ │ DashMap<SN>│ │
+                    │  └─────────────┘ └───────────┘ │
+                    │  TrafficCounters (atomics)      │
+                    └───────────────────────────────┘
+                          ↕
+                    Wal (crash recovery)
+```
 
-Every detection decision needs to reference per-IP history: "What's this IP's current threat score? Is it already blocked? When did we first see it?" A naive approach (reading from disk on every query) would be too slow. But storing everything in memory risks OOM under load. The storage module solves this with a RAM-bounded, sharded in-memory store backed by a WAL for crash recovery.
+## Why it exists
 
-Without this module, blocks are lost on restart. Without RAM limits, a flood of unique IPs would exhaust memory.
+Every other subsystem needs per-IP state — threat scores, block status, event counts, subnet membership — but no subsystem should own it. A centralized in-memory store with RAM-bounded eviction and WAL-backed crash recovery lets detection write, enforcement read, forecasting update, and dashboard query without duplicating state or fighting over locks.
 
 ## How it works
 
-### Store (DashMap-backed)
+### Sharded IP Map
+
+`Store` wraps a `DashMap<IpAddr, Entry>` with configurable shard count (default: power-of-two matching CPU cores). Each shard has its own RwLock — operations on different keys never contend:
 
 ```rust
 pub struct Store {
-    pub inner: DashMap<IpAddr, Entry, ahash::RandomState>,
-    pub blocked_set: DashSet<IpAddr>,           // reverse index
-    pub subnet_index: DashMap<SubnetKey, DashSet<IpAddr>>,
-    pub ram_bytes: AtomicU64,                   // live memory tracking
-    pub traffic: TrafficCounters,               // lock-free atomic counters
+    inner: Arc<IpEntryMap>,          // DashMap<IpAddr, Entry>
+    subnet_table: Arc<SubnetTable>,  // DashMap<SubnetKey, SubnetRecord>
+    blocked_set: Arc<DashSet<IpAddr>>,
+    subnet_index: Arc<SubnetIndex>,  // DashMap<SubnetKey, DashSet<IpAddr>>
+    pub traffic: Arc<TrafficCounters>,
+    // ...eviction, RAM tracking
 }
 ```
 
-DashMap with configurable shard count (power of 2). Each shard is a separate RwLock — concurrent reads don't block each other. `ahash` provides collision-resistant hashing (no HashDoS).
+### IpRecord — Per-IP State
 
-### RAM-aware insertion
-
-Every `insert()` checks `ram_bytes + heap_delta ≤ ram_limit_bytes`. If exceeded, the insert is rejected with `StorageFull`. Replacements are allowed (net-zero delta). Eviction is lazy: `evict_batch()` scans for expired TTLs and frees memory in bulk.
-
-### Per-IP records
+Each IP gets an `IpRecord` with fields updated by different subsystems:
 
 ```rust
 pub struct IpRecord {
-    pub ip: IpAddr,
-    pub request_count: u64,
-    pub ewma_rps: f64,
-    pub cusum_s: f64,
-    pub baseline_rps: f64,
-    pub prev_sample_hot: bool,
-    pub sample_count: u8,
-    pub pulse_samples_in_window: u8,
-    pub pulse_window_start_ns: u64,
+    pub event_count: u64,
     pub first_seen_ns: u64,
     pub last_seen_ns: u64,
-    pub bytes_in: u64,
-    pub status_dist: [u32; 5],
-    pub proto_fingerprint: u32,
-    pub threat_score: f32,
-    pub block_state: BlockState,
+    pub threat_score: f32,        // updated by Forecaster (CUSUM accumulator)
+    pub block_state: BlockState,  // written by Enforcement
+    pub status_history: BoundedVecDeque<u16>,  // last 20 status codes
 }
 ```
 
-~150 bytes per IP. At 100K tracked IPs = 15 MB. The detection engine reads and writes these on every batch flush.
+`Entry` wraps `IpRecord` with optional inline storage — IPs with fewer than 64 events store their status history in the struct itself (no heap allocation). Above 64 events, the history spills to a `BoundedVecDeque` on the heap.
 
-### WAL (Write-Ahead Log)
+### Subnet Tracking
 
-Append-only log for crash recovery:
+Two parallel maps support subnet-level detection:
 
-```
-wal-00000000.rshw  (segment file)
-├── 23-byte header: magic + version + LSN + payload_len + CRC32 + flags
-├── LZ4-compressed payload
-└── CRC32 checksum
-```
+- `SubnetTable`: maps `/24` (IPv4) or `/64` (IPv6) keys to `SubnetRecord` — event count, unique IP count, last-seen timestamp, CIDR string.
+- `SubnetIndex`: reverse index mapping subnet keys to the set of IPs observed in that subnet.
 
-**Durability modes:**
-- `None` — no sync (fastest, crash-unsafe)
-- `Flush` — flush OS buffer
-- `Fsync` — full disk sync per append
-- `GroupCommit` — batch fsyncs (default, best throughput/safety tradeoff)
+The subnet key is a `u128` that packs the network address and prefix length into a single comparable integer: `subnet_key_v4(octets: [u8; 4])` zeros the host bits and shifts the result into the upper 32 bits, while `subnet_key_v6(octets: [u8; 16])` does the same for 128-bit addresses.
 
-**Replay on startup:** Sequential scan, truncate on corruption (quarantine bad tail). Expired TTLs skipped. Idempotent — duplicate replay is safe.
+### RAM-Bounded Eviction
 
-### Subnet tracking
+`TrafficCounters` tracks total heap usage via `AtomicU64`. When `ram_bytes()` exceeds `ram_limit_mb` (default 128 MB), eviction runs in two passes:
+
+1. **Expired entries** — IPs with `last_seen_ns` older than `rate_window_secs` are removed.
+2. **LRU eviction** — if still over limit, the least-recently-seen entries are removed in batches of 1024.
+
+The RAM accounting is conservative: each `IpRecord` is estimated at `size_of::<IpRecord>() + inline data`. Evicted IPs are simply forgotten — detection will re-create their records if they reappear.
+
+### Write-Ahead Log (WAL)
+
+`Wal` provides crash recovery for enforcement decisions. Every `EnforceCommand` is appended to the WAL before XDP rules are applied:
 
 ```rust
-pub fn subnet_key_v4(octets: [u8; 4]) -> u32   // pack /24 into u32
-pub fn subnet_key_v6(octets: [u8; 16]) -> u128  // pack /64 into u128
+pub struct Wal {
+    inner: Arc<Mutex<Inner>>,
+    compress: bool,
+    durability: Durability,  // NoSync | Fsync | Fdatasync
+    seg_max: u64,            // segment rotation threshold (bytes)
+    retention_max: u64,      // total disk cap (oldest segments deleted)
+    base_dir: String,
+}
 ```
 
-The `subnet_index` maps subnet keys to sets of member IPs. The detection engine uses this for swarm detection (50+ unique IPs in a /24 = block the whole subnet).
+On startup, `Wal::replay(dir)` reads all WAL segments and returns the entries in LSN order. `EnforcementService` replays them to restore blocked IPs and re-apply XDP rules — the system recovers from a crash without losing block state.
 
-### blocked_set
+The WAL supports three durability modes:
+- `NoSync`: fastest, blocks may be lost on power failure.
+- `Fsync`: `fsync()` after every append — guaranteed durable, ~2ms per write.
+- `Fdatasync`: `fdatasync()` — durable for data, metadata may be stale.
 
-A `DashSet<IpAddr>` maintained in sync with Store mutations. Makes `get_all_blocked_ips()` O(blocked) instead of O(all). The enforcement engine polls this for XDP reconciliation.
+### TrafficCounters
+
+A set of atomic counters shared across all subsystems for dashboard and Prometheus metrics:
+
+```rust
+pub struct TrafficCounters {
+    pub ram_limit_mb: AtomicUsize,
+    pub ram_bytes: AtomicUsize,
+    pub total_events: AtomicU64,
+    pub unique_ips: AtomicU64,
+    pub uptime_secs: AtomicU64,
+    pub threat_samples: Mutex<Vec<(IpAddr, f32)>>,
+}
+```
+
+No locks in the hot path — every counter uses `AtomicU64::fetch_add` or `AtomicUsize::store`. The `threat_samples` mutex is only touched during batch flush (every 500ms).
+
+## Uniqueness
+
+**RAM-bounded by design.** Most in-memory stores grow until they OOM. This one tracks its own heap usage and evicts entries when the limit is hit. The operator sets `ram_limit_mb`; the store enforces it without external pressure.
+
+**Subnet reverse index.** The `SubnetIndex` maps subnet keys back to individual IPs — enabling O(1) lookup of "all IPs in this /24" for batch subnet blocks. Without this index, finding all IPs in a subnet would require scanning the entire map.
+
+**WAL with configurable durability.** Three modes let operators trade crash safety for throughput: `NoSync` for benchmarking, `Fdatasync` for production, `Fsync` for financial environments where every block decision must survive power loss.
 
 ## Dependencies
 
+**Reads from:** `ramshield-types` (`ConnectionEvent`, `IpNetwork`, `BlockReason`, `Durability`, `BoundedVecDeque`).
+
+**Written by:** `ramshield-detection` (insert, update_ip), `ramshield-forecasting` (update_ip for threat scores), `ramshield-enforcement` (update_ip for block_state), `ramshield-enforcement::wal` (append, checkpoint).
+
+**Read by:** `ramshield-enforcement` (get, evict_batch), `ramshield-dashboard` (query, stats), `ramshield-metrics` (traffic counters).
+
+## Benchmarks
+
+```bash
+cargo bench --bench hot_paths --features full -- store_insert
+cargo bench --bench hot_paths --features full -- store_lookup
+cargo bench --bench hot_paths --features full -- subnet_key
 ```
-ramshield-storage
-  ← ramshield-types (BlockReason, IpNetwork, Durability, RsError)
-  ← dashmap, ahash, lz4_flex, crc32fast, crossbeam-queue, serde, tokio
 
-Used by:
-  → ramshield-detection (read/write IpRecords, subnet tracking)
-  → ramshield-enforcement (read blocked_set, write WAL)
-  → ramshield-forecasting (read TrafficCounters)
-  → ramshield-metrics (read store stats for dashboard)
-  → src/engine (create Store at boot)
-```
+## Testing
 
-This is the shared state layer. Every other module reads from or writes to the Store.
-
-## Key benchmarks
-
-| Function | ns/op | ops/sec |
-|----------|-------|---------|
-| subnet_key_v4 | 249 | 4.0M |
-| Store::get (1K entries) | 253 | 3.9M |
-| Store::update_ip (1K entries) | 267 | 3.7M |
-
-## What to read next
-
-- `crates/ramshield-detection/` — reads and writes IpRecords through this module
-- `crates/ramshield-enforcement/` — writes WAL records and updates blocked_set
-- `crates/ramshield-forecasting/` — reads TrafficCounters for anomaly detection
+52 tests covering: shard-level concurrency (10 threads inserting simultaneously), RAM limit enforcement (insert until limit hit, verify eviction), WAL append+replay round-trip, subnet index consistency (insert IP → verify subnet index → remove IP → verify index cleaned up), and expired entry eviction timing.
