@@ -25,37 +25,57 @@ Fields:
 
 ## EnforceCommand
 
-Instruction sent from the detection/forecasting engine to the enforcement layer.
+Instruction sent from the detection/forecasting engine to the enforcement layer. Carries full audit metadata for WAL persistence and decision deduplication.
 
 ```rust
-pub enum EnforceCommand {
-    Block {
-        ip: IpAddr,
-        reason: String,
-        ttl_secs: Option<u64>,
-    },
-    Unblock {
-        ip: IpAddr,
-    },
+pub struct EnforceCommand {
+    pub decision_id: Uuid,        // unique ID for dedup
+    pub policy_version: u64,      // policy schema version
+    pub source: String,           // "detection", "forecasting", "manual"
+    pub actor: String,            // human-readable actor name
+    pub timestamp_utc: i64,       // UTC seconds
+    pub ttl_seconds: u64,         // 0 = permanent until explicit unblock
+    pub reason: String,           // human-readable reason
+    pub ip: IpAddr,               // target IP
+    pub action: EnforceAction,    // Block or Unblock
 }
-```
 
-`Block` carries a reason string (logged and returned in IPC responses) and an optional TTL. `None` TTL means permanent block until explicit unblock. The enforcement engine writes this to the WAL and applies it to the Store and optionally to XDP maps.
-
-## EnforceAction
-
-The result of applying an `EnforceCommand` — returned to the caller (typically the detection engine or IPC handler) to confirm what happened.
-
-```rust
 pub enum EnforceAction {
-    Blocked { ip: IpAddr, ttl_secs: Option<u64> },
-    Unblocked { ip: IpAddr },
-    AlreadyBlocked { ip: IpAddr },
-    AlreadyUnblocked { ip: IpAddr },
+    Block,
+    Unblock,
 }
 ```
 
-Idempotent: applying the same block twice returns `AlreadyBlocked` instead of double-counting. This matters for WAL replay (crash recovery) where the same command may be applied multiple times.
+The `decision_id` (UUID v4) enables the enforcement service to deduplicate commands — applying the same command twice returns `EnforceResult` with `applied: false`. This matters for WAL replay (crash recovery) where the same command may be reapplied.
+
+## EnforceResult
+
+Outcome of applying an `EnforceCommand`:
+
+```rust
+pub struct EnforceResult {
+    pub decision_id: Uuid,
+    pub committed: bool,       // WAL record written
+    pub applied: bool,         // Store state changed
+    pub wal_lsn: Option<u64>,  // WAL sequence number
+    pub xdp_applied: bool,     // kernel XDP map updated
+    pub error: Option<String>, // error message if partial failure
+}
+```
+
+## EnforcementError
+
+```rust
+pub enum EnforcementError {
+    Wal(String),
+    Storage(String),
+    Xdp(String),
+    Duplicate(Uuid),
+    InvalidCommand(String),
+}
+```
+
+`Duplicate` is returned when a command with the same `decision_id` is applied twice. `Xdp` is non-fatal — XDP errors don't roll back storage state (fail-open design).
 
 ## Error types
 
@@ -74,14 +94,29 @@ pub enum RamshieldError {
 ## BlockDecision
 
 ```rust
-pub enum BlockDecision {
-    Blocked { reason: String, ttl_secs: Option<u64> },
-    AlreadyBlocked,
-    Failed { reason: String },
+pub struct BlockDecision {
+    pub ip: IpAddr,
+    pub reason: BlockReason,
+    pub ttl_secs: Option<u64>,
+    pub batch_subnet: Option<IpNetwork>,
 }
 ```
 
-Returned from the Store's block path. `Failed` is currently unused but reserves space for future error conditions (e.g., WAL write failure).
+Returned from the detection engine. The `batch_subnet` field is set when the block applies to an entire subnet (/24 or /64) rather than a single IP.
+
+## BlockReason
+
+```rust
+pub enum BlockReason {
+    HighRps,
+    SubnetBatch,
+    ForecastAnomaly,
+    EntropyAnomaly,
+    ManualBlock,
+}
+```
+
+Has `as_str()` for stable wire tokens and `from_reason_str()` with alias expansion (e.g., `syn_flood` → `HighRps`, `anomaly` → `EntropyAnomaly`).
 
 ## IpNetwork
 
@@ -90,9 +125,61 @@ pub struct IpNetwork {
     pub addr: IpAddr,
     pub prefix_len: u8,
 }
+impl IpNetwork {
+    pub fn new(addr: IpAddr, prefix_len: u8) -> Result<Self, &'static str>
+    pub fn ipv4_subnet(ip: Ipv4Addr) -> Self  // /24
+    pub fn ipv6_subnet(ip: Ipv6Addr) -> Self  // /64
+    pub fn of_ip(ip: IpAddr) -> Self          // canonical subnet
+    pub fn contains(&self, ip: IpAddr) -> bool
+    pub fn pack(&self) -> u128                // for HashMap keys
+    pub fn family(&self) -> u8                // 4 or 6
+}
 ```
 
-Represents a CIDR network (e.g., `10.0.0.0/8`). Used by the subnet tracking system to group IPs into /24 (v4) or /64 (v6) networks for swarm detection. The `prefix_len` determines the grouping granularity.
+Represents a CIDR network. Used by the subnet tracking system to group IPs into /24 (v4) or /64 (v6) networks for swarm detection. The `pack()` method serializes the network into a `u128` for use as a DashMap key.
+
+## Durability
+
+```rust
+pub enum Durability {
+    None,
+    Flush,
+    Fsync,
+    GroupCommit,  // default
+}
+```
+
+WAL durability level. `GroupCommit` batches fsyncs for throughput; `Fsync` fsyncs every append for maximum safety.
+
+## BoundedVecDeque
+
+```rust
+pub struct BoundedVecDeque<T> {
+    pub cap: usize,
+}
+impl<T> BoundedVecDeque<T> {
+    pub fn new(cap: usize) -> Self
+    pub fn push(&mut self, item: T)  // evicts front when full
+    pub fn len(&self) -> usize
+    pub fn is_empty(&self) -> bool
+    pub fn iter(&self) -> impl Iterator<Item = &T>
+}
+```
+
+Fixed-capacity ring buffer used for batch history and block log. Zero-allocation push when not at capacity.
+
+## RsError
+
+```rust
+pub enum RsError {
+    NotFound(String),
+    CapacityExceeded { limit_mb: usize },
+    Serde(String),
+    Io(std::io::Error),
+    CorruptWal { offset: u64 },
+    RecordTooLarge { size: usize, max: usize },
+}
+```
 
 ## Re-exports
 

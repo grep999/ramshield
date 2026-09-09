@@ -56,34 +56,33 @@ Maintains three components: `level` (baseline), `trend` (direction), and `season
 
 ## EwmAVar (EWMA variance tracker)
 
+Internal to the `Forecaster` — not publicly exposed. Tracks mean and variance with O(1) memory (3 floats = 24 bytes).
+
 ```rust
-pub struct EwmAVar { ... }
-impl EwmAVar {
-    pub fn new(span: usize) -> Self  // span=120 ticks ≈ 2 min
-    pub fn update(&mut self, x: f64) -> f64  // returns current mean
-    pub fn variance(&self) -> f64
-    pub fn std_dev(&self) -> f64
-}
+fn new(span: usize) -> Self  // span=120 ticks ≈ 2 min
+fn update(&mut self, x: f64) -> f64  // returns z-score
+fn sigma(&self) -> f64
 ```
 
-O(1) memory: 3 floats (mean, variance, tick_count) = 24 bytes. Replaces the old `RingBuffer<60>` (480 bytes, O(n) standard deviation). Alpha=0.02 gives a 120-tick adaptation window — fast enough to track legitimate traffic shifts, slow enough to filter noise.
+Alpha=0.02 gives a 120-tick adaptation window — fast enough to track legitimate traffic shifts, slow enough to filter noise. Replaces the old `RingBuffer<60>` (480 bytes, O(n) standard deviation).
 
-The z-score is computed as `(rps - forecast) / std_dev`. A z-score above 3.0 (configurable `anomaly_zscore`) triggers the CUSUM detector.
+The z-score is computed as `|residual| / σ`. A z-score above 3.0 (configurable `anomaly_zscore`) triggers the CUSUM detector.
 
 ## CusumState (CUSUM drift detector)
 
+Internal to the `Forecaster` — not publicly exposed. Two-sided CUSUM (Page 1954).
+
 ```rust
-pub struct CusumState { ... }
-impl CusumState {
-    pub fn new() -> Self
-    pub fn update(&mut self, z: f64) -> (f64, bool)  // returns (new_s, fired)
-}
+fn new(k: f64, h: f64) -> Self
+fn update(&mut self, z: f64) -> bool  // returns alarm flag
+fn reset(&mut self)
 ```
 
 O(1) memory: 4 floats = 32 bytes. Detects slow-ramp attacks invisible to z-score — attacks that stay below the anomaly threshold but sustain a drift over minutes.
 
-- `drift allowance k = 0.5σ` — minimum deviation to accumulate.
-- `decision boundary h = 4.0σ` — consecutive drift samples to trigger.
+- Upper accumulator: `s_upper = max(0, s_upper + z - k)`
+- Lower accumulator: `s_lower = max(0, s_lower - z - k)`
+- Drift allowance `k = 0.5σ`, decision boundary `h = 4.0σ`
 - When fired: sends enforcement command, resets both accumulators.
 
 **Benchmark:** 3.1 ns/op. Called once per second.
@@ -98,8 +97,9 @@ pub struct HypothesisTracker {
 }
 impl HypothesisTracker {
     pub fn new() -> Self
-    pub fn bayesian_update(&mut self, z: f64, cusum: f64, threat: f64, delta_entropy: f64)
-    pub fn best_above_threshold(&self) -> Option<(usize, f64)>
+    pub fn bayesian_update(&mut self, z: f64, delta_h: f64, threat: f64, cusum_alarm: bool) -> [f64; 4]
+    pub fn best_above_threshold(&self) -> Option<(Hypothesis, f64)>
+    pub fn priors(&self) -> &[f64; 4]
 }
 ```
 

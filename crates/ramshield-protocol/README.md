@@ -37,16 +37,41 @@ Maximum frame size is configurable (default 32MB). Frames exceeding this limit a
 | `stats` | Server statistics: IPs tracked, blocked count, RAM usage, uptime, evictions |
 | `ip_detail` | Full per-IP detail: count, EWMA, threat, state, bytes, timestamps |
 
-## Message structs
+## Message envelope
+
+All frames are wrapped in a `Message` envelope:
 
 ```rust
+pub struct Message {
+    pub version: u16,     // PROTOCOL_VERSION (currently 1)
+    pub body: Body,
+}
+
+pub enum Body {
+    Request(Request),
+    Response(Response),
+}
+
+impl Message {
+    pub fn request(req: Request) -> Self
+    pub fn response(resp: Response) -> Self
+}
+```
+
+The version field enables forward-compatible protocol evolution. The `Body` enum discriminates request from response at the envelope level.
+
+## Request and Response enums
+
+```rust
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
-    CheckIp { ip: IpAddr },
-    BlockIp { ip: IpAddr, reason: String, ttl_secs: Option<u64> },
-    UnblockIp { ip: IpAddr },
-    GetIpStats { ip: IpAddr },
+    CheckIp { ip: String },
+    BlockIp { ip: String, reason: String, ttl_secs: Option<u64> },
+    UnblockIp { ip: String },
+    GetIpStats { ip: String },
     GetStats,
-    ReportConnection(ConnectionReport),
+    GetStatus,
+    ReportConnection { ip: String, bytes: u64, status_code: u16, proto_fp: u32 },
     ReportConnections { events: Vec<ConnectionReport> },
     Flush,
 }
@@ -58,17 +83,38 @@ pub struct ConnectionReport {
     pub proto_fp: u32,
 }
 
+pub struct Stats {
+    pub ips_tracked: usize,
+    pub blocked: u64,
+    pub ram_bytes: usize,
+    pub ram_limit_mb: usize,
+    pub uptime_secs: u64,
+    pub evictions: u64,
+}
+
+pub struct IpDetail {
+    pub ip: String,
+    pub count: u64,
+    pub ewma_rps: f64,
+    pub threat: f32,
+    pub state: String,
+    pub bytes_in: u64,
+    pub first_seen_s: u64,
+    pub last_seen_s: u64,
+}
+
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
-    IpStatus { ip, blocked, threat, ewma_rps, reason },
-    Ok { message: String },
+    IpStatus { ip: String, blocked: bool, threat: f32, ewma_rps: f64, reason: Option<String> },
+    Ok { message: String, state: Option<String> },
     BatchOk { accepted: u64, rejected: u64 },
-    Error { code: u16, message: String },
-    Stats { ips_tracked, blocked, ram_bytes, ram_limit_mb, uptime_secs, evictions },
-    IpDetail { ip, count, ewma_rps, threat, state, bytes_in, first_seen_s, last_seen_s },
+    Error { code: u32, message: String },
+    Stats(Stats),
+    IpDetail(IpDetail),
 }
 ```
 
-All types derive `Serialize` and `Deserialize` via serde. The IPC server uses `serde_json` for framing; this crate is format-agnostic.
+All types derive `Serialize` and `Deserialize` via serde. `deny_unknown_fields` on Request prevents field typos from being silently accepted (e.g., a wrong TTL field name can't accidentally block IPs permanently). The IPC server uses `serde_json` for framing; this crate is format-agnostic.
 
 ## HMAC-SHA256 authentication
 
