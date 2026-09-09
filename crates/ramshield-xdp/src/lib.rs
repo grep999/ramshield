@@ -5,7 +5,7 @@
 //! (the only consumer). Types (`BlocklistKey`/`BlocklistValue`) are defined
 //! there too — one source of truth, no drift.
 
-/// Compiled BPF ELF produced by this crate's build.rs (clang fallback path).
+/// Compiled BPF ELF produced by this crate's build.rs (aya-ebpf + bpf-linker).
 pub static BPF_ELF: &[u8] = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/ramshield-xdp"));
 
 // ---------------------------------------------------------------------------
@@ -387,5 +387,47 @@ mod tests {
             .expect("ramshield_xdp program missing");
 
         eprintln!("aya::Bpf::load succeeded — BLOCKLIST, BLOCKLIST6, ramshield_xdp all present");
+    }
+
+    // ===== insert ↔ lookup roundtrip: proves blocking works end-to-end =====
+
+    /// Load BPF ELF, insert a v4 key into BLOCKLIST, verify lookup finds it.
+    #[test]
+    #[ignore] // requires root — run with: cargo test -- --ignored insert_lookup_roundtrip_v4
+    fn insert_lookup_roundtrip_v4() {
+        let mut bpf = aya::Bpf::load(crate::BPF_ELF).expect("aya::Bpf::load failed");
+        let map = bpf.take_map("BLOCKLIST").expect("BLOCKLIST missing");
+        let mut hm: aya::maps::HashMap<_, [u64; 2], u8> =
+            aya::maps::HashMap::try_from(map).unwrap();
+
+        // 1.2.3.4 → BlocklistKey(u128::from(u32::from_ne_bytes([1,2,3,4])))
+        // On LE x86: lower u64 = 0x04030201, upper u64 = 0
+        let key: [u64; 2] = [0x04030201u64, 0u64];
+        hm.insert(key, 1u8, 0).expect("insert failed");
+
+        let val = hm
+            .get(&key, 0)
+            .expect("lookup failed — key missing after insert");
+        assert_eq!(val, 1u8);
+    }
+
+    /// Load BPF ELF, insert a v6 key into BLOCKLIST6, verify lookup finds it.
+    #[test]
+    #[ignore] // requires root — run with: cargo test -- --ignored insert_lookup_roundtrip_v6
+    fn insert_lookup_roundtrip_v6() {
+        let mut bpf = aya::Bpf::load(crate::BPF_ELF).expect("aya::Bpf::load failed");
+        let map = bpf.take_map("BLOCKLIST6").expect("BLOCKLIST6 missing");
+        let mut hm: aya::maps::HashMap<_, [u64; 2], u8> =
+            aya::maps::HashMap::try_from(map).unwrap();
+
+        // 2001:db8::1 → BlocklistKey(u128::from_le_bytes(octets))
+        // Octets [20,01,0d,b8,00,00,00,00,00,00,00,00,00,00,00,01] as [u64;2] LE
+        let key: [u64; 2] = [0x00000000_b80d0120u64, 0x01000000_00000000u64];
+        hm.insert(key, 1u8, 0).expect("insert failed");
+
+        let val = hm
+            .get(&key, 0)
+            .expect("lookup failed — key missing after insert");
+        assert_eq!(val, 1u8);
     }
 }

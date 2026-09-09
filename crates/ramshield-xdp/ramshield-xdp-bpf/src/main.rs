@@ -94,18 +94,16 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
 
     if proto == EtherType::Ipv6 as u16 {
         let ip6: *const Ipv6Hdr = ptr_at(&ctx, l3_off)?;
-        if unsafe { (*ip6).version() } == 6 {
-            let mut key = [0u64; 2];
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    (*ip6).src_addr.as_ptr(),
-                    key.as_mut_ptr() as *mut u8,
-                    16,
-                );
-            }
-            if unsafe { BLOCKLIST6.get(&key) }.is_some() {
-                return Ok(xdp_action::XDP_DROP);
-            }
+        let mut key = [0u64; 2];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                (*ip6).src_addr.as_ptr(),
+                key.as_mut_ptr() as *mut u8,
+                16,
+            );
+        }
+        if unsafe { BLOCKLIST6.get(&key) }.is_some() {
+            return Ok(xdp_action::XDP_DROP);
         }
         return Ok(xdp_action::XDP_PASS);
     }

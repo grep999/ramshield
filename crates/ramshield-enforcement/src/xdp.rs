@@ -1,4 +1,4 @@
-//! Real XDP dataplane via aya. Loads the clang-built BPF ELF, attaches to an
+//! Real XDP dataplane via aya. Loads the Rust aya-ebpf BPF ELF, attaches to an
 //! interface, and applies block/unblock decisions to the kernel BLOCKLIST map.
 //!
 //! Semantics (see .hermes/plans/2026-08-22_enforcement-production.md):
@@ -173,6 +173,13 @@ impl XdpApplier for AyaXdpApplier {
             let expected: std::collections::HashSet<BlocklistKey> = expected.into_iter().collect();
             let mut stale_count = 0usize;
             self.with_map(name, |m| {
+                // ponytail: collect-then-remove is required — aya's HashMap
+                // doesn't allow mutating during iteration (borrow conflict).
+                // Ceiling: O(N) alloc where N = map size. Acceptable because
+                // blocked set stays small under normal load (<100 IPs);
+                // under DDoS, N ~10K = ~800KB one-shot alloc, amortized
+                // over reconcile interval. Upgrade: batched collect (chunks
+                // of 1024) if memory pressure matters.
                 let stale: Vec<BlocklistKey> = m
                     .keys()
                     .filter_map(|k| k.ok())
