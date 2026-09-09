@@ -364,4 +364,28 @@ mod tests {
             );
         }
     }
+
+    // ===== aya ELF load verification =====
+
+    /// Load the compiled BPF ELF via aya and verify maps + program exist.
+    /// Proves: build.rs → aya-ebpf → bpf-linker → ELF → aya parser → BPF syscalls.
+    /// Requires root (BPF syscalls).
+    #[test]
+    #[ignore] // requires root — run with: cargo test -- --ignored aya_load
+    fn aya_load_verifies_maps_and_program() {
+        let mut bpf = aya::Bpf::load(crate::BPF_ELF)
+            .expect("aya::Bpf::load failed — legacy maps rejected or ELF corrupt");
+
+        // Maps must exist and be takeable
+        let _bl = bpf.take_map("BLOCKLIST")
+            .expect("BLOCKLIST map missing from loaded ELF");
+        let _bl6 = bpf.take_map("BLOCKLIST6")
+            .expect("BLOCKLIST6 map missing from loaded ELF");
+
+        // Program must exist
+        let _prog = bpf.program("ramshield_xdp")
+            .expect("ramshield_xdp program missing");
+
+        eprintln!("aya::Bpf::load succeeded — BLOCKLIST, BLOCKLIST6, ramshield_xdp all present");
+    }
 }
