@@ -1,159 +1,122 @@
 # ramshield-forecasting
 
-Anomaly detection engine using Holt-Winters time-series forecasting combined with a Bayesian Hypothesis Framework. This module answers the question: "Is the current traffic pattern normal, or is something wrong?" — and if wrong, what kind of attack is it.
+## Problem
 
-## Architecture
+The detection module catches obvious attacks: high rate, many IPs, status code anomalies. But sophisticated attacks stay below every individual threshold. A slow ramp that adds 10 requests/second per minute will never trigger a static rate limit — until it's too late. And a flash crowd from a product launch looks identical to a volumetric DDoS if you only look at rate.
+
+The forecasting module answers: "Is the overall traffic pattern consistent with normal behavior, or does it match a known attack profile?" It uses time-series forecasting to predict what *should* happen next, then measures the deviation.
+
+## How it works
+
+### Pipeline (runs once per second)
 
 ```
-tick_hw (1 Hz)                           tick_entropy (0.2 Hz)
-    │                                          │
-    ▼                                          ▼
-HoltWinters::update(rps)                 Shannon entropy delta
-    │                                     (diversity of IPs)
-    ▼                                          │
-EwmAVar → z-score = (rps - forecast) / σ        │
-    │                                          │
-    ▼                                          │
-CusumState (drift detector)                     │
-    │                                          │
-    ▼                                          ▼
-              ┌──────────────────────────────────┐
-              │   HypothesisTracker               │
-              │   signals: z, cusum, threat, ΔH   │
-              │   → Bayes' rule on 4 hypotheses   │
-              └────────────┬─────────────────────┘
-                           │
-              ┌────────────┼────────────────┐
-              │            │                │
-              ▼            ▼                ▼
-           Normal     Volumetric       FlashCrowd
-           (noop)     (block RPS)     (log only)
+TrafficCounters (from Store — no store scan)
+        │
+        ▼
+HoltWinters::update(rps)          ← triple exponential smoothing
+        │
+        ▼
+EwmAVar → z-score                 ← normalized residual
+        │
+        ▼
+CusumState → alarm flag           ← slow-ramp drift detector
+        │
+        ▼
+HypothesisTracker::bayesian_update(z, delta_h, threat, cusum_alarm)
+        │
+        ▼
+Decision: Block or No-op
 ```
 
-## HoltWinters (triple exponential smoothing)
+### HoltWinters (triple exponential smoothing)
 
 ```rust
 pub struct HoltWinters {
-    level: f64,
-    trend: f64,
-    seasonal: Vec<f64>,
-    alpha: f64,  // level smoothing (default: 0.3)
-    beta: f64,   // trend smoothing (default: 0.1)
-    gamma: f64,  // seasonal smoothing (default: 0.1)
-    period: usize, // seasonality period (default: 60 ticks = 1 min)
+    level: f64,        // baseline
+    trend: f64,        // direction
+    seasonal: Vec<f64>, // cyclical pattern
 }
 impl HoltWinters {
     pub fn new(alpha: f64, beta: f64, gamma: f64, period: usize) -> Self
-    pub fn update(&mut self, y: f64)  // one-step-ahead forecast for NEXT tick
+    pub fn update(&mut self, y: f64)  // returns forecast for NEXT tick
 }
 ```
 
-Maintains three components: `level` (baseline), `trend` (direction), and `seasonal[period]` (cyclical pattern). The `update()` method takes the current observation and returns the one-step-ahead forecast via the `level` field after update.
+Maintains level + trend + seasonal components. The forecast uses the *future* seasonal slot to avoid residual collapse on regular traffic cycles. Params: α=0.3, β=0.1, γ=0.1, period=60 (1-minute seasonality). Benchmark: 37-57 ns/op.
 
-**Key design decision:** The forecast uses the future seasonal slot (not the just-updated one) to avoid residual collapse on regular traffic cycles. Without this, a perfectly periodic traffic pattern would produce zero residuals and mask real anomalies.
+### EwmAVar (internal, private)
 
-**Benchmark:** 37-57 ns/op. Called once per second (1 Hz tick).
+O(1) EWMA variance tracker (3 floats = 24 bytes). Alpha=0.02, span=120 ticks (≈2 min). Normalizes forecast residuals into z-scores. Replaces the old RingBuffer<60> (480 bytes, O(n) standard deviation).
 
-## EwmAVar (EWMA variance tracker)
+### CusumState (internal, private)
 
-Internal to the `Forecaster` — not publicly exposed. Tracks mean and variance with O(1) memory (3 floats = 24 bytes).
+Two-sided CUSUM (Page 1954). Detects slow-ramp attacks invisible to z-score:
+- Upper: `s_upper = max(0, s_upper + z - k)` — accumulates positive deviation
+- Lower: `s_lower = max(0, s_lower - z - k)` — accumulates negative deviation
+- Drift allowance k=0.5σ, decision boundary h=4.0σ
+- When fired: sends enforcement command, resets both accumulators. 3 ns/op.
 
-```rust
-fn new(span: usize) -> Self  // span=120 ticks ≈ 2 min
-fn update(&mut self, x: f64) -> f64  // returns z-score
-fn sigma(&self) -> f64
-```
-
-Alpha=0.02 gives a 120-tick adaptation window — fast enough to track legitimate traffic shifts, slow enough to filter noise. Replaces the old `RingBuffer<60>` (480 bytes, O(n) standard deviation).
-
-The z-score is computed as `|residual| / σ`. A z-score above 3.0 (configurable `anomaly_zscore`) triggers the CUSUM detector.
-
-## CusumState (CUSUM drift detector)
-
-Internal to the `Forecaster` — not publicly exposed. Two-sided CUSUM (Page 1954).
+### HypothesisTracker (Bayesian brain)
 
 ```rust
-fn new(k: f64, h: f64) -> Self
-fn update(&mut self, z: f64) -> bool  // returns alarm flag
-fn reset(&mut self)
-```
-
-O(1) memory: 4 floats = 32 bytes. Detects slow-ramp attacks invisible to z-score — attacks that stay below the anomaly threshold but sustain a drift over minutes.
-
-- Upper accumulator: `s_upper = max(0, s_upper + z - k)`
-- Lower accumulator: `s_lower = max(0, s_lower - z - k)`
-- Drift allowance `k = 0.5σ`, decision boundary `h = 4.0σ`
-- When fired: sends enforcement command, resets both accumulators.
-
-**Benchmark:** 3.1 ns/op. Called once per second.
-
-## HypothesisTracker (Bayesian brain)
-
-The core decision engine. Maintains posterior probabilities over four competing hypotheses about the current traffic state.
-
-```rust
-pub struct HypothesisTracker {
-    posteriors: [f64; 4],  // H0..H3
-}
+pub struct HypothesisTracker { posteriors: [f64; 4] }
 impl HypothesisTracker {
     pub fn new() -> Self
     pub fn bayesian_update(&mut self, z: f64, delta_h: f64, threat: f64, cusum_alarm: bool) -> [f64; 4]
     pub fn best_above_threshold(&self) -> Option<(Hypothesis, f64)>
-    pub fn priors(&self) -> &[f64; 4]
 }
 ```
 
-### Hypotheses
+Four competing hypotheses about traffic state:
 
-| ID | Name | Prior | Meaning |
-|----|------|-------|---------|
-| H0 | Normal | 0.90 | Legitimate traffic, no attack |
-| H1 | VolumetricDDoS | 0.02 | High-rate flood attack |
-| H2 | SlowRampDoS | 0.02 | Gradual ramp-up below threshold |
-| H3 | FlashCrowd | 0.05 | Legitimate traffic spike (release, news) |
+| ID | Name | Prior | Signal |
+|----|------|-------|--------|
+| H0 | Normal | 0.91 | Low z, stable entropy, low threat |
+| H1 | VolumetricDDoS | 0.02 | High z, entropy ↓, high threat |
+| H2 | SlowRampDoS | 0.02 | CUSUM alarm primary signal |
+| H3 | FlashCrowd | 0.05 | High entropy, low threat |
 
-### Signal inputs (per tick)
-
-1. **z-score** — EWMA residual deviation. High z → H1 likely.
-2. **CUSUM alarm** — sustained drift. High cusum → H2 likely.
-3. **max threat** — per-IP threat score from detection crate. High threat → H1 likely.
-4. **entropy delta** — change in IP diversity. Low diversity → H1 (botnet). High diversity → H3 (flash crowd).
-
-### Update cycle
-
-1. Compute log-likelihood ratios for each hypothesis × each signal.
-2. Apply Bayes' rule: `P(H|evidence) ∝ P(evidence|H) × P(H)`.
-3. Softmax normalize posteriors.
-4. Decay toward baseline (multiply by 0.98, renormalize) — prevents stale decisions.
-5. Cold start: first 30 ticks use higher threshold (0.85 vs 0.75) to prevent premature action.
+Bayes' rule updates posteriors from 4 signal inputs. 98% decay toward baseline each tick prevents stale decisions. Cold start: first 30 ticks use higher threshold (0.85 vs 0.75) to prevent premature action. 157 ns/op.
 
 ### Decision dispatch
 
-| Highest posterior above threshold | Action |
-|-----------------------------------|--------|
+| Highest posterior | Action |
+|-------------------|--------|
 | H0 (Normal) | No-op |
-| H1 (VolumetricDDoS) | Block by RPS spike, send `EnforceCommand::Block` |
-| H2 (SlowRampDoS) | Block by sustained deviation, send `EnforceCommand::Block` |
-| H3 (FlashCrowd) | Log only — legitimate traffic, NOT blocked |
+| H1 (VolumetricDDoS) | Block by RPS spike |
+| H2 (SlowRampDoS) | Block by sustained deviation |
+| H3 (FlashCrowd) | **Log only** — legitimate, never blocked |
 
-**Benchmark:** bayesian_update = 157 ns/op; best_above_threshold = 5.5 ns/op. Called once per second.
-
-## PeakReservoir (legacy, transitional)
-
-```rust
-pub struct PeakReservoir { ... }  // 512-element cap, modular eviction
-```
-
-Empirical quantile of forecast residuals. Used as a spot alarm fallback until v0.4 removal. Kept for backward compatibility with dashboards that display the quantile metric.
+The flash-crowd distinction is critical. Blocking a legitimate traffic spike (e.g., product launch) would be worse than the attack itself.
 
 ## Dependencies
 
-`ramshield-types` (for `EnforceCommand`). Pure math — no async, no I/O, no external crates beyond `serde`.
+```
+ramshield-forecasting
+  ← ramshield-types    (EnforceCommand, EnforceAction)
+  ← ramshield-storage  (Store — reads TrafficCounters, no store scan)
+  ← ramshield-metrics  (Metrics — set_forecast_hw, set_entropy)
+  ← ramshield-config   (ForecastingConfig — alpha, beta, gamma, thresholds)
+  ← tokio, uuid, tracing
 
-## Tests (18)
+Sends to: ramshield-enforcement (via EnforceCommand channel)
+```
 
-- HW: forecast correctness, seasonal slot usage, level/trend convergence.
-- EwmAVar: phase adaptation, zero stddev edge case, spike residual z-score.
-- CUSUM: drift detection, noise rejection, reset after alarm, cap behavior.
-- Bayesian: normal traffic stays H0, volumetric detection fires H1, slow ramp fires H2, flash crowd stays H3, cold start delay, posterior decay over time.
-- PeakReservoir: cold start, warm quantile, negative deviation handling.
+This module reads from the Store's `TrafficCounters` (lock-free atomics) — it never scans the DashMap. This keeps the 1 Hz tick fast and non-blocking.
+
+## Key benchmarks
+
+| Function | ns/op | ops/sec |
+|----------|-------|---------|
+| HoltWinters::update | 37-57 | 17-27M |
+| bayesian_update | 157 | 6.3M |
+| best_above_threshold | 5.5 | 175M |
+
+At 1 Hz tick rate, total CPU per tick: ~200 ns. Negligible.
+
+## What to read next
+
+- `crates/ramshield-detection/` — produces threat scores this module reads
+- `crates/ramshield-enforcement/` — receives block commands from this module
+- `crates/ramshield-storage/` — TrafficCounters (atomic counters, no DashMap scan)

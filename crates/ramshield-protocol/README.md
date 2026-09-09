@@ -1,45 +1,21 @@
 # ramshield-protocol
 
-Wire-format definitions, HMAC authentication, and serialization for RamShield's TCP JSON IPC protocol. This crate defines every message type that crosses the wire between client applications and the RamShield server, plus the cryptographic envelope that protects frames in transit.
+## Problem
 
-## Wire format
+Client applications (Nginx modules, custom proxies, scripts) need to send connection events to RamShield and receive block/unblock responses. Without a defined wire format, every integration would need custom parsing. Without authentication, anyone who can reach the IPC port can send fake events or issue unauthorized blocks. The protocol module defines the message schema and cryptographic envelope that makes integrations safe and interoperable.
 
-The IPC protocol is newline-delimited JSON over TCP. Each frame is a single JSON object terminated by `\n`. Request frames carry a `"type"` field that dispatches to the handler; response frames carry a `"type"` field that identifies the response kind.
+## How it works
+
+### Wire format
+
+Newline-delimited JSON over TCP. One JSON object per line. No streaming, no framing complexity — each `\n` terminates a frame.
 
 ```
 Client → Server: {"type":"report_connections","events":[...]} \n
 Server → Client: {"type":"batch_ok","accepted":950,"rejected":0} \n
 ```
 
-Maximum frame size is configurable (default 32MB). Frames exceeding this limit are dropped and the connection is closed. This protects against memory exhaustion from a single malformed client.
-
-## Request types
-
-| Type | Description | Key fields |
-|------|-------------|------------|
-| `check_ip` | Query IP status (blocked, threat score, EWMA rate) | `ip` |
-| `block_ip` | Manually block an IP | `ip`, `reason`, `ttl_secs` |
-| `unblock_ip` | Remove a block | `ip` |
-| `get_ip_stats` | Detailed per-IP statistics | `ip` |
-| `get_stats` | Global server statistics | — |
-| `report_connection` | Single connection event | `ip`, `bytes`, `status_code`, `proto_fp` |
-| `report_connections` | Batch of connection events | `events: [ConnectionReport, ...]` |
-| `flush` | Force immediate batch flush (debug) | — |
-
-## Response types
-
-| Type | Description |
-|------|-------------|
-| `ip_status` | IP query result: blocked flag, threat score, EWMA rate, reason |
-| `ok` | Acknowledgement with message string |
-| `batch_ok` | Batch accepted/rejected counts |
-| `error` | Error with HTTP-style code (400, 404, 500, 503) and message |
-| `stats` | Server statistics: IPs tracked, blocked count, RAM usage, uptime, evictions |
-| `ip_detail` | Full per-IP detail: count, EWMA, threat, state, bytes, timestamps |
-
-## Message envelope
-
-All frames are wrapped in a `Message` envelope:
+### Message envelope
 
 ```rust
 pub struct Message {
@@ -51,16 +27,11 @@ pub enum Body {
     Request(Request),
     Response(Response),
 }
-
-impl Message {
-    pub fn request(req: Request) -> Self
-    pub fn response(resp: Response) -> Self
-}
 ```
 
-The version field enables forward-compatible protocol evolution. The `Body` enum discriminates request from response at the envelope level.
+The version field enables forward-compatible protocol evolution. Future versions can add fields without breaking existing clients.
 
-## Request and Response enums
+### Request types
 
 ```rust
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -75,102 +46,79 @@ pub enum Request {
     ReportConnections { events: Vec<ConnectionReport> },
     Flush,
 }
+```
 
-pub struct ConnectionReport {
-    pub ip: IpAddr,
-    pub bytes: u64,
-    pub status_code: u16,
-    pub proto_fp: u32,
-}
+`deny_unknown_fields` prevents silent acceptance of typos (e.g., a misspelled TTL field won't silently default to permanent block).
 
-pub struct Stats {
-    pub ips_tracked: usize,
-    pub blocked: u64,
-    pub ram_bytes: usize,
-    pub ram_limit_mb: usize,
-    pub uptime_secs: u64,
-    pub evictions: u64,
-}
+### Response types
 
-pub struct IpDetail {
-    pub ip: String,
-    pub count: u64,
-    pub ewma_rps: f64,
-    pub threat: f32,
-    pub state: String,
-    pub bytes_in: u64,
-    pub first_seen_s: u64,
-    pub last_seen_s: u64,
-}
-
+```rust
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
-    IpStatus { ip: String, blocked: bool, threat: f32, ewma_rps: f64, reason: Option<String> },
-    Ok { message: String, state: Option<String> },
-    BatchOk { accepted: u64, rejected: u64 },
-    Error { code: u32, message: String },
+    IpStatus { ip, blocked, threat, ewma_rps, reason },
+    Ok { message, state },
+    BatchOk { accepted, rejected },
+    Error { code: u32, message },
     Stats(Stats),
     IpDetail(IpDetail),
 }
 ```
 
-All types derive `Serialize` and `Deserialize` via serde. `deny_unknown_fields` on Request prevents field typos from being silently accepted (e.g., a wrong TTL field name can't accidentally block IPs permanently). The IPC server uses `serde_json` for framing; this crate is format-agnostic.
+### HMAC-SHA256 authentication
 
-## HMAC-SHA256 authentication
-
-Every frame can carry an `"auth"` envelope:
+Every frame can carry an auth envelope:
 
 ```json
 {
-  "auth": {
-    "key_id": "k1",
-    "ts_ms": 1725900000000,
-    "sig": "hex_hmac_sha256"
-  },
+  "auth": {"key_id": "k1", "ts_ms": 1725900000000, "sig": "hex_hmac"},
   "type": "report_connections",
   "events": [...]
 }
 ```
 
-The signature covers `<ts_ms>.<raw_json_without_auth>` — the timestamp is prepended to prevent signature reuse across frames. The server maintains a per-key `ReplayStore` (bounded LRU + 10s TTL) to reject replayed signatures.
-
-### auth module
-
 ```rust
 pub fn sign(key: &[u8], ts_ms: u64, payload: &[u8]) -> String
-pub fn verify(key: &[u8], ts_ms: u64, payload: &[u8], sig_hex: &str) -> Result<(), AuthError>
+pub fn verify(keys: &[(String, Vec<u8>)], key_id: &str, ts_ms: u64, sig_hex: &str, payload: &[u8], replay: Option<&ReplayStore>) -> Result<(), &'static str>
 ```
 
-`sign()` produces the hex-encoded HMAC. `verify()` recomputes and compares in constant time (via the `hmac` crate's `verify()` method). Timing attacks are neutralized.
+The signature covers `<ts_ms>.<raw_json_without_auth>`. Timestamp prevents replay across frames. `verify()` uses constant-time comparison (XOR-diff loop) to prevent timing attacks.
 
 ### ReplayStore
 
 ```rust
 pub struct ReplayStore { ... }
 impl ReplayStore {
-    pub fn new(capacity: usize) -> Self
-    pub fn insert_if_new(&self, key_id: &str, ts_ms: u64, sig: &str) -> bool
+    pub fn new(capacity: usize, ttl: Duration) -> Self
+    pub fn check_and_record(&self, key_id: &str, nonce: &[u8]) -> Result<(), &'static str>
 }
 ```
 
-`insert_if_new()` returns `true` if the nonce is fresh, `false` if already seen. The LRU evicts oldest entries when capacity is reached. TTL expiry happens lazily on access (no background thread).
-
-## Protocol version
-
-```rust
-pub const PROTOCOL_VERSION: u32 = 1;
-```
-
-Included in the `stats` response so clients can detect version mismatches. Future protocol changes will bump this constant and gate new fields behind version checks.
+Per-key LRU nonce store. 1024 entries, 65s TTL (2× MAX_CLOCK_SKEW + 5s). `check_and_record()` returns `Err` if the nonce was already seen within the TTL window. Prevents an attacker from capturing and re-sending a valid frame.
 
 ## Dependencies
 
-`serde`, `serde_json`, `hmac`, `sha2`, `hex` — all lightweight, audited crates. No async runtime required; the protocol layer is pure data manipulation.
+```
+ramshield-protocol
+  ← serde, serde_json, hmac, sha2, hex, ahash
 
-## Tests
+Used by:
+  → ramshield-detection (ConnectionEvent from ConnectionReport)
+  → ramshield-enforcement (EnforceCommand from BlockIp/UnblockIp)
+  → src/ipc/server.rs (parse requests, verify auth, format responses)
+  → src/cli.rs (sign requests, format commands)
+```
 
-- Serde round-trip for every Request and Response variant.
-- HMAC sign → verify round-trip with valid and invalid keys.
-- Replay detection: same nonce rejected on second call.
-- Frame size limits: oversized payloads are caught before deserialization.
-- Malformed JSON: graceful error response, no panic.
+Leaf crate — no RamShield-internal dependencies. The IPC server imports this crate's types directly.
+
+## Key constants
+
+```rust
+pub const PROTOCOL_VERSION: u16 = 1;
+pub const MAX_CLOCK_SKEW_MS: u64 = 30_000;
+```
+
+## What to read next
+
+- `src/ipc/server.rs` — implements the TCP server using these types
+- `src/cli.rs` — command-line client using these types
+- `docs/IPC.md` — human-readable protocol documentation
