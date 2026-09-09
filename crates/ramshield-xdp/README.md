@@ -1,60 +1,68 @@
 # ramshield-xdp
 
-## Problem
+## Why it exists
 
-Userspace IP blocking (writing to a store, checking on every connection) has overhead: syscall per check, context switches, memory copies. For high-traffic servers handling millions of packets per second, this overhead adds up. XDP (eXpress Data Path) runs a BPF program directly in the NIC driver, before packets enter the kernel's network stack. A blocked IP's packets are dropped at the driver level — zero syscall overhead, zero context switches, zero memory copies.
+This crate is a build artifact container. It compiles a BPF program (written in C or Rust) into an ELF binary at build time, then exports it as a static byte slice. The actual loading, attaching to a network interface, and map management happens in `ramshield-enforcement::xdp::AyaXdpApplier`.
 
-## How it works
+This separation exists because BPF compilation requires `clang` and `llvm-strip` at build time — tools that aren't always available on the target machine. By isolating the compilation into its own crate, the rest of the workspace compiles cleanly even without BPF toolchain. The `xdp` feature flag controls whether this crate is included.
 
-This crate is a **build artifact** — it compiles a C eBPF program and exports it as a static byte slice. It contains zero runtime logic.
-
-### Build time
-
-`build.rs` compiles `src/xdp_shield.bpf.c` using `aya-ebpf` and `bpf-linker`:
+## What it does
 
 ```rust
-// build.rs output:
-pub static BPF_ELF: &[u8] = aya::include_bytes_aligned!("ramshield-xdp");
+pub static BPF_ELF: &[u8] = aya::include_bytes_aligned!(
+    concat!(env!("OUT_DIR"), "/ramshield-xdp")
+);
 ```
 
-### Runtime (consumed by ramshield-enforcement)
+That's the entire public API. One static byte slice containing the compiled BPF ELF. `build.rs` compiles the BPF source, strips it, and places it in `OUT_DIR`. The `aya` crate's `include_bytes_aligned!` macro loads it at compile time with correct alignment for BPF map access.
 
-The `ramshield-enforcement` crate's `AyaXdpApplier` loads this byte slice:
+## How it's consumed
+
+`ramshield-enforcement` is the sole consumer:
 
 ```rust
-let mut bpf = aya::Bpf::load(ramshield_xdp::BPF_ELF)?;
-// Attach to NIC, update BLOCKED_IPS map
+// In ramshield-enforcement::xdp
+pub struct AyaXdpApplier { ... }
+
+impl AyaXdpApplier {
+    pub fn load_and_attach(&mut self) -> Result<(), EnforcementError> {
+        let mut bpf = aya::Bpf::load(ramshield_xdp::BPF_ELF)?;
+        // ... attach to interface, get blocklist map
+    }
+}
 ```
 
-### BPF program behavior
+The enforcement crate also defines the BPF map types (`BlocklistKey`, `BlocklistValue`) that the kernel program reads. This keeps the type definitions next to the code that writes to them — one source of truth, no drift between the BPF program and the userspace writer.
 
-```
-NIC receives packet
-    → XDP program inspects source IP
-    → Lookup in BLOCKED_IPS (v4) or BLOCKLIST6 (v6) hashmap
-    → Match: XDP_DROP (130) — packet discarded, ~200 cycles
-    → No match: XDP_PASS (2) — packet enters normal stack
-```
+## BPF Program Behavior
 
-Two separate BPF maps for v4/v6 prevent variable-width key issues in the kernel verifier.
+The compiled kernel program runs on every incoming packet at the XDP hook point (before the kernel's network stack). It:
+
+1. Extracts the source IP from the packet header.
+2. Hashes it into the blocklist map.
+3. If the IP is in the map, drops the packet (returns `XDP_DROP`).
+4. If not, passes it through (returns `XDP_PASS`).
+
+This happens in kernel space — no context switch to userspace, no memory copies. For blocked IPs, the packet is dropped before any kernel processing (no socket allocation, no TCP state machine, no buffer allocation).
+
+## Uniqueness
+
+**Build artifact, not a runtime component.** This crate does nothing at runtime. It exists solely to isolate the BPF compilation step — a build-time concern — from the rest of the workspace. The 9 lines of Rust are a delivery mechanism for a binary artifact.
+
+**Fail-open design.** If the BPF program fails to load (wrong kernel, missing permissions), `AyaXdpApplier::load_and_attach()` returns an error. The enforcement service catches this and falls back to in-band enforcement (Store-based blocking). The system degrades gracefully — slower but functional.
 
 ## Dependencies
 
-```
-ramshield-xdp
-  ← aya (include_bytes_aligned! macro)
-  ← aya-ebpf, bpf-linker (build-time only)
+**Reads from:** `aya` (BPF loading, `include_bytes_aligned!`).
 
-Used by:
-  → ramshield-enforcement::AyaXdpApplier (loads BPF_ELF)
-```
+**Written by:** nothing at runtime.
 
-The `elf` feature gates compilation. Without it, the crate is empty — useful for development on machines without BPF toolchain.
+**Read by:** `ramshield-enforcement::xdp::AyaXdpApplier` (sole consumer).
 
-## Requirements
+## Benchmarks
 
-- Linux kernel ≥ 5.15
-- `bpf-linker` in PATH
-- Capabilities: `cap_net_admin`, `cap_bpf`, `cap_perfmon`
+No benchmarks — this crate has no runtime code. Kernel-side packet processing benchmarks would require a live XDP environment and are planned for a future phase.
 
-Without capabilities, enforcement falls back to Store-only blocking.
+## Testing
+
+No unit tests — the crate's correctness is verified by `ramshield-enforcement` integration tests that load the BPF program and verify block/unblock behavior through the `AyaXdpApplier`.

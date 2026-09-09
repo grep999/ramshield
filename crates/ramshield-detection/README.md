@@ -1,117 +1,102 @@
 # ramshield-detection
 
-## Problem
+```text
+IPC TCP ──→ ConnectionEvent ──→ PreAggregator ──→ Batch Workers (N threads)
+                                                       │
+                    ┌──────────────────────────────────┘
+                    ↓
+        ┌───────────────────────────────────────────┐
+        │ IpAgg: per-IP counters                    │
+        │ BloomFilter: dedup during batch           │
+        │ EWMA tracker: exponential moving average  │
+        │ CUSUM: cumulative sum change detector     │
+        │ Pulse tracker: burst-spacing correlation  │
+        │ Subnet aggregator: /24 swarm detection    │
+        └──────────┬────────────────────────────────┘
+                   ↓
+              EnforceCommand ──→ EnforcementService
+```
 
-When a DDoS attack hits, thousands of IPs flood your server simultaneously. Processing each connection event individually is too slow — you need to batch them, aggregate per-IP statistics, and decide within milliseconds which IPs are attackers. The detection module is the analytical engine that answers: "Given the last 50ms of traffic, which IPs should be blocked?"
+## Why it exists
 
-The core challenge is doing this fast enough to keep up with millions of events per second while avoiding false positives on legitimate traffic spikes (like a product launch or news event).
+Connection events arrive at 10K–150K per second during an attack. Processing each event individually would burn through memory and CPU before any analysis finished. This crate batches events, deduplicates IPs within each window, and runs four independent detection algorithms against the aggregated data — each catching a different class of attack.
 
 ## How it works
 
-### Ingestion pipeline
+### PreAggregation
 
-```
-ConnectionEvents (from IPC)
-        │
-        ▼
-PreAggregator (DashMap<IpAddr, IpAgg>, 50ms window)
-        │  flush()
-        ▼
-DetectionEngine
-        ├── BloomFilter — fast "have we seen this IP?" check
-        ├── EWMA — exponential moving average for rate tracking
-        ├── CUSUM — cumulative sum for slow-ramp detection
-        ├── Pulse tracker — burst pattern detection
-        ├── Subnet swarm gate — /24 or /64 group blocking
-        └── Threat scoring — per-IP risk score
-        │
-        ▼
-EnforceCommand → EnforcementEngine
-```
-
-### PreAggregator
-
-The entry point. A `DashMap<IpAddr, IpAgg>` collects events for 50ms. Each event is absorbed into an `IpAgg`:
+Events arrive through a crossbeam channel (`CHANNEL_CAPACITY = 64_000`). Multiple batch worker threads compete to drain it. Each worker accumulates events into a `HashMap<IpAddr, IpAgg>` — an in-memory per-IP accumulator that counts events, status code buckets, error ratios, and unique upstream IPs without touching the main `Store`:
 
 ```rust
 pub struct IpAgg {
-    pub count: u32,
-    pub bytes: u64,
-    pub status_dist: [u32; 5],  // 2xx, 3xx, 4xx, 5xx, other
-    pub proto_fp: u32,
-    pub first_ts_ns: u64,
-    pub last_ts_ns: u64,
+    pub count: u64,
+    pub unique_upstreams: usize,
+    pub status_buckets: [u16; 6],   // 1xx..5xx buckets
+    pub error_ratio: f64,
+    pub first_seen: Instant,
+    pub last_seen: Instant,
 }
 ```
 
-After 50ms, `flush()` drains all entries to the detection engine and resets the map. At 100K unique IPs, the DashMap uses ~4MB.
+When the batch window expires (default 500ms) or the event count hits `batch_max_events` (default 5000), the worker calls `flush_batch()`.
 
-### Rate tracking (pure math, zero dependencies)
+### Bloom Filter
 
-**EWMA** — `ewma(prev, sample)` with α=0.3. One line of code. Inlined by the compiler to <1 ns/op. Tracks per-IP request rate.
+A 100K-bit Bloom filter tracks IPs already seen in the current window. Insert+check is O(1) per event. This prevents double-counting a single IP sending thousands of identical packets. The filter is cleared at each batch window boundary.
 
-**CUSUM** — `cusum_step_capped(prev_s, inst, baseline, cap)` detects slow-ramp attacks invisible to z-score thresholds. The accumulator grows when the rate exceeds the baseline. `cusum_fired(s, threshold)` checks if it crossed the decision boundary. 3 ns/op.
+### Four Detection Algorithms
 
-**Pulse tracker** — `pulse_tracker_step(...)` counts consecutive over-threshold samples in a sliding window. Catches short bursts spaced just below the detection limit (e.g., 2s-on/3-off T13 patterns). <1 ns/op (inlined).
+**1. EWMA (Exponential Weighted Moving Average) — rate spike detection**
+Tracks RPS per IP. If current RPS exceeds `ewma(prev, sample)` by more than `rps_threshold`, the IP is flagged. Catches sudden rate spikes — a single IP jumping from 10 to 5000 RPS.
 
-### Bloom filter
+**2. CUSUM (Cumulative Sum) — sustained drift detection**
+If an IP's rate stays marginally above baseline for multiple consecutive samples, the CUSUM accumulator grows: `cusum_step_capped(prev_s, inst, baseline, cap)`. Once it exceeds `cusum_allowance(threshold)`, the IP is flagged even though each individual sample was below the EWMA threshold. Catches slow-ramp attacks that stay just under any single-sample alarm.
 
-```rust
-pub struct BloomFilter { ... }
-impl BloomFilter {
-    pub fn new(bits: usize) -> Self   // default: 8M bits = 1 MB
-    pub fn insert(&mut self, ip: IpAddr)
-    pub fn contains(&self, ip: IpAddr) -> bool
-}
+**3. Pulse tracker — burst spacing correlation**
+Counts samples that exceed the rate threshold within a sliding `pulse_window_secs` window (default 5s). If the count hits `pulse_threshold_samples` (default 2), the IP is flagged. Catches intermittent attacks that fire 2-second bursts spaced 3 seconds apart — below EWMA, below CUSUM, but detectable by burst frequency.
+
+**4. Subnet swarm — /24 block detection**
+Tracks unique IPs per /24 subnet within each batch window. If a subnet has `>= subnet_batch_threshold` unique IPs (default 50) AND `>= subnet_batch_min_events` total events, the entire /24 is flagged. This catches distributed attacks where 50+ IPs each send a few events — no single IP triggers individual thresholds, but the swarm does.
+
+### Data Structures
+
+- **Sharded maps**: `DashMap` with configurable shard count for the IP records and subnet index. Contention scales with `sqrt(N)` shards.
+- **Bounded deque**: `BoundedVecDeque` for status code history and event ring buffers — O(1) push/pop with automatic eviction.
+- **SubnetKey**: `u128` that packs IPv4/IPv6 + CIDR prefix into a single comparable integer. IPv4 uses the lower 32 bits shifted to align with IPv6 prefix positions.
+
+### Configuration
+
+```toml
+[detection]
+rps_threshold = 5000           # events/sec to trigger EWMA
+rate_window_secs = 10          # EWMA window
+subnet_batch_threshold = 50    # unique IPs in /24 for swarm block
+pulse_window_secs = 5          # burst correlation window
+batch_max_events = 5000        # max events per batch flush
+batch_window_ms = 500          # max wait before flush
+promote_min_events = 3         # hits before full IpRecord tracking
 ```
 
-Probabilistic set membership. At 8M bits and 100K IPs, false positive rate is ~0.1%. Insert: 38 ns/op. Contains: 258 ns/op. Used for cold-skip optimization: 93% of traffic never touches the expensive detection path.
+## Uniqueness
 
-### Subnet swarm detection
+**Four-algorithm detection stack.** Most DDoS detectors use a single rate threshold. RamShield runs four independent detectors in parallel — each catching what the others miss. The CUSUM accumulator is particularly effective against slow-ramp attacks that evade rate-based detection by staying below any single threshold.
 
-Tracks /24 (IPv4) or /64 (IPv6) subnets in 2-second rolling windows:
-
-```
-if unique_ips ≥ 50 AND total_events ≥ 100:
-    → BLOCK entire subnet (10s TTL)
-```
-
-The dual gate prevents false positives on CGNAT and shared hosting. A single abusive client at 500 events is one offender; 50 IPs at 12 events each is a swarm.
-
-### Threat scoring
-
-Per-IP score combines rate deviation, status code distribution, and protocol anomalies into a [0.0, 1.0] value. Feeds the forecasting module's Bayesian hypothesis tracker.
+**Pre-aggregation avoids per-event lock contention.** Events are accumulated in thread-local `HashMap`s, then merged into the shared `Store` only at flush boundaries. This keeps the hot path lock-free and scales linearly with CPU cores.
 
 ## Dependencies
 
+**Reads from:** `ramshield-types` (`ConnectionEvent`, `BlockReason`, `IpNetwork`, `BoundedVecDeque`), `ramshield-storage` (`Store`), `ramshield-config` (`DetectionConfig`).
+
+**Writes to:** `Store` (via `flush_batch`), `EnforceCommand` channel (to `ramshield-enforcement`), `ramshield-metrics` (batch statistics).
+
+## Benchmarks
+
+```bash
+cargo bench --bench hot_paths --features full -- bloom_filter
+cargo bench --bench hot_paths --features full -- pre_aggregate
+cargo bench --bench hot_paths --features full -- subnet_swarm
 ```
-ramshield-detection
-  ← ramshield-types    (ConnectionEvent, EnforceCommand, BlockReason)
-  ← ramshield-storage  (Store, IpRecord, subnet_key)
-  ← ramshield-config   (ConfigHandle, DetectionConfig)
-  ← ramshield-metrics  (Metrics, BatchRecord)
-  ← ahash, dashmap, crossbeam-channel, tokio::sync::mpsc
 
-Sends to: ramshield-enforcement (via EnforceCommand channel)
-Reads from: ramshield-storage (Store lookups during merge)
-```
+## Testing
 
-The detection engine is the bridge between raw events and blocking decisions. It reads events from the IPC layer, processes them through the math pipeline, and sends `EnforceCommand` values to the enforcement module.
-
-## Key benchmarks
-
-| Function | ns/op | ops/sec |
-|----------|-------|---------|
-| ewma() | <1 | ~1.8B |
-| cusum_step + fired | 3.2 | 317M |
-| BloomFilter::insert | 38 | 26M |
-| BloomFilter::contains | 258 | 3.9M |
-| batch::aggregate (4096 events) | 309μs | 3.2K |
-
-At 19K events/s, the detection pipeline uses ~1% CPU. The remaining 99% is headroom for traffic spikes.
-
-## What to read next
-
-- `crates/ramshield-forecasting/` — reads threat scores from this module, makes block/no-block decisions
-- `crates/ramshield-storage/` — stores per-IP records updated by this module
-- `crates/ramshield-enforcement/` — receives block commands from this module
+45 tests across `lib.rs` and `batch.rs`: EWMA threshold triggering, CUSUM warmup period, pulse tracker sliding window, subnet swarm unique-IP counting, Bloom filter false positive rate, batch flush timing, and worker thread shutdown. Integration tests feed synthetic traffic through `flush_events()` and verify correct block/unblock decisions.

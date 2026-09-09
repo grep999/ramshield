@@ -1,103 +1,117 @@
 # ramshield-enforcement
 
-## Problem
+```text
+EnforceCommand (from detection/forecasting)
+           │
+           ↓
+    EnforcementService::run()  ←── tokio mpsc::channel(4096)
+           │
+    ┌──────┴──────┐
+    ↓             ↓
+ Store.update   XdpApplier.apply
+    │               │
+    ↓               ↓
+ WAL.append    XDP kernel map
+    │
+    ↓
+ TTL ring scheduler (auto-unblock after TTL)
+```
 
-The detection and forecasting modules produce decisions: "block this IP" or "unblock this IP." But a decision sitting in memory is useless — it needs to survive crashes, propagate to the kernel's packet filter, and be deduplicated so the same IP isn't blocked twice. The enforcement module is the bridge between a detection decision and actual traffic blocking.
+## Why it exists
 
-Without this module, a server restart would lose all block state. Without WAL persistence, a crash mid-attack would leave the server wide open.
+Detection and forecasting produce decisions — "block this IP for 3600 seconds" or "unblock it now." But a decision sitting in memory is worthless. This crate executes those decisions: writes them to the WAL (crash safety), applies them to the Store (in-memory state), pushes them to XDP (kernel-level packet drop), and schedules automatic unblocking after the TTL expires. Without enforcement, detection is just expensive logging.
 
 ## How it works
 
-### EnforcementService (actor pattern)
+### EnforcementService
 
-The enforcement layer is a single-writer actor. All block/unblock commands flow through a `tokio::sync::mpsc` channel to one `EnforcementService` that serializes every mutation. This eliminates race conditions between concurrent detection and forecasting decisions.
-
-```
-EnforceCommand (from detection or forecasting)
-        │
-        ▼
-EnforcementService::run()  ← main event loop
-        │
-        ├── enforce(cmd)
-        │     ├── Store::update_ip() — set block_state
-        │     ├── blocked_set — update reverse index
-        │     ├── Wal::append() — persist for crash recovery
-        │     └── XdpApplier::apply_block() — kernel BPF map update
-        │
-        └── expire_due() — TTL ring drain (O(due), not O(all))
-```
-
-### TTL ring (bucketed priority queue)
-
-Blocked IPs have optional time-to-live values. The enforcement service maintains a `BTreeMap<u64, Vec<IpAddr>>` where keys are second-bucket deadlines. Expiry drains only past-due buckets — O(due) instead of O(all-blocked). This matters when thousands of IPs are blocked simultaneously.
-
-### Decision deduplication
-
-Each `EnforceCommand` carries a UUID `decision_id`. The service tracks a 65K-entry LRU of seen IDs. Duplicate commands (e.g., from WAL replay after a crash) return `EnforceResult { applied: false }` instead of double-counting.
-
-### WAL crash recovery
-
-On startup, `replay_wal_into_store()` reads all WAL records sequentially:
-1. Block records → re-apply the block (skip if TTL expired).
-2. Unblock records → remove the block.
-3. Return remaining TTL pairs for re-arming the expiry ring.
-
-WAL replay is idempotent — applying the same block twice is caught by dedup.
-
-### XDP integration (optional, feature-gated)
-
-The `XdpApplier` trait abstracts kernel-level blocking:
+An actor that runs on a dedicated tokio task. It receives `EnforceCommand`s through an `mpsc::channel(4096)` — large enough to buffer burst decisions during an attack without backpressure blocking detection:
 
 ```rust
-#[async_trait]
-pub trait XdpApplier {
-    async fn apply_block(&mut self, ip: IpAddr, decision_id: Uuid) -> Result<()>;
-    async fn apply_unblock(&mut self, ip: IpAddr, decision_id: Uuid) -> Result<()>;
-    async fn reconcile(&mut self, expected: &[IpAddr]) -> Result<ReconciliationState>;
+pub struct EnforcementService {
+    store: Arc<Store>,
+    metrics: Arc<Metrics>,
+    xdp: Box<dyn XdpApplier>,
+    wal: Option<Arc<Wal>>,
+    processed_decisions: HashSet<Uuid>,     // dedup by decision_id
+    processed_order: VecDeque<Uuid>,        // LRU eviction for dedup set
+    blocked_ips: HashSet<IpAddr>,           // current block state
+    expirations: HashMap<IpAddr, Instant>,  // TTL expiry timestamps
+    buckets: BTreeMap<Instant, Vec<IpAddr>>, // time-bucketed expiration
+    epoch: Instant,
+    shutdown: Arc<AtomicBool>,
 }
 ```
 
-Two implementations:
-- `AyaXdpApplier` — loads the BPF ELF from `ramshield-xdp`, attaches to a NIC, writes to `BLOCKED_IPS` / `BLOCKLIST6` hashmaps. IPv4 uses packed u32 keys; IPv6 uses u128 keys.
-- `StubXdpApplier` — no-ops everything. Used when XDP is disabled or capabilities are missing.
+### Decision Processing
 
-Design: XDP errors are **non-fatal** (fail-open). If the kernel rejects a map update, the Store-level block is still committed. This prevents XDP permission issues from disabling all blocking.
+Every incoming command is checked against `processed_decisions` — a `HashSet` that deduplicates by `decision_id`. This prevents the same block decision from being applied twice if detection fires multiple times in rapid succession (the `processed_order` `VecDeque` evicts the oldest entries when the set exceeds 65K).
+
+Processing path:
+
+1. **Block command**: `store.update_ip()` sets `BlockState::Blocked`, then `wal.append()` writes the decision, then `xdp.apply_block()` pushes to the kernel XDP map. If the XDP interface is unavailable, enforcement degrades to in-band only — the Store's `blocked_set` is still updated, and IPC responses still report blocked status.
+
+2. **Unblock command**: `store.update_ip()` sets `BlockState::Unblocked`, `wal.append()` records the unblock, `xdp.apply_unblock()` removes from XDP, and the expiration entry is removed.
+
+### TTL Ring
+
+Block decisions include a `ttl_secs` field. When a block is applied, `schedule_expiration(ip, instant)` places the IP into a time-bucketed `BTreeMap<Instant, Vec<IpAddr>>`. A background loop wakes every second, checks the earliest bucket, and issues unblock commands for any IPs whose TTL has elapsed.
+
+The ring uses `Instant::now()` (monotonic clock) — not `SystemTime` — so NTP adjustments don't cause premature or delayed unblocks.
+
+### WAL Replay
+
+On startup, `replay_wal_into_store()` reads the WAL and replays all block entries into the Store. It returns pairs of `(IpAddr, remaining_secs)` — IPs that were blocked at crash time with their remaining TTL. `restore_expirations()` reschedules these in the TTL ring, so blocking survives daemon restarts.
+
+### XdpApplier Trait
+
+The kernel XDP interface is abstracted behind a trait — enabling testing without root privileges:
+
+```rust
+pub trait XdpApplier: Send + Sync {
+    fn apply_block(&self, ip: IpAddr) -> Result<(), EnforcementError>;
+    fn apply_unblock(&self, ip: IpAddr) -> Result<(), EnforcementError>;
+    fn reconcile(&self, blocked: &HashSet<IpAddr>) -> Result<(), EnforcementError>;
+}
+```
+
+Two implementations exist:
+- `StubXdpApplier`: no-op, used in tests and when XDP is disabled.
+- `AyaXdpApplier`: loads the compiled BPF program from `ramshield-xdp::BPF_ELF`, attaches to a network interface via `aya`, and maintains a hash map of blocked IPs that the kernel program checks on every packet.
+
+### Block Reasons
+
+```rust
+pub enum BlockReason {
+    RateLimit,     // EWMA threshold exceeded
+    SubnetBurst,   // subnet swarm gate fired
+    PulseWave,     // burst-spacing correlation
+    Manual,        // operator-initiated via IPC
+}
+```
+
+Each reason maps to a stable string (`"rate_limit"`, `"subnet_burst"`, `"pulse_wave"`, `"manual"`) for wire protocol and Prometheus labels.
+
+## Uniqueness
+
+**Deduplication prevents block storms.** During a DDoS, detection may fire the same block decision hundreds of times per second. The `processed_decisions` HashSet ensures each `decision_id` is applied exactly once — preventing redundant XDP map writes and WAL appends that would consume disk and CPU.
+
+**Time-bucketed TTL ring.** Most TTL systems scan the full expiration map every second. This one groups IPs by expiry time in a `BTreeMap` — checking only the earliest bucket. When thousands of IPs share the same TTL (common in subnet blocks), the scan is O(1) instead of O(N).
+
+**Graceful degradation.** If XDP fails to load (wrong kernel, missing permissions), enforcement falls back to in-band mode — the Store still tracks blocks, IPC still reports them, only the kernel-level packet drop is lost. The daemon runs degraded but functional.
 
 ## Dependencies
 
-```
-ramshield-enforcement
-  ← ramshield-types    (EnforceCommand, EnforceResult, BlockReason)
-  ← ramshield-storage  (Store, Wal)
-  ← ramshield-metrics  (Metrics — record_block)
-  ← ramshield-xdp      (BPF_ELF — optional, feature-gated)
-  ← aya, ahash, tokio, uuid, async-trait, thiserror, anyhow
+**Reads from:** `ramshield-types` (`EnforceCommand`, `EnforceAction`, `BlockReason`, `IpNetwork`), `ramshield-storage` (`Store`, `Wal`), `ramshield-metrics` (`Metrics`), `ramshield-config` (for WAL config).
 
-Receives from: ramshield-detection, ramshield-forecasting
-  (via EnforceCommand channel)
-Sends to: ramshield-storage (Store mutations)
-         ramshield-xdp (kernel BPF map updates)
-```
+**Written by:** `ramshield-detection` (sends `EnforceCommand` via channel), `ramshield-forecasting` (sends `EnforceCommand` via channel).
 
-## Key types
+**Read by:** `ramshield-dashboard` (block log), `ramshield-metrics` (block counters).
 
-```rust
-pub struct EnforcementService { ... }  // actor, owns all mutable state
-pub trait XdpApplier { ... }           // kernel dataplane abstraction
-pub struct AyaXdpApplier { ... }       // real eBPF implementation
-pub struct StubXdpApplier { ... }      // no-op fallback
-pub struct EnforceResult {
-    pub decision_id: Uuid,
-    pub committed: bool,     // WAL written
-    pub applied: bool,       // Store changed
-    pub xdp_applied: bool,   // kernel updated
-    pub error: Option<String>,
-}
-```
+## Benchmarks
 
-## What to read next
+No standalone benchmarks — enforcement latency is measured end-to-end in `benches/hot_paths.rs` through the Store update path. XDP map operations are measured separately in kernel-space benchmarks (not yet implemented).
 
-- `crates/ramshield-detection/` — produces the EnforceCommands this module consumes
-- `crates/ramshield-forecasting/` — also produces EnforceCommands
-- `crates/ramshield-xdp/` — the BPF ELF loaded by AyaXdpApplier
-- `crates/ramshield-storage/` — the Store and WAL this module writes to
+## Testing
+
+28 tests covering: dedup by decision_id, TTL ring expiry timing, WAL replay round-trip, `StubXdpApplier` mock behavior, concurrent block+unblock race conditions, and graceful degradation when XDP is unavailable.
