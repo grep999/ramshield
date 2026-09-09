@@ -5,8 +5,8 @@
 //! Last resort: empty ELF-looking stub so host `cargo check` still compiles
 //! userspace without a BPF toolchain. Runtime load() fails on the stub.
 //!
-//! ponytail: drop the stub when bpf-linker matches host LLVM (needs LLVM 21 APIs;
-//! Ubuntu noble ships LLVM 18). Upgrade: cargo install bpf-linker against matching llvm-sys.
+// ponytail: bpf-linker installed as prebuilt musl static binary (~/.local/bin/bpf-linker).
+// The C fallback (try_clang_c) can be deleted once the Rust aya-ebpf path is proven in CI.
 
 use std::env;
 use std::fs;
