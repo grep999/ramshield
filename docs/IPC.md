@@ -2,7 +2,7 @@
 
 Wire format: newline-delimited JSON over TCP. One JSON `Request` per line, one JSON `Response` per line. Server is `src/engine/mod.rs::ipc_server`; framing handled by `conn_handler`.
 
-Transport: TCP, address from `engine.ipc.tcp_addr`, max concurrent connections from `engine.max_connections`.
+Transport: TCP, address from `ipc.tcp_addr`, max concurrent connections from `ipc.max_connections`.
 
 ## Requests (`tag = "type"`, snake_case)
 

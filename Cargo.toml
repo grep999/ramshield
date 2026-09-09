@@ -35,6 +35,11 @@ path = "src/cli.rs"
 name = "ramshield"
 path = "src/lib.rs"
 
+[[bench]]
+name = "hot_paths"
+path = "benches/hot_paths.rs"
+harness = false
+
 [features]
 default = []
 full = ["tokio/full", "tracing-subscriber/env-filter", "tracing-subscriber/fmt", "tower-http/cors", "clap/derive", "xdp"]
