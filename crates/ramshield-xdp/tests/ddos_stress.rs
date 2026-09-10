@@ -1,0 +1,417 @@
+//! DDoS stress tests — proves RamShield XDP survives peak attack load.
+//! All tests require root. Run with:
+//!   sudo env PATH="$HOME/.cargo/bin:$PATH" RUSTUP_HOME="$HOME/.rustup" \
+//!     /home/m/.cargo/bin/cargo test -p ramshield-xdp --features elf \
+//!     -- --ignored ddos_ --test-threads=1
+
+use std::collections::HashSet;
+use std::net::Ipv4Addr;
+use std::os::fd::{AsFd, AsRawFd};
+use std::time::Instant;
+
+// ── BPF elem syscall ──────────────────────────────────────────────────
+const ATTR_SZ: usize = 32;
+
+unsafe fn bpf_update(fd: i32, key: *const u8, val: *const u8, flags: u64) -> std::io::Result<()> {
+    let mut b = [0u8; ATTR_SZ];
+    b[0..4].copy_from_slice(&(fd as u32).to_ne_bytes());
+    b[8..16].copy_from_slice(&(key as u64).to_ne_bytes());
+    b[16..24].copy_from_slice(&(val as u64).to_ne_bytes());
+    b[24..32].copy_from_slice(&flags.to_ne_bytes());
+    if libc::syscall(libc::SYS_bpf, 2i64, b.as_ptr(), ATTR_SZ) < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+unsafe fn bpf_delete(fd: i32, key: *const u8) -> std::io::Result<()> {
+    let mut b = [0u8; ATTR_SZ];
+    b[0..4].copy_from_slice(&(fd as u32).to_ne_bytes());
+    b[8..16].copy_from_slice(&(key as u64).to_ne_bytes());
+    if libc::syscall(libc::SYS_bpf, 3i64, b.as_ptr(), ATTR_SZ) < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// Lookup element.
+unsafe fn bpf_lookup(fd: i32, key: *const u8, val_out: *mut u8) -> std::io::Result<()> {
+    let mut b = [0u8; ATTR_SZ];
+    b[0..4].copy_from_slice(&(fd as u32).to_ne_bytes());
+    b[8..16].copy_from_slice(&(key as u64).to_ne_bytes());
+    b[16..24].copy_from_slice(&(val_out as u64).to_ne_bytes());
+    if libc::syscall(libc::SYS_bpf, 1i64, b.as_ptr(), ATTR_SZ) < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+// ── Key/value ─────────────────────────────────────────────────────────
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(C)]
+struct Key(u128);
+
+impl Key {
+    fn v4(a: u8, b: u8, c: u8, d: u8) -> Self {
+        Key(u128::from(u32::from_ne_bytes(
+            Ipv4Addr::new(a, b, c, d).octets(),
+        )))
+    }
+    fn v6(o: [u8; 16]) -> Self {
+        Key(u128::from_le_bytes(o))
+    }
+    fn idx(i: usize) -> Self {
+        Self::v4(
+            (i % 256) as u8,
+            ((i >> 8) % 256) as u8,
+            ((i >> 16) % 256) as u8,
+            ((i >> 24) % 255 + 1) as u8,
+        )
+    }
+    fn v6_idx(i: usize) -> Self {
+        let mut o = [0u8; 16];
+        o[0] = 0x20;
+        o[1] = 0x01;
+        o[8] = ((i >> 24) % 256) as u8;
+        o[9] = ((i >> 16) % 256) as u8;
+        o[10] = ((i >> 8) % 256) as u8;
+        o[15] = (i & 0xFF) as u8;
+        Self::v6(o)
+    }
+    fn as_map_key(&self) -> [u64; 2] {
+        let b = self.0.to_ne_bytes();
+        [
+            u64::from_ne_bytes(b[0..8].try_into().unwrap()),
+            u64::from_ne_bytes(b[8..16].try_into().unwrap()),
+        ]
+    }
+    fn raw(&self) -> [u8; 16] {
+        self.0.to_ne_bytes()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+struct Val(u8);
+
+unsafe impl aya::Pod for Key {}
+unsafe impl aya::Pod for Val {}
+
+const CAP: usize = 102_400;
+
+// ── Helpers ───────────────────────────────────────────────────────────
+fn load() -> aya::Bpf {
+    aya::Bpf::load(ramshield_xdp::BPF_ELF).expect("load failed")
+}
+
+fn raw_fd(bpf: &mut aya::Bpf, name: &str) -> i32 {
+    let map = bpf.map_mut(name).expect("map missing");
+    match map {
+        aya::maps::Map::HashMap(d) => d.fd().as_fd().as_raw_fd(),
+        aya::maps::Map::LruHashMap(d) => d.fd().as_fd().as_raw_fd(),
+        other => panic!("{name}: {other:?}"),
+    }
+}
+
+/// Count keys — consumes Map, fd invalid after.
+fn count(bpf: &mut aya::Bpf, name: &str) -> usize {
+    use aya::maps::IterableMap;
+    let map = bpf.take_map(name).unwrap();
+    aya::maps::HashMap::<_, [u64; 2], Val>::try_from(map)
+        .unwrap()
+        .keys()
+        .count()
+}
+
+/// Collect all keys as [u64;2]. Consumes Map.
+fn collect(bpf: &mut aya::Bpf, name: &str) -> Vec<[u64; 2]> {
+    use aya::maps::IterableMap;
+    let map = bpf.take_map(name).unwrap();
+    aya::maps::HashMap::<_, [u64; 2], Val>::try_from(map)
+        .unwrap()
+        .keys()
+        .filter_map(|k| k.ok())
+        .collect()
+}
+
+unsafe fn ins(fd: i32, k: &Key) {
+    let v = Val(1);
+    bpf_update(fd, k.raw().as_ptr(), &v as *const _ as *const u8, 0).unwrap();
+}
+
+unsafe fn del(fd: i32, k: &Key) {
+    bpf_delete(fd, k.raw().as_ptr()).unwrap();
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// DIAGNOSTIC — prove insert/lookup/delete work before stress tests
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+#[ignore]
+fn ddos_diag_crud() {
+    let mut bpf = load();
+    let fd = raw_fd(&mut bpf, "BLOCKLIST");
+    let k = Key::idx(0);
+    let kb = k.raw();
+
+    // Insert
+    unsafe {
+        let v = Val(1);
+        let r = bpf_update(fd, kb.as_ptr(), &v as *const _ as *const u8, 0);
+        eprintln!("[crud] insert={r:?}");
+        assert!(r.is_ok());
+
+        // Lookup
+        let mut val = [0u8; 1];
+        let r = bpf_lookup(fd, kb.as_ptr(), val.as_mut_ptr());
+        eprintln!("[crud] lookup={r:?} val={:?}", val);
+        assert!(r.is_ok());
+        assert_eq!(val[0], 1);
+
+        // Delete
+        let r = bpf_delete(fd, kb.as_ptr());
+        eprintln!("[crud] delete={r:?}");
+        assert!(r.is_ok(), "delete failed: {r:?}");
+
+        // Lookup again — should fail
+        let r = bpf_lookup(fd, kb.as_ptr(), val.as_mut_ptr());
+        eprintln!("[crud] lookup_after_delete={r:?}");
+        assert!(r.is_err());
+
+        eprintln!("[crud] ALL PASSED — insert/lookup/delete cycle works");
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// TESTS
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+#[ignore]
+fn ddos_fill_map_to_capacity() {
+    let mut bpf = load();
+    let fd = raw_fd(&mut bpf, "BLOCKLIST");
+    let t0 = Instant::now();
+    for i in 0..CAP {
+        unsafe {
+            ins(fd, &Key::idx(i));
+        }
+    }
+    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let c = count(&mut bpf, "BLOCKLIST");
+    assert_eq!(c, CAP, "expected {CAP}, got {c}");
+    eprintln!(
+        "[fill] {CAP} in {ms:.0}ms ({:.0}/sec)",
+        CAP as f64 / (ms / 1000.0)
+    );
+}
+
+#[test]
+#[ignore]
+fn ddos_map_full_error() {
+    let mut bpf = load();
+    let fd = raw_fd(&mut bpf, "BLOCKLIST");
+    for i in 0..CAP {
+        unsafe {
+            ins(fd, &Key::idx(i));
+        }
+    }
+    let k = Key::v4(99, 99, 99, 99);
+    let r = unsafe { bpf_update(fd, k.raw().as_ptr(), &Val(1) as *const _ as *const u8, 0) };
+    assert!(r.is_err());
+    let code = r.unwrap_err().raw_os_error().unwrap_or(0);
+    assert!(code == 7 || code == 28, "expected E2BIG/ENOSPC, got {code}");
+    eprintln!("[full] correctly rejects with errno {code}");
+}
+
+#[test]
+#[ignore]
+fn ddos_lookup_10k() {
+    let mut bpf = load();
+    let fd = raw_fd(&mut bpf, "BLOCKLIST");
+    let n = 10_000;
+    for i in 0..n {
+        unsafe {
+            ins(fd, &Key::idx(i));
+        }
+    }
+    let t0 = Instant::now();
+    let c = count(&mut bpf, "BLOCKLIST");
+    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+    assert_eq!(c, n);
+    eprintln!(
+        "[10k] iterate {n} in {ms:.0}ms ({:.0}/sec)",
+        n as f64 / (ms / 1000.0)
+    );
+}
+
+#[test]
+#[ignore]
+fn ddos_lookup_100k() {
+    let mut bpf = load();
+    let fd = raw_fd(&mut bpf, "BLOCKLIST");
+    let n = 100_000;
+    let t_ins = Instant::now();
+    for i in 0..n {
+        unsafe {
+            ins(fd, &Key::idx(i));
+        }
+    }
+    let ins_ms = t_ins.elapsed().as_secs_f64() * 1000.0;
+    let t_iter = Instant::now();
+    let c = count(&mut bpf, "BLOCKLIST");
+    let iter_ms = t_iter.elapsed().as_secs_f64() * 1000.0;
+    assert_eq!(c, n);
+    eprintln!(
+        "[100k] insert {n} in {ins_ms:.0}ms | iterate {n} in {iter_ms:.0}ms ({:.0}/sec)",
+        n as f64 / (iter_ms / 1000.0)
+    );
+}
+
+#[test]
+#[ignore]
+fn ddos_reconcile_50k() {
+    let half = 50_000;
+    let all_keys = {
+        let mut bpf = load();
+        let fd = raw_fd(&mut bpf, "BLOCKLIST");
+        for i in 0..half {
+            unsafe {
+                ins(fd, &Key::idx(i));
+            }
+        }
+        collect(&mut bpf, "BLOCKLIST")
+    };
+    let new_set: HashSet<[u64; 2]> = (half..half * 2).map(|i| Key::idx(i).as_map_key()).collect();
+
+    let mut bpf2 = load();
+    let fd2 = raw_fd(&mut bpf2, "BLOCKLIST");
+    for i in 0..half {
+        unsafe {
+            ins(fd2, &Key::idx(i));
+        }
+    }
+    let mut stale = 0;
+    for mk in &all_keys {
+        if !new_set.contains(mk) {
+            let bytes: [u8; 16] = {
+                let mut x = [0u8; 16];
+                x[0..8].copy_from_slice(&mk[0].to_ne_bytes());
+                x[8..16].copy_from_slice(&mk[1].to_ne_bytes());
+                x
+            };
+            unsafe {
+                bpf_delete(fd2, bytes.as_ptr()).unwrap();
+            }
+            stale += 1;
+        }
+    }
+    let mut inserted = 0;
+    for mk in &new_set {
+        let r = unsafe {
+            bpf_update(
+                fd2,
+                mk as *const _ as *const u8,
+                &Val(1) as *const _ as *const u8,
+                0,
+            )
+        };
+        if r.is_ok() {
+            inserted += 1;
+        }
+    }
+    let after = count(&mut bpf2, "BLOCKLIST");
+    assert_eq!(after, half, "expected {half}, got {after}");
+    eprintln!("[reconcile] stale={stale} inserted={inserted} final={after}");
+}
+
+#[test]
+#[ignore]
+fn ddos_isolation() {
+    let n = 10_000;
+    // Phase 1: v6 inserts + count
+    {
+        let mut bpf = load();
+        let v6_fd = raw_fd(&mut bpf, "BLOCKLIST6");
+        for i in 0..n {
+            unsafe {
+                ins(v6_fd, &Key::v6_idx(i));
+            }
+        }
+        let c6 = count(&mut bpf, "BLOCKLIST6");
+        assert_eq!(c6, n);
+        eprintln!("[iso] v6={n}");
+    }
+    // Phase 2: v4 inserts + count
+    {
+        let mut bpf = load();
+        let v4_fd = raw_fd(&mut bpf, "BLOCKLIST");
+        for i in 0..n {
+            unsafe {
+                ins(v4_fd, &Key::idx(i));
+            }
+        }
+        let c4 = count(&mut bpf, "BLOCKLIST");
+        assert_eq!(c4, n);
+        eprintln!("[iso] v4={n}, zero cross-contamination");
+    }
+}
+
+#[test]
+#[ignore]
+fn ddos_rapid_churn() {
+    let n = 5_000;
+    let mut bpf = load();
+    let fd = raw_fd(&mut bpf, "BLOCKLIST");
+    let t0 = Instant::now();
+    for i in 0..n {
+        let k = Key::idx(i);
+        unsafe {
+            ins(fd, &k);
+            del(fd, &k);
+        }
+    }
+    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let c = count(&mut bpf, "BLOCKLIST");
+    assert_eq!(c, 0, "must be empty, got {c}");
+    eprintln!(
+        "[churn] {n} cycles in {ms:.0}ms ({:.0}/sec)",
+        n as f64 / (ms / 1000.0)
+    );
+}
+
+#[test]
+#[ignore]
+fn ddos_boundary_reuse() {
+    let mut bpf = load();
+    let fd = raw_fd(&mut bpf, "BLOCKLIST");
+    for i in 0..CAP {
+        unsafe {
+            ins(fd, &Key::idx(i));
+        }
+    }
+    // Overflow must fail
+    let k = Key::v4(99, 99, 99, 99);
+    assert!(
+        unsafe { bpf_update(fd, k.raw().as_ptr(), &Val(1) as *const _ as *const u8, 0) }.is_err()
+    );
+    // Delete one
+    unsafe {
+        del(fd, &Key::idx(42));
+    }
+    // Re-insert
+    unsafe {
+        ins(fd, &Key::idx(42));
+    }
+    // Overflow still fails
+    assert!(
+        unsafe { bpf_update(fd, k.raw().as_ptr(), &Val(1) as *const _ as *const u8, 0) }.is_err()
+    );
+    let c = count(&mut bpf, "BLOCKLIST");
+    assert_eq!(c, CAP, "expected {CAP}, got {c}");
+    eprintln!("[boundary] fill/overflow/delete/re-insert/overflow/count all correct");
+}

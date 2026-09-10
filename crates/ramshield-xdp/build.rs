@@ -33,7 +33,9 @@ fn try_aya_build(dest: &Path) -> bool {
         .output()
         .is_err()
     {
-        eprintln!("cargo:warning=bpf-linker not found — install from https://github.com/aya-rs/bpf-linker/releases");
+        eprintln!(
+            "cargo:warning=bpf-linker not found — install from https://github.com/aya-rs/bpf-linker/releases"
+        );
         return false;
     }
     let manifest = Path::new("ramshield-xdp-bpf/Cargo.toml");

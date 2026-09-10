@@ -9,12 +9,16 @@
 //!   bytes — see BlocklistKey::from_ip (P0: u32::from_ne_bytes, NOT
 //!   u32::from, which byte-reverses and makes every lookup miss).
 
+#![allow(unsafe_code)]
+
 use crate::{EnforcementError, ReconciliationState, XdpApplier};
 use aya::Ebpf;
+use aya::maps::IterableMap;
 use aya::maps::{HashMap, MapError};
 use aya::programs::Xdp;
 use aya::programs::xdp::XdpMode;
 use std::net::IpAddr;
+use std::os::fd::{AsFd, AsRawFd};
 use uuid::Uuid;
 
 /// XDP blocklist key — must stay byte-compatible with the C program's
@@ -88,6 +92,78 @@ fn split_by_family(expected_blocks: &[IpAddr]) -> (Vec<BlocklistKey>, Vec<Blockl
 
 fn map_err(e: impl std::fmt::Display) -> EnforcementError {
     EnforcementError::Xdp(e.to_string())
+}
+
+// ── Raw BPF syscalls for O(1)-memory map reconciliation ──────────────
+// aya's HashMap borrow-checker rules prevent iterating keys while
+// mutating. We extract the raw fd (Copy integer) via IterableMap::map(),
+// then call bpf(2) directly. The kernel's linked-list iteration skips
+// deleted entries, so reusing the same prev_key after a delete advances
+// correctly without restarting.
+
+// 32-byte bpf_attr layout for BPF_MAP_*_ELEM (cmd 1/2/3/4).
+// kernel: { map_fd:u32, pad:u32, key:u64, value_or_next:u64, flags:u64 }
+// flags@24 MUST be within the buffer — kernel's bpf_check_uarg_tail_zero
+// rejects buffers smaller than the expected union size.
+const BPF_ELEM_ATTR_SIZE: usize = 32;
+
+/// Build a zeroed 32-byte bpf_attr buffer for map elem operations.
+#[inline(always)]
+fn bpf_elem_attr(fd: std::os::fd::RawFd, key: u64, value_or_next: u64, flags: u64) -> [u8; 32] {
+    let mut buf = [0u8; BPF_ELEM_ATTR_SIZE];
+    buf[0..4].copy_from_slice(&(fd as u32).to_ne_bytes());
+    buf[8..16].copy_from_slice(&key.to_ne_bytes());
+    buf[16..24].copy_from_slice(&value_or_next.to_ne_bytes());
+    buf[24..32].copy_from_slice(&flags.to_ne_bytes());
+    buf
+}
+
+/// bpf_map_get_next_key — returns next key after `prev`, or None at end.
+///
+/// # Safety
+/// `fd` must be a valid BPF map file descriptor.
+#[allow(unsafe_code)]
+unsafe fn raw_get_next_key<K: Copy>(
+    fd: std::os::fd::RawFd,
+    prev: Option<&K>,
+) -> std::io::Result<Option<K>> {
+    let key_ptr = prev.map_or(0, |k| std::ptr::from_ref(k) as u64);
+    let mut next = std::mem::MaybeUninit::<K>::uninit();
+    let next_ptr = next.as_mut_ptr() as u64;
+    let attr = bpf_elem_attr(fd, key_ptr, next_ptr, 0);
+    let ret = libc::syscall(
+        libc::SYS_bpf,
+        4i64, // BPF_MAP_GET_NEXT_KEY
+        attr.as_ptr(),
+        BPF_ELEM_ATTR_SIZE,
+    );
+    if ret < 0 {
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() == Some(libc::ENOENT) {
+            return Ok(None);
+        }
+        return Err(e);
+    }
+    Ok(Some(next.assume_init()))
+}
+
+/// bpf_map_delete_elem — remove `key` from the map.
+///
+/// # Safety
+/// `fd` must be a valid BPF map file descriptor.
+#[allow(unsafe_code)]
+unsafe fn raw_delete_elem<K: Copy>(fd: std::os::fd::RawFd, key: &K) -> std::io::Result<()> {
+    let attr = bpf_elem_attr(fd, std::ptr::from_ref(key) as u64, 0, 0);
+    let ret = libc::syscall(
+        libc::SYS_bpf,
+        3i64, // BPF_MAP_DELETE_ELEM
+        attr.as_ptr(),
+        BPF_ELEM_ATTR_SIZE,
+    );
+    if ret < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Owns the loaded Bpf object and attached program.
@@ -173,21 +249,27 @@ impl XdpApplier for AyaXdpApplier {
             let expected: std::collections::HashSet<BlocklistKey> = expected.into_iter().collect();
             let mut stale_count = 0usize;
             self.with_map(name, |m| {
-                // ponytail: collect-then-remove is required — aya's HashMap
-                // doesn't allow mutating during iteration (borrow conflict).
-                // Ceiling: O(N) alloc where N = map size. Acceptable because
-                // blocked set stays small under normal load (<100 IPs);
-                // under DDoS, N ~10K = ~800KB one-shot alloc, amortized
-                // over reconcile interval. Upgrade: batched collect (chunks
-                // of 1024) if memory pressure matters.
-                let stale: Vec<BlocklistKey> = m
-                    .keys()
-                    .filter_map(|k| k.ok())
-                    .filter(|k| !expected.contains(k))
-                    .collect();
-                for k in stale {
-                    m.remove(&k)?;
-                    stale_count += 1;
+                // O(1)-memory reconcile: extract raw fd (Copy i32), then
+                // iterate + delete via bpf(2). Kernel's linked-list
+                // iteration skips deleted entries, so reusing prev_key
+                // after a delete advances correctly.
+                let fd_raw = m.map().fd().as_fd().as_raw_fd();
+                let mut prev_key: Option<BlocklistKey> = None;
+                loop {
+                    let next = unsafe { raw_get_next_key(fd_raw, prev_key.as_ref()) };
+                    match next {
+                        Ok(Some(k)) => {
+                            if !expected.contains(&k) {
+                                unsafe { raw_delete_elem(fd_raw, &k) }.map_err(MapError::from)?;
+                                stale_count += 1;
+                                // keep prev_key — kernel skips deleted entry
+                            } else {
+                                prev_key = Some(k);
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => return Err(MapError::from(e)),
+                    }
                 }
                 for k in &expected {
                     m.insert(*k, BlocklistValue(1), 0)?;

@@ -1175,6 +1175,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "aya 0.14.0",
+ "libc",
  "proptest",
  "ramshield-metrics",
  "ramshield-storage",
@@ -1257,6 +1258,7 @@ version = "0.1.0"
 dependencies = [
  "aya 0.12.0",
  "aya-build",
+ "libc",
 ]
 
 [[package]]

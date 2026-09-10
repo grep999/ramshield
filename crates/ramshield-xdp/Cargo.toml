@@ -10,6 +10,9 @@ build = "build.rs"
 # ramshield-enforcement is the single live consumer of BPF_ELF.
 aya = { version = "0.12", default-features = false }
 
+[dev-dependencies]
+libc = "0.2"
+
 [features]
 default = []
 elf = []
