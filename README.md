@@ -163,7 +163,7 @@ Workspace: a thin root binary crate + 9 focused crates.
 | `ramshield-enforcement` | block/unblock actor, XDP map sync, TTL expiry, reconcile |
 | `ramshield-forecasting` | Holt-Winters entropy baseline, preemptive threat sampling |
 | `ramshield-metrics` | counters, snapshot, Prometheus exposition |
-| `ramshield-xdp` | BPF object build + load (aya), clang fallback |
+|| `ramshield-xdp` | BPF object build + load (aya), clang fallback **+ XDP drop event wire (Step 5)** |\n
 
 Hard-won invariants (see [`SECURITY.md`](SECURITY.md), [`docs/audits/`](docs/audits/)):
 `block_state` is written **only** by the enforcement actor; detection mutates
@@ -173,6 +173,18 @@ raw-wire-octet layout — byte order is load-bearing; v6 keys live in a dedicate
 runtime-verified (`scripts/verify_v6_drop.sh`). WAL replay refuses any
 compressed record claiming more than the append cap (decompression-bomb gate).
 Channel capacity is a `const` with exactly one definition site.
+
+## XDP Enhancements (5 commits, production-gated)
+
+| # | Commit | Scope |
+|---|--------|-------|
+| 1 | `7f174b7` | PerCpuArray drop counters — v4/v6/pass/parse_fail per-CPU, summed on read |
+| 2 | `5c58106` | HASH → LRU_HASH for BLOCKLIST/BLOCKLIST6 — botnet-proof under map-full, kernel LRU eviction |
+| 3 | `abe0ca1` | LPM_TRIE CIDR maps (BLOCKCIDR/BLOCKCIDR6) — one /24 replaces 256 flat entries |
+| 4 | `bb6d445` | TTL expiry in values — u64 absolute ns (CLOCK_MONOTONIC), 0 = permanent, kernel-side drop gate |
+| 5 | `ee1fdb2` | EVENTS RingBuf — kernel emits 26B record on every drop (v4/v6 hash + CIDR), userspace drains on 250ms tick |
+
+All 5 pass full gate: 214 tests, clippy 0, 10/10 root-gated DDoS stress suite.
 
 ## Requirements
 
