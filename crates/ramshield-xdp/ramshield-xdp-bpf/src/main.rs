@@ -68,7 +68,7 @@ fn inc_counter(slot: u32) {
     }
 }
 
-fn emit_drop_event(ip: &[u8; 16], slot: u32) {
+fn emit_drop_event(slot: u32, ip: &[u8; 16]) {
     let ts = unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() };
     let mut buf = [0u8; 26];
     buf[0..16].copy_from_slice(ip);
@@ -149,23 +149,30 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
     if proto == EtherType::Ipv6 as u16 {
         let ip6: *const Ipv6Hdr = ptr_at(&ctx, l3_off)?;
         let mut key = [0u64; 2];
+        let mut key_bytes = [0u8; 16];
         unsafe {
             core::ptr::copy_nonoverlapping(
                 (*ip6).src_addr.as_ptr(),
                 key.as_mut_ptr() as *mut u8,
                 16,
             );
+            key_bytes.copy_from_slice(core::slice::from_raw_parts(
+                (*ip6).src_addr.as_ptr(),
+                16,
+            ));
         }
         if let Some(v) = unsafe { BLOCKLIST6.get(&key) } {
             let now = unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() };
             if now < *v {
                 inc_counter(counter::V6_DROP);
+                emit_drop_event(counter::V6_DROP, &key_bytes);
                 return Ok(xdp_action::XDP_DROP);
             }
         }
         // CIDR fallback: LPM_TRIE — one /64 entry replaces 256 flat entries in BLOCKLIST6
         if unsafe { BLOCKCIDR6.get(&Key::new(128, key)) }.is_some() {
             inc_counter(counter::V6_DROP);
+            emit_drop_event(counter::V6_DROP, &key_bytes);
             return Ok(xdp_action::XDP_DROP);
         }
         inc_counter(counter::PASS);
@@ -184,12 +191,18 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
         let now = unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() };
         if now < *v {
             inc_counter(counter::V4_DROP);
+            let mut ipb = [0u8; 16];
+            ipb[0..4].copy_from_slice(&src.to_ne_bytes());
+            emit_drop_event(counter::V4_DROP, &ipb);
             return Ok(xdp_action::XDP_DROP);
         }
     }
     // CIDR fallback: LPM_TRIE — one /24 entry replaces 256 flat entries in BLOCKLIST
     if unsafe { BLOCKCIDR.get(&Key::new(32, key)) }.is_some() {
         inc_counter(counter::V4_DROP);
+        let mut ipb = [0u8; 16];
+        ipb[0..4].copy_from_slice(&src.to_ne_bytes());
+        emit_drop_event(counter::V4_DROP, &ipb);
         return Ok(xdp_action::XDP_DROP);
     }
     inc_counter(counter::PASS);

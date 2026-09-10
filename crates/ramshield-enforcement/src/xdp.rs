@@ -11,12 +11,12 @@
 
 #![allow(unsafe_code)]
 
-use crate::{EnforcementError, ReconciliationState, XdpApplier};
+use crate::{EnforcementError, ReconciliationState, XdpApplier, XdpDropEvent};
 use aya::Ebpf;
-use aya::maps::{HashMap as AyaHashMap, MapError, PerCpuArray, PerCpuValues, IterableMap};
+use aya::maps::{HashMap as AyaHashMap, MapError, PerCpuArray, PerCpuValues, IterableMap, RingBuf};
 use aya::programs::Xdp;
 use aya::programs::xdp::XdpMode;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsFd, AsRawFd};
 use uuid::Uuid;
 
@@ -247,6 +247,52 @@ impl AyaXdpApplier {
         }
         Ok(totals)
     }
+
+    /// Drain kernel→userspace drop notifications from the EVENTS ringbuf.
+    /// Returns parsed drop events; empty when the channel is idle.
+    pub fn drain_drop_events(&mut self) -> Vec<XdpDropEvent> {
+        let Some(bpf) = self.bpf.as_mut() else {
+            return Vec::new();
+        };
+        let Some(map) = bpf.map_mut("EVENTS") else {
+            return Vec::new();
+        };
+        let mut ring = match RingBuf::try_from(map) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        while let Some(item) = ring.next() {
+            if let Some(ev) = parse_drop_event(&item) {
+                out.push(ev);
+            }
+        }
+        out
+    }
+}
+
+/// Parse a 26-byte EVENTS record into a drop event. Family from slot:
+/// 0 = v4_drop, 1 = v6_drop (see BPF counter module); std::net interprets
+/// the 16-byte key as IPv4 (first 4 bytes; trailing zero pad) or IPv6.
+pub fn parse_drop_event(rec: &[u8]) -> Option<XdpDropEvent> {
+    if rec.len() < 26 {
+        return None;
+    }
+    let mut ipb = [0u8; 16];
+    ipb.copy_from_slice(&rec[0..16]);
+    let slot = rec[25];
+    let ip = if slot == 0 {
+        IpAddr::V4(Ipv4Addr::new(ipb[0], ipb[1], ipb[2], ipb[3]))
+    } else {
+        let mut o = [0u8; 16];
+        o.copy_from_slice(&ipb);
+        IpAddr::V6(Ipv6Addr::from(o))
+    };
+    Some(XdpDropEvent {
+        ip,
+        ts_ns: u64::from_le_bytes(rec[16..24].try_into().ok()?),
+        slot,
+    })
 }
 
 #[async_trait::async_trait]
@@ -334,6 +380,10 @@ impl XdpApplier for AyaXdpApplier {
         }
         Ok(ReconciliationState::default())
     }
+
+    fn drain_drop_events(&mut self) -> Vec<XdpDropEvent> {
+        AyaXdpApplier::drain_drop_events(self)
+    }
 }
 
 #[cfg(test)]
@@ -407,5 +457,44 @@ mod tests {
             !v4.iter().any(|k| v6.contains(k)),
             "a key must not appear in both sweeps"
         );
+    }
+
+    // ===== EVENTS ringbuf record parsing =====
+
+    fn rec(ip: &[u8; 16], ts_ns: u64, slot: u8) -> Vec<u8> {
+        let mut r = Vec::with_capacity(26);
+        r.extend_from_slice(ip);
+        r.extend_from_slice(&ts_ns.to_ne_bytes());
+        r.push(0); // action byte
+        r.push(slot);
+        r
+    }
+
+    /// P0: v4 drop event — slot 0 → parsed as a v4 address, ts + slot kept.
+    #[test]
+    fn parse_v4_drop_event() {
+        let mut ip = [0u8; 16];
+        ip[0..4].copy_from_slice(&[1, 2, 3, 4]);
+        let ev = parse_drop_event(&rec(&ip, 42, 0)).unwrap();
+        assert_eq!(ev.ip, "1.2.3.4".parse::<IpAddr>().unwrap());
+        assert_eq!(ev.ts_ns, 42);
+        assert_eq!(ev.slot, 0);
+    }
+
+    /// P0: v6 drop event — slot 1 → full 16-byte address.
+    #[test]
+    fn parse_v6_drop_event() {
+        let ip = b"\x20\x01\x0d\xb8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01";
+        let ev = parse_drop_event(&rec(ip, 7, 1)).unwrap();
+        assert_eq!(ev.ip, "2001:db8::1".parse::<IpAddr>().unwrap());
+        assert_eq!(ev.ts_ns, 7);
+        assert_eq!(ev.slot, 1);
+    }
+
+    /// Truncated records (bad ringbuf framing) must not panic/crash the drain.
+    #[test]
+    fn parse_short_record_is_none() {
+        assert!(parse_drop_event(&[0u8; 25]).is_none());
+        assert!(parse_drop_event(&[]).is_none());
     }
 }

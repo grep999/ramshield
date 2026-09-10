@@ -26,7 +26,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{error, info, trace, warn};
 use uuid::Uuid;
 
 /// Fallback expiry horizon when TTL arithmetic overflows (belt-and-suspenders;
@@ -58,6 +58,20 @@ pub trait XdpApplier: Send + Sync {
         &mut self,
         expected_blocks: &[IpAddr],
     ) -> Result<ReconciliationState, EnforcementError>;
+    /// Drain kernel→userspace drop notifications (RingBuf). Default: no channel.
+    fn drain_drop_events(&mut self) -> Vec<XdpDropEvent> {
+        Vec::new()
+    }
+}
+
+/// One kernel→userspace drop notification from the XDP EVENTS ringbuf.
+/// `ip` = dropped source address, `ts_ns` = monotonic clock (bpf_ktime_get_ns),
+/// `slot` = COUNTERS slot that was incremented (0 = v4_drop, 1 = v6_drop).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XdpDropEvent {
+    pub ip: IpAddr,
+    pub ts_ns: u64,
+    pub slot: u8,
 }
 
 pub struct StubXdpApplier;
@@ -161,6 +175,10 @@ impl EnforcementService {
             tokio::select! {
                 _ = tick.tick() => {
                     self.expire_due().await;
+                    let drops = self.xdp.drain_drop_events();
+                    if !drops.is_empty() {
+                        trace!(n = drops.len(), "XDP drop events drained");
+                    }
                     if self.shutdown.load(Ordering::Acquire) { break; }
                 }
                 cmd = command_rx.recv() => {
