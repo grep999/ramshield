@@ -10,7 +10,8 @@ use aya_ebpf::bindings::xdp_md;
 use aya_ebpf::{
     bindings::xdp_action,
     macros::{map, xdp},
-    maps::{LruHashMap, PerCpuArray},
+    maps::{LpmTrie, LruHashMap, PerCpuArray},
+    maps::lpm_trie::Key,
     programs::XdpContext,
 };
 use core::mem;
@@ -21,11 +22,23 @@ use network_types::{
 
 // 16-byte key matching C's __u64[2] layout.
 // LRU_HASH: kernel auto-evicts coldest entry when full — no E2BIG under botnet flood.
+// Key for LPM_CIDR is { prefixlen: u32, addr: [u64; 2] } — one /24 or /128 entry
+// replaces 256 flat entries in BLOCKLIST.
 #[map]
 static BLOCKLIST: LruHashMap<[u64; 2], u8> = LruHashMap::with_max_entries(blocklist_cap_env(), 0);
 
 #[map]
 static BLOCKLIST6: LruHashMap<[u64; 2], u8> = LruHashMap::with_max_entries(blocklist_cap_env(), 0);
+
+// 16-byte key matching C's __u64[2] layout.
+// CIDR maps: one /24 entry replaces 256 flat v4 entries in BLOCKLIST.
+// /64 prefix matches a single IPv6 /64 in BLOCKLIST6.
+// LpmTrie key = { prefix_len: u32, data: [u64; 2] } — network byte order addr.
+#[map]
+static BLOCKCIDR: LpmTrie<[u64; 2], u8> = LpmTrie::with_max_entries(102_400, 0);
+
+#[map]
+static BLOCKCIDR6: LpmTrie<[u64; 2], u8> = LpmTrie::with_max_entries(102_400, 0);
 
 // Per-CPU drop counters. One u64 slot per CPU; zero cache-line contention
 // under peak flood. Slot index encodes the outcome (see CounterSlot below).
@@ -133,6 +146,11 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
             inc_counter(counter::V6_DROP);
             return Ok(xdp_action::XDP_DROP);
         }
+        // CIDR fallback: LPM_TRIE — one /64 entry replaces 256 flat entries in BLOCKLIST6
+        if unsafe { BLOCKCIDR6.get(&Key::new(128, key)) }.is_some() {
+            inc_counter(counter::V6_DROP);
+            return Ok(xdp_action::XDP_DROP);
+        }
         inc_counter(counter::PASS);
         return Ok(xdp_action::XDP_PASS);
     }
@@ -146,6 +164,11 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
     let src = u32::from_be_bytes(unsafe { (*ip).src_addr });
     let key = [src as u64, 0u64];
     if unsafe { BLOCKLIST.get(&key) }.is_some() {
+        inc_counter(counter::V4_DROP);
+        return Ok(xdp_action::XDP_DROP);
+    }
+    // CIDR fallback: LPM_TRIE — one /24 entry replaces 256 flat entries in BLOCKLIST
+    if unsafe { BLOCKCIDR.get(&Key::new(32, key)) }.is_some() {
         inc_counter(counter::V4_DROP);
         return Ok(xdp_action::XDP_DROP);
     }
