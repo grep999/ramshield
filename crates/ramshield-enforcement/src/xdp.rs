@@ -14,7 +14,7 @@
 use crate::{EnforcementError, ReconciliationState, XdpApplier};
 use aya::Ebpf;
 use aya::maps::IterableMap;
-use aya::maps::{HashMap, MapError};
+use aya::maps::{HashMap, MapError, PerCpuArray, PerCpuValues};
 use aya::programs::Xdp;
 use aya::programs::xdp::XdpMode;
 use std::net::IpAddr;
@@ -221,6 +221,26 @@ impl AyaXdpApplier {
         let mut m: HashMap<_, BlocklistKey, BlocklistValue> =
             HashMap::try_from(map).map_err(map_err)?;
         f(&mut m).map_err(map_err)
+    }
+
+    /// Read XDP per-CPU drop counters. Returns [v4_drop, v6_drop, pass, parse_fail]
+    /// summed across all CPUs.
+    pub fn counters(&mut self) -> Result<[u64; 4], EnforcementError> {
+        let bpf = self
+            .bpf
+            .as_ref()
+            .ok_or_else(|| EnforcementError::Xdp("not loaded".into()))?;
+        let map = bpf
+            .map("COUNTERS")
+            .ok_or_else(|| EnforcementError::Xdp("COUNTERS map missing".into()))?;
+        let array: PerCpuArray<&aya::maps::MapData, u64> =
+            PerCpuArray::try_from(map).map_err(map_err)?;
+        let mut totals = [0u64; 4];
+        for (i, slot) in totals.iter_mut().enumerate() {
+            let per_cpu: PerCpuValues<u64> = array.get(&(i as u32), 0).map_err(map_err)?;
+            *slot = per_cpu.iter().sum();
+        }
+        Ok(totals)
     }
 }
 

@@ -415,3 +415,32 @@ fn ddos_boundary_reuse() {
     assert_eq!(c, CAP, "expected {CAP}, got {c}");
     eprintln!("[boundary] fill/overflow/delete/re-insert/overflow/count all correct");
 }
+
+// ── COUNTERS map validation ───────────────────────────────────────────────
+
+#[test]
+#[ignore]
+fn ddos_counters_map_loads() {
+    let mut bpf = load();
+    // COUNTERS map must exist and be a PerCpuArray
+    let map = bpf.map("COUNTERS").expect("COUNTERS map missing");
+    let mut array: aya::maps::PerCpuArray<&aya::maps::MapData, u64> =
+        aya::maps::PerCpuArray::try_from(map).expect("COUNTERS not a PerCpuArray");
+    assert_eq!(array.len(), 4, "must have 4 counter slots");
+
+    // Read slot 0 (v4_drop) via aya API
+    let vals: aya::maps::PerCpuValues<u64> = array.get(&0, 0).expect("slot 0 read failed");
+    let total: u64 = vals.iter().sum();
+    assert_eq!(total, 0, "initial counter must be 0, got {total}");
+
+    // Verify all 4 slots readable and zero
+    for slot in 0u32..4 {
+        let v: aya::maps::PerCpuValues<u64> = array.get(&slot, 0).expect("slot read failed");
+        let s: u64 = v.iter().sum();
+        assert_eq!(s, 0, "slot {slot} initial must be 0, got {s}");
+    }
+    let nr_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    eprintln!("[counters] COUNTERS map loaded, 4 slots, {nr_cpus} CPUs, all zero");
+}

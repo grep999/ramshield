@@ -10,7 +10,7 @@ use aya_ebpf::bindings::xdp_md;
 use aya_ebpf::{
     bindings::xdp_action,
     macros::{map, xdp},
-    maps::HashMap,
+    maps::{HashMap, PerCpuArray},
     programs::XdpContext,
 };
 use core::mem;
@@ -26,6 +26,30 @@ static BLOCKLIST: HashMap<[u64; 2], u8> = HashMap::with_max_entries(blocklist_ca
 
 #[map]
 static BLOCKLIST6: HashMap<[u64; 2], u8> = HashMap::with_max_entries(blocklist_cap_env(), 0);
+
+// Per-CPU drop counters. One u64 slot per CPU; zero cache-line contention
+// under peak flood. Slot index encodes the outcome (see CounterSlot below).
+#[map]
+static COUNTERS: PerCpuArray<u64> = PerCpuArray::with_max_entries(4, 0);
+
+// COUNTERS slot indices. Protocol-aware split so the "did XDP actually drop?"
+// question is answerable without any userspace map scanning.
+mod counter {
+    pub const V4_DROP: u32 = 0;
+    pub const V6_DROP: u32 = 1;
+    pub const PASS: u32 = 2;
+    pub const PARSE_FAIL: u32 = 3;
+}
+
+/// Bump a per-CPU counter. PerCpuArray slots are isolated per CPU so a plain
+/// read-modify-write is safe; no atomics, no lock.
+#[inline(always)]
+fn inc_counter(slot: u32) {
+    let ptr = COUNTERS.get_ptr_mut(slot);
+    if let Some(p) = ptr {
+        unsafe { *p += 1 };
+    }
+}
 
 // Wire-format VLAN ethertypes (native/LE representation of the on-wire values).
 const ETH_P_8021Q: u16 = 0x8100_u16.to_be();
@@ -71,7 +95,10 @@ fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, ()> {
 pub fn ramshield_xdp(ctx: XdpContext) -> u32 {
     match try_ramshield_xdp(ctx) {
         Ok(action) => action,
-        Err(()) => xdp_action::XDP_PASS,
+        Err(()) => {
+            inc_counter(counter::PARSE_FAIL);
+            xdp_action::XDP_PASS
+        }
     }
 }
 
@@ -103,12 +130,15 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
             );
         }
         if unsafe { BLOCKLIST6.get(&key) }.is_some() {
+            inc_counter(counter::V6_DROP);
             return Ok(xdp_action::XDP_DROP);
         }
+        inc_counter(counter::PASS);
         return Ok(xdp_action::XDP_PASS);
     }
 
     if proto != EtherType::Ipv4 as u16 {
+        inc_counter(counter::PASS);
         return Ok(xdp_action::XDP_PASS);
     }
 
@@ -116,8 +146,10 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
     let src = u32::from_be_bytes(unsafe { (*ip).src_addr });
     let key = [src as u64, 0u64];
     if unsafe { BLOCKLIST.get(&key) }.is_some() {
+        inc_counter(counter::V4_DROP);
         return Ok(xdp_action::XDP_DROP);
     }
+    inc_counter(counter::PASS);
     Ok(xdp_action::XDP_PASS)
 }
 
