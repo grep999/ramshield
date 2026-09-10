@@ -10,7 +10,7 @@ use aya_ebpf::bindings::xdp_md;
 use aya_ebpf::{
     bindings::xdp_action,
     macros::{map, xdp},
-    maps::{HashMap, PerCpuArray},
+    maps::{LruHashMap, PerCpuArray},
     programs::XdpContext,
 };
 use core::mem;
@@ -20,12 +20,12 @@ use network_types::{
 };
 
 // 16-byte key matching C's __u64[2] layout.
-// Capacity tuned via BLOCKLIST_CAP env var at build time (default 102_400).
+// LRU_HASH: kernel auto-evicts coldest entry when full — no E2BIG under botnet flood.
 #[map]
-static BLOCKLIST: HashMap<[u64; 2], u8> = HashMap::with_max_entries(blocklist_cap_env(), 0);
+static BLOCKLIST: LruHashMap<[u64; 2], u8> = LruHashMap::with_max_entries(blocklist_cap_env(), 0);
 
 #[map]
-static BLOCKLIST6: HashMap<[u64; 2], u8> = HashMap::with_max_entries(blocklist_cap_env(), 0);
+static BLOCKLIST6: LruHashMap<[u64; 2], u8> = LruHashMap::with_max_entries(blocklist_cap_env(), 0);
 
 // Per-CPU drop counters. One u64 slot per CPU; zero cache-line contention
 // under peak flood. Slot index encodes the outcome (see CounterSlot below).

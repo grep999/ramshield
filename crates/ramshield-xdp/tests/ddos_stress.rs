@@ -212,7 +212,7 @@ fn ddos_fill_map_to_capacity() {
 
 #[test]
 #[ignore]
-fn ddos_map_full_error() {
+fn ddos_lru_eviction() {
     let mut bpf = load();
     let fd = raw_fd(&mut bpf, "BLOCKLIST");
     for i in 0..CAP {
@@ -220,12 +220,18 @@ fn ddos_map_full_error() {
             ins(fd, &Key::idx(i));
         }
     }
+    // LRU_HASH: insert one more — kernel evicts coldest, never E2BIG.
     let k = Key::v4(99, 99, 99, 99);
     let r = unsafe { bpf_update(fd, k.raw().as_ptr(), &Val(1) as *const _ as *const u8, 0) };
-    assert!(r.is_err());
-    let code = r.unwrap_err().raw_os_error().unwrap_or(0);
-    assert!(code == 7 || code == 28, "expected E2BIG/ENOSPC, got {code}");
-    eprintln!("[full] correctly rejects with errno {code}");
+    assert!(
+        r.is_ok(),
+        "LRU insert must never fail: {:?}",
+        r.unwrap_err()
+    );
+    // Count should not exceed CAP — one old entry was evicted.
+    let c = count(&mut bpf, "BLOCKLIST");
+    assert!(c <= CAP, "LRU must cap at {CAP}, got {c}");
+    eprintln!("[lru] fill+overflow: {c} entries (cap {CAP}), LRU eviction confirmed");
 }
 
 #[test]
@@ -394,26 +400,21 @@ fn ddos_boundary_reuse() {
             ins(fd, &Key::idx(i));
         }
     }
-    // Overflow must fail
+    // LRU: overflow succeeds — kernel evicts coldest entry.
     let k = Key::v4(99, 99, 99, 99);
-    assert!(
-        unsafe { bpf_update(fd, k.raw().as_ptr(), &Val(1) as *const _ as *const u8, 0) }.is_err()
-    );
-    // Delete one
+    unsafe {
+        bpf_update(fd, k.raw().as_ptr(), &Val(1) as *const _ as *const u8, 0).unwrap();
+    }
+    // Delete one, re-insert — count stays ≤ CAP.
     unsafe {
         del(fd, &Key::idx(42));
     }
-    // Re-insert
     unsafe {
         ins(fd, &Key::idx(42));
     }
-    // Overflow still fails
-    assert!(
-        unsafe { bpf_update(fd, k.raw().as_ptr(), &Val(1) as *const _ as *const u8, 0) }.is_err()
-    );
     let c = count(&mut bpf, "BLOCKLIST");
-    assert_eq!(c, CAP, "expected {CAP}, got {c}");
-    eprintln!("[boundary] fill/overflow/delete/re-insert/overflow/count all correct");
+    assert!(c <= CAP, "LRU must cap at {CAP}, got {c}");
+    eprintln!("[boundary] fill/lru-evict/delete/re-insert: {c} entries ≤ cap {CAP}");
 }
 
 // ── COUNTERS map validation ───────────────────────────────────────────────
