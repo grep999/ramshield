@@ -25,12 +25,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "allocator-api2"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -158,34 +152,17 @@ dependencies = [
 
 [[package]]
 name = "aya"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90eea657cc8028447cbda5068f4e10c4fadba0131624f4f7dd1a9c46ffc8d81f"
-dependencies = [
- "assert_matches",
- "aya-obj 0.1.0",
- "bitflags",
- "bytes",
- "lazy_static",
- "libc",
- "log",
- "object 0.32.2",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "aya"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66e644424fada9fff4fdc63848db1732fb69b626e8328202ef55c03df1f4d939"
 dependencies = [
  "assert_matches",
- "aya-obj 0.3.0",
+ "aya-obj",
  "bitflags",
  "hashbrown 0.17.1",
  "libc",
  "log",
- "object 0.39.1",
+ "object",
  "once_cell",
  "scopeguard",
  "thiserror 2.0.20",
@@ -205,27 +182,13 @@ dependencies = [
 
 [[package]]
 name = "aya-obj"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c02024a307161cf3d1f052161958fd13b1a33e3e038083e58082c0700fdab85"
-dependencies = [
- "bytes",
- "core-error",
- "hashbrown 0.14.5",
- "log",
- "object 0.32.2",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "aya-obj"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c76b9c75d9cdc155ff8f6a06d61e873f67bf47be8cfa92a3b5aaea43f4b4077"
 dependencies = [
  "bytes",
  "log",
- "object 0.39.1",
+ "object",
  "thiserror 2.0.20",
 ]
 
@@ -386,15 +349,6 @@ name = "clap_lex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
-
-[[package]]
-name = "core-error"
-version = "0.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efcdb2972eb64230b4c50646d8498ff73f5128d196a90c7236eec4cbe8619b8f"
-dependencies = [
- "version_check",
-]
 
 [[package]]
 name = "core-foundation-sys"
@@ -631,10 +585,6 @@ name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
-dependencies = [
- "ahash",
- "allocator-api2",
-]
 
 [[package]]
 name = "hashbrown"
@@ -955,15 +905,6 @@ dependencies = [
 
 [[package]]
 name = "object"
-version = "0.32.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6a622008b6e321afc04970976f62ee297fdbaa6f95318ca343e3eebb9648441"
-dependencies = [
- "memchr",
-]
-
-[[package]]
-name = "object"
 version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
@@ -1100,7 +1041,7 @@ dependencies = [
  "argon2",
  "async-trait",
  "axum",
- "aya 0.14.0",
+ "aya",
  "bytes",
  "chrono",
  "clap",
@@ -1174,7 +1115,7 @@ dependencies = [
  "ahash",
  "anyhow",
  "async-trait",
- "aya 0.14.0",
+ "aya",
  "libc",
  "proptest",
  "ramshield-metrics",
@@ -1256,7 +1197,7 @@ dependencies = [
 name = "ramshield-xdp"
 version = "0.1.0"
 dependencies = [
- "aya 0.12.0",
+ "aya",
  "aya-build",
  "libc",
 ]
