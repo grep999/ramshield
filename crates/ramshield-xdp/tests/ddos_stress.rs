@@ -171,12 +171,16 @@ fn ddos_diag_crud() {
         eprintln!("[crud] insert={r:?}");
         assert!(r.is_ok());
 
-        // Lookup
-        let mut val = [0u8; 1];
+        // Lookup — map value is 8-byte u64; PERM = u64::MAX = all 0xFF bytes.
+        let mut val = [0u8; 8];
         let r = bpf_lookup(fd, kb.as_ptr(), val.as_mut_ptr());
         eprintln!("[crud] lookup={r:?} val={:?}", val);
         assert!(r.is_ok());
-        assert_eq!(val[0], 1);
+        assert_eq!(
+            u64::from_le_bytes(val),
+            PERM,
+            "value must round-trip as u64::MAX (P0 contract)"
+        );
 
         // Delete
         let r = bpf_delete(fd, kb.as_ptr());
@@ -209,9 +213,15 @@ fn ddos_fill_map_to_capacity() {
     }
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
     let c = count(&mut bpf, "BLOCKLIST");
-    assert_eq!(c, CAP, "expected {CAP}, got {c}");
+    // Common-LRU keeps per-CPU free lists (NR_BPF_LRU_LOCAL_LIST_SIZE per CPU),
+    // so an exact fill may hold marginally fewer than max_entries — observed
+    // 128 on 4 CPUs. Invariant: near-full, and never E2BIG (LRU evicts).
+    assert!(
+        (CAP - 1024..=CAP).contains(&c),
+        "fill must land within 1024 of cap {CAP}, got {c}"
+    );
     eprintln!(
-        "[fill] {CAP} in {ms:.0}ms ({:.0}/sec)",
+        "[fill] {CAP} in {ms:.0}ms ({:.0}/sec) — {c} resident (LRU local-list slack)",
         CAP as f64 / (ms / 1000.0)
     );
 }
@@ -411,12 +421,14 @@ fn ddos_boundary_reuse() {
     unsafe {
         bpf_update(fd, k.raw().as_ptr(), &Val(PERM) as *const _ as *const u8, 0).unwrap();
     }
-    // Delete one, re-insert — count stays ≤ CAP.
+    // Delete the just-inserted key (guaranteed resident — most-recently used),
+    // then re-insert it. LRU eviction order is insertion order, so any
+    // early-index key may already be gone — don't target one.
     unsafe {
-        del(fd, &Key::idx(42));
+        del(fd, &k);
     }
     unsafe {
-        ins(fd, &Key::idx(42));
+        ins(fd, &k);
     }
     let c = count(&mut bpf, "BLOCKLIST");
     assert!(c <= CAP, "LRU must cap at {CAP}, got {c}");
