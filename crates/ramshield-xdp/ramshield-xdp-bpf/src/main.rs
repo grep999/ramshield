@@ -29,10 +29,10 @@ static BLOCKLIST: LruHashMap<[u64; 2], u64> = LruHashMap::with_max_entries(block
 #[map]
 static BLOCKLIST6: LruHashMap<[u64; 2], u64> = LruHashMap::with_max_entries(blocklist_cap_env(), 0);
 
-// TTL value format: lower 32 bits = slot index (0-3), upper 32 bits = expiry_ns
-// On insert: value = (expiry_ns << 32) | slot
-// On lookup: if now < expiry { drop } else { pass }
-// Reconcile: scan keys, delete expired
+// TTL value format: absolute expiry ns (CLOCK_MONOTONIC, same clock as
+// bpf_ktime_get_ns). u64::MAX = permanent. P0: full u64 — a packed u32
+// expiry capped any block at 4.3s, and a 1-byte userspace value made the
+// map type-check fail at open (InvalidValueSize) → XDP never blocked.
 #[map]
 static BLOCKCIDR: LpmTrie<[u64; 2], u8> = LpmTrie::with_max_entries(102_400, 0);
 
@@ -75,7 +75,7 @@ fn emit_drop_event(ip: &[u8; 16], slot: u32) {
     buf[16..24].copy_from_slice(&ts.to_ne_bytes());
     buf[24] = 0;
     buf[25] = (slot & 0xFF) as u8;
-    let _ = unsafe { EVENTS.output(&buf, 0) };
+    let _ = EVENTS.output(&buf, 0);
 }
 
 // Wire-format VLAN ethertypes (native/LE representation of the on-wire values).
@@ -157,9 +157,8 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
             );
         }
         if let Some(v) = unsafe { BLOCKLIST6.get(&key) } {
-            let expiry_ns = v >> 32;
             let now = unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() };
-            if now < expiry_ns {
+            if now < *v {
                 inc_counter(counter::V6_DROP);
                 return Ok(xdp_action::XDP_DROP);
             }
@@ -182,9 +181,8 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
     let src = u32::from_be_bytes(unsafe { (*ip).src_addr });
     let key = [src as u64, 0u64];
     if let Some(v) = unsafe { BLOCKLIST.get(&key) } {
-        let expiry_ns = v >> 32;
         let now = unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() };
-        if now < expiry_ns {
+        if now < *v {
             inc_counter(counter::V4_DROP);
             return Ok(xdp_action::XDP_DROP);
         }

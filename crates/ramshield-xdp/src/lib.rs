@@ -1,6 +1,6 @@
 //! RamShield eBPF / XDP data plane — build artifact crate.
 //!
-//! Sole export: the compiled BPF ELF from build.rs. All loading, attaching,
+//! Sole export: the compiled BPF ELF from build.rs (aya-ebpf + bpf-linker). All loading, attaching,
 //! and map management lives in `ramshield-enforcement::xdp::AyaXdpApplier`
 //! (the only consumer). Types (`BlocklistKey`/`BlocklistValue`) are defined
 //! there too — one source of truth, no drift.
@@ -18,6 +18,7 @@ pub static BPF_ELF: &[u8] = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"),
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
+    use aya::Ebpf;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     // --- mirror types (must stay 1:1 with ramshield-enforcement/src/xdp.rs) ---
@@ -373,22 +374,16 @@ mod tests {
     #[test]
     #[ignore] // requires root — run with: cargo test -- --ignored aya_load
     fn aya_load_verifies_maps_and_program() {
-        let mut bpf = aya::Bpf::load(crate::BPF_ELF)
-            .expect("aya::Bpf::load failed — legacy maps rejected or ELF corrupt");
-
-        // Maps must exist and be takeable
+        let mut bpf = Ebpf::load(crate::BPF_ELF).expect("aya::Bpf::load failed");
         let _bl = bpf
             .take_map("BLOCKLIST")
             .expect("BLOCKLIST map missing from loaded ELF");
         let _bl6 = bpf
             .take_map("BLOCKLIST6")
             .expect("BLOCKLIST6 map missing from loaded ELF");
-
-        // Program must exist
         let _prog = bpf
             .program("ramshield_xdp")
             .expect("ramshield_xdp program missing");
-
         eprintln!("aya::Bpf::load succeeded — BLOCKLIST, BLOCKLIST6, ramshield_xdp all present");
     }
 
@@ -398,39 +393,39 @@ mod tests {
     #[test]
     #[ignore] // requires root — run with: cargo test -- --ignored insert_lookup_roundtrip_v4
     fn insert_lookup_roundtrip_v4() {
-        let mut bpf = aya::Bpf::load(crate::BPF_ELF).expect("aya::Bpf::load failed");
+        let mut bpf = Ebpf::load(crate::BPF_ELF).expect("aya::Bpf::load failed");
         let map = bpf.take_map("BLOCKLIST").expect("BLOCKLIST missing");
-        let mut hm: aya::maps::HashMap<_, [u64; 2], u8> =
+        let mut hm: aya::maps::HashMap<_, [u64; 2], u64> =
             aya::maps::HashMap::try_from(map).unwrap();
 
         // 1.2.3.4 → BlocklistKey(u128::from(u32::from_ne_bytes([1,2,3,4])))
         // On LE x86: lower u64 = 0x04030201, upper u64 = 0
         let key: [u64; 2] = [0x04030201u64, 0u64];
-        hm.insert(key, 1u8, 0).expect("insert failed");
+        hm.insert(key, u64::MAX, 0).expect("insert failed");
 
         let val = hm
             .get(&key, 0)
             .expect("lookup failed — key missing after insert");
-        assert_eq!(val, 1u8);
+        assert_eq!(val, u64::MAX);
     }
 
     /// Load BPF ELF, insert a v6 key into BLOCKLIST6, verify lookup finds it.
     #[test]
     #[ignore] // requires root — run with: cargo test -- --ignored insert_lookup_roundtrip_v6
     fn insert_lookup_roundtrip_v6() {
-        let mut bpf = aya::Bpf::load(crate::BPF_ELF).expect("aya::Bpf::load failed");
+        let mut bpf = Ebpf::load(crate::BPF_ELF).expect("aya::Bpf::load failed");
         let map = bpf.take_map("BLOCKLIST6").expect("BLOCKLIST6 missing");
-        let mut hm: aya::maps::HashMap<_, [u64; 2], u8> =
+        let mut hm: aya::maps::HashMap<_, [u64; 2], u64> =
             aya::maps::HashMap::try_from(map).unwrap();
 
         // 2001:db8::1 → BlocklistKey(u128::from_le_bytes(octets))
         // Octets [20,01,0d,b8,00,00,00,00,00,00,00,00,00,00,00,01] as [u64;2] LE
         let key: [u64; 2] = [0x00000000_b80d0120u64, 0x01000000_00000000u64];
-        hm.insert(key, 1u8, 0).expect("insert failed");
+        hm.insert(key, u64::MAX, 0).expect("insert failed");
 
         let val = hm
             .get(&key, 0)
             .expect("lookup failed — key missing after insert");
-        assert_eq!(val, 1u8);
+        assert_eq!(val, u64::MAX);
     }
 }

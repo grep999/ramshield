@@ -46,7 +46,13 @@ pub struct ReconciliationState {
 
 #[async_trait::async_trait]
 pub trait XdpApplier: Send + Sync {
-    fn apply_block(&mut self, ip: IpAddr, decision_id: Uuid) -> Result<(), EnforcementError>;
+    /// ttl_seconds: 0 = permanent block (u64::MAX expiry in the map).
+    fn apply_block(
+        &mut self,
+        ip: IpAddr,
+        decision_id: Uuid,
+        ttl_seconds: u64,
+    ) -> Result<(), EnforcementError>;
     fn apply_unblock(&mut self, ip: IpAddr, decision_id: Uuid) -> Result<(), EnforcementError>;
     fn reconcile(
         &mut self,
@@ -58,7 +64,12 @@ pub struct StubXdpApplier;
 
 #[async_trait::async_trait]
 impl XdpApplier for StubXdpApplier {
-    fn apply_block(&mut self, ip: IpAddr, _decision_id: Uuid) -> Result<(), EnforcementError> {
+    fn apply_block(
+        &mut self,
+        ip: IpAddr,
+        _decision_id: Uuid,
+        _ttl_seconds: u64,
+    ) -> Result<(), EnforcementError> {
         info!(%ip, "XDP block (stub)");
         Ok(())
     }
@@ -410,7 +421,10 @@ impl EnforcementService {
                 }
 
                 // Step 3: dataplane.
-                let xdp_applied = match self.xdp.apply_block(cmd.ip, cmd.decision_id) {
+                let xdp_applied = match self
+                    .xdp
+                    .apply_block(cmd.ip, cmd.decision_id, cmd.ttl_seconds)
+                {
                     Ok(()) => true,
                     Err(e) => {
                         warn!(ip=%cmd.ip, "XDP block failed: {}", e);
@@ -609,7 +623,12 @@ mod tests {
     }
     #[async_trait::async_trait]
     impl XdpApplier for RecordingApplier {
-        fn apply_block(&mut self, ip: IpAddr, _d: Uuid) -> Result<(), EnforcementError> {
+        fn apply_block(
+            &mut self,
+            ip: IpAddr,
+            _d: Uuid,
+            _ttl_seconds: u64,
+        ) -> Result<(), EnforcementError> {
             self.log.lock().unwrap().push(("block".into(), ip));
             Ok(())
         }
@@ -807,7 +826,12 @@ mod tests {
         struct FailingApplier;
         #[async_trait::async_trait]
         impl XdpApplier for FailingApplier {
-            fn apply_block(&mut self, _: IpAddr, _: Uuid) -> Result<(), EnforcementError> {
+            fn apply_block(
+                &mut self,
+                _: IpAddr,
+                _: Uuid,
+                _: u64,
+            ) -> Result<(), EnforcementError> {
                 Err(EnforcementError::Xdp("kernel gone".into()))
             }
             fn apply_unblock(&mut self, _: IpAddr, _: Uuid) -> Result<(), EnforcementError> {

@@ -13,8 +13,7 @@
 
 use crate::{EnforcementError, ReconciliationState, XdpApplier};
 use aya::Ebpf;
-use aya::maps::IterableMap;
-use aya::maps::{HashMap, MapError, PerCpuArray, PerCpuValues};
+use aya::maps::{HashMap as AyaHashMap, MapError, PerCpuArray, PerCpuValues, IterableMap};
 use aya::programs::Xdp;
 use aya::programs::xdp::XdpMode;
 use std::net::IpAddr;
@@ -31,12 +30,20 @@ pub struct BlocklistKey(pub u128);
 #[allow(unsafe_code)]
 unsafe impl aya::Pod for BlocklistKey {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-pub struct BlocklistValue(pub u8);
+/// Map value = absolute expiry ns on the monotonic clock (same clock as BPF's
+/// bpf_ktime_get_ns; on Linux std::time::Instant is CLOCK_MONOTONIC since
+/// boot). u64::MAX = permanent. P0: the old 1-byte value made aya's try_from
+/// fail with InvalidValueSize → apply_block errored → XDP silently blocked
+/// nothing; and a packed u32 expiry capped any block at 2^32 ns ≈ 4.3 s.
+pub const PERMANENT: u64 = u64::MAX;
 
-#[allow(unsafe_code)]
-unsafe impl aya::Pod for BlocklistValue {}
+/// Encode a TTL in seconds into the map value. ttl_seconds = 0 → permanent.
+fn blocklist_value(now_ns: u64, ttl_seconds: u64) -> u64 {
+    if ttl_seconds == 0 {
+        return PERMANENT;
+    }
+    now_ns.saturating_add(ttl_seconds.saturating_mul(1_000_000_000))
+}
 
 impl BlocklistKey {
     pub fn from_ip(ip: IpAddr) -> Self {
@@ -131,12 +138,12 @@ unsafe fn raw_get_next_key<K: Copy>(
     let mut next = std::mem::MaybeUninit::<K>::uninit();
     let next_ptr = next.as_mut_ptr() as u64;
     let attr = bpf_elem_attr(fd, key_ptr, next_ptr, 0);
-    let ret = libc::syscall(
-        libc::SYS_bpf,
-        4i64, // BPF_MAP_GET_NEXT_KEY
-        attr.as_ptr(),
-        BPF_ELEM_ATTR_SIZE,
-    );
+    let ret = unsafe { libc::syscall(
+       libc::SYS_bpf,
+       4i64, // BPF_MAP_GET_NEXT_KEY
+       attr.as_ptr(),
+       BPF_ELEM_ATTR_SIZE,
+       ) };
     if ret < 0 {
         let e = std::io::Error::last_os_error();
         if e.raw_os_error() == Some(libc::ENOENT) {
@@ -144,7 +151,7 @@ unsafe fn raw_get_next_key<K: Copy>(
         }
         return Err(e);
     }
-    Ok(Some(next.assume_init()))
+    Ok(Some(unsafe { next.assume_init() }))
 }
 
 /// bpf_map_delete_elem — remove `key` from the map.
@@ -154,12 +161,12 @@ unsafe fn raw_get_next_key<K: Copy>(
 #[allow(unsafe_code)]
 unsafe fn raw_delete_elem<K: Copy>(fd: std::os::fd::RawFd, key: &K) -> std::io::Result<()> {
     let attr = bpf_elem_attr(fd, std::ptr::from_ref(key) as u64, 0, 0);
-    let ret = libc::syscall(
+    let ret = unsafe { libc::syscall(
         libc::SYS_bpf,
         3i64, // BPF_MAP_DELETE_ELEM
         attr.as_ptr(),
         BPF_ELEM_ATTR_SIZE,
-    );
+        ) };
     if ret < 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -207,9 +214,7 @@ impl AyaXdpApplier {
     fn with_map<R>(
         &mut self,
         name: &str,
-        f: impl FnOnce(
-            &mut HashMap<&mut aya::maps::MapData, BlocklistKey, BlocklistValue>,
-        ) -> Result<R, MapError>,
+        f: impl FnOnce(&mut AyaHashMap<&mut aya::maps::MapData, BlocklistKey, u64>) -> Result<R, MapError>,
     ) -> Result<R, EnforcementError> {
         let bpf = self
             .bpf
@@ -218,8 +223,8 @@ impl AyaXdpApplier {
         let map = bpf
             .map_mut(name)
             .ok_or_else(|| EnforcementError::Xdp(format!("{name} map missing")))?;
-        let mut m: HashMap<_, BlocklistKey, BlocklistValue> =
-            HashMap::try_from(map).map_err(map_err)?;
+        let mut m: AyaHashMap<_, BlocklistKey, u64> =
+            AyaHashMap::try_from(map).map_err(map_err)?;
         f(&mut m).map_err(map_err)
     }
 
@@ -246,9 +251,27 @@ impl AyaXdpApplier {
 
 #[async_trait::async_trait]
 impl XdpApplier for AyaXdpApplier {
-    fn apply_block(&mut self, ip: IpAddr, _decision_id: Uuid) -> Result<(), EnforcementError> {
+    fn apply_block(
+        &mut self,
+        ip: IpAddr,
+        _decision_id: Uuid,
+        ttl_seconds: u64,
+    ) -> Result<(), EnforcementError> {
+        // CLOCK_MONOTONIC — same clock as BPF's bpf_ktime_get_ns, so the
+        // absolute expiry is comparable in-kernel.
+        let mut ts = std::mem::MaybeUninit::<libc::timespec>::uninit();
+        let rc = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, ts.as_mut_ptr()) };
+        if rc != 0 {
+            return Err(map_err(std::io::Error::last_os_error()));
+        }
+        let ts = unsafe { ts.assume_init() };
+        let now_ns = (ts.tv_sec as u64) * 1_000_000_000 + ts.tv_nsec as u64;
         self.with_map(xdp_map_for(ip), |m| {
-            m.insert(BlocklistKey::from_ip(ip), BlocklistValue(1), 0)
+            m.insert(
+                BlocklistKey::from_ip(ip),
+                blocklist_value(now_ns, ttl_seconds),
+                0,
+            )
         })
     }
 
@@ -292,7 +315,12 @@ impl XdpApplier for AyaXdpApplier {
                     }
                 }
                 for k in &expected {
-                    m.insert(*k, BlocklistValue(1), 0)?;
+                    // Reconcile can't see per-block TTLs from a bare IP list;
+                    // userspace owns expiry (removes on unblock). u64::MAX keeps
+                    // the key blocking until explicitly removed — LRU eviction
+                    // still bounds map growth. ponytail: pass (IpAddr, ttl) into
+                    // reconcile if BPF-side expiry backup is ever needed.
+                    m.insert(*k, PERMANENT, 0)?;
                 }
                 Ok(())
             })?;
@@ -312,6 +340,20 @@ impl XdpApplier for AyaXdpApplier {
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+
+    /// P0: ttl=0 must encode PERMANENT — a zero expiry would be instantly
+    /// expired in-kernel (now < 0 never) and silently unblock everything.
+    #[test]
+    fn blocklist_value_ttl_zero_is_permanent() {
+        assert_eq!(blocklist_value(1_000, 0), PERMANENT);
+    }
+
+    /// Value must be absolute expiry ns (not a duration) — BPF compares
+    /// now < value directly against bpf_ktime_get_ns.
+    #[test]
+    fn blocklist_value_encodes_absolute_expiry() {
+        assert_eq!(blocklist_value(5_000_000_000, 10), 15_000_000_000);
+    }
 
     /// P0 regression: the kernel memcmp's the raw memory of BlocklistKey
     /// against the C program's `key[0] = ip->saddr` layout — wire octets in

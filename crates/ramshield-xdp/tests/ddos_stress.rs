@@ -4,7 +4,9 @@
 //!     /home/m/.cargo/bin/cargo test -p ramshield-xdp --features elf \
 //!     -- --ignored ddos_ --test-threads=1
 
+#![allow(unsafe_code, unsafe_op_in_unsafe_fn)] // test-only raw BPF syscall wrappers, root-gated
 use std::collections::HashSet;
+use aya::Ebpf;
 use std::net::Ipv4Addr;
 use std::os::fd::{AsFd, AsRawFd};
 use std::time::Instant;
@@ -95,19 +97,23 @@ impl Key {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
-struct Val(u8);
+struct Val(u64);
 
 unsafe impl aya::Pod for Key {}
 unsafe impl aya::Pod for Val {}
 
 const CAP: usize = 102_400;
 
+/// Value = absolute expiry ns (CLOCK_MONOTONIC, same as BPF bpf_ktime_get_ns).
+/// u64::MAX = permanent — tests want the key to stay blocking for the run.
+const PERM: u64 = u64::MAX;
+
 // ── Helpers ───────────────────────────────────────────────────────────
-fn load() -> aya::Bpf {
-    aya::Bpf::load(ramshield_xdp::BPF_ELF).expect("load failed")
+fn load() -> aya::Ebpf {
+    Ebpf::load(ramshield_xdp::BPF_ELF).expect("load failed")
 }
 
-fn raw_fd(bpf: &mut aya::Bpf, name: &str) -> i32 {
+fn raw_fd(bpf: &mut aya::Ebpf, name: &str) -> i32 {
     let map = bpf.map_mut(name).expect("map missing");
     match map {
         aya::maps::Map::HashMap(d) => d.fd().as_fd().as_raw_fd(),
@@ -117,8 +123,8 @@ fn raw_fd(bpf: &mut aya::Bpf, name: &str) -> i32 {
 }
 
 /// Count keys — consumes Map, fd invalid after.
-fn count(bpf: &mut aya::Bpf, name: &str) -> usize {
-    use aya::maps::IterableMap;
+fn count(bpf: &mut aya::Ebpf, name: &str) -> usize {
+
     let map = bpf.take_map(name).unwrap();
     aya::maps::HashMap::<_, [u64; 2], Val>::try_from(map)
         .unwrap()
@@ -127,8 +133,8 @@ fn count(bpf: &mut aya::Bpf, name: &str) -> usize {
 }
 
 /// Collect all keys as [u64;2]. Consumes Map.
-fn collect(bpf: &mut aya::Bpf, name: &str) -> Vec<[u64; 2]> {
-    use aya::maps::IterableMap;
+fn collect(bpf: &mut aya::Ebpf, name: &str) -> Vec<[u64; 2]> {
+
     let map = bpf.take_map(name).unwrap();
     aya::maps::HashMap::<_, [u64; 2], Val>::try_from(map)
         .unwrap()
@@ -138,7 +144,7 @@ fn collect(bpf: &mut aya::Bpf, name: &str) -> Vec<[u64; 2]> {
 }
 
 unsafe fn ins(fd: i32, k: &Key) {
-    let v = Val(1);
+    let v = Val(PERM);
     bpf_update(fd, k.raw().as_ptr(), &v as *const _ as *const u8, 0).unwrap();
 }
 
@@ -160,7 +166,7 @@ fn ddos_diag_crud() {
 
     // Insert
     unsafe {
-        let v = Val(1);
+        let v = Val(PERM);
         let r = bpf_update(fd, kb.as_ptr(), &v as *const _ as *const u8, 0);
         eprintln!("[crud] insert={r:?}");
         assert!(r.is_ok());
@@ -222,7 +228,7 @@ fn ddos_lru_eviction() {
     }
     // LRU_HASH: insert one more — kernel evicts coldest, never E2BIG.
     let k = Key::v4(99, 99, 99, 99);
-    let r = unsafe { bpf_update(fd, k.raw().as_ptr(), &Val(1) as *const _ as *const u8, 0) };
+    let r = unsafe { bpf_update(fd, k.raw().as_ptr(), &Val(PERM) as *const _ as *const u8, 0) };
     assert!(
         r.is_ok(),
         "LRU insert must never fail: {:?}",
@@ -322,7 +328,7 @@ fn ddos_reconcile_50k() {
             bpf_update(
                 fd2,
                 mk as *const _ as *const u8,
-                &Val(1) as *const _ as *const u8,
+                &Val(PERM) as *const _ as *const u8,
                 0,
             )
         };
@@ -403,7 +409,7 @@ fn ddos_boundary_reuse() {
     // LRU: overflow succeeds — kernel evicts coldest entry.
     let k = Key::v4(99, 99, 99, 99);
     unsafe {
-        bpf_update(fd, k.raw().as_ptr(), &Val(1) as *const _ as *const u8, 0).unwrap();
+        bpf_update(fd, k.raw().as_ptr(), &Val(PERM) as *const _ as *const u8, 0).unwrap();
     }
     // Delete one, re-insert — count stays ≤ CAP.
     unsafe {
@@ -422,10 +428,10 @@ fn ddos_boundary_reuse() {
 #[test]
 #[ignore]
 fn ddos_counters_map_loads() {
-    let mut bpf = load();
+    let bpf = load();
     // COUNTERS map must exist and be a PerCpuArray
     let map = bpf.map("COUNTERS").expect("COUNTERS map missing");
-    let mut array: aya::maps::PerCpuArray<&aya::maps::MapData, u64> =
+    let array: aya::maps::PerCpuArray<&aya::maps::MapData, u64> =
         aya::maps::PerCpuArray::try_from(map).expect("COUNTERS not a PerCpuArray");
     assert_eq!(array.len(), 4, "must have 4 counter slots");
 
