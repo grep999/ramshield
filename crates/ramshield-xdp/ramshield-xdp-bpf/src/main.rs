@@ -10,8 +10,7 @@ use aya_ebpf::bindings::xdp_md;
 use aya_ebpf::{
     bindings::xdp_action,
     macros::{map, xdp},
-    maps::{LpmTrie, LruHashMap, PerCpuArray},
-    maps::lpm_trie::Key,
+    maps::{lpm_trie::Key, LpmTrie, LruHashMap, PerCpuArray, RingBuf},
     programs::XdpContext,
 };
 use core::mem;
@@ -25,20 +24,25 @@ use network_types::{
 // Key for LPM_CIDR is { prefixlen: u32, addr: [u64; 2] } — one /24 or /128 entry
 // replaces 256 flat entries in BLOCKLIST.
 #[map]
-static BLOCKLIST: LruHashMap<[u64; 2], u8> = LruHashMap::with_max_entries(blocklist_cap_env(), 0);
+static BLOCKLIST: LruHashMap<[u64; 2], u64> = LruHashMap::with_max_entries(blocklist_cap_env(), 0);
 
 #[map]
-static BLOCKLIST6: LruHashMap<[u64; 2], u8> = LruHashMap::with_max_entries(blocklist_cap_env(), 0);
+static BLOCKLIST6: LruHashMap<[u64; 2], u64> = LruHashMap::with_max_entries(blocklist_cap_env(), 0);
 
-// 16-byte key matching C's __u64[2] layout.
-// CIDR maps: one /24 entry replaces 256 flat v4 entries in BLOCKLIST.
-// /64 prefix matches a single IPv6 /64 in BLOCKLIST6.
-// LpmTrie key = { prefix_len: u32, data: [u64; 2] } — network byte order addr.
+// TTL value format: lower 32 bits = slot index (0-3), upper 32 bits = expiry_ns
+// On insert: value = (expiry_ns << 32) | slot
+// On lookup: if now < expiry { drop } else { pass }
+// Reconcile: scan keys, delete expired
 #[map]
 static BLOCKCIDR: LpmTrie<[u64; 2], u8> = LpmTrie::with_max_entries(102_400, 0);
 
 #[map]
 static BLOCKCIDR6: LpmTrie<[u64; 2], u8> = LpmTrie::with_max_entries(102_400, 0);
+
+// RingBuf for kernel→userspace drop events. 64KB default.
+// Event: { ip: [u8; 16], ts_ns: u64, action: u8, slot: u8 }
+#[map]
+static EVENTS: RingBuf = RingBuf::with_byte_size(65536, 0);
 
 // Per-CPU drop counters. One u64 slot per CPU; zero cache-line contention
 // under peak flood. Slot index encodes the outcome (see CounterSlot below).
@@ -62,6 +66,16 @@ fn inc_counter(slot: u32) {
     if let Some(p) = ptr {
         unsafe { *p += 1 };
     }
+}
+
+fn emit_drop_event(ip: &[u8; 16], slot: u32) {
+    let ts = unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() };
+    let mut buf = [0u8; 26];
+    buf[0..16].copy_from_slice(ip);
+    buf[16..24].copy_from_slice(&ts.to_ne_bytes());
+    buf[24] = 0;
+    buf[25] = (slot & 0xFF) as u8;
+    let _ = unsafe { EVENTS.output(&buf, 0) };
 }
 
 // Wire-format VLAN ethertypes (native/LE representation of the on-wire values).
@@ -142,9 +156,13 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
                 16,
             );
         }
-        if unsafe { BLOCKLIST6.get(&key) }.is_some() {
-            inc_counter(counter::V6_DROP);
-            return Ok(xdp_action::XDP_DROP);
+        if let Some(v) = unsafe { BLOCKLIST6.get(&key) } {
+            let expiry_ns = v >> 32;
+            let now = unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() };
+            if now < expiry_ns {
+                inc_counter(counter::V6_DROP);
+                return Ok(xdp_action::XDP_DROP);
+            }
         }
         // CIDR fallback: LPM_TRIE — one /64 entry replaces 256 flat entries in BLOCKLIST6
         if unsafe { BLOCKCIDR6.get(&Key::new(128, key)) }.is_some() {
@@ -163,9 +181,13 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
     let ip: *const Ipv4Hdr = ptr_at(&ctx, l3_off)?;
     let src = u32::from_be_bytes(unsafe { (*ip).src_addr });
     let key = [src as u64, 0u64];
-    if unsafe { BLOCKLIST.get(&key) }.is_some() {
-        inc_counter(counter::V4_DROP);
-        return Ok(xdp_action::XDP_DROP);
+    if let Some(v) = unsafe { BLOCKLIST.get(&key) } {
+        let expiry_ns = v >> 32;
+        let now = unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() };
+        if now < expiry_ns {
+            inc_counter(counter::V4_DROP);
+            return Ok(xdp_action::XDP_DROP);
+        }
     }
     // CIDR fallback: LPM_TRIE — one /24 entry replaces 256 flat entries in BLOCKLIST
     if unsafe { BLOCKCIDR.get(&Key::new(32, key)) }.is_some() {
