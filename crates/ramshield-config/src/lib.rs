@@ -1,5 +1,6 @@
 use arc_swap::ArcSwap;
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 use std::sync::Arc;
 
 pub type ConfigHandle = Arc<ArcSwap<Config>>;
@@ -553,10 +554,10 @@ impl Config {
                 anyhow::bail!("ipc.auth_keys[{id}] contains non-hex characters");
             }
         }
-        if let Some(ref p) = self.dashboard.admin_password_hash {
-            if argon2::PasswordHash::new(p).is_err() {
-                anyhow::bail!("dashboard.admin_password_hash is not a valid PHC string");
-            }
+        if let Some(ref p) = self.dashboard.admin_password_hash
+            && argon2::PasswordHash::new(p).is_err()
+        {
+            anyhow::bail!("dashboard.admin_password_hash is not a valid PHC string");
         }
 
         Ok(())
@@ -591,13 +592,32 @@ impl Config {
     }
 }
 
-/// True when `addr` would accept packets from other hosts.
-/// Treats `0.0.0.0`, `[::]`, and bare `::` as public; everything else
-/// (loopback, specific NIC IPs, hostnames) is the operator's problem.
+/// True when `addr` binds an interface reachable from other hosts.
+/// Loopback (127.0.0.1, ::1) and link-local (169.254.x.x, fe80::/10) are
+/// host-private; all other L3 addresses — including RFC1918 private
+/// ranges — are LAN-reachable and treated as public for fail-closed
+/// exposure purposes. Hostnames are treated as private (DNS may resolve
+/// anywhere; a wrong answer is a config bug, not a code risk).
 fn is_public_bind(addr: &str) -> bool {
     let host = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(addr);
     let host = host.trim_matches(['[', ']']);
-    host == "0.0.0.0" || host == "::" || host == "*"
+    if host.is_empty() || host == "0.0.0.0" || host == "::" || host == "*" {
+        return true;
+    }
+    match host.parse::<IpAddr>() {
+        // Loopback and link-local are unreachable from other hosts. Everything
+        // else — including RFC1918 private ranges — is reachable from the LAN,
+        // so an unauthenticated bind there is an exposure.
+        Ok(IpAddr::V4(ip)) => !(ip.is_loopback() || ip.is_link_local()),
+        Ok(IpAddr::V6(ip)) => !(ip.is_loopback() || ip.is_unicast_link_local()),
+        Err(_) => {
+            // Hostname (e.g. "localhost") is the operator's call — DNS may
+            // resolve to a public address, but we can't tell here. Treat as
+            // private: a misconfigured hostname is a config bug, not a
+            // security hole.
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -624,9 +644,32 @@ mod tests {
             "bracketed loopback is private"
         );
         assert!(
+            !is_public_bind("::1:7890"),
+            "unbracketed loopback is private"
+        );
+        assert!(
+            !is_public_bind("[fe80::1]:7890"),
+            "bracketed v6 link-local is private"
+        );
+        assert!(
             !is_public_bind("127.0.0.1:7890"),
             "v4 loopback stays private"
         );
+    }
+
+    /// P1: NIC-specific binds reach the LAN. An unauthenticated dashboard on
+    /// 192.168.x.x is one ARP hop from every host on the segment — the
+    /// fail-closed guard must not treat it as operator-local. Hostnames stay
+    /// private (localhost resolves loopback; a DNS name needs an answer we
+    /// can't get here). Link-local is unreachable from other hosts.
+    #[test]
+    fn lan_nic_binds_are_public() {
+        assert!(is_public_bind("192.168.1.5:9999"), "v4 private LAN");
+        assert!(is_public_bind("10.0.0.1:7890"), "v4 private 10/8");
+        assert!(is_public_bind("172.16.0.1:7890"), "v4 private 172.16/12");
+        assert!(is_public_bind(":9999"), "empty host binds 0.0.0.0");
+        assert!(!is_public_bind("[fe80::1]:7890"), "v6 link-local private");
+        assert!(!is_public_bind("localhost:9999"), "hostname is operator's call");
     }
 
     #[cfg(test)]
