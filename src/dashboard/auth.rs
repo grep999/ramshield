@@ -13,7 +13,6 @@ use dashmap::DashMap;
 use rand::RngCore;
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
     net::{IpAddr, SocketAddr},
     sync::Arc,
     time::{Duration, Instant},
@@ -27,7 +26,7 @@ pub struct AuthState {
     /// Argon2 PHC string from config.
     password_hash: Option<String>,
     ttl: Duration,
-    sessions: Arc<std::sync::Mutex<HashMap<String, Instant>>>,
+    sessions: Arc<DashMap<String, Instant, ahash::RandomState>>,
     max_login_attempts: u32,
     max_password_length: usize,
     /// Per-IP failed-login counters. A global counter let any host lock out
@@ -67,7 +66,7 @@ impl AuthState {
         Self {
             password_hash,
             ttl: Duration::from_secs(ttl_secs.max(60)),
-            sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            sessions: Arc::new(DashMap::with_hasher(ahash::RandomState::new())),
             max_login_attempts,
             max_password_length,
             failures: Arc::new(DashMap::with_hasher(ahash::RandomState::new())),
@@ -149,25 +148,16 @@ impl AuthState {
     /// flow so the async handler can verify on a blocking thread and register
     /// here.
     fn register_session(&self, token: &str) {
-        self.sessions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(token.to_string(), Instant::now());
+        self.sessions.insert(token.to_string(), Instant::now());
     }
 
     fn validate(&self, token: &str) -> bool {
         if token.len() != 64 {
             return false;
         }
-        // ponytail: poison-recovery — session map data stays valid across a
-        // panicked holder; availability > strict poison semantics.
-        let mut map = self
-            .sessions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Opportunistic sweep of expired sessions.
-        map.retain(|_, t| t.elapsed() < self.ttl);
-        map.contains_key(token)
+        // Opportunistic sweep of expired sessions (sharded, no global lock).
+        self.sessions.retain(|_, t| t.elapsed() < self.ttl);
+        self.sessions.contains_key(token)
     }
 }
 
