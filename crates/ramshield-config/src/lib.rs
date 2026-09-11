@@ -553,6 +553,9 @@ impl Config {
             if hex_str.bytes().any(|b| !b.is_ascii_hexdigit()) {
                 anyhow::bail!("ipc.auth_keys[{id}] contains non-hex characters");
             }
+            if hex_str.len() < 32 {
+                anyhow::bail!("ipc.auth_keys[{id}] hex key must be >= 32 chars (16 bytes)");
+            }
         }
         if let Some(ref p) = self.dashboard.admin_password_hash
             && argon2::PasswordHash::new(p).is_err()
@@ -712,7 +715,7 @@ mod tests {
         cfg.dashboard.http_addr = "0.0.0.0:9999".into();
         cfg.dashboard.admin_password_hash = Some("$argon2id$v=19$m=19456,t=2,p=1$KEr4N0scMPEA13Rh1/+mqg$T9fGQf4DDvVRIk2khZH1q2xnI/e4UcWo1l00tSYfDnM".into());
         cfg.ipc.tcp_addr = "0.0.0.0:7890".into();
-        cfg.ipc.auth_keys = vec!["k1:deadbeef01020304".into()];
+        cfg.ipc.auth_keys = vec!["k1:deadbeef01020304deadbeef01020304".into()];
         // validate() still permits (operator may TLS-front); warnings must flag it.
         cfg.validate().unwrap();
         let w = cfg.exposure_warnings();
