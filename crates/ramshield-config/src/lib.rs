@@ -520,8 +520,8 @@ impl Config {
             anyhow::bail!("dashboard.http_addr must not be empty");
         }
 
-        // Fail-closed: a public bind without credentials is an open admin
-        // surface. Loopback (127.0.0.1 / ::1) stays open for local dev.
+        // Fail-closed: a public bind without credentials is an open admin surface.
+        // Loopback (127.0.0.1 / ::1) stays open for local dev.
         if is_public_bind(&self.dashboard.http_addr) && self.dashboard.admin_password_hash.is_none()
         {
             anyhow::bail!(
@@ -534,6 +534,29 @@ impl Config {
                 "ipc.tcp_addr binds a public interface ({}) but auth_keys is empty — set HMAC keys or bind 127.0.0.1",
                 self.ipc.tcp_addr
             );
+        }
+
+        // P1e: validate auth_keys shape (key_id:hex) + PHC hash format,
+        // before any IPC server binds with them. No new deps — std hex check.
+        for entry in &self.ipc.auth_keys {
+            let (id, hex_str) = match entry.split_once(':') {
+                Some((k, v)) => (k, v),
+                None => ("", entry.as_str()),
+            };
+            if hex_str.is_empty() {
+                anyhow::bail!("ipc.auth_keys entries must be `key_id:hex_key`");
+            }
+            if hex_str.len() % 2 != 0 {
+                anyhow::bail!("ipc.auth_keys[{id}] has odd-length hex key");
+            }
+            if hex_str.bytes().any(|b| !b.is_ascii_hexdigit()) {
+                anyhow::bail!("ipc.auth_keys[{id}] contains non-hex characters");
+            }
+        }
+        if let Some(ref p) = self.dashboard.admin_password_hash {
+            if argon2::PasswordHash::new(p).is_err() {
+                anyhow::bail!("dashboard.admin_password_hash is not a valid PHC string");
+            }
         }
 
         Ok(())
@@ -644,9 +667,9 @@ mod tests {
     fn public_binds_produce_exposure_warnings() {
         let mut cfg = Config::default();
         cfg.dashboard.http_addr = "0.0.0.0:9999".into();
-        cfg.dashboard.admin_password_hash = Some("x".into());
+        cfg.dashboard.admin_password_hash = Some("$argon2id$v=19$m=19456,t=2,p=1$KEr4N0scMPEA13Rh1/+mqg$T9fGQf4DDvVRIk2khZH1q2xnI/e4UcWo1l00tSYfDnM".into());
         cfg.ipc.tcp_addr = "0.0.0.0:7890".into();
-        cfg.ipc.auth_keys = vec!["k1".into()];
+        cfg.ipc.auth_keys = vec!["k1:deadbeef01020304".into()];
         // validate() still permits (operator may TLS-front); warnings must flag it.
         cfg.validate().unwrap();
         let w = cfg.exposure_warnings();

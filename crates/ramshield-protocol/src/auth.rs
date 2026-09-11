@@ -23,12 +23,15 @@ type HmacSha256 = Hmac<Sha256>;
 pub const MAX_CLOCK_SKEW_MS: u64 = 30_000;
 
 /// Compute hex signature for a payload with a key at the given timestamp.
-pub fn sign(key: &[u8], ts_ms: u64, payload: &[u8]) -> String {
-    let mut mac = HmacSha256::new_from_slice(key).expect("hmac accepts any key length");
+///
+/// Result reserved for future MAC swaps with length limits — current HMAC
+/// accepts any key length, so `Err` is unreachable in practice.
+pub fn sign(key: &[u8], ts_ms: u64, payload: &[u8]) -> Result<String, &'static str> {
+    let mut mac = HmacSha256::new_from_slice(key).map_err(|_| "bad key")?;
     mac.update(ts_ms.to_string().as_bytes());
     mac.update(b".");
     mac.update(payload);
-    hex::encode(mac.finalize().into_bytes())
+    Ok(hex::encode(mac.finalize().into_bytes()))
 }
 
 /// Verify an incoming frame's auth object against configured keys.
@@ -104,8 +107,16 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let sig = sign(b"secret-key", now, payload);
+        let sig = sign(b"secret-key", now, payload).expect("test key non-empty");
         assert!(verify(&keys, "k1", now, &sig, payload, None).is_ok());
+    }
+
+    #[test]
+    fn empty_key_still_signs_invariant() {
+        // HMAC accepts any key length — empty included. Pins the invariant so
+        // sign() stays equation-correct if a length-limited MAC is swapped in.
+        let payload = b"x";
+        assert!(sign(b"", 1, payload).is_ok());
     }
 
     #[test]
@@ -115,7 +126,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let sig = sign(b"secret-key", now, b"honest payload");
+        let sig = sign(b"secret-key", now, b"honest payload").expect("test key non-empty");
         assert!(verify(&keys, "k1", now, &sig, b"evil payload", None).is_err());
     }
 
@@ -126,9 +137,9 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let sig = sign(b"other-key", now, b"x");
+        let sig = sign(b"other-key", now, b"x").expect("test key non-empty");
         assert!(verify(&keys, "k1", now, &sig, b"x", None).is_err());
-        let good_sig = sign(b"secret-key", now, b"x");
+        let good_sig = sign(b"secret-key", now, b"x").expect("test key non-empty");
         let old = now - MAX_CLOCK_SKEW_MS - 1000;
         assert!(verify(&keys, "k1", old, &good_sig, b"x", None).is_err());
     }
@@ -142,7 +153,7 @@ mod tests {
             .unwrap()
             .as_millis() as u64;
         let payload = br#"{"type":"check_ip","ip":"1.2.3.4"}"#;
-        let sig = sign(b"secret-key", now, payload);
+        let sig = sign(b"secret-key", now, payload).expect("test key non-empty");
         assert!(verify(&keys, "k1", now, &sig, payload, None).is_ok());
         // BUG: second call passes — no store supplied, no replay protection.
         assert!(verify(&keys, "k1", now, &sig, payload, None).is_ok());
@@ -166,7 +177,7 @@ mod replay_tests {
             .unwrap()
             .as_millis() as u64;
         let payload = br#"{"type":"check_ip","ip":"1.2.3.4"}"#;
-        let sig = sign(b"secret-key", now, payload);
+        let sig = sign(b"secret-key", now, payload).expect("test key non-empty");
         let store = ReplayStore::new(64, Duration::from_millis(MAX_CLOCK_SKEW_MS));
 
         // First call should succeed
@@ -190,8 +201,8 @@ mod replay_tests {
             .as_millis() as u64;
         let payload = br#"{"type":"check_ip","ip":"5.6.7.8"}"#;
 
-        let sig1 = sign(b"key-a", now, payload);
-        let sig2 = sign(b"key-b", now, payload);
+        let sig1 = sign(b"key-a", now, payload).expect("test key non-empty");
+        let sig2 = sign(b"key-b", now, payload).expect("test key non-empty");
         let store = ReplayStore::new(64, Duration::from_millis(MAX_CLOCK_SKEW_MS));
         // Different keys, same payload: both should pass (different signatures)
         assert!(verify(&keys, "k1", now, &sig1, payload, Some(&store)).is_ok());
@@ -206,8 +217,8 @@ mod replay_tests {
             .unwrap()
             .as_millis() as u64;
 
-        let sig1 = sign(b"secret-key", now, b"payload-a");
-        let sig2 = sign(b"secret-key", now, b"payload-b");
+        let sig1 = sign(b"secret-key", now, b"payload-a").expect("test key non-empty");
+        let sig2 = sign(b"secret-key", now, b"payload-b").expect("test key non-empty");
         let store = ReplayStore::new(64, Duration::from_millis(MAX_CLOCK_SKEW_MS));
         // Different payloads: both should pass
         assert!(verify(&keys, "k1", now, &sig1, b"payload-a", Some(&store)).is_ok());

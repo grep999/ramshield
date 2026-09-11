@@ -28,7 +28,7 @@ jobs:
             --glob '!**/*_test.rs' \
             -e '\.unwrap\s*\(' \
             -e '\.expect\s*\(' \
-            src/ || true)
+            src/ crates/ || true)
           # Filter hits using the same Python that the test harness exercises.
           # ci_filter_testcode.py reads source files, finds #[cfg(test)] block
           # line ranges via brace-depth tracking, drops hits inside them.

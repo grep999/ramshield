@@ -331,7 +331,10 @@ impl DetectionEngine {
 
         // crossbeam Receiver inside Arc — clone Arc for each worker (cheap refcount bump).
         // Each worker drains aggressively with try_recv() inside a recv_timeout window.
-        let mut handles = self.worker_handles.lock().unwrap();
+        // ponytail: lock().unwrap() here is poison-panic risk — one panicked worker
+        // poisons the shared mutex and every later spawn/join panics too.
+        // unwrap_or_else(PoisonError::into_inner) recovers the guard instead.
+        let mut handles = self.worker_handles.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for i in 0..n_workers {
             let eng = self.clone();
             let rx = self.event_rx.clone();
@@ -356,7 +359,9 @@ impl DetectionEngine {
     /// F9: block until batch/subnet threads exit (each final-flushes on the
     /// way out). Returns after `grace` elapses at worst.
     pub fn join_workers(&self, grace: std::time::Duration) {
-        let handles: Vec<_> = self.worker_handles.lock().unwrap().drain(..).collect();
+        // ponytail: poison-recover on the shared worker_handles mutex — a
+        // panicked worker must not poison every later join.
+        let handles: Vec<_> = self.worker_handles.lock().unwrap_or_else(std::sync::PoisonError::into_inner).drain(..).collect();
         // Workers exit within recv_timeout (<= batch_window_ms) of the flag
         // + one final flush; poll-until-finished gives the grace cap without
         // inventing a join_timeout (std has none). Last-resort join() is safe

@@ -401,6 +401,8 @@ impl Wal {
                             // decompressed size is corruption or an attack.
                             let declared = payload
                                 .get(..4)
+                                // ponytail: invariant — get(..4) guarantees exactly 4 bytes,
+                                // so TryInto<[u8; 4]> is provably infallible. Unwrap is safe.
                                 .map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
                                 .unwrap_or(usize::MAX);
                             if declared > MAX_RECORD_SIZE {
