@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="512" height="512">
+  <!-- Shield body: left red, right blue, split down the middle -->
+  <defs>
+    <clipPath id="left">
+      <path d="M128 16 L232 48 V128 C232 184 186 224 128 244 C70 224 24 184 24 128 V48 Z"/>
+    </clipPath>
+    <clipPath id="right">
+      <path d="M128 16 L232 48 V128 C232 184 186 224 128 244 C70 224 24 184 24 128 V48 Z"/>
+    </clipPath>
+    <linearGradient id="gRed" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e11d48"/>
+      <stop offset="1" stop-color="#9f1239"/>
+    </linearGradient>
+    <linearGradient id="gBlue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#1e3a8a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Shadow -->
+  <path d="M128 16 L232 48 V128 C232 184 186 224 128 244 C70 224 24 184 24 128 V48 Z"
+        fill="#0f172a" opacity="0.15" transform="translate(4,6)"/>
+
+  <!-- Shield outline -->
+  <path d="M128 16 L232 48 V128 C232 184 186 224 128 244 C70 224 24 184 24 128 V48 Z"
+        fill="#0f172a"/>
+
+  <!-- Red left half -->
+  <g clip-path="url(#left)">
+    <rect x="24" y="16" width="104" height="230" fill="url(#gRed)"/>
+  </g>
+  <!-- Blue right half -->
+  <g clip-path="url(#right)">
+    <rect x="128" y="16" width="104" height="230" fill="url(#gBlue)"/>
+  </g>
+
+  <!-- Center seam highlight -->
+  <rect x="126" y="28" width="4" height="200" rx="2" fill="#ffffff" opacity="0.85"/>
+
+  <!-- Upward chevron (arrow theme woven in) -->
+  <path d="M128 76 L168 116 L128 156 L88 116 Z" fill="#ffffff"/>
+  <path d="M128 116 L146 134 L128 152 L110 134 Z" fill="#fca5a5"/>
+  <path d="M128 76 L146 94 L128 112 L110 94 Z" fill="#93c5fd"/>
+
+  <!-- Inner shield border -->
+  <path d="M128 28 L218 56 V126 C218 174 182 208 128 226 C74 208 38 174 38 126 V56 Z"
+        fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="3"/>
+</svg>
