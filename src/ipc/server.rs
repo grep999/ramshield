@@ -201,7 +201,12 @@ impl IpcServer {
             }
             let accept = timeout(Duration::from_secs(1), self.listener.accept()).await;
             let (mut socket, remote) = match accept {
-                Ok(Ok(pair)) => pair,
+                Ok(Ok((mut socket, remote))) => {
+                    if let Err(e) = socket.set_nodelay(true) {
+                        debug!("tcp_nodelay on {remote} failed: {e}");
+                    }
+                    (socket, remote)
+                }
                 Ok(Err(e)) => {
                     error!("accept error: {}", e);
                     backoff = Duration::from_secs(1).min(backoff * 2);
