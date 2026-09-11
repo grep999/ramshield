@@ -198,6 +198,10 @@ pub struct Metrics {
     pub blocks_detection: Arc<AtomicU64>,
     pub blocks_subnet: Arc<AtomicU64>,
     pub blocks_forecast: Arc<AtomicU64>,
+    /// Track when detection updates fail due to capacity exceeded
+    pub capacity_exceeded_count: Arc<AtomicU64>,
+    /// Track how many IPs fail due to capacity exceeded
+    pub capacity_exceeded_ips: Arc<AtomicU64>,
     pub forecast_ticks: Arc<AtomicU64>,
     pub entropy_ticks: Arc<AtomicU64>,
     pub hw_rps_bits: Arc<AtomicU64>,
@@ -244,6 +248,8 @@ impl Metrics {
             blocks_detection: Arc::new(AtomicU64::new(0)),
             blocks_subnet: Arc::new(AtomicU64::new(0)),
             blocks_forecast: Arc::new(AtomicU64::new(0)),
+            capacity_exceeded_count: Arc::new(AtomicU64::new(0)),
+            capacity_exceeded_ips: Arc::new(AtomicU64::new(0)),
             forecast_ticks: Arc::new(AtomicU64::new(0)),
             entropy_ticks: Arc::new(AtomicU64::new(0)),
             hw_rps_bits: Arc::new(AtomicU64::new(0)),

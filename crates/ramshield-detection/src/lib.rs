@@ -535,8 +535,25 @@ impl DetectionEngine {
 
             // ponytail: merge_record does the single store lookup (is_blocked check
             // was a second DashMap hit on the same key).
-            let (_ewma_rps, threat, should_block, _was_blocked) =
+            let (_ewma_rps, threat, should_block, _was_blocked, stored) =
                 self.merge_record(ip, agg, det, ram_lim, now, sk);
+            if !stored {
+                self.metrics
+                    .capacity_exceeded_count
+                    .fetch_add(1, Ordering::Relaxed);
+                self.metrics
+                    .capacity_exceeded_ips
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    ip = %ip,
+                    ram_usage = self.store.ram_bytes(),
+                    ram_limit = ram_lim,
+                    "detection: record update capacity-exceeded — IP not tracked"
+                );
+                cold_skipped += 1;
+                cold_skipped_events += agg.count;
+                continue;
+            }
             // Note: we do NOT skip already-blocked IPs here. The pulse-wave
             // tracker needs to keep running on every batch to count distinct
             // over-threshold samples; subsequent bursts must still record
@@ -620,9 +637,11 @@ impl DetectionEngine {
         );
     }
 
-    /// ponytail: returns the 4-tuple `(ewma_rps, threat, should_block, was_blocked)`.
+    /// ponytail: returns the 5-tuple `(ewma_rps, threat, should_block, was_blocked, stored)`.
     /// `was_blocked` is set true if the IP already had a BlockState, so callers can
     /// skip the extra store.get() they used to do.
+    /// `stored` is false when a net-new key was refused by the RAM budget —
+    /// callers must NOT count the IP as promoted.
     /// `sk`: pre-computed subnet key (avoids redundant `subnet_key_u128` call).
     fn merge_record(
         &self,
@@ -632,7 +651,7 @@ impl DetectionEngine {
         ram_lim: usize,
         now: u64,
         sk: Option<SubnetKey>,
-    ) -> (f64, f32, bool, bool) {
+    ) -> (f64, f32, bool, bool, bool) {
         // P0 fix (round-4 Q3): was get() -> clone -> mutate -> insert(),
         // spanning two shard locks. A block committed by the enforcement
         // actor between the read and the write was silently reverted by
@@ -645,7 +664,7 @@ impl DetectionEngine {
         let window_ns = det.rate_window_secs * 1_000_000_000;
         let pulse_win = det.pulse_window_secs;
         let pulse_thr = det.pulse_threshold_samples;
-        let ((was_blocked, (ewma_rps, threat, block)), _stored) = self.store.update_ip(
+        let ((was_blocked, (ewma_rps, threat, block)), stored) = self.store.update_ip(
             ip,
             IpRecord {
                 ip,
@@ -741,7 +760,7 @@ impl DetectionEngine {
         self.store.update_subnet_index(ip, sk, false);
         // block emitted even when already blocked: caller relies on the
         // enforcement dedup to refresh TTL (semantics preserved from pre-fix).
-        (ewma_rps, threat, block, was_blocked)
+        (ewma_rps, threat, block, was_blocked, stored)
     }
 
     /// Subnet-scale batch block — reads subnet_table only, not full store key scan.
@@ -1422,6 +1441,48 @@ mod tests {
         assert_eq!(
             promoted, 3,
             "promoted_ips counter must reflect this flush's promoted count, not store.len()"
+        );
+    }
+
+    /// RED: Wenn update_ip wegen erschöpfter RAM-Budget ein net-new Key
+    /// ablehnt (stored=false), darf die IP weder als promoted gezählt noch
+    /// in den subnet_index aufgenommen werden — und der Vorfall muss in
+    /// Metrics sichtbar sein. Bisher: stillschweigendes Verschwinden.
+    #[test]
+    fn capacity_exceeded_is_tracked_and_not_promoted() {
+        let cfg = Config::default().into_handle();
+        let store = Arc::new(Store::new(16));
+        let metrics = Arc::new(Metrics::new());
+        let (etx, _erx) = mpsc::channel(64);
+        let eng = Arc::new(DetectionEngine::new(
+            store.clone(),
+            cfg,
+            etx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        ));
+        // Budget künstlich erschöpfen: ram_bytes weit über jedes Limit heben.
+        store.set_ram_bytes_for_testing(usize::MAX / 2);
+        let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 42, 0, 7));
+        eng.flush_events(&(0..20).map(|i| ev_at(ip, i)).collect::<Vec<_>>());
+        assert_eq!(
+            metrics.capacity_exceeded_count.load(Ordering::Relaxed),
+            1,
+            "capacity exceeded muss in Metrics sichtbar sein"
+        );
+        assert_eq!(
+            metrics.capacity_exceeded_ips.load(Ordering::Relaxed),
+            1,
+            "betroffene IP muss gezählt werden"
+        );
+        assert!(
+            store.get(&ip).is_none(),
+            "abgelehnte IP darf keinen Store-Eintrag erzeugen"
+        );
+        assert_eq!(
+            store.traffic.promoted_ips.load(Ordering::Relaxed),
+            0,
+            "abgelehnte IP darf nicht als promoted gezählt werden"
         );
     }
 }
