@@ -757,7 +757,13 @@ impl DetectionEngine {
                 (was_blocked, (ewma_rps, threat, block))
             },
         );
-        self.store.update_subnet_index(ip, sk, false);
+        // Only update subnet index when the record was actually stored.
+        // When stored=false (capacity exceeded), no entry exists in inner,
+        // so a ghost in subnet_index would leak forever — no eviction path
+        // will ever clean it.  Gate on stored to prevent the leak.
+        if stored {
+            self.store.update_subnet_index(ip, sk, false);
+        }
         // block emitted even when already blocked: caller relies on the
         // enforcement dedup to refresh TTL (semantics preserved from pre-fix).
         (ewma_rps, threat, block, was_blocked, stored)
