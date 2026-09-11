@@ -672,7 +672,10 @@ mod tests {
         assert!(is_public_bind("172.16.0.1:7890"), "v4 private 172.16/12");
         assert!(is_public_bind(":9999"), "empty host binds 0.0.0.0");
         assert!(!is_public_bind("[fe80::1]:7890"), "v6 link-local private");
-        assert!(!is_public_bind("localhost:9999"), "hostname is operator's call");
+        assert!(
+            !is_public_bind("localhost:9999"),
+            "hostname is operator's call"
+        );
     }
 
     #[cfg(test)]
@@ -713,9 +716,10 @@ mod tests {
     fn public_binds_produce_exposure_warnings() {
         let mut cfg = Config::default();
         cfg.dashboard.http_addr = "0.0.0.0:9999".into();
-        cfg.dashboard.admin_password_hash = Some("$argon2id$v=19$m=19456,t=2,p=1$KEr4N0scMPEA13Rh1/+mqg$T9fGQf4DDvVRIk2khZH1q2xnI/e4UcWo1l00tSYfDnM".into());
+        cfg.dashboard.admin_password_hash = Some("$argon2id$v=19$m=19456,t=2,p=1$rOGcgxnibWHynWZ0exEH7Q$KM06+4aIAIc2nPNe+jyGekH+zqzAwwYw3JHzgo26b1M".into());
         cfg.ipc.tcp_addr = "0.0.0.0:7890".into();
-        cfg.ipc.auth_keys = vec!["k1:deadbeef01020304deadbeef01020304".into()];
+        cfg.ipc.auth_keys =
+            vec!["k1:0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021".into()];
         // validate() still permits (operator may TLS-front); warnings must flag it.
         cfg.validate().unwrap();
         let w = cfg.exposure_warnings();

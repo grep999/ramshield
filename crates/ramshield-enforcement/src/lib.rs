@@ -439,16 +439,17 @@ impl EnforcementService {
                 }
 
                 // Step 3: dataplane.
-                let xdp_applied = match self
-                    .xdp
-                    .apply_block(cmd.ip, cmd.decision_id, cmd.ttl_seconds)
-                {
-                    Ok(()) => true,
-                    Err(e) => {
-                        warn!(ip=%cmd.ip, "XDP block failed: {}", e);
-                        false
-                    }
-                };
+                let xdp_applied =
+                    match self
+                        .xdp
+                        .apply_block(cmd.ip, cmd.decision_id, cmd.ttl_seconds)
+                    {
+                        Ok(()) => true,
+                        Err(e) => {
+                            warn!(ip=%cmd.ip, "XDP block failed: {}", e);
+                            false
+                        }
+                    };
                 self.remember_decision(cmd.decision_id);
                 self.metrics.inc_blocks();
                 Ok(EnforceResult {
@@ -844,12 +845,7 @@ mod tests {
         struct FailingApplier;
         #[async_trait::async_trait]
         impl XdpApplier for FailingApplier {
-            fn apply_block(
-                &mut self,
-                _: IpAddr,
-                _: Uuid,
-                _: u64,
-            ) -> Result<(), EnforcementError> {
+            fn apply_block(&mut self, _: IpAddr, _: Uuid, _: u64) -> Result<(), EnforcementError> {
                 Err(EnforcementError::Xdp("kernel gone".into()))
             }
             fn apply_unblock(&mut self, _: IpAddr, _: Uuid) -> Result<(), EnforcementError> {

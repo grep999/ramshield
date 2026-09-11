@@ -334,7 +334,10 @@ impl DetectionEngine {
         // ponytail: lock().unwrap() here is poison-panic risk — one panicked worker
         // poisons the shared mutex and every later spawn/join panics too.
         // unwrap_or_else(PoisonError::into_inner) recovers the guard instead.
-        let mut handles = self.worker_handles.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut handles = self
+            .worker_handles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for i in 0..n_workers {
             let eng = self.clone();
             let rx = self.event_rx.clone();
@@ -361,7 +364,12 @@ impl DetectionEngine {
     pub fn join_workers(&self, grace: std::time::Duration) {
         // ponytail: poison-recover on the shared worker_handles mutex — a
         // panicked worker must not poison every later join.
-        let handles: Vec<_> = self.worker_handles.lock().unwrap_or_else(std::sync::PoisonError::into_inner).drain(..).collect();
+        let handles: Vec<_> = self
+            .worker_handles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain(..)
+            .collect();
         // Workers exit within recv_timeout (<= batch_window_ms) of the flag
         // + one final flush; poll-until-finished gives the grace cap without
         // inventing a join_timeout (std has none). Last-resort join() is safe

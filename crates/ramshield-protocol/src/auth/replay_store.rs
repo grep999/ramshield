@@ -28,6 +28,10 @@ pub struct NonceKey {
 pub struct ReplayStore {
     cap: usize,
     ttl: Duration,
+    /// Process-random hash builder for key_id -> u64. Fixed seeds (0,0,0,0)
+    /// made the digest deterministic across restarts; random per-process
+    /// seed removes cross-key collision availability risk.
+    key_hasher: ahash::RandomState,
     // Map key -> insert instant. Insertion order = LRU order (front = oldest).
     inner: Mutex<StoreInner>,
 }
@@ -42,6 +46,7 @@ impl ReplayStore {
         Self {
             cap: capacity.max(1),
             ttl,
+            key_hasher: ahash::RandomState::new(),
             inner: Mutex::new(StoreInner {
                 order: VecDeque::with_capacity(capacity),
                 map: AHashMap::with_capacity(capacity),
@@ -54,7 +59,7 @@ impl ReplayStore {
     /// `Ok(())` otherwise. Evicts expired entries and overflows the LRU.
     pub fn check_and_record(&self, key_id: &str, nonce: &[u8]) -> Result<(), &'static str> {
         let key = NonceKey {
-            key_id_hash: ahash::RandomState::with_seeds(0, 0, 0, 0).hash_one(key_id),
+            key_id_hash: self.key_hasher.hash_one(key_id),
             nonce: nonce.to_vec(),
         };
         let now = Instant::now();

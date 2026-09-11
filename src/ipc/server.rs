@@ -110,7 +110,7 @@ impl IpcServer {
         store: Arc<Store>,
         enforcement_tx: mpsc::Sender<EnforceCommand>,
     ) -> std::io::Result<Self> {
-        config.validate().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        config.validate().map_err(std::io::Error::other)?;
         let addr = config.ipc.tcp_addr.clone();
         info!("IPC server binding to {}", addr);
         let listener = TcpListener::bind(&addr).await?;

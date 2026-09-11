@@ -5,8 +5,8 @@
 //!     -- --ignored ddos_ --test-threads=1
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)] // test-only raw BPF syscall wrappers, root-gated
-use std::collections::HashSet;
 use aya::Ebpf;
+use std::collections::HashSet;
 use std::net::Ipv4Addr;
 use std::os::fd::{AsFd, AsRawFd};
 use std::time::Instant;
@@ -124,7 +124,6 @@ fn raw_fd(bpf: &mut aya::Ebpf, name: &str) -> i32 {
 
 /// Count keys — consumes Map, fd invalid after.
 fn count(bpf: &mut aya::Ebpf, name: &str) -> usize {
-
     let map = bpf.take_map(name).unwrap();
     aya::maps::HashMap::<_, [u64; 2], Val>::try_from(map)
         .unwrap()
@@ -134,7 +133,6 @@ fn count(bpf: &mut aya::Ebpf, name: &str) -> usize {
 
 /// Collect all keys as [u64;2]. Consumes Map.
 fn collect(bpf: &mut aya::Ebpf, name: &str) -> Vec<[u64; 2]> {
-
     let map = bpf.take_map(name).unwrap();
     aya::maps::HashMap::<_, [u64; 2], Val>::try_from(map)
         .unwrap()

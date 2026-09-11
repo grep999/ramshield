@@ -262,7 +262,7 @@ async fn login_submit(
         Some(token) => {
             auth.register_session(&token);
             let cookie = format!(
-                "{}={}; HttpOnly; SameSite=Lax; Secure; Max-Age={}",
+                "{}={}; HttpOnly; SameSite=Lax; Secure; Path=/; Max-Age={}",
                 COOKIE_NAME,
                 token,
                 auth.ttl.as_secs()

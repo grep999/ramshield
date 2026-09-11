@@ -13,7 +13,7 @@
 
 use crate::{EnforcementError, ReconciliationState, XdpApplier, XdpDropEvent};
 use aya::Ebpf;
-use aya::maps::{HashMap as AyaHashMap, MapError, PerCpuArray, PerCpuValues, IterableMap, RingBuf};
+use aya::maps::{HashMap as AyaHashMap, IterableMap, MapError, PerCpuArray, PerCpuValues, RingBuf};
 use aya::programs::Xdp;
 use aya::programs::xdp::XdpMode;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -138,12 +138,14 @@ unsafe fn raw_get_next_key<K: Copy>(
     let mut next = std::mem::MaybeUninit::<K>::uninit();
     let next_ptr = next.as_mut_ptr() as u64;
     let attr = bpf_elem_attr(fd, key_ptr, next_ptr, 0);
-    let ret = unsafe { libc::syscall(
-       libc::SYS_bpf,
-       4i64, // BPF_MAP_GET_NEXT_KEY
-       attr.as_ptr(),
-       BPF_ELEM_ATTR_SIZE,
-       ) };
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            4i64, // BPF_MAP_GET_NEXT_KEY
+            attr.as_ptr(),
+            BPF_ELEM_ATTR_SIZE,
+        )
+    };
     if ret < 0 {
         let e = std::io::Error::last_os_error();
         if e.raw_os_error() == Some(libc::ENOENT) {
@@ -161,12 +163,14 @@ unsafe fn raw_get_next_key<K: Copy>(
 #[allow(unsafe_code)]
 unsafe fn raw_delete_elem<K: Copy>(fd: std::os::fd::RawFd, key: &K) -> std::io::Result<()> {
     let attr = bpf_elem_attr(fd, std::ptr::from_ref(key) as u64, 0, 0);
-    let ret = unsafe { libc::syscall(
-        libc::SYS_bpf,
-        3i64, // BPF_MAP_DELETE_ELEM
-        attr.as_ptr(),
-        BPF_ELEM_ATTR_SIZE,
-        ) };
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            3i64, // BPF_MAP_DELETE_ELEM
+            attr.as_ptr(),
+            BPF_ELEM_ATTR_SIZE,
+        )
+    };
     if ret < 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -214,7 +218,9 @@ impl AyaXdpApplier {
     fn with_map<R>(
         &mut self,
         name: &str,
-        f: impl FnOnce(&mut AyaHashMap<&mut aya::maps::MapData, BlocklistKey, u64>) -> Result<R, MapError>,
+        f: impl FnOnce(
+            &mut AyaHashMap<&mut aya::maps::MapData, BlocklistKey, u64>,
+        ) -> Result<R, MapError>,
     ) -> Result<R, EnforcementError> {
         let bpf = self
             .bpf
@@ -223,8 +229,7 @@ impl AyaXdpApplier {
         let map = bpf
             .map_mut(name)
             .ok_or_else(|| EnforcementError::Xdp(format!("{name} map missing")))?;
-        let mut m: AyaHashMap<_, BlocklistKey, u64> =
-            AyaHashMap::try_from(map).map_err(map_err)?;
+        let mut m: AyaHashMap<_, BlocklistKey, u64> = AyaHashMap::try_from(map).map_err(map_err)?;
         f(&mut m).map_err(map_err)
     }
 
