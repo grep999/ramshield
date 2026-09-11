@@ -47,8 +47,7 @@ body {
   border-bottom: 1px solid var(--border);
 }
 .brand { display: flex; align-items: center; gap: 12px; }
-.shield { width: 26px; height: 26px; flex: 0 0 auto; filter: drop-shadow(0 0 6px rgba(0,229,255,.5)); }
-.shield path { fill: none; stroke: url(#shieldGrad); stroke-width: 1.6; }
+.logo { width: 28px; height: 32px; flex: 0 0 auto; filter: drop-shadow(0 0 6px rgba(0,229,255,.4)); }
 .brand h1 {
   font-size: 15px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase;
   background: linear-gradient(90deg, var(--neon), var(--violet));
@@ -205,8 +204,7 @@ tr.fresh td { animation: rowIn 1.6s ease; }
 
 <div class="header">
   <div class="brand">
-    <svg class="shield" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8 3.5v5.2c0 5-3.2 9.3-8 11.3-4.8-2-8-6.3-8-11.3V5.5L12 2z"/><path d="M8.2 12.2l2.6 2.6 5-5.4"/></svg>
-    <h1>RamShield</h1>
+    <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNTYgMjU2IiB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiI+IDxkZWZzPiA8Y2xpcFBhdGggaWQ9ImxlZnQiPiA8cGF0aCBkPSJNMTI4IDE2IEwyMzIgNDggVjEyOCBDMjMyIDE4NCAxODYgMjI0IDEyOCAyNDQgQzcwIDIyNCAyNCAxODQgMjQgMTI4IFY0OCBaIi8+IDwvY2xpcFBhdGg+IDxjbGlwUGF0aCBpZD0icmlnaHQiPiA8cGF0aCBkPSJNMTI4IDE2IEwyMzIgNDggVjEyOCBDMjMyIDE4NCAxODYgMjI0IDEyOCAyNDQgQzcwIDIyNCAyNCAxODQgMjQgMTI4IFY0OCBaIi8+IDwvY2xpcFBhdGg+IDxsaW5lYXJHcmFkaWVudCBpZD0iZ1JlZCIgeDE9IjAiIHkxPSIwIiB4Mj0iMCIgeTI9IjEiPiA8c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNlMTFkNDgiLz4gPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjOWYxMjM5Ii8+IDwvbGluZWFyR3JhZGllbnQ+IDxsaW5lYXJHcmFkaWVudCBpZD0iZ0JsdWUiIHgxPSIwIiB5MT0iMCIgeDI9IjAiIHkyPSIxIj4gPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjMjU2M2ViIi8+IDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzFlM2E4YSIvPiA8L2xpbmVhckdyYWRpZW50PiA8L2RlZnM+IDxwYXRoIGQ9Ik0xMjggMTYgTDIzMiA0OCBWMTI4IEMyMzIgMTg0IDE4NiAyMjQgMTI4IDI0NCBDNzAgMjI0IDI0IDE4NCAyNCAxMjggVjQ4IFoiIGZpbGw9IiMwZjE3MmEiIG9wYWNpdHk9IjAuMTUiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQsNikiLz4gPHBhdGggZD0iTTEyOCAxNiBMMjMyIDQ4IFYxMjggQzIzMiAxODQgMTg2IDIyNCAxMjggMjQ0IEM3MCAyMjQgMjQgMTg0IDI0IDEyOCBWNDggWiIgZmlsbD0iIzBmMTcyYSIvPiA8ZyBjbGlwLXBhdGg9InVybCgjbGVmdCkiPiA8cmVjdCB4PSIyNCIgeT0iMTYiIHdpZHRoPSIxMDQiIGhlaWdodD0iMjMwIiBmaWxsPSJ1cmwoI2dSZWQpIi8+IDwvZz4gPGcgY2xpcC1wYXRoPSJ1cmwoI3JpZ2h0KSI+IDxyZWN0IHg9IjEyOCIgeT0iMTYiIHdpZHRoPSIxMDQiIGhlaWdodD0iMjMwIiBmaWxsPSJ1cmwoI2dCbHVlKSIvPiA8L2c+IDxyZWN0IHg9IjEyNiIgeT0iMjgiIHdpZHRoPSI0IiBoZWlnaHQ9IjIwMCIgcng9IjIiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuODUiLz4gPHBhdGggZD0iTTEyOCA3NiBMMTY4IDExNiBMMTI4IDE1NiBMODggMTE2IFoiIGZpbGw9IiNmZmZmZmYiLz4gPHBhdGggZD0iTTEyOCAxMTYgTDE0NiAxMzQgTDEyOCAxNTIgTDExMCAxMzQgWiIgZmlsbD0iI2ZjYTVhNSIvPiA8cGF0aCBkPSJNMTI4IDc2IEwxNDYgOTQgTDEyOCAxMTIgTDExMCA5NCBaIiBmaWxsPSIjOTNjNWZkIi8+IDxwYXRoIGQ9Ik0xMjggMjggTDIxOCA1NiBWMTI2IEMyMTggMTc0IDE4MiAyMDggMTI4IDIyNiBDNzQgMjA4IDM4IDE3NCAzOCAxMjYgVjU2IFoiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZmZmZiIgc3Ryb2tlLW9wYWNpdHk9IjAuMzUiIHN0cm9rZS13aWR0aD0iMyIvPiA8L3N2Zz4=" alt="RamShield logo" class="logo" />
   </div>
   <div class="health">
     <span id="xdp-chip" class="badge badge-muted" title="Kernel XDP dataplane status" style="display:none">XDP —</span>

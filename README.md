@@ -1,3 +1,5 @@
+<p align="center"><img src="logos/ramshield-logo.svg" width="120" alt="RamShield logo"></p>
+
 # RamShield
 
 **DDoS mitigation that decides in milliseconds and drops at the kernel.**
