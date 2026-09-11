@@ -33,6 +33,8 @@ screen*.jpg
 
 # Test configs
 test_config.toml
+config.prod.toml          # production secrets are never committed
+
 
 # Session continuation files
 *session*.txt

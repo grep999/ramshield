@@ -1,10 +1,11 @@
-# config.prod.toml — production-like settings.
+# config.prod.toml.example — production-like settings template
 #
-# Apply with: ./target/release/ramshield --config config.prod.toml --no-xdp
+# Copy to config.prod.toml and fill in REAL values before use.
+# This file is tracked; config.prod.toml is NOT tracked (.gitignore).
 #
 # FAIL-CLOSED: this file binds 0.0.0.0. Config::validate() refuses to
 # start until you set:
-#   [dashboard] admin_password_hash = "<argon2 PHC>"
+#   [dashboard] admin_password_hash = "<argon2 PHC string from argon2 CLI>"
 #   [ipc]       auth_keys = ["k1:<64-hex-hmac-key>"]
 # Loopback (127.0.0.1) stays open for local dev.
 #
@@ -25,11 +26,13 @@ ram_limit_mb = 8192
 [ipc]
 tcp_addr = "0.0.0.0:7890"
 max_connections = 1000000
+# auth_keys = ["k1:<64-hex-hmac-key>"]
 
 [dashboard]
 enabled = true
 http_addr = "0.0.0.0:9999"
 block_log_size = 1024
+# admin_password_hash = "<argon2 PHC string>"
 
 [wal]
 enabled = true

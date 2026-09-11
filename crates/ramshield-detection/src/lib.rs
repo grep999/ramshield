@@ -590,14 +590,13 @@ impl DetectionEngine {
             .promoted_ips
             .store(promoted as u64, Ordering::Relaxed);
 
-        let block_count = blocks.len() as u32;
-        for b in &blocks {
-            self.metrics
-                .record_block_ip(&b.0, b.1.as_str(), "detection");
-        }
+        // ponytail: block metrics + enforcement send are fused into one loop
+        // so the dashboard never counts a block the enforcement channel
+        // dropped.  `blocks` in BatchRecord is the SENT count, not the
+        // proposed count.
+        let mut sent_blocks = 0u32;
         // ponytail: warn once per 1024 rejections — log churn kills throughput
-        // under sustained queue pressure. Upgrade: sliding-window rate limiter
-        // if ops needs exact rejection counts (metric already tracks blocks).
+        // under sustained queue pressure.
         let mut rejected = 0u32;
         for b in blocks {
             let cmd = EnforceCommand {
@@ -611,7 +610,11 @@ impl DetectionEngine {
                 ip: b.0,
                 action: EnforceAction::Block,
             };
-            if self.enforcement_tx.try_send(cmd).is_err() {
+            if self.enforcement_tx.try_send(cmd).is_ok() {
+                sent_blocks += 1;
+                self.metrics
+                    .record_block_ip(&b.0, b.1.as_str(), "detection");
+            } else {
                 rejected += 1;
                 if rejected & 0x3FF == 1 {
                     warn!(ip=%b.0, rejected, "enforcement queue full; dropping {} block commands (sampled warn)", rejected);
@@ -627,7 +630,7 @@ impl DetectionEngine {
             cold_skipped,
             promoted_events,
             cold_skipped_events,
-            blocks: block_count,
+            blocks: sent_blocks,
             hot_subnets: hot_subnets as u32,
         });
 
