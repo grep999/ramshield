@@ -33,7 +33,7 @@ fn replay_protection_requires_store() {
     let k = keys();
     let payload = br#"{"type":"check_ip","ip":"1.2.3.4"}"#;
     let ts = now_ms();
-    let sig = auth::sign(b"server-key", ts, payload).expect("test key non-empty");
+    let sig = auth::sign(b"server-key", "k1", ts, payload).expect("test key non-empty");
 
     assert!(auth::verify(&k, "k1", ts, &sig, payload, None).is_ok());
     // No store => no memory => duplicate is (correctly) accepted.
@@ -51,7 +51,7 @@ fn replay_outside_window_rejected() {
     let k = keys();
     let payload = b"x";
     let stale_ts = now_ms() - MAX_CLOCK_SKEW_MS - 1;
-    let sig = auth::sign(b"server-key", stale_ts, payload).expect("test key non-empty");
+    let sig = auth::sign(b"server-key", "k1", stale_ts, payload).expect("test key non-empty");
     assert!(auth::verify(&k, "k1", stale_ts, &sig, payload, None).is_err());
 }
 

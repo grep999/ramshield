@@ -26,10 +26,15 @@ pub const MAX_CLOCK_SKEW_MS: u64 = 30_000;
 ///
 /// Result reserved for future MAC swaps with length limits — current HMAC
 /// accepts any key length, so `Err` is unreachable in practice.
-pub fn sign(key: &[u8], ts_ms: u64, payload: &[u8]) -> Result<String, &'static str> {
+///
+/// `key_id` is bound into the MAC input (after `ts_ms`) so two key_ids
+/// holding identical key bytes produce different signatures — a frame
+/// captured under `k1` can't be accepted under `k2`.
+pub fn sign(key: &[u8], key_id: &str, ts_ms: u64, payload: &[u8]) -> Result<String, &'static str> {
     let mut mac = HmacSha256::new_from_slice(key).map_err(|_| "bad key")?;
     mac.update(ts_ms.to_string().as_bytes());
     mac.update(b".");
+    mac.update(key_id.as_bytes());
     mac.update(payload);
     Ok(hex::encode(mac.finalize().into_bytes()))
 }
@@ -63,6 +68,7 @@ pub fn verify(
     let mut mac = HmacSha256::new_from_slice(key).map_err(|_| "bad key")?;
     mac.update(ts_ms.to_string().as_bytes());
     mac.update(b".");
+    mac.update(key_id.as_bytes());
     mac.update(payload);
     let expected = mac.finalize().into_bytes();
     // Constant-time compare.
@@ -107,7 +113,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let sig = sign(b"secret-key", now, payload).expect("test key non-empty");
+        let sig = sign(b"secret-key", "k1", now, payload).expect("test key non-empty");
         assert!(verify(&keys, "k1", now, &sig, payload, None).is_ok());
     }
 
@@ -116,7 +122,7 @@ mod tests {
         // HMAC accepts any key length — empty included. Pins the invariant so
         // sign() stays equation-correct if a length-limited MAC is swapped in.
         let payload = b"x";
-        assert!(sign(b"", 1, payload).is_ok());
+        assert!(sign(b"", "", 1, payload).is_ok());
     }
 
     #[test]
@@ -126,7 +132,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let sig = sign(b"secret-key", now, b"honest payload").expect("test key non-empty");
+        let sig = sign(b"secret-key", "k1", now, b"honest payload").expect("test key non-empty");
         assert!(verify(&keys, "k1", now, &sig, b"evil payload", None).is_err());
     }
 
@@ -137,9 +143,9 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        let sig = sign(b"other-key", now, b"x").expect("test key non-empty");
+        let sig = sign(b"other-key", "k1", now, b"x").expect("test key non-empty");
         assert!(verify(&keys, "k1", now, &sig, b"x", None).is_err());
-        let good_sig = sign(b"secret-key", now, b"x").expect("test key non-empty");
+        let good_sig = sign(b"secret-key", "k1", now, b"x").expect("test key non-empty");
         let old = now - MAX_CLOCK_SKEW_MS - 1000;
         assert!(verify(&keys, "k1", old, &good_sig, b"x", None).is_err());
     }
@@ -153,7 +159,7 @@ mod tests {
             .unwrap()
             .as_millis() as u64;
         let payload = br#"{"type":"check_ip","ip":"1.2.3.4"}"#;
-        let sig = sign(b"secret-key", now, payload).expect("test key non-empty");
+        let sig = sign(b"secret-key", "k1", now, payload).expect("test key non-empty");
         assert!(verify(&keys, "k1", now, &sig, payload, None).is_ok());
         // BUG: second call passes — no store supplied, no replay protection.
         assert!(verify(&keys, "k1", now, &sig, payload, None).is_ok());
@@ -177,7 +183,7 @@ mod replay_tests {
             .unwrap()
             .as_millis() as u64;
         let payload = br#"{"type":"check_ip","ip":"1.2.3.4"}"#;
-        let sig = sign(b"secret-key", now, payload).expect("test key non-empty");
+        let sig = sign(b"secret-key", "k1", now, payload).expect("test key non-empty");
         let store = ReplayStore::new(64, Duration::from_millis(MAX_CLOCK_SKEW_MS));
 
         // First call should succeed
@@ -201,8 +207,8 @@ mod replay_tests {
             .as_millis() as u64;
         let payload = br#"{"type":"check_ip","ip":"5.6.7.8"}"#;
 
-        let sig1 = sign(b"key-a", now, payload).expect("test key non-empty");
-        let sig2 = sign(b"key-b", now, payload).expect("test key non-empty");
+        let sig1 = sign(b"key-a", "k1", now, payload).expect("test key non-empty");
+        let sig2 = sign(b"key-b", "k2", now, payload).expect("test key non-empty");
         let store = ReplayStore::new(64, Duration::from_millis(MAX_CLOCK_SKEW_MS));
         // Different keys, same payload: both should pass (different signatures)
         assert!(verify(&keys, "k1", now, &sig1, payload, Some(&store)).is_ok());
@@ -217,11 +223,40 @@ mod replay_tests {
             .unwrap()
             .as_millis() as u64;
 
-        let sig1 = sign(b"secret-key", now, b"payload-a").expect("test key non-empty");
-        let sig2 = sign(b"secret-key", now, b"payload-b").expect("test key non-empty");
+        let sig1 = sign(b"secret-key", "k1", now, b"payload-a").expect("test key non-empty");
+        let sig2 = sign(b"secret-key", "k1", now, b"payload-b").expect("test key non-empty");
         let store = ReplayStore::new(64, Duration::from_millis(MAX_CLOCK_SKEW_MS));
         // Different payloads: both should pass
         assert!(verify(&keys, "k1", now, &sig1, b"payload-a", Some(&store)).is_ok());
         assert!(verify(&keys, "k1", now, &sig2, b"payload-b", Some(&store)).is_ok());
+    }
+
+    /// RED -> GREEN: H5 — two key_ids with identical key bytes MUST produce
+    /// different signatures. Before the fix: same bytes, same signature,
+    /// cross-key replay accepted. After the fix: key_id is in the MAC input,
+    /// so identical bytes yield different sigs, and verify under k2 rejects
+    /// a frame signed under k1.
+    #[test]
+    fn identical_key_bytes_different_key_id_produces_different_sig() {
+        let keys = vec![
+            ("k1".to_string(), b"same-secret-key".to_vec()),
+            ("k2".to_string(), b"same-secret-key".to_vec()),
+        ];
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let payload = br#"{"type":"check_ip","ip":"1.2.3.4"}"#;
+
+        let sig1 = sign(b"same-secret-key", "k1", now, payload).expect("sign k1");
+        let sig2 = sign(b"same-secret-key", "k2", now, payload).expect("sign k2");
+        // Signatures differ even though key material is identical.
+        assert_ne!(sig1, sig2, "identical bytes + different key_id must differ");
+        // A frame signed under k1 must NOT be accepted as k1 if key_id is wrong.
+        assert!(verify(&keys, "k1", now, &sig2, payload, None).is_err());
+        assert!(verify(&keys, "k2", now, &sig1, payload, None).is_err());
+        // Each frame still validates under its own key_id.
+        assert!(verify(&keys, "k1", now, &sig1, payload, None).is_ok());
+        assert!(verify(&keys, "k2", now, &sig2, payload, None).is_ok());
     }
 }

@@ -260,7 +260,8 @@ fn bench_hmac_sign(n: usize) -> f64 {
     let t0 = Instant::now();
     for i in 0..n {
         std::hint::black_box(
-            ramshield_protocol::auth::sign(&key, i as u64, payload).expect("test key non-empty"),
+            ramshield_protocol::auth::sign(&key, "k1", i as u64, payload)
+                .expect("test key non-empty"),
         );
     }
     t0.elapsed().as_nanos() as f64 / n as f64

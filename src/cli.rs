@@ -72,10 +72,13 @@ fn main() -> Result<()> {
             .as_millis() as u64;
         let payload = serde_json::to_vec(&v)?;
         let key = hex::decode(hexkey.trim()).map_err(|e| anyhow::anyhow!("bad key hex: {}", e))?;
+        let key_id = "k1"; // per config; for now static
+
         let mut mac = Hmac::<Sha256>::new_from_slice(&key)
             .map_err(|e| anyhow::anyhow!("hmac init: {}", e))?;
         mac.update(ts_ms.to_string().as_bytes());
         mac.update(b".");
+        mac.update(key_id.as_bytes());
         mac.update(&payload);
         let sig = hex::encode(mac.finalize().into_bytes());
         let obj = v

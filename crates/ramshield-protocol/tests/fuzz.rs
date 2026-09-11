@@ -74,7 +74,7 @@ proptest! {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let sig = auth::sign(b"attacker-key", now, &payload).expect("test key non-empty");
+        let sig = auth::sign(b"attacker-key", "attacker", now, &payload).expect("test key non-empty");
         let keys = vec![("k1".to_string(), b"server-key".to_vec())];
         let res = auth::verify(&keys, "k1", now, &sig, &payload, None);
         prop_assert!(res.is_err(), "forged signature accepted");
