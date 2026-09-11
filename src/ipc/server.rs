@@ -448,11 +448,11 @@ async fn write_resp(socket: &mut TcpStream, resp: &Response) -> Result<(), std::
     Ok(())
 }
 
-fn epoch_ns() -> u64 {
+fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_nanos() as u64
+        .as_millis() as u64
 }
 
 fn process_request(
@@ -532,7 +532,7 @@ fn process_request(
                 policy_version: 1,
                 source: "ipc".into(),
                 actor: "admin".into(),
-                timestamp_utc: epoch_ns() as i64 / 1_000_000_000,
+                timestamp_utc: now_ms() as i64 / 1000,
                 ttl_seconds: ttl_secs,
                 reason,
                 ip: ip_addr,
@@ -570,7 +570,7 @@ fn process_request(
                 policy_version: 1,
                 source: "ipc".into(),
                 actor: "admin".into(),
-                timestamp_utc: epoch_ns() as i64 / 1_000_000_000,
+                timestamp_utc: now_ms() as i64 / 1000,
                 ttl_seconds: 0,
                 reason: "manual_unblock".into(),
                 ip: ip_addr,
@@ -653,7 +653,7 @@ fn process_request(
                         };
                     }
                 },
-                timestamp_ns: epoch_ns(),
+                timestamp_ns: now_ms() * 1_000_000,
                 bytes,
                 status_code,
                 proto_fingerprint: proto_fp,
@@ -676,7 +676,7 @@ fn process_request(
             }
         }
         Request::ReportConnections { events } => {
-            let now = epoch_ns();
+            let now = now_ms() * 1_000_000;
             let total = events.len() as u32;
             let mut accepted = 0u32;
             let mut rejected = 0u32;
