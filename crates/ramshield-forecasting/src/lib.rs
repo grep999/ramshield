@@ -142,7 +142,7 @@ impl EwmAVar {
         }
     }
 
-    #[allow(dead_code)] // used in tests
+    #[cfg(test)]
     fn sigma(&self) -> f64 {
         self.var_ewma.sqrt()
     }
@@ -532,7 +532,7 @@ impl PeakReservoir {
         Some(self.vals[idx as usize])
     }
 
-    #[allow(dead_code)] // used in tests
+    #[cfg(test)]
     fn warm(&self) -> bool {
         self.ticks >= Self::WARM_TICKS
     }

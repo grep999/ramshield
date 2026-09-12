@@ -635,10 +635,6 @@ mod tests {
                 log: std::sync::Mutex::new(Vec::new()),
             }
         }
-        #[allow(dead_code)]
-        fn ops(&self) -> Vec<(String, IpAddr)> {
-            self.log.lock().unwrap().clone()
-        }
     }
     #[async_trait::async_trait]
     impl XdpApplier for RecordingApplier {
