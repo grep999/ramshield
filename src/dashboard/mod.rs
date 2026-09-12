@@ -5,7 +5,7 @@ use crate::engine::Engine;
 use axum::{
     Router,
     extract::State,
-    http::StatusCode,
+    http::{StatusCode, header},
     middleware as axum_mw,
     response::{Html, Json},
     routing::get,
@@ -212,11 +212,75 @@ struct ConfigResponse {
     config: ConfigView,
 }
 
+/// F1-fix (CWE-352 / OWASP A01): CSRF protection on POST /api/config.
+///
+/// Why: this endpoint accepts full config patches (IPC auth keys, dashboard
+/// password hash). Without an origin check, an authenticated admin who
+/// visits a hostile page could have that page fire a cross-origin POST
+/// here (CORS blocks reading the response, NOT the request itself), e.g.
+/// rotating IPC keys to lock out other admins or swapping config.
+///
+/// Defense-in-depth: the session cookie already carries `SameSite=Lax`,
+/// which modern browsers withhold on cross-site POSTs — this check is the
+/// second layer (and covers non-browser clients that DO attach cookies).
+///
+/// Logic: a browser always sends `Origin` on cross-origin requests; for
+/// same-origin fetches `Origin` is also present, so we compare its
+/// authority (host[:port]) against the request's `Host` header. If
+/// `Origin` is absent we fall back to `Referer` (older clients, form
+/// posts). If BOTH are absent the client is not a browser (curl,
+/// scripts, IPC tooling) — fail-open, since no CSRF is possible without
+/// a browser to smuggle cookies into. A present-but-mismatched header
+/// fails closed with 403 before any config parsing happens.
+///
+/// ponytail: string-slice authority parsing instead of the `url` crate —
+/// origin values are always `scheme://authority[/path]`, a find+split
+/// covers that; add the crate if IPv6 literals in Host ever matter.
+/// Upgrade path: SameSite=Strict on the cookie, or a double-submit CSRF
+/// token, if the dashboard ever grows GET-side state changes too.
 async fn api_set_config(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(patch): Json<ConfigPatch>,
 ) -> (StatusCode, Json<ConfigResponse>) {
     let mut cfg = state.engine.config.load().as_ref().clone();
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_lowercase);
+    let origin = headers
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_lowercase);
+    let referer = headers
+        .get(header::REFERER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_lowercase);
+
+    fn is_cross_origin(origin: Option<&str>, referer: Option<&str>, host: Option<&str>) -> bool {
+        // If Origin present, use it; otherwise check Referer
+        let header = origin.or(referer);
+        // Both missing (curl/operator) => fail-open, allow
+        let Some(header) = header else { return false };
+        // Parse as URL: take everything after :// up to next / (path/query)
+        let header = header.trim();
+        let scheme_end = header.find("://").map(|i| i + 3).unwrap_or(0);
+        let authority = &header[scheme_end..];
+        let authority = authority.split('/').next().unwrap_or("");
+        let authority = authority.split('?').next().unwrap_or("");
+        // Compare authority against Host header; empty => allow
+        !host.is_some_and(|h| h == authority)
+    }
+
+    if is_cross_origin(origin.as_deref(), referer.as_deref(), host.as_deref()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ConfigResponse {
+                ok: false,
+                config: ConfigView::from_config(&cfg),
+            }),
+        );
+    }
     // P2 fix: GET /api/config returns auth_keys as "id:<redacted>" and
     // admin_password_hash as "<redacted>". An operator (or UI) POSTing the
     // viewed config back used to PASS validate() — the placeholder strings
@@ -423,6 +487,54 @@ mod tests {
             !raw.contains("deadbeefcafebabe"),
             "POST /api/config leaked raw HMAC key"
         );
+    }
+
+    /// F1 regression: cross-origin POST /api/config (Origin header pointing
+    /// at a hostile site) must be rejected — this is the CSRF guard.
+    #[tokio::test]
+    async fn post_config_cross_origin_forbidden() {
+        let state = test_app_state();
+        let app = Router::new()
+            .route("/api/config", post(api_set_config))
+            .with_state(state.clone());
+        let body = serde_json::json!({"engine": {"worker_threads": 2, "ram_limit_mb": 128, "shard_count": 8}});
+        let response = app
+            .oneshot(
+                Request::post("/api/config")
+                    .header("content-type", "application/json")
+                    .header("origin", "https://evil.example")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// F1 regression: same-origin POST (Origin matches Host) is allowed —
+    /// the guard must not break legitimate dashboard use.
+    #[tokio::test]
+    async fn post_config_same_origin_allowed() {
+        let state = test_app_state();
+        let app = Router::new()
+            .route("/api/config", post(api_set_config))
+            .with_state(state.clone());
+        let body = serde_json::json!({"engine": {"worker_threads": 4, "ram_limit_mb": 256, "shard_count": 64}});
+        let response = app
+            .oneshot(
+                Request::post("/api/config")
+                    .header("content-type", "application/json")
+                    .header("host", "127.0.0.1:9999")
+                    .header("origin", "http://127.0.0.1:9999")
+                    .body(Body::from(serde_json::to_string(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let cfg = state.engine.config.load();
+        assert_eq!(cfg.engine.ram_limit_mb, 256);
+        assert_eq!(cfg.engine.shard_count, 64);
     }
 
     #[tokio::test]
