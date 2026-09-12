@@ -81,17 +81,32 @@ COUNT=$(printf '%s\n' "$FILTERED" | grep -c . || true)
 if [ "$COUNT" -eq 0 ]; then ok "no unwrap/expect in prod code"; else bad "no unwrap/expect in prod code ($COUNT hits)"; printf '%s\n' "$FILTERED" | head -10; fi
 
 echo "=== 6. SECRETS HYGIENE ==="
-check_absent "config.prod.toml not tracked" "" /dev/null # placeholder replaced below
-if git ls-files | grep -q "^config\.prod\.toml$"; then bad "config.prod.toml not tracked"; else ok "config.prod.toml not tracked"; fi
-check_absent "no deadbeef fixtures" "deadbeef" crates/ src/ tests/
-check_absent "no hardcoded 64-hex keys in tests" "[0-9a-f]{64}" tests/ crates/*/src/lib.rs
+# config.prod.toml not tracked
+git_result=$(git ls-files "config.prod.toml" 2>/dev/null)
+if [ -z "$git_result" ]; then
+    ok "config.prod.toml not tracked"
+else
+    bad "config.prod.toml tracked (security risk)"
+fi
+# deadbeef fixtures
+if rg -l "deadbeef" src/ crates/ tests/ 2>/dev/null | grep -q .; then
+    bad "deadbeef fixtures present"
+else
+    ok "no deadbeef fixtures"
+fi
+# hardcoded 64-hex keys in tests
+if rg -l "[0-9a-f]{64}" tests/ crates/*/src/lib.rs 2>/dev/null | grep -q .; then
+    bad "hardcoded 64-hex keys in tests"
+else
+    ok "no hardcoded 64-hex keys in tests"
+fi
 
 echo "=== 7. UNSAFE SURFACE (XDP-only) ==="
 if rg -l --type rust "unsafe" src/ | grep -v -i "xdp\|enforcement" | grep -q .; then
-    bad "unsafe only in XDP/enforcement"
+    bad "unsafe in files other than XDP/enforcement"
     rg -l --type rust "unsafe" src/ | grep -v -i "xdp\|enforcement" | head -5
 else
-    ok "unsafe only in XDP/enforcement"
+    ok "unsafe only in XDP/enforcement crates"
 fi
 
 echo "=== 8. AUDIT FINDINGS (AUDIT_FULL_20260911) ==="
@@ -129,7 +144,7 @@ check_grep "cookie Path=/" "Path=/" src/dashboard/auth.rs
 check_grep "validate checks PHC hash" "PasswordHash::new" crates/ramshield-config/src/lib.rs
 
 echo "=== 9. ENFORCEMENT COVERAGE (audit: was 1 test / 1090 LOC) ==="
-N=$(rg -c "#\[test\]|#\[tokio::test\]" crates/ramshield-enforcement/src/ 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
+N=$(rg -c '#\[test\]|#\[tokio::test\]' crates/ramshield-enforcement/src/ 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
 if [ "$N" -ge 5 ]; then ok "enforcement tests: $N (>=5)"; else bad "enforcement tests: $N (<5)"; fi
 
 echo "=== 10. HYGIENE ==="

@@ -61,10 +61,16 @@ RamShield is designed to operate in a **trusted network zone** (localhost or iso
 
 1. **Bind IPC to localhost only** — `tcp_addr = "127.0.0.1:7890"`
 2. **Firewall dashboard port** — `:9999` should not be public
-3. **Run as non-root user** — XDP requires `CAP_SYS_ADMIN` capability only
-4. **Use dedicated NIC for XDP** — isolate from management traffic
-5. **Monitor RAM usage** — alert at 80% of `ram_limit_mb`
-6. **Rotate logs** — structured JSON logs via `RUST_LOG`
+3. **HTTPS required for dashboard login over the network** — the session
+   cookie always carries the `Secure` flag, so browsers only send it over
+   HTTPS. Loopback-only deploys work over plain HTTP (RFC 6265bis treats
+   `Secure` on `http://localhost` as trustworthy), but any non-loopback
+   bind needs a TLS-terminating reverse proxy or login loops forever
+   (Set-Cookie accepted, never sent back).
+4. **Run as non-root user** — XDP requires `CAP_SYS_ADMIN` capability only
+5. **Use dedicated NIC for XDP** — isolate from management traffic
+6. **Monitor RAM usage** — alert at 80% of `ram_limit_mb`
+7. **Rotate logs** — structured JSON logs via `RUST_LOG`
 
 ## Dashboard behind a reverse proxy
 
