@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 memmap2 = "0.9"
 ramshield-forecasting = { path = "../ramshield-forecasting" }
+ramshield-mesh = { path = "../ramshield-mesh" }

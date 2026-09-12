@@ -1097,6 +1097,7 @@ version = "0.1.0"
 dependencies = [
  "memmap2",
  "ramshield-forecasting",
+ "ramshield-mesh",
 ]
 
 [[package]]
@@ -1143,6 +1144,7 @@ dependencies = [
  "aya",
  "libc",
  "proptest",
+ "ramshield-mesh",
  "ramshield-metrics",
  "ramshield-storage",
  "ramshield-types",
