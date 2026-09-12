@@ -739,7 +739,14 @@ impl Forecaster {
     }
 }
 
-fn shannon_entropy(counts: &[u64], total: u64) -> f64 {
+/// Shannon entropy in bits for a positive-count distribution.
+///
+/// Callers must pass `total` equal to the sum of `counts`; zero totals return
+/// `0.0` instead of producing NaN. Shared by forecasting and CGNAT analysis.
+pub fn shannon_entropy(counts: &[u64], total: u64) -> f64 {
+    if total == 0 {
+        return 0.0;
+    }
     counts
         .iter()
         .filter(|&&c| c > 0)
