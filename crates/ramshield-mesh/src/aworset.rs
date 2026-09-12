@@ -1,11 +1,14 @@
-//! Add-Wins Observed-Remove Set (AWORSet) CRDT for fleet-federated blocklists
+//! Add-Wins Observed-Remove Set (AWORSet) CRDT primitives
 //!
-//! Each peer maintains a set of (element, dot) pairs where dot is the
-//! logical timestamp when the element was observed. Supports concurrent
-//! adds and removes with eventual consistency across the fleet.
+//! Two layers:
+//! - `Aworset`: generic string-keyed CRDT set (add/remove/merge/contains).
+//! - `AworsetBlocklist`: IP-keyed blocklist CRDT from the fleet integration
+//!   contract — `record_ban` produces a `ClusterBlockDelta` for gossip,
+//!   `merge_delta` absorbs one, `is_blocked` answers membership.
 
-use dashmap::DashSet;
-use std::sync::Arc;
+use super::hlc::Hlc;
+use dashmap::DashMap;
+use std::net::IpAddr;
 
 pub type Dot = u64;
 
@@ -16,19 +19,35 @@ pub struct Element {
     pub removed: bool,
 }
 
-/// Thread-safe AWORSet implementation using DashMap for lock-free concurrent access.
+/// Per-node logical timestamp: (node id, HLC logical sequence).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ClusterDot {
+    pub node_id: u32,
+    pub counter: u32,
+}
+
+/// One ban decision, gossip-able across the fleet.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ClusterBlockDelta {
+    pub ip: IpAddr,
+    pub dot: ClusterDot,
+    pub expires_at_ms: u64,
+    pub tier: u8,
+}
+
+/// Thread-safe AWORSet implementation using DashSet for lock-free concurrent access.
 pub struct Aworset {
     /// Internal storage: element key -> set of dots (add operations)
-    elements: Arc<DashSet<String>>,
+    elements: dashmap::DashSet<String>,
     /// Tombstones: removed elements keyed by element name -> dot
-    tombstones: Arc<DashSet<String>>,
+    tombstones: dashmap::DashSet<String>,
 }
 
 impl Aworset {
     pub fn new() -> Self {
         Self {
-            elements: Arc::new(DashSet::new()),
-            tombstones: Arc::new(DashSet::new()),
+            elements: dashmap::DashSet::new(),
+            tombstones: dashmap::DashSet::new(),
         }
     }
 
@@ -71,6 +90,73 @@ impl Default for Aworset {
     }
 }
 
+/// IP-keyed blocklist CRDT: ban dots per (ip, node), HLC-ordered so the
+/// highest counter per node wins on merge. Internal map is
+/// DashMap<(IpAddr, node_id), (seq, expires_at_ms)>.
+pub struct AworsetBlocklist {
+    node_id: u32,
+    hlc: Hlc,
+    entries: DashMap<(IpAddr, u32), (u32, u64)>,
+}
+
+impl AworsetBlocklist {
+    pub fn new(node_id: u32) -> Self {
+        Self {
+            node_id,
+            hlc: Hlc::new(),
+            entries: DashMap::new(),
+        }
+    }
+
+    /// Record a local ban. Returns the delta to broadcast to peers.
+    pub fn record_ban(&self, ip: IpAddr, ttl_ms: u64, tier: u8) -> ClusterBlockDelta {
+        let (phys_ms, seq) = self.hlc.tick(0, 0);
+        let expires_at_ms = phys_ms + ttl_ms;
+
+        let dot = ClusterDot { node_id: self.node_id, counter: seq };
+        self.entries.insert((ip, self.node_id), (seq, expires_at_ms));
+
+        ClusterBlockDelta { ip, dot, expires_at_ms, tier }
+    }
+
+    /// Absorb a peer delta. True if it changed local state.
+    pub fn merge_delta(&self, delta: &ClusterBlockDelta) -> bool {
+        self.hlc.tick(delta.expires_at_ms, delta.dot.counter);
+        let key = (delta.ip, delta.dot.node_id);
+
+        let mut inserted = false;
+        self.entries
+            .entry(key)
+            .and_modify(|(existing_seq, existing_exp)| {
+                if delta.dot.counter > *existing_seq {
+                    *existing_seq = delta.dot.counter;
+                    *existing_exp = delta.expires_at_ms;
+                    inserted = true;
+                }
+            })
+            .or_insert_with(|| {
+                inserted = true;
+                (delta.dot.counter, delta.expires_at_ms)
+            });
+
+        inserted
+    }
+
+    pub fn is_blocked(&self, ip: &IpAddr, now_ms: u64) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.key().0 == *ip && entry.value().1 > now_ms)
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +179,35 @@ mod tests {
         set_a.merge(&set_b);
         assert!(set_a.contains("item1"));
         assert!(set_a.contains("item2"));
+    }
+
+    #[test]
+    fn ban_lifecycle() {
+        let mesh = AworsetBlocklist::new(1);
+        let ip = IpAddr::from([203, 0, 113, 195]);
+        let delta = mesh.record_ban(ip, 60_000, 2);
+        assert_eq!(delta.tier, 2);
+        assert!(mesh.is_blocked(&ip, 1_000), "ban not yet expired");
+        assert!(!mesh.is_blocked(&ip, 2_000_000_000_000), "ban must expire");
+    }
+
+    #[test]
+    fn delta_merge_wins_by_counter() {
+        let a = AworsetBlocklist::new(1);
+        let ip = IpAddr::from([198, 51, 100, 7]);
+        // Fresh delta at ttl 60s.
+        let d1 = a.record_ban(ip, 60_000, 1);
+
+        // Peer node 2 sees it and re-bans with a longer TTL.
+        let mut d2 = d1.clone();
+        d2.dot.node_id = 2;
+        d2.dot.counter += 1;
+        d2.expires_at_ms += 60_000;
+
+        assert!(a.merge_delta(&d2), "higher counter must merge in");
+        // Stale delta from node 2 must NOT overwrite.
+        let mut d3 = d2.clone();
+        d3.dot.counter -= 1;
+        assert!(!a.merge_delta(&d3), "lower counter must be rejected");
     }
 }
