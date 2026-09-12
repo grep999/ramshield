@@ -8,6 +8,9 @@ ramshield-config = { path = "../ramshield-config" }
 ramshield-storage = { path = "../ramshield-storage" }
 ramshield-types = { path = "../ramshield-types" }
 ramshield-metrics = { path = "../ramshield-metrics" }
+ramshield-analytics = { path = "../ramshield-analytics" }
+ramshield-cgnat = { path = "../ramshield-cgnat" }
+ramshield-mesh = { path = "../ramshield-mesh" }
 ahash = "0.8"
 dashmap = "6"
 uuid = { version = "1", features = ["v4"] }

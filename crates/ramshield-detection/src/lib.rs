@@ -158,6 +158,12 @@ pub struct DetectionEngine {
     /// F9: batch/subnet threads, joined at shutdown (was: detached + blind
     /// 5s sleep in main). Each does a final flush before exit.
     worker_handles: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
+    /// P2: CGNAT graduated mitigation guard, clamped tier dispatch.
+    cgnat_guard: ramshield_cgnat::CgnatGuard,
+    /// P2: Shared memory rule table for proxy lookups (<15ns).
+    shm_table: Arc<ramshield_cgnat::ShmTableManager>,
+    /// P2: Cluster blocklist CRDT for fleet-fenced gossip.
+    mesh_blocklist: Arc<ramshield_mesh::aworset::AworsetBlocklist>,
 }
 
 /// Releases the single-flusher gate even on early return/panic.
@@ -203,6 +209,25 @@ impl DetectionEngine {
             last_pre_aggs_flush_ns: AtomicU64::new(now_ns()),
             flushing: AtomicBool::new(false),
             worker_handles: std::sync::Mutex::new(Vec::new()),
+            // P2: single SHM rule table shared between proxy and CGNAT guard.
+            shm_table: Arc::new(
+                ramshield_cgnat::ShmTableManager::open_or_create(
+                    &ramshield_cgnat::ShmTableManager::default_path(),
+                )
+                .expect("P2: SHM rule table must open at boot"),
+            ),
+            // ponytail: threshold 2.8 is JA4 shared-IP heuristic; lift to
+            // Config.detection.cgnat_entropy_threshold when profiling diverges.
+            cgnat_guard: ramshield_cgnat::CgnatGuard::new(
+                Arc::new(
+                    ramshield_cgnat::ShmTableManager::open_or_create(
+                        &ramshield_cgnat::ShmTableManager::default_path(),
+                    )
+                    .expect("P2: CGNAT SHM table must open at boot"),
+                ),
+                2.8,
+            ),
+            mesh_blocklist: Arc::new(ramshield_mesh::aworset::AworsetBlocklist::new(0)),
         }
     }
 
@@ -939,6 +964,25 @@ impl DetectionEngine {
                     if self.enforcement_tx.try_send(cmd).is_err() {
                         warn!(ip=%r.ip, "enforcement queue full; subnet block rejected");
                     }
+                    // P2: CGNAT graduated clamp — shared-infra subnets get
+                    // Challenge (429+JS) rather than hard Block (blackhole).
+                    let fp_bytes = (r.ip.to_string() + &sk.to_string()).as_bytes().to_vec();
+                    let tier = self.cgnat_guard.classify(&fp_bytes);
+                    if tier != ramshield_cgnat::CGNAT_TIER_ALLOW {
+                        self.shm_table.publish_rule(
+                            sk as u64,
+                            cfg.detection.subnet_burst_ttl_secs as u64 * 1000,
+                            tier,
+                            0,
+                            true,
+                        );
+                    }
+                    // P2: fleet-fenced gossip.
+                    self.mesh_blocklist.record_ban(
+                        r.ip,
+                        cfg.detection.subnet_burst_ttl_secs as u64 * 1000,
+                        tier,
+                    );
                     self.metrics
                         .record_block_ip(&r.ip, "subnet_batch", "detection");
                     self.metrics.blocks_subnet.fetch_add(1, Ordering::Relaxed);
