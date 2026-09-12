@@ -33,6 +33,9 @@ pub struct AuthState {
     /// every admin with 50 garbage POSTs (process-wide DoS). Windowed per IP:
     /// failures older than LOCKOUT_WINDOW decay and the slot is reclaimed.
     failures: Arc<DashMap<IpAddr, FailureWindow, ahash::RandomState>>,
+    /// Last time the session store was swept. Used by validate() to throttle
+    /// the O(n) retain to once per SWEEP_INTERVAL instead of every request.
+    last_sweep: Arc<std::sync::atomic::AtomicI64>,
 }
 
 /// Rolling failure window for one client IP.
@@ -45,6 +48,11 @@ struct FailureWindow {
 /// Failed attempts older than this decay to zero — transient brute force
 /// stops locking the IP after a cool-down instead of until restart.
 const LOCKOUT_WINDOW: Duration = Duration::from_secs(15 * 60);
+/// Sweep interval for the session store. Rather than scanning all
+/// sessions on every authenticated request (O(n)), we sweep at most
+/// once per SWEEP_INTERVAL. Entries that outlive the TTL are still
+/// reclaimed lazily on access; the sweep is only to bound the map size.
+const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
 impl AuthState {
     pub fn new(
@@ -70,6 +78,12 @@ impl AuthState {
             max_login_attempts,
             max_password_length,
             failures: Arc::new(DashMap::with_hasher(ahash::RandomState::new())),
+            last_sweep: Arc::new(std::sync::atomic::AtomicI64::new(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0),
+            )),
         }
     }
 
@@ -155,9 +169,22 @@ impl AuthState {
         if token.len() != 64 {
             return false;
         }
-        // Opportunistic sweep of expired sessions (sharded, no global lock).
-        self.sessions.retain(|_, t| t.elapsed() < self.ttl);
-        self.sessions.contains_key(token)
+        // ponytail: throttle the O(n) retain sweep to once per SWEEP_INTERVAL
+        // (memory bound only). Expiry itself is enforced exactly below via a
+        // per-token TTL check — a throttled sweep alone would let an expired
+        // session authenticate for up to SWEEP_INTERVAL past its TTL.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let last = self.last_sweep.load(std::sync::atomic::Ordering::Relaxed);
+        if now - last >= SWEEP_INTERVAL.as_secs() as i64 {
+            self.sessions.retain(|_, t| t.elapsed() < self.ttl);
+            self.last_sweep.store(now, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.sessions
+            .get(token)
+            .is_some_and(|t| t.elapsed() < self.ttl)
     }
 }
 
