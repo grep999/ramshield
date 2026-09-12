@@ -1,0 +1,8 @@
+[package]
+name = "ramshield-cgnat"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+memmap2 = "0.9"
+ramshield-forecasting = { path = "../ramshield-forecasting" }

@@ -1088,6 +1088,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ramshield-cgnat"
+version = "0.1.0"
+dependencies = [
+ "memmap2",
+ "ramshield-forecasting",
+]
+
+[[package]]
 name = "ramshield-config"
 version = "0.1.0"
 dependencies = [
