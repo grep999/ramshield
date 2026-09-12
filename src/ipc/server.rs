@@ -102,6 +102,34 @@ pub struct IpcServer {
     replay_store: Arc<ramshield_protocol::auth::ReplayStore>,
 }
 
+/// Parse `config.ipc.auth_keys` entries into (key_id, key_bytes).
+/// Mirrors `Config::validate` so bind fails instead of silently shipping
+/// with zero keys when an entry like `k1:badhex` is present.
+fn parse_ipc_keys(config: &crate::config::Config) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut out = Vec::new();
+    for entry in &config.ipc.auth_keys {
+        let (id, hex_str) = entry
+            .split_once(':')
+            .ok_or_else(|| format!("ipc.auth_keys entry '{entry}' is not 'key_id:hex_key'"))?;
+        if hex_str.is_empty() {
+            return Err(format!("ipc.auth_keys[{id}] has empty hex key"));
+        }
+        if hex_str.len() % 2 != 0 {
+            return Err(format!("ipc.auth_keys[{id}] has odd-length hex key"));
+        }
+        if hex_str.bytes().any(|b| !b.is_ascii_hexdigit()) {
+            return Err(format!("ipc.auth_keys[{id}] contains non-hex characters"));
+        }
+        if hex_str.len() < 32 {
+            return Err(format!("ipc.auth_keys[{id}] hex key must be >= 32 chars (16 bytes)"));
+        }
+        let bytes = hex::decode(hex_str)
+            .map_err(|e| format!("ipc.auth_keys[{id}] hex decode: {e}"))?;
+        out.push((id.to_string(), bytes));
+    }
+    Ok(out)
+}
+
 impl IpcServer {
     pub async fn bind(
         config: &Config,
@@ -134,21 +162,7 @@ impl IpcServer {
             .connection_idle_timeout_ms
             .unwrap_or(CONNECTION_IDLE_TIMEOUT_MS);
         let max_line_length = config.ipc.max_line_length.unwrap_or(MAX_LINE_LENGTH);
-        let mut auth_keys: Vec<(String, Vec<u8>)> = Vec::new();
-        for entry in &config.ipc.auth_keys {
-            match entry.split_once(':') {
-                Some((id, hexkey)) => match hex::decode(hexkey.trim()) {
-                    Ok(k) if !k.is_empty() => auth_keys.push((id.trim().to_string(), k)),
-                    _ => warn!("ipc.auth_keys: invalid hex key for '{}', skipped", id),
-                },
-                // P2 fix: entry may be a mistyped real secret — log length,
-                // never content.
-                None => warn!(
-                    "ipc.auth_keys: expected 'key_id:hex_key', got colon-less entry of len {}",
-                    entry.len()
-                ),
-            }
-        }
+        let auth_keys = parse_ipc_keys(config).map_err(std::io::Error::other)?;
         if !auth_keys.is_empty() {
             info!("IPC HMAC auth ENABLED ({} key(s))", auth_keys.len());
         }
