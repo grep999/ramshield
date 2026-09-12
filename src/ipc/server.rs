@@ -73,7 +73,10 @@ fn sanitize_ttl(ttl: Option<u64>) -> Result<u64, String> {
 // Ingest channel capacity — single source of truth: the detection engine's
 // bounded channel (64k ConnectionEvents, ~4MB; fills in ~64ms at 1M eps).
 pub use ramshield_detection::CHANNEL_CAPACITY;
-const MAX_LINE_LENGTH: usize = 33_554_432; // 32MB max single line (batch reports)
+/// Upper bound on a single line (batch reports). Equals DEFAULT_MAX_CONNECTION_BYTES
+/// (1 MB) so a single JSON frame can never allocate beyond the per-connection
+/// budget before HMAC auth gates the frame. Prevents OOM-before-auth.
+const MAX_LINE_LENGTH: usize = DEFAULT_MAX_CONNECTION_BYTES; // 1 MB
 const CONNECTION_IDLE_TIMEOUT_MS: u64 = 30_000; // 30s idle
 
 pub struct IpcServer {
