@@ -8,6 +8,7 @@ ahash = "0.8"
 ramshield-metrics = { path = "../ramshield-metrics" }
 ramshield-types = { path = "../ramshield-types" }
 ramshield-storage = { path = "../ramshield-storage" }
+ramshield-mesh = { path = "../ramshield-mesh" }
 ramshield-xdp = { path = "../ramshield-xdp", default-features = false, features = ["elf"], optional = true }
 aya = { version = "0.14", optional = true }
 tokio = { version = "1", features = ["full"] }

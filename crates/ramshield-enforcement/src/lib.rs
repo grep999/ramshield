@@ -128,6 +128,10 @@ pub struct EnforcementService {
     buckets: BTreeMap<u64, Vec<IpAddr>>,
     epoch: Instant,
     shutdown: Arc<AtomicBool>,
+    /// P2: Cluster blocklist CRDT — companion to `blocked_ips` local mirror.
+    /// Local blocks are authoritative; this CRDT absorbs peer deltas and
+    /// merges them on the next enforcement tick. None = single-node.
+    mesh_blocklist: Option<Arc<ramshield_mesh::aworset::AworsetBlocklist>>,
 }
 
 impl EnforcementService {
@@ -149,7 +153,18 @@ impl EnforcementService {
             buckets: BTreeMap::new(),
             epoch: Instant::now(),
             shutdown,
+            // P2: disabled mesh by default; enable with `with_mesh_blocklist`.
+            mesh_blocklist: None,
         }
+    }
+
+    /// Enable cluster CRDT companion (fleet gossip mesh).
+    pub fn with_mesh_blocklist(
+        mut self,
+        mesh_blocklist: Arc<ramshield_mesh::aworset::AworsetBlocklist>,
+    ) -> Self {
+        self.mesh_blocklist = Some(mesh_blocklist);
+        self
     }
 
     /// Attach WAL for durable enforcement (append-before-mutate ordering).

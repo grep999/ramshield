@@ -155,6 +155,19 @@ impl AworsetBlocklist {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Drop entries whose ban has expired (GC pass on the 250ms tick).
+    pub fn purge_expired(&self, now_ms: u64) {
+        self.entries.retain(|_, (_, exp)| *exp > now_ms);
+    }
+
+    /// Local unblock: remove this node's dot for the IP so the unban
+    /// gossips out and peer merges converge on removal.
+    pub fn record_unban(&self, ip: IpAddr) {
+        let (_, seq) = self.hlc.tick(0, 0);
+        self.entries.remove(&(ip, self.node_id));
+        let _ = seq; // dot counter consumed only for HLC monotonicity
+    }
 }
 
 #[cfg(test)]
