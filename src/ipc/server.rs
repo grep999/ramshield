@@ -379,9 +379,17 @@ async fn handle_connection(
             let frame = buf.split_to(pos + 1);
             // H3: resolve auth_keys from live config per frame — a reload via
             // PATCH /api/config rotates credentials without server restart.
+            // F2-fix: fail-closed. If parse_ipc_keys errors (malformed config),
+            // reject the frame rather than silently disabling auth.
             let live_keys = {
                 let cfg = config.config.load();
-                parse_ipc_keys(&cfg).unwrap_or_default()
+                match parse_ipc_keys(&cfg) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        debug!("parse_ipc_keys failed: {e}; rejecting frame");
+                        continue;
+                    }
+                }
             };
             let req: Request = if !live_keys.is_empty() {
                 // HMAC auth gate: enforced only when keys configured. The auth
