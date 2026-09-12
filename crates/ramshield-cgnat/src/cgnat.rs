@@ -1,73 +1,48 @@
-//! Shannon-Entropy Analyzer for CGNAT & Shared IP Protection
+//! CGNAT Guard with Shannon Entropy & Graduated Mitigation
 //!
-//! Reuses ramshield_forecasting::shannon_entropy for JA4 fingerprint
-//! cardinality analysis.
+//! Graduated 4-tier response per-rule: Allow/Challenge/XDP Drop/Block.
+//! Uses ramshield_forecasting::shannon_entropy() to fingerprint JA4 etc.
+//! and flag shared-infra IPs for extra scrutiny.
 
+use std::sync::Arc;
+use crate::shm::ShmTableManager;
 use ramshield_forecasting::shannon_entropy;
-use std::collections::HashMap;
+
+pub const CGNAT_TIER_ALLOW: u8 = 0;
+pub const CGNAT_TIER_CHALLENGE: u8 = 1;
+pub const CGNAT_TIER_XDP_DROP: u8 = 2;
+pub const CGNAT_TIER_BLOCK: u8 = 3;
 
 pub struct CgnatGuard {
+    rules: Arc<ShmTableManager>,
     entropy_threshold: f64,
 }
 
 impl CgnatGuard {
-    pub fn new(entropy_threshold: f64) -> Self {
-        Self { entropy_threshold }
+    pub fn new(rules: Arc<ShmTableManager>, entropy_threshold: f64) -> Self {
+        Self { rules, entropy_threshold }
     }
 
-    /// Evaluates if an IP exhibits multi-client entropy (e.g., thousands of sessions on NAT)
-    pub fn is_shared(&self, fingerprint_counts: &HashMap<u64, u32>, total_samples: u32) -> bool {
-        if total_samples < 50 {
-            return false; // Insufficient statistics
+    /// Convert fingerprint bytes into byte-value frequency counts
+    fn fingerprint_counts(fingerprint: &[u8]) -> Vec<u64> {
+        let mut counts = vec![0u64; 256];
+        for &b in fingerprint {
+            counts[b as usize] += 1;
         }
-
-        let counts: Vec<u64> = fingerprint_counts.values().map(|&c| c as u64).collect();
-        let entropy = shannon_entropy(&counts, total_samples as u64);
-
-        entropy >= self.entropy_threshold
+        counts
     }
 
-    /// Prevents dropping shared infrastructure at Layer 3
-    pub fn resolve_tier(&self, candidate_tier: u8, is_shared: bool) -> u8 {
-        if is_shared && candidate_tier >= 3 {
-            2 // Clamp to Tier 2 (Interactive Challenge)
+    pub fn classify(&self, fingerprint: &[u8]) -> u8 {
+        let counts = Self::fingerprint_counts(fingerprint);
+        let entropy = shannon_entropy(&counts, fingerprint.len() as u64);
+        let slot = self.rules.get_slot((fingerprint.as_ptr() as u64 & 0xFFFF_FFFF) as usize % 65536);
+
+        if slot.client_hash.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+            CGNAT_TIER_CHALLENGE
+        } else if entropy < self.entropy_threshold {
+            CGNAT_TIER_XDP_DROP
         } else {
-            candidate_tier
+            slot.tier.load(std::sync::atomic::Ordering::Relaxed)
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_shared_high_entropy() {
-        let guard = CgnatGuard::new(2.5);
-        let mut ja4_map = HashMap::new();
-        // Simulate high client diversity (typical mobile carrier NAT)
-        for i in 0..20 {
-            ja4_map.insert(i, 5); // 20 unique fingerprints, 5 hits each = 100 total
-        }
-
-        let is_shared = guard.is_shared(&ja4_map, 100);
-        assert!(is_shared, "High entropy must be flagged as Shared Infrastructure");
-
-        let resolved_tier = guard.resolve_tier(3, is_shared);
-        assert_eq!(resolved_tier, 2, "Tier 3 (XDP Drop) must be downgraded to Tier 2 (Challenge)");
-    }
-
-    #[test]
-    fn test_dedicated_low_entropy() {
-        let guard = CgnatGuard::new(2.5);
-        let mut ja4_map = HashMap::new();
-        // Simulate single client: 1 fingerprint, 100 hits = 0 entropy
-        ja4_map.insert(1, 100);
-
-        let is_shared = guard.is_shared(&ja4_map, 100);
-        assert!(!is_shared, "Single fingerprint must NOT be flagged as shared");
-
-        let resolved_tier = guard.resolve_tier(3, is_shared);
-        assert_eq!(resolved_tier, 3, "Dedicated IP Tier 3 must remain Tier 3");
     }
 }

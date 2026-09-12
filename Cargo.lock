@@ -1088,6 +1088,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ramshield-analytics"
+version = "0.1.0"
+
+[[package]]
 name = "ramshield-cgnat"
 version = "0.1.0"
 dependencies = [
@@ -1117,7 +1121,10 @@ dependencies = [
  "arc-swap",
  "crossbeam-channel",
  "dashmap",
+ "ramshield-analytics",
+ "ramshield-cgnat",
  "ramshield-config",
+ "ramshield-mesh",
  "ramshield-metrics",
  "ramshield-storage",
  "ramshield-types",
@@ -1158,6 +1165,14 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "ramshield-mesh"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "serde",
 ]
 
 [[package]]

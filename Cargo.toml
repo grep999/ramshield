@@ -11,6 +11,8 @@ members = [
     "crates/ramshield-types",
     "crates/ramshield-xdp",
     "crates/ramshield-cgnat",
+    "crates/ramshield-analytics",
+    "crates/ramshield-mesh",
 ]
 resolver = "3"
 

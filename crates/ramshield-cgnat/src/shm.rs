@@ -65,7 +65,7 @@ impl ShmTableManager {
     }
 
     #[inline(always)]
-    fn get_slot(&self, index: usize) -> &ShmRuleEntry {
+    pub fn get_slot(&self, index: usize) -> &ShmRuleEntry {
         let offset = (index & (SHM_TABLE_CAPACITY - 1)) * std::mem::size_of::<ShmRuleEntry>();
         // SAFETY: Offset is masked by (SHM_TABLE_CAPACITY - 1), guaranteeing bounds within mmap.
         // Alignment is guaranteed by repr(C, align(64)).
