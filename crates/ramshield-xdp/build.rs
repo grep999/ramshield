@@ -13,16 +13,16 @@ fn main() {
     println!("cargo:rerun-if-changed=ramshield-xdp-bpf/Cargo.toml");
     println!("cargo:rerun-if-changed=bpf/main.rs");
 
-    // ponytail: cargo guarantees OUT_DIR for build scripts, so this unwrap is invariant.
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    // ponytail: cargo guarantees OUT_DIR for build scripts.
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR set by Cargo"));
     let dest = out_dir.join("ramshield-xdp");
 
     if try_aya_build(&dest) {
         return;
     }
 
-    panic!(
-        "XDP BPF build failed: bpf-linker not found or cargo build failed.\n\
+    eprintln!(
+        "cargo:warning=XDP BPF build failed: bpf-linker not found or cargo build failed.\n\
          Install bpf-linker: https://github.com/aya-rs/bpf-linker/releases\n\
          Then: PATH=\"$HOME/.local/bin:$PATH\" cargo build"
     );

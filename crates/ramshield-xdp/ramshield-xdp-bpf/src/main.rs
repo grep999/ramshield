@@ -170,7 +170,7 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
             }
         }
         // CIDR fallback: LPM_TRIE — one /64 entry replaces 256 flat entries in BLOCKLIST6
-        if unsafe { BLOCKCIDR6.get(&Key::new(128, key)) }.is_some() {
+        if BLOCKCIDR6.get(&Key::new(128, key)).is_some() {
             inc_counter(counter::V6_DROP);
             emit_drop_event(counter::V6_DROP, &key_bytes);
             return Ok(xdp_action::XDP_DROP);
@@ -198,7 +198,7 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
         }
     }
     // CIDR fallback: LPM_TRIE — one /24 entry replaces 256 flat entries in BLOCKLIST
-    if unsafe { BLOCKCIDR.get(&Key::new(32, key)) }.is_some() {
+    if BLOCKCIDR.get(&Key::new(32, key)).is_some() {
         inc_counter(counter::V4_DROP);
         let mut ipb = [0u8; 16];
         ipb[0..4].copy_from_slice(&src.to_ne_bytes());
