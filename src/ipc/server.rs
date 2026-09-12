@@ -14,8 +14,8 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::{Request, Response};
-use crate::config::Config;
 use crate::engine::Engine;
+use ramshield_config::ConfigHandle;
 use crate::storage::Store;
 use ramshield_types::ConnectionEvent;
 use ramshield_types::{EnforceAction, EnforceCommand};
@@ -28,7 +28,7 @@ struct ConnectionConfig {
     write_timeout: Duration,
     idle_timeout: Duration,
     max_line_length: usize,
-    auth_keys: Arc<Vec<(String, Vec<u8>)>>,
+    config: ConfigHandle,
     /// Per-key nonce store. Bounded LRU + 10s TTL; lives for the server's
     /// lifetime. Shared by every connection via Arc.
     replay_store: Arc<ramshield_protocol::auth::ReplayStore>,
@@ -42,7 +42,7 @@ impl ConnectionConfig {
             write_timeout: Duration::from_millis(server.write_timeout_ms),
             idle_timeout: Duration::from_millis(server.connection_idle_timeout_ms),
             max_line_length: server.max_line_length,
-            auth_keys: Arc::new(server.auth_keys.clone()),
+            config: server.config.clone(),
             replay_store: server.replay_store.clone(),
         }
     }
@@ -79,8 +79,8 @@ const CONNECTION_IDLE_TIMEOUT_MS: u64 = 30_000; // 30s idle
 pub struct IpcServer {
     listener: TcpListener,
     engine: Arc<Engine>,
-    /// (key_id, key_bytes) pairs; empty = auth disabled.
-    auth_keys: Vec<(String, Vec<u8>)>,
+    /// Live config handle — auth_keys are resolved per-connection (hot-reload).
+    config: ConfigHandle,
     event_tx: Sender<ConnectionEvent>,
     store: Arc<Store>,
     enforcement_tx: mpsc::Sender<EnforceCommand>,
@@ -132,45 +132,41 @@ fn parse_ipc_keys(config: &crate::config::Config) -> Result<Vec<(String, Vec<u8>
 
 impl IpcServer {
     pub async fn bind(
-        config: &Config,
+        config: ConfigHandle,
         engine: Arc<Engine>,
         event_tx: Sender<ConnectionEvent>,
         store: Arc<Store>,
         enforcement_tx: mpsc::Sender<EnforceCommand>,
     ) -> std::io::Result<Self> {
-        config.validate().map_err(std::io::Error::other)?;
-        let addr = config.ipc.tcp_addr.clone();
-        info!("IPC server binding to {}", addr);
+        {
+            let cfg = config.load();
+            cfg.validate().map_err(std::io::Error::other)?;
+        }
+        let (addr, max_connections, max_connection_bytes, read_timeout_ms, write_timeout_ms, connection_idle_timeout_ms, max_line_length) = {
+            let cfg = config.load();
+            let addr = cfg.ipc.tcp_addr.clone();
+            info!("IPC server binding to {}", addr);
+            let auth_enabled = parse_ipc_keys(&cfg).map(|k| !k.is_empty()).unwrap_or(false);
+            if auth_enabled {
+                info!("IPC HMAC auth ENABLED");
+            }
+            (
+                addr,
+                cfg.ipc.max_connections.max(1),
+                cfg.ipc.max_connection_bytes.unwrap_or(DEFAULT_MAX_CONNECTION_BYTES),
+                cfg.ipc.read_timeout_ms.unwrap_or(DEFAULT_READ_TIMEOUT_MS),
+                cfg.ipc.write_timeout_ms.unwrap_or(DEFAULT_WRITE_TIMEOUT_MS),
+                cfg.ipc.connection_idle_timeout_ms.unwrap_or(CONNECTION_IDLE_TIMEOUT_MS),
+                cfg.ipc.max_line_length.unwrap_or(MAX_LINE_LENGTH),
+            )
+        };
         let listener = TcpListener::bind(&addr).await?;
         info!("IPC server bound to {}", addr);
-
-        let max_connections = config.ipc.max_connections.max(1);
-        let max_connection_bytes = config
-            .ipc
-            .max_connection_bytes
-            .unwrap_or(DEFAULT_MAX_CONNECTION_BYTES);
-        let read_timeout_ms = config
-            .ipc
-            .read_timeout_ms
-            .unwrap_or(DEFAULT_READ_TIMEOUT_MS);
-        let write_timeout_ms = config
-            .ipc
-            .write_timeout_ms
-            .unwrap_or(DEFAULT_WRITE_TIMEOUT_MS);
-        let connection_idle_timeout_ms = config
-            .ipc
-            .connection_idle_timeout_ms
-            .unwrap_or(CONNECTION_IDLE_TIMEOUT_MS);
-        let max_line_length = config.ipc.max_line_length.unwrap_or(MAX_LINE_LENGTH);
-        let auth_keys = parse_ipc_keys(config).map_err(std::io::Error::other)?;
-        if !auth_keys.is_empty() {
-            info!("IPC HMAC auth ENABLED ({} key(s))", auth_keys.len());
-        }
 
         Ok(Self {
             listener,
             engine,
-            auth_keys,
+            config,
             event_tx,
             store,
             enforcement_tx,
@@ -381,11 +377,17 @@ async fn handle_connection(
             // pipelines a batch pays quadratically in the buffered bytes.
             // BytesMut::split_to is O(1) (advances the start pointer).
             let frame = buf.split_to(pos + 1);
-            let req: Request = if !config.auth_keys.is_empty() {
+            // H3: resolve auth_keys from live config per frame — a reload via
+            // PATCH /api/config rotates credentials without server restart.
+            let live_keys = {
+                let cfg = config.config.load();
+                parse_ipc_keys(&cfg).unwrap_or_default()
+            };
+            let req: Request = if !live_keys.is_empty() {
                 // HMAC auth gate: enforced only when keys configured. The auth
                 // object rides OUTSIDE the Request enum so deny_unknown_fields
                 // on the wire contract stays intact.
-                match verify_frame_auth(&config.auth_keys, &frame, &config.replay_store) {
+                match verify_frame_auth(&live_keys, &frame, &config.replay_store) {
                     // P1-5: verify_frame_auth returns the auth-stripped Value;
                     // from_value deserializes without a second JSON parse.
                     Ok(v) => match serde_json::from_value::<Request>(v) {

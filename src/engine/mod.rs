@@ -403,7 +403,7 @@ async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     };
 
     let server = crate::ipc::server::IpcServer::bind(
-        &cfg_snapshot,
+        cfg_handle.clone(),
         engine.clone(),
         event_tx,
         store,
