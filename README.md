@@ -165,7 +165,34 @@ Workspace: a thin root binary crate + 9 focused crates.
 | `ramshield-enforcement` | block/unblock actor, XDP map sync, TTL expiry, reconcile |
 | `ramshield-forecasting` | Holt-Winters entropy baseline, preemptive threat sampling |
 | `ramshield-metrics` | counters, snapshot, Prometheus exposition |
+|| `ramshield-cgnat` | 4-tier graduated mitigation + SHM rule table |
+|| `ramshield-analytics` | HLL+CMS+EWMA constant-memory streaming analytics |
+|| `ramshield-mesh` | distributed CRDT: HLC tick/merge + AworsetBlocklist + purge |
 || `ramshield-xdp` | BPF object build + load (aya), clang fallback **+ XDP drop event wire (Step 5)** |\n
+
+## P1/P2/P3: CGNAT + Analytics + Mesh (branch `p1`)
+
+Three pillars integrated on top of the base detection pipeline:
+
+| Pillar | Crate | What it does |
+|---|---|---|
+| **P1 CGNAT** | `ramshield-cgnat` | 4-tier graduated mitigation (Allow/Challenge/PowDrop/Block) + SHM rule table (64B aligned, 65536 slots) for proxy (<15ns) lookups |
+| **P2 Analytics** | `ramshield-analytics` | HLL (1024 registers, ±5% cardinality), CMS (4×65536 flat heap, 512 KiB), Welford EWMA — constant memory w.r.t. stream length |
+| **P3 Mesh** | `ramshield-mesh` | HLC tick/merge CAS loop + AworsetBlocklist CRDT (IP-keyed, TTL-purged) for fleet-fenced gossip |
+
+**Wiring:** DetectionEngine clamps shared-infra traffic to Tier 2 (Challenge), publishes
+to SHM on block, and announces to the mesh CRDT. EnforcementService carries an
+optional `AworsetBlocklist` companion that absorbs incoming deltas.
+
+**Benchmarks** (release, i7 loopback):
+
+| Operation | ns/op |
+|---|---|
+| SHM rule lookup (hit) | 1.7 |
+| CGNAT classify (entropy) | 2310.5 |
+| CMS::increment | 158.5 |
+| HLL::insert | 5.1 |
+| Mesh record_ban | 241.7 |
 
 Hard-won invariants (see [`SECURITY.md`](SECURITY.md), [`docs/audits/`](docs/audits/)):
 `block_state` is written **only** by the enforcement actor; detection mutates
