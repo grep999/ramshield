@@ -485,7 +485,7 @@ mod startup_tests {
         #[allow(deprecated)]
         engine.start();
         let stats = engine.get_module_stats();
-        assert_eq!(stats.len(), 4);
+        assert_eq!(stats.len(), 7);
         let labels: Vec<&str> = stats.iter().map(|m| m.label.as_str()).collect();
         assert!(labels.contains(&"IPC"));
         assert!(labels.contains(&"Detection"));

@@ -208,6 +208,25 @@ pub struct Metrics {
     pub hw_z_bits: Arc<AtomicU64>,
     pub hw_forecast_bits: Arc<AtomicU64>,
     pub entropy_bits: Arc<AtomicU64>,
+    /// P2: CGNAT graduated mitigation counters
+    pub cgnat_classify_ticks: Arc<AtomicU64>,
+    pub cgnat_tier_allow: Arc<AtomicU64>,
+    pub cgnat_tier_challenge: Arc<AtomicU64>,
+    pub cgnat_tier_powdrop: Arc<AtomicU64>,
+    pub cgnat_tier_block: Arc<AtomicU64>,
+    /// P2: SHM rule table publish counters
+    pub shm_publish_count: Arc<AtomicU64>,
+    pub shm_lookup_count: Arc<AtomicU64>,
+    pub shm_cache_hits: Arc<AtomicU64>,
+    /// P2: Analytics streaming counters
+    pub hll_insert_count: Arc<AtomicU64>,
+    pub cms_increment_count: Arc<AtomicU64>,
+    pub cms_decay_ticks: Arc<AtomicU64>,
+    /// P3: Mesh CRDT counters
+    pub mesh_record_ban_count: Arc<AtomicU64>,
+    pub mesh_record_unban_count: Arc<AtomicU64>,
+    pub mesh_purge_ticks: Arc<AtomicU64>,
+    pub mesh_hlc_ticks: Arc<AtomicU64>,
     pub last_batch_events: Arc<AtomicU64>,
     pub last_batch_promoted: Arc<AtomicU64>,
     pub last_batch_blocks: Arc<AtomicU64>,
@@ -256,6 +275,21 @@ impl Metrics {
             hw_z_bits: Arc::new(AtomicU64::new(0)),
             hw_forecast_bits: Arc::new(AtomicU64::new(0)),
             entropy_bits: Arc::new(AtomicU64::new(0)),
+            cgnat_classify_ticks: Arc::new(AtomicU64::new(0)),
+            cgnat_tier_allow: Arc::new(AtomicU64::new(0)),
+            cgnat_tier_challenge: Arc::new(AtomicU64::new(0)),
+            cgnat_tier_powdrop: Arc::new(AtomicU64::new(0)),
+            cgnat_tier_block: Arc::new(AtomicU64::new(0)),
+            shm_publish_count: Arc::new(AtomicU64::new(0)),
+            shm_lookup_count: Arc::new(AtomicU64::new(0)),
+            shm_cache_hits: Arc::new(AtomicU64::new(0)),
+            hll_insert_count: Arc::new(AtomicU64::new(0)),
+            cms_increment_count: Arc::new(AtomicU64::new(0)),
+            cms_decay_ticks: Arc::new(AtomicU64::new(0)),
+            mesh_record_ban_count: Arc::new(AtomicU64::new(0)),
+            mesh_record_unban_count: Arc::new(AtomicU64::new(0)),
+            mesh_purge_ticks: Arc::new(AtomicU64::new(0)),
+            mesh_hlc_ticks: Arc::new(AtomicU64::new(0)),
             last_batch_events: Arc::new(AtomicU64::new(0)),
             last_batch_promoted: Arc::new(AtomicU64::new(0)),
             last_batch_blocks: Arc::new(AtomicU64::new(0)),
@@ -443,6 +477,47 @@ impl Metrics {
                 }),
             },
             ModuleStats {
+                label: "CGNAT".into(),
+                events: self.cgnat_classify_ticks.load(Ordering::Relaxed),
+                errors: 0,
+                rate_per_sec: self.cgnat_classify_ticks.load(Ordering::Relaxed) as f64 / elapsed,
+                detail: serde_json::json!({
+                    "tier_allow": self.cgnat_tier_allow.load(Ordering::Relaxed),
+                    "tier_challenge": self.cgnat_tier_challenge.load(Ordering::Relaxed),
+                    "tier_powdrop": self.cgnat_tier_powdrop.load(Ordering::Relaxed),
+                    "tier_block": self.cgnat_tier_block.load(Ordering::Relaxed),
+                    "shm_publishes": self.shm_publish_count.load(Ordering::Relaxed),
+                    "shm_cache_hits": self.shm_cache_hits.load(Ordering::Relaxed),
+                }),
+            },
+            ModuleStats {
+                label: "Analytics".into(),
+                events: self.hll_insert_count.load(Ordering::Relaxed)
+                    + self.cms_increment_count.load(Ordering::Relaxed),
+                errors: 0,
+                rate_per_sec: (self.hll_insert_count.load(Ordering::Relaxed)
+                    + self.cms_increment_count.load(Ordering::Relaxed))
+                    as f64
+                    / elapsed,
+                detail: serde_json::json!({
+                    "hll_inserts": self.hll_insert_count.load(Ordering::Relaxed),
+                    "cms_increments": self.cms_increment_count.load(Ordering::Relaxed),
+                    "cms_decay_ticks": self.cms_decay_ticks.load(Ordering::Relaxed),
+                }),
+            },
+            ModuleStats {
+                label: "Mesh".into(),
+                events: self.mesh_record_ban_count.load(Ordering::Relaxed),
+                errors: 0,
+                rate_per_sec: self.mesh_record_ban_count.load(Ordering::Relaxed) as f64 / elapsed,
+                detail: serde_json::json!({
+                    "record_bans": self.mesh_record_ban_count.load(Ordering::Relaxed),
+                    "record_unbans": self.mesh_record_unban_count.load(Ordering::Relaxed),
+                    "purge_ticks": self.mesh_purge_ticks.load(Ordering::Relaxed),
+                    "hlc_ticks": self.mesh_hlc_ticks.load(Ordering::Relaxed),
+                }),
+            },
+            ModuleStats {
                 label: "Storage".into(),
                 events: ips_tracked as u64,
                 errors: 0,
@@ -578,6 +653,96 @@ impl Metrics {
             Metrics::f64(&self.entropy_bits),
             "Current IP entropy.",
             "gauge"
+        ));
+        out.push_str(&emit!(
+            "ramshield_cgnat_classify_ticks",
+            self.cgnat_classify_ticks.load(Ordering::Relaxed),
+            "CGNAT graduated classification cycles.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_cgnat_tier_allow",
+            self.cgnat_tier_allow.load(Ordering::Relaxed),
+            "CGNAT allow-tier verdicts.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_cgnat_tier_challenge",
+            self.cgnat_tier_challenge.load(Ordering::Relaxed),
+            "CGNAT challenge-tier (429+JS) verdicts.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_cgnat_tier_powdrop",
+            self.cgnat_tier_powdrop.load(Ordering::Relaxed),
+            "CGNAT proof-of-work drop verdicts.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_cgnat_tier_block",
+            self.cgnat_tier_block.load(Ordering::Relaxed),
+            "CGNAT hard-block verdicts.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_shm_publish_total",
+            self.shm_publish_count.load(Ordering::Relaxed),
+            "SHM rule-table publishes.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_shm_lookup_total",
+            self.shm_lookup_count.load(Ordering::Relaxed),
+            "SHM rule-table lookups.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_shm_cache_hits",
+            self.shm_cache_hits.load(Ordering::Relaxed),
+            "SHM rule-table lookups hitting an active rule.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_hll_insert_total",
+            self.hll_insert_count.load(Ordering::Relaxed),
+            "HLL cardinality-sketch inserts.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_cms_increment_total",
+            self.cms_increment_count.load(Ordering::Relaxed),
+            "Count-min sketch increments.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_cms_decay_ticks",
+            self.cms_decay_ticks.load(Ordering::Relaxed),
+            "Count-min sketch decay sweeps.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_mesh_record_ban_total",
+            self.mesh_record_ban_count.load(Ordering::Relaxed),
+            "Mesh CRDT ban records.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_mesh_record_unban_total",
+            self.mesh_record_unban_count.load(Ordering::Relaxed),
+            "Mesh CRDT unban records.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_mesh_purge_ticks",
+            self.mesh_purge_ticks.load(Ordering::Relaxed),
+            "Mesh CRDT TTL-purge sweeps.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_mesh_hlc_ticks",
+            self.mesh_hlc_ticks.load(Ordering::Relaxed),
+            "Mesh HLC logical-clock ticks.",
+            "counter"
         ));
         // No trailing println! here — every emit stanza already ends in '\n',
         // and stdout writes from a render fn were a stray-syscall bug (2026-09).

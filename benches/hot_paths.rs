@@ -343,6 +343,76 @@ fn bench_render_prometheus(n: usize) -> f64 {
     t0.elapsed().as_nanos() as f64 / n as f64
 }
 
+// ── P2/P3: CGNAT SHM + Mesh CRDT ────────────────────────────────────────────
+
+fn bench_shm_in_cache_hit(n: usize) -> f64 {
+    let shm = ramshield_cgnat::ShmTableManager::open_or_create(
+        &ramshield_cgnat::ShmTableManager::default_path(),
+    )
+    .expect("SHM open for bench");
+    let client_hash = 0x1234_5678_9ABC_DEF0u64;
+    shm.publish_rule(client_hash, 60_000, 2, 0, true);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let t0 = Instant::now();
+    for _ in 0..n {
+        let slot = shm.get_slot(client_hash as usize);
+        std::hint::black_box(
+            slot.client_hash.load(std::sync::atomic::Ordering::Relaxed) == client_hash
+                && slot
+                    .expires_at_ms
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    > now_ms,
+        );
+    }
+    t0.elapsed().as_nanos() as f64 / n as f64
+}
+
+fn bench_cgnat_classify(n: usize) -> f64 {
+    let shm = ramshield_cgnat::ShmTableManager::open_or_create(
+        &ramshield_cgnat::ShmTableManager::default_path(),
+    )
+    .expect("SHM open for bench");
+    let guard = ramshield_cgnat::CgnatGuard::new(std::sync::Arc::new(shm), 2.8);
+    let fp: Vec<u8> = (0..64).map(|i| (i * 7) as u8).collect();
+    let t0 = Instant::now();
+    for _ in 0..n {
+        std::hint::black_box(guard.classify(&fp));
+    }
+    t0.elapsed().as_nanos() as f64 / n as f64
+}
+
+fn bench_cms_update(n: usize) -> f64 {
+    let cms = ramshield_analytics::cms::DecayingCountMinSketch::new();
+    let t0 = Instant::now();
+    for i in 0..n {
+        cms.increment(i as u64);
+    }
+    t0.elapsed().as_nanos() as f64 / n as f64
+}
+
+fn bench_hll_insert(n: usize) -> f64 {
+    let mut hll = ramshield_analytics::hll::SubnetHll::new();
+    let t0 = Instant::now();
+    for i in 0..n {
+        hll.insert((i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    }
+    t0.elapsed().as_nanos() as f64 / n as f64
+}
+
+fn bench_mesh_record_ban(n: usize) -> f64 {
+    use std::net::IpAddr;
+    let mesh = ramshield_mesh::aworset::AworsetBlocklist::new(1);
+    let t0 = Instant::now();
+    for i in 0..n {
+        let ip = IpAddr::from([10, 0, ((i >> 8) & 0xFF) as u8, (i & 0xFF) as u8]);
+        std::hint::black_box(mesh.record_ban(ip, 60_000, 2));
+    }
+    t0.elapsed().as_nanos() as f64 / n as f64
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 fn main() {
@@ -418,6 +488,13 @@ fn main() {
         bench_render_prometheus,
         n_medium
     );
+
+    println!("\n── P2/P3: CGNAT SHM + Analytics + Mesh ─────────────────────────────");
+    bench!("SHM rule lookup (hit)", bench_shm_in_cache_hit, n_fast);
+    bench!("CGNAT classify (entropy)", bench_cgnat_classify, n_medium);
+    bench!("CMS::increment", bench_cms_update, n_fast);
+    bench!("HLL::insert", bench_hll_insert, n_fast);
+    bench!("Mesh record_ban", bench_mesh_record_ban, n_medium);
 
     println!("\n═══════════════════════════════════════════════════════════════════════════");
 }

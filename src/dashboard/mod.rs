@@ -623,7 +623,7 @@ mod tests {
             .unwrap();
         let modules: Vec<ModuleStats> = serde_json::from_slice(&body).unwrap();
         assert!(!modules.is_empty()); // Should have at least default modules
-        assert_eq!(modules.len(), 4);
+        assert_eq!(modules.len(), 7);
     }
 
     /// REGRESSION: AppState was introduced because the original code called
