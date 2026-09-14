@@ -550,6 +550,13 @@ impl Config {
         if self.detection.pre_aggs_max_size == 0 {
             anyhow::bail!("detection.pre_aggs_max_size must be > 0");
         }
+        const MAX_TTL_SECS: u64 = 31_536_000;
+        if self.detection.block_ttl_secs > MAX_TTL_SECS {
+            anyhow::bail!("detection.block_ttl_secs must not exceed one year");
+        }
+        if self.detection.subnet_burst_ttl_secs > MAX_TTL_SECS {
+            anyhow::bail!("detection.subnet_burst_ttl_secs must not exceed one year");
+        }
 
         // IPC config validation
         if self.ipc.max_connections == 0 {

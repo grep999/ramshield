@@ -182,6 +182,17 @@ impl DetectionEngine {
         metrics: Arc<Metrics>,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
+        Self::try_new(store, config, enforcement_tx, metrics, shutdown)
+            .expect("failed to initialize detection shared memory")
+    }
+
+    pub fn try_new(
+        store: Arc<Store>,
+        config: ConfigHandle,
+        enforcement_tx: mpsc::Sender<EnforceCommand>,
+        metrics: Arc<Metrics>,
+        shutdown: Arc<AtomicBool>,
+    ) -> std::io::Result<Self> {
         let bloom_bits = config.load().detection.bloom_bits;
         // 64k cap ≈ 4MB RSS, fills in ~64ms at 1M eps — keeps the batch
         // processor honest without megabytes of dead head-of-line buffer.
@@ -196,7 +207,12 @@ impl DetectionEngine {
         // every shard lookup chased a huge array of cache lines it could
         // never reuse (TLB tax per event). Shards should track worker
         // count, not bloom size. ponytail: revisit if workers ever > 64.
-        Self {
+        let shm_table = Arc::new(
+            ramshield_cgnat::ShmTableManager::open_or_create(
+                &ramshield_cgnat::ShmTableManager::default_path(),
+            )?,
+        );
+        Ok(Self {
             store,
             config,
             metrics,
@@ -210,25 +226,15 @@ impl DetectionEngine {
             flushing: AtomicBool::new(false),
             worker_handles: std::sync::Mutex::new(Vec::new()),
             // P2: single SHM rule table shared between proxy and CGNAT guard.
-            shm_table: Arc::new(
-                ramshield_cgnat::ShmTableManager::open_or_create(
-                    &ramshield_cgnat::ShmTableManager::default_path(),
-                )
-                .expect("P2: SHM rule table must open at boot"),
-            ),
+            shm_table: shm_table.clone(),
             // ponytail: threshold 2.8 is JA4 shared-IP heuristic; lift to
             // Config.detection.cgnat_entropy_threshold when profiling diverges.
             cgnat_guard: ramshield_cgnat::CgnatGuard::new(
-                Arc::new(
-                    ramshield_cgnat::ShmTableManager::open_or_create(
-                        &ramshield_cgnat::ShmTableManager::default_path(),
-                    )
-                    .expect("P2: CGNAT SHM table must open at boot"),
-                ),
+                shm_table,
                 2.8,
             ),
             mesh_blocklist: Arc::new(ramshield_mesh::aworset::AworsetBlocklist::new(0)),
-        }
+        })
     }
 
     pub fn event_sender(&self) -> Sender<ConnectionEvent> {
@@ -948,34 +954,38 @@ impl DetectionEngine {
                         continue;
                     }
 
-                    let cmd = EnforceCommand {
-                        decision_id: Uuid::new_v4(),
-                        policy_version: 1,
-                        source: "detection".into(),
-                        actor: "system".into(),
-                        timestamp_utc: (now_ns() / 1_000_000_000) as i64,
-                        // Subnet blocks cover up to 253 hosts of shared
-                        // egress — short TTL, re-fires on continued abuse.
-                        ttl_seconds: cfg.detection.subnet_burst_ttl_secs,
-                        reason: "subnet_burst".into(),
-                        ip: r.ip,
-                        action: EnforceAction::Block,
-                    };
-                    if self.enforcement_tx.try_send(cmd).is_err() {
-                        warn!(ip=%r.ip, "enforcement queue full; subnet block rejected");
-                    }
                     // P2: CGNAT graduated clamp — shared-infra subnets get
                     // Challenge (429+JS) rather than hard Block (blackhole).
                     let fp_bytes = (r.ip.to_string() + &sk.to_string()).as_bytes().to_vec();
                     let tier = self.cgnat_guard.classify(&fp_bytes);
                     if tier != ramshield_cgnat::CGNAT_TIER_ALLOW {
                         self.shm_table.publish_rule(
-                            sk as u64,
+                            ramshield_cgnat::CgnatGuard::fingerprint_hash(&fp_bytes),
                             cfg.detection.subnet_burst_ttl_secs * 1000,
                             tier,
                             0,
                             true,
                         );
+                    }
+                    // Only the explicit hard-block tier may reach XDP. Lower
+                    // tiers are enforced by the SHM proxy rule above.
+                    if tier == ramshield_cgnat::CGNAT_TIER_BLOCK {
+                        let cmd = EnforceCommand {
+                            decision_id: Uuid::new_v4(),
+                            policy_version: 1,
+                            source: "detection".into(),
+                            actor: "system".into(),
+                            timestamp_utc: (now_ns() / 1_000_000_000) as i64,
+                            // Subnet blocks cover up to 253 hosts of shared
+                            // egress — short TTL, re-fires on continued abuse.
+                            ttl_seconds: cfg.detection.subnet_burst_ttl_secs,
+                            reason: "subnet_burst".into(),
+                            ip: r.ip,
+                            action: EnforceAction::Block,
+                        };
+                        if self.enforcement_tx.try_send(cmd).is_err() {
+                            warn!(ip=%r.ip, "enforcement queue full; subnet block rejected");
+                        }
                     }
                     // P2: fleet-fenced gossip.
                     self.mesh_blocklist.record_ban(
@@ -983,9 +993,11 @@ impl DetectionEngine {
                         cfg.detection.subnet_burst_ttl_secs * 1000,
                         tier,
                     );
-                    self.metrics
-                        .record_block_ip(&r.ip, "subnet_batch", "detection");
-                    self.metrics.blocks_subnet.fetch_add(1, Ordering::Relaxed);
+                    if tier == ramshield_cgnat::CGNAT_TIER_BLOCK {
+                        self.metrics
+                            .record_block_ip(&r.ip, "subnet_batch", "detection");
+                        self.metrics.blocks_subnet.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
             self.store.reset_subnet_window(sk);

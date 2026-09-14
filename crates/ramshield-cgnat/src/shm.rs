@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU16, AtomicU64, AtomicU8, Ordering};
 use memmap2::{MmapMut, MmapOptions};
 
 pub const SHM_TABLE_CAPACITY: usize = 65_536; // 64K rule slots
+pub const SHM_SET_COUNT: usize = SHM_TABLE_CAPACITY / 2;
 pub const FLAG_SHARED_INFRA: u8 = 0x01;
 
 #[repr(C, align(64))]
@@ -56,12 +57,13 @@ impl ShmTableManager {
 
         // SAFETY: File size is strictly enforced above. The mapping is shared with read-only proxies.
         let mmap = unsafe { MmapOptions::new().map_mut(&file)? };
-
-        Ok(Self {
+        let manager = Self {
             _file: file,
             mmap,
             path: path.to_path_buf(),
-        })
+        };
+        manager.clear();
+        Ok(manager)
     }
 
     #[inline(always)]
@@ -72,19 +74,71 @@ impl ShmTableManager {
         unsafe { &*(self.mmap.as_ptr().add(offset) as *const ShmRuleEntry) }
     }
 
-    pub fn publish_rule(&self, client_hash: u64, ttl_ms: u64, tier: u8, max_rps: u16, is_shared: bool) {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+    /// SHM is an ephemeral acceleration layer, not durable state. Clear it
+    /// when the daemon opens the file so rules from a previous process cannot
+    /// override fresh WAL/store state after restart.
+    pub fn clear(&self) {
+        for index in 0..SHM_TABLE_CAPACITY {
+            let slot = self.get_slot(index);
+            slot.client_hash.store(0, Ordering::Release);
+            slot.expires_at_ms.store(0, Ordering::Relaxed);
+            slot.max_rps.store(0, Ordering::Relaxed);
+            slot.tier.store(0, Ordering::Relaxed);
+            slot.flags.store(0, Ordering::Relaxed);
+        }
+    }
 
-        let slot = self.get_slot(client_hash as usize);
+    #[inline(always)]
+    pub fn get_set_slot(&self, client_hash: u64, way: usize) -> &ShmRuleEntry {
+        let set = (client_hash as usize) & (SHM_SET_COUNT - 1);
+        self.get_slot(set * 2 + (way & 1))
+    }
+
+    /// Find a rule in either way of the set-associative table.
+    pub fn find_rule(&self, client_hash: u64) -> Option<&ShmRuleEntry> {
+        (0..2).map(|way| self.get_set_slot(client_hash, way)).find(|slot| {
+            slot.client_hash.load(Ordering::Acquire) == client_hash
+                && slot.expires_at_ms.load(Ordering::Acquire)
+                    > epoch_ms()
+        })
+    }
+
+    pub fn publish_rule(&self, client_hash: u64, ttl_ms: u64, tier: u8, max_rps: u16, is_shared: bool) {
+        let now_ms = epoch_ms();
+        let slots = [self.get_set_slot(client_hash, 0), self.get_set_slot(client_hash, 1)];
+        let slot = slots
+            .iter()
+            .copied()
+            .find(|slot| slot.client_hash.load(Ordering::Acquire) == client_hash)
+            .or_else(|| {
+                slots
+                    .iter()
+                    .copied()
+                    .find(|slot| slot.client_hash.load(Ordering::Acquire) == 0)
+            })
+            .unwrap_or_else(|| {
+                if slots[0].expires_at_ms.load(Ordering::Acquire)
+                    <= slots[1].expires_at_ms.load(Ordering::Acquire)
+                {
+                    slots[0]
+                } else {
+                    slots[1]
+                }
+            });
         let flags = if is_shared { FLAG_SHARED_INFRA } else { 0 };
 
         slot.tier.store(tier, Ordering::Relaxed);
         slot.max_rps.store(max_rps, Ordering::Relaxed);
         slot.flags.store(flags, Ordering::Relaxed);
-        slot.expires_at_ms.store(now_ms + ttl_ms, Ordering::Release);
+        slot.expires_at_ms
+            .store(now_ms.saturating_add(ttl_ms), Ordering::Release);
         slot.client_hash.store(client_hash, Ordering::Release);
     }
+}
+
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }

@@ -203,16 +203,19 @@ impl CoordinatedEnforcementEngine {
             cmd.ip.is_ipv6(), // Use IPv6 indicator as shared infra proxy
         );
 
-        // Broadcast AWORSet CRDT delta.
-        let delta = self.mesh_blocklist.record_ban(
-            cmd.ip,
-            cmd.ttl_seconds.saturating_mul(1000), // Convert to ms
-            tier,
-        );
-
-        // For unblock commands, also record an unban in the mesh.
-        if cmd.action == EnforceAction::Unblock {
-            self.mesh_blocklist.record_unban(cmd.ip);
+        // Broadcast the matching AWORSet operation. An unblock must not emit
+        // a new ban before its tombstone is recorded.
+        match cmd.action {
+            EnforceAction::Block => {
+                let _delta = self.mesh_blocklist.record_ban(
+                    cmd.ip,
+                    cmd.ttl_seconds.saturating_mul(1000),
+                    tier,
+                );
+            }
+            EnforceAction::Unblock => {
+                let _delta = self.mesh_blocklist.record_unban(cmd.ip);
+            }
         }
 
         // Mirror active records for fast veto checks.
@@ -354,8 +357,9 @@ impl CoordinatedEnforcementEngine {
 
     /// Wait for shutdown signal.
     async fn shutdown_wait(&self) -> () {
-        // Use a one-shot timeout for responsiveness while avoiding busy-wait.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        while !self.shutdown.load(std::sync::atomic::Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 

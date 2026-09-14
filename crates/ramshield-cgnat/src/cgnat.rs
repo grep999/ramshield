@@ -24,25 +24,53 @@ impl CgnatGuard {
     }
 
     /// Convert fingerprint bytes into byte-value frequency counts
-    fn fingerprint_counts(fingerprint: &[u8]) -> Vec<u64> {
-        let mut counts = vec![0u64; 256];
+    fn fingerprint_counts(fingerprint: &[u8]) -> [u64; 256] {
+        let mut counts = [0u64; 256];
         for &b in fingerprint {
             counts[b as usize] += 1;
         }
         counts
     }
 
+    /// Derive the SHM slot from the fingerprint bytes, not from their address.
+    /// The address changes between allocations and processes, so pointer-based
+    /// indexing could not reliably find a published rule.
+    pub fn fingerprint_hash(fingerprint: &[u8]) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for &byte in fingerprint {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash
+    }
+
     pub fn classify(&self, fingerprint: &[u8]) -> u8 {
         let counts = Self::fingerprint_counts(fingerprint);
         let entropy = shannon_entropy(&counts, fingerprint.len() as u64);
-        let slot = self.rules.get_slot((fingerprint.as_ptr() as u64 & 0xFFFF_FFFF) as usize % 65536);
+        let slot = self.rules.find_rule(Self::fingerprint_hash(fingerprint));
 
-        if slot.client_hash.load(std::sync::atomic::Ordering::Relaxed) == 0 {
-            CGNAT_TIER_CHALLENGE
-        } else if entropy < self.entropy_threshold {
-            CGNAT_TIER_XDP_DROP
-        } else {
-            slot.tier.load(std::sync::atomic::Ordering::Relaxed)
+        match slot {
+            // No published rule means this identity has not been classified
+            // as shared infrastructure. Preserve the normal hard-block path;
+            // Challenge is reserved for an explicitly published shared rule.
+            None => CGNAT_TIER_BLOCK,
+            Some(_) if entropy < self.entropy_threshold => CGNAT_TIER_XDP_DROP,
+            Some(slot) => slot.tier.load(std::sync::atomic::Ordering::Relaxed),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CgnatGuard;
+
+    #[test]
+    fn fingerprint_hash_is_stable_across_allocations() {
+        let first = String::from("client-fingerprint");
+        let second = String::from("client-fingerprint");
+        assert_eq!(
+            CgnatGuard::fingerprint_hash(first.as_bytes()),
+            CgnatGuard::fingerprint_hash(second.as_bytes())
+        );
     }
 }

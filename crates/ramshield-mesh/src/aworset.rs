@@ -33,6 +33,8 @@ pub struct ClusterBlockDelta {
     pub dot: ClusterDot,
     pub expires_at_ms: u64,
     pub tier: u8,
+    #[serde(default)]
+    pub removed: bool,
 }
 
 /// Thread-safe AWORSet implementation using DashSet for lock-free concurrent access.
@@ -97,6 +99,7 @@ pub struct AworsetBlocklist {
     node_id: u32,
     hlc: Hlc,
     entries: DashMap<(IpAddr, u32), (u32, u64)>,
+    tombstones: DashMap<(IpAddr, u32), (u32, u64)>,
 }
 
 impl AworsetBlocklist {
@@ -105,27 +108,62 @@ impl AworsetBlocklist {
             node_id,
             hlc: Hlc::new(),
             entries: DashMap::new(),
+            tombstones: DashMap::new(),
         }
     }
 
     /// Record a local ban. Returns the delta to broadcast to peers.
     pub fn record_ban(&self, ip: IpAddr, ttl_ms: u64, tier: u8) -> ClusterBlockDelta {
         let (phys_ms, seq) = self.hlc.tick(0, 0);
-        let expires_at_ms = phys_ms + ttl_ms;
+        let expires_at_ms = phys_ms.saturating_add(ttl_ms);
 
 let dot = ClusterDot {
             node_id: self.node_id,
             counter: seq,
         };
         self.entries.insert((ip, self.node_id), (seq, expires_at_ms));
+        self.tombstones.remove(&(ip, self.node_id));
 
-        ClusterBlockDelta { ip, dot, expires_at_ms, tier }
+        ClusterBlockDelta { ip, dot, expires_at_ms, tier, removed: false }
     }
 
     /// Absorb a peer delta. True if it changed local state.
     pub fn merge_delta(&self, delta: &ClusterBlockDelta) -> bool {
         self.hlc.tick(delta.expires_at_ms, delta.dot.counter);
         let key = (delta.ip, delta.dot.node_id);
+
+        if delta.removed {
+            let mut changed = false;
+            self.tombstones
+                .entry(key)
+                .and_modify(|(counter, removed_at)| {
+                    if delta.dot.counter > *counter {
+                        *counter = delta.dot.counter;
+                        *removed_at = current_ms();
+                        changed = true;
+                    }
+                })
+                .or_insert_with(|| {
+                    changed = true;
+                    (delta.dot.counter, current_ms())
+                });
+            if self
+                .entries
+                .get(&key)
+                .is_some_and(|entry| entry.value().0 <= delta.dot.counter)
+            {
+                self.entries.remove(&key);
+            }
+            return changed;
+        }
+
+        if self
+            .tombstones
+            .get(&key)
+            .is_some_and(|tombstone| delta.dot.counter <= tombstone.value().0)
+        {
+            return false;
+        }
 
         let mut inserted = false;
         self.entries
@@ -171,15 +209,36 @@ let dot = ClusterDot {
         const TOMBSTONE_HORIZON_MS: u64 = 5_000;
         self.entries
             .retain(|_, (_, exp)| now_ms.saturating_sub(*exp) < TOMBSTONE_HORIZON_MS);
+        self.tombstones
+            .retain(|_, (_, removed_at)| now_ms.saturating_sub(*removed_at) < TOMBSTONE_HORIZON_MS);
     }
 
     /// Local unblock: remove this node's dot for the IP so the unban
     /// gossips out and peer merges converge on removal.
-    pub fn record_unban(&self, ip: IpAddr) {
+    pub fn record_unban(&self, ip: IpAddr) -> ClusterBlockDelta {
         let (_, seq) = self.hlc.tick(0, 0);
+        let dot = ClusterDot {
+            node_id: self.node_id,
+            counter: seq,
+        };
         self.entries.remove(&(ip, self.node_id));
-        let _ = seq; // dot counter consumed only for HLC monotonicity
+        self.tombstones
+            .insert((ip, self.node_id), (seq, current_ms()));
+        ClusterBlockDelta {
+            ip,
+            dot,
+            expires_at_ms: 0,
+            tier: 0,
+            removed: true,
+        }
     }
+}
+
+fn current_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 #[cfg(test)]
@@ -234,5 +293,18 @@ mod tests {
         let mut d3 = d2.clone();
         d3.dot.counter -= 1;
         assert!(!a.merge_delta(&d3), "lower counter must be rejected");
+    }
+
+    #[test]
+    fn unban_tombstone_rejects_delayed_ban() {
+        let a = AworsetBlocklist::new(1);
+        let ip = IpAddr::from([198, 51, 100, 8]);
+        let ban = a.record_ban(ip, 60_000, 1);
+        let unban = a.record_unban(ip);
+
+        assert!(!a.is_blocked(&ip, 0));
+        assert!(!a.merge_delta(&ban));
+        assert!(!a.merge_delta(&unban));
+        assert!(!a.is_blocked(&ip, 0));
     }
 }

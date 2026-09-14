@@ -3,8 +3,10 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 
 #define RAMSHIELD_SHM_TABLE_CAPACITY 65536
+#define RAMSHIELD_SHM_SET_COUNT (RAMSHIELD_SHM_TABLE_CAPACITY / 2)
 #define RAMSHIELD_FLAG_SHARED_INFRA 0x01
 
 /// Lock-free rule table entry. Must match the Rust `ShmRuleEntry` layout
@@ -29,7 +31,7 @@ typedef struct __attribute__((aligned(64))) {
 #define RAMSHIELD_TIER_POW         2u
 #define RAMSHIELD_TIER_XDP_DROP    3u
 
-/// Single-slot lookup. Reads two atomics (hash + expiry) under Relaxed
+/// Two-way set-associative lookup. Reads two atomics (hash + expiry) under Acquire
 /// ordering — the proxy side is a pure reader; the daemon side uses
 /// Release on publish_rule. A torn read of either field is harmless:
 /// a stale hash means a miss (pass-through), a stale expiry means a
@@ -38,12 +40,14 @@ static inline const RamshieldShmRuleEntry *
 ramshield_shm_lookup(const RamshieldShmRuleEntry *table,
                      uint64_t hash, uint64_t now_ms)
 {
-    uint32_t idx = (uint32_t)(hash & (RAMSHIELD_SHM_TABLE_CAPACITY - 1));
-    const RamshieldShmRuleEntry *entry = &table[idx];
-    if (atomic_load_explicit(&entry->client_hash, memory_order_relaxed) == hash
-        && atomic_load_explicit(&entry->expires_at_ms, memory_order_relaxed) > now_ms)
-    {
-        return entry;
+    uint32_t set = (uint32_t)(hash & (RAMSHIELD_SHM_SET_COUNT - 1));
+    for (uint32_t way = 0; way < 2; way++) {
+        const RamshieldShmRuleEntry *entry = &table[set * 2 + way];
+        if (atomic_load_explicit(&entry->client_hash, memory_order_acquire) == hash
+            && atomic_load_explicit(&entry->expires_at_ms, memory_order_acquire) > now_ms)
+        {
+            return entry;
+        }
     }
     return NULL; // Pass-through
 }
