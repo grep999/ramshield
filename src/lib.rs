@@ -2,6 +2,7 @@
 //! Domain logic lives in crates/ramshield-*; this module exists so the
 //! binaries (main.rs, cli.rs) and glue (engine/, ipc/, dashboard/) keep
 //! short import paths.
+#![recursion_limit = "512"]
 
 pub mod config {
     pub use ramshield_config::*;

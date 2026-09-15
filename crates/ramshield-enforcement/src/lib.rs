@@ -62,6 +62,10 @@ pub trait XdpApplier: Send + Sync {
     fn drain_drop_events(&mut self) -> Vec<XdpDropEvent> {
         Vec::new()
     }
+    /// Read cumulative kernel COUNTERS slots: v4 drop, v6 drop, wire pass, parse fail.
+    fn counters(&mut self) -> Result<[u64; 4], EnforcementError> {
+        Ok([0; 4])
+    }
 }
 
 /// One kernel→userspace drop notification from the XDP EVENTS ringbuf.
@@ -190,9 +194,19 @@ impl EnforcementService {
             tokio::select! {
                 _ = tick.tick() => {
                     self.expire_due().await;
+                    // ponytail: export pending TTL expirations count for rev2 dashboard.
+                    self.metrics.pending_expirations.store(self.expirations.len() as u64, Ordering::Relaxed);
                     let drops = self.xdp.drain_drop_events();
                     if !drops.is_empty() {
                         trace!(n = drops.len(), "XDP drop events drained");
+                    }
+                    // ponytail: true kernel drop counters (rev/Step 1). COUNTERS
+                    // PerCpuArray slots: V4_DROP, V6_DROP, PASS, PARSE_FAIL.
+                    if let Ok(counts) = self.xdp.counters() {
+                        self.metrics.xdp_v4_drops.store(counts[0], Ordering::Relaxed);
+                        self.metrics.xdp_v6_drops.store(counts[1], Ordering::Relaxed);
+                        self.metrics.xdp_wire_pass.store(counts[2], Ordering::Relaxed);
+                        self.metrics.xdp_parse_fails.store(counts[3], Ordering::Relaxed);
                     }
                     if self.shutdown.load(Ordering::Acquire) { break; }
                 }
@@ -383,6 +397,11 @@ impl EnforcementService {
         } else {
             None
         };
+
+        // ponytail: export WAL LSN to metrics for rev2 dashboard.
+        if let Some(lsn) = wal_lsn {
+            self.metrics.wal_last_lsn.store(lsn, Ordering::Relaxed);
+        }
 
         // Step 2: storage mutation.
         let now_ns = SystemTime::now()

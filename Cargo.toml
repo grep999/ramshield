@@ -91,6 +91,8 @@ ramshield-protocol = { path = "crates/ramshield-protocol", version = "0.1.0" }
 ramshield-cgnat = { path = "crates/ramshield-cgnat", version = "0.1.0" }
 ramshield-analytics = { path = "crates/ramshield-analytics", version = "0.1.0" }
 ramshield-mesh = { path = "crates/ramshield-mesh", version = "0.1.0" }
+futures = "0.3.34"
+tokio-stream = "0.1.19"
 
 [dev-dependencies]
 serial_test = "3"
