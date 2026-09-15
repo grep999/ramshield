@@ -26,6 +26,12 @@ fn main() {
          Install bpf-linker: https://github.com/aya-rs/bpf-linker/releases\n\
          Then: PATH=\"$HOME/.local/bin:$PATH\" cargo build"
     );
+
+    // Keep the include_bytes_aligned! target present even on non-XDP hosts so the
+    // crate can compile in CI and local dev environments without the BPF toolchain.
+    if std::fs::write(&dest, b"").is_err() {
+        eprintln!("cargo:warning=failed to create fallback XDP ELF stub at {}", dest.display());
+    }
 }
 
 fn try_aya_build(dest: &Path) -> bool {

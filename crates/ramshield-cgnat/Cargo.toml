@@ -7,3 +7,6 @@ edition = "2024"
 memmap2 = "0.9"
 ramshield-forecasting = { path = "../ramshield-forecasting" }
 ramshield-mesh = { path = "../ramshield-mesh" }
+
+[lints]
+workspace = true

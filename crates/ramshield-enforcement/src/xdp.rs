@@ -223,6 +223,13 @@ impl AyaXdpApplier {
 
     /// Load ELF + attach + return. Errors surface verbatim for boot logging.
     pub fn load_and_attach(&mut self) -> Result<(), EnforcementError> {
+        if ramshield_xdp::BPF_ELF.is_empty() {
+            return Err(EnforcementError::Xdp(
+                "XDP BPF ELF is not available; install bpf-linker and rebuild the ramshield-xdp crate"
+                    .to_string(),
+            ));
+        }
+
         let mut bpf = Ebpf::load(ramshield_xdp::BPF_ELF).map_err(map_err)?;
         let program: &mut Xdp = bpf
             .program_mut("ramshield_xdp")
