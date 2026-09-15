@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 //! High-Performance Shared Memory Rule Table with OS Fallback
 //!
 //! Provides a memory-mapped rule table for sub-20ns reverse-proxy
