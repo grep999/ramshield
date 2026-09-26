@@ -934,9 +934,30 @@ fn process_request(
                 evictions: stats.evictions,
             })
         }
-        Request::GetStatus => Response::Ok {
-            message: "ok".into(),
-            state: None,
+        Request::GetStatus => {
+            let snap = engine.dashboard_snapshot();
+            let blocks_total = engine.metrics.blocks_total.load(std::sync::atomic::Ordering::Relaxed);
+            let detections = engine.metrics.blocks_detection.load(std::sync::atomic::Ordering::Relaxed)
+                + engine.metrics.blocks_subnet.load(std::sync::atomic::Ordering::Relaxed)
+                + engine.metrics.blocks_forecast.load(std::sync::atomic::Ordering::Relaxed);
+            let state_json = serde_json::to_string(&serde_json::json!({
+                "health": snap.health_reason,
+                "healthy": snap.is_healthy,
+                "xdp_active": snap.xdp_active,
+                "uptime_secs": snap.uptime_secs,
+                "blocks_total": blocks_total,
+                "active_blocks": snap.blocked_total,
+                "detections_total": detections,
+                "ips_tracked": snap.ips_tracked,
+                "ingested": snap.events_ingested,
+                "rejected": snap.events_rejected,
+                "ram_pct": snap.ram_pct,
+                "wal_lsn": snap.wal_lsn,
+            })).unwrap_or_default();
+            Response::Ok {
+                message: "ok".into(),
+                state: Some(state_json),
+            }
         },
         Request::ReportConnection {
             ip,

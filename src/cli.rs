@@ -4,6 +4,8 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
+use std::time::Duration;
+use ramshield_config::Config;
 
 #[derive(Parser)]
 #[command(name = "ramshield-cli", about = "RamShield CLI")]
@@ -44,10 +46,27 @@ enum Cmd {
     Info {
         ip: String,
     },
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    Validate {
+        #[arg(short, long)]
+        config: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Handle config subcommand (no IPC connection needed)
+    match &cli.cmd {
+        Cmd::Config { .. } => return validate_cmd(&cli.cmd),
+        _ => {},
+    }
     let json = match &cli.cmd {
         Cmd::Check { ip } => serde_json::json!({"type": "check_ip", "ip": ip}).to_string(),
         Cmd::Block { ip, reason, ttl } => {
@@ -61,6 +80,7 @@ fn main() -> Result<()> {
         Cmd::Stats => r#"{"type":"get_stats"}"#.into(),
         Cmd::Status { .. } => r#"{"type":"get_status"}"#.into(),
         Cmd::Info { ip } => serde_json::json!({"type": "get_ip_stats", "ip": ip}).to_string(),
+        Cmd::Config { .. } => unreachable!(), // handled above
     };
 
     let compact = matches!(&cli.cmd, Cmd::Status { json: true });
@@ -113,6 +133,25 @@ fn main() -> Result<()> {
         println!("{}", serde_json::to_string(&v)?);
     } else {
         println!("{}", serde_json::to_string_pretty(&v)?);
+    }
+    Ok(())
+}
+
+/// Validate a config file offline (no IPC daemon needed).
+fn validate_cmd(cmd: &Cmd) -> Result<()> {
+    let config_path = match cmd {
+        Cmd::Config { cmd: ConfigCmd::Validate { config } } => {
+            let c = config.clone();
+            c.or_else(|| std::env::var("RAMSHIELD_CONFIG").ok()).unwrap_or("config.toml".into())
+        }
+        _ => unreachable!(),
+    };
+    let absolute_path = std::fs::canonicalize(&config_path)
+        .map_err(|e| anyhow::anyhow!("config not found: {} ({})", config_path, e))?;
+    let cfg = Config::load(absolute_path.to_str().context("non-UTF-8 path")?)?;
+    println!("Config OK: {}", absolute_path.display());
+    for w in cfg.exposure_warnings() {
+        println!("WARNING: {}", w);
     }
     Ok(())
 }
