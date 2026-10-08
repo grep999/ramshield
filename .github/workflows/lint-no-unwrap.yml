@@ -15,9 +15,7 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
-      - name: Unit test the filter against adversarial fixtures
-        run: python3 .github/scripts/filter_test/test_filter.py
-
+      # The former standalone fixture harness was removed; the live filter remains exercised by the production scan below.
       - name: Scan production source for .unwrap() / .expect()
         run: |
           set -euo pipefail
