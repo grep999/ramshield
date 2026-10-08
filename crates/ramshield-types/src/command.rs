@@ -11,13 +11,10 @@ use crate::IpNetwork;
 /// telemetry, trusted RamShield fleet evidence, or an explicit operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EvidenceSource {
+    #[default]
     LocalSignals,
     FleetSignals,
     Operator,
-}
-
-impl Default for EvidenceSource {
-    fn default() -> Self { Self::LocalSignals }
 }
 use uuid::Uuid;
 
