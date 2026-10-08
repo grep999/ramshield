@@ -46,12 +46,9 @@ impl EnforcementService {
         // future remains Send when the actor is spawned on Tokio.
 
         // Hold the checkpoint barrier through synchronous WAL/store mutation, then release it before async mesh I/O.
-        let checkpoint_barrier = self
-            .checkpoint_shared
-            .as_ref()
-            .map(|shared| std::sync::Arc::clone(&shared.barrier));
-        let _ckpt_guard = checkpoint_barrier.as_ref().map(|barrier| {
-            barrier.lock().unwrap_or_else(|e| e.into_inner())
+        let checkpoint_shared = self.checkpoint_shared.clone();
+        let _ckpt_guard = checkpoint_shared.as_ref().map(|shared| {
+            shared.barrier.lock().unwrap_or_else(|e| e.into_inner())
         });
 
         // Step 1: commit intent to WAL (durable) — before any state change.
