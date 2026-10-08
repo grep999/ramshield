@@ -78,6 +78,7 @@ fn local_merge_preserves_cross_worker_semantics() {
         timestamp_ns: 500,
         bytes: 10,
         status_code: 404,
+        l7: None,
         proto_fingerprint: 7,
     });
     b.entry(ip).or_default().absorb(&ConnectionEvent {
