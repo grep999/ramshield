@@ -65,7 +65,6 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
                 "enforcement service already started",
             )
         })?;
-    let mut shutdown_rx = engine.shutdown_rx();
     // The service follows the engine shutdown flag through a dedicated watcher.
     let enforcement_shutdown = Arc::new(AtomicBool::new(false));
     // Dataplane: real aya XDP when [xdp].enabled, else in-band-only stub.
@@ -430,7 +429,7 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
 
     let upstream_cfg = Arc::new(cfg_snapshot.clone());
     let upstream_metrics = metrics.clone();
-    let mut upstream_shutdown = engine.shutdown_rx();
+    let upstream_shutdown = engine.shutdown_rx();
     tokio::spawn(async move {
         crate::engine::upstream::run(upstream_cfg, upstream_metrics, upstream_shutdown).await;
     });
