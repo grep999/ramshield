@@ -39,20 +39,26 @@ pub trait XdpApplier: Send + Sync {
             "CIDR enforcement unsupported: {network}"
         )))
     }
-    /// Configure trusted overlay CIDR blocklist (IPv4/IPv6 LPM trie maps)
+    /// Configure trusted overlay CIDR blocklist (IPv4/IPv6 LPM trie maps).
     fn configure_trusted_overlay(
         &mut self,
-        cidrs: &[IpNetwork],
-    ) -> Result<(), EnforcementError>;
-    /// Configure autonomous mode (syn/udp/packet PPS per-CPU limits)
+        _cidrs: &[IpNetwork],
+    ) -> Result<(), EnforcementError> {
+        // Keep the optional overlay hook a no-op for appliers without a kernel overlay map.
+        Ok(())
+    }
+    /// Configure autonomous mode (syn/udp/packet PPS per-CPU limits).
     fn configure_autonomous(
         &mut self,
-        enabled: bool,
-        syn_pps_per_cpu: u64,
-        udp_pps_per_cpu: u64,
-        packet_pps_per_cpu: u64,
-        window_ms: u64,
-    ) -> Result<(), EnforcementError>;
+        _enabled: bool,
+        _syn_pps_per_cpu: u64,
+        _udp_pps_per_cpu: u64,
+        _packet_pps_per_cpu: u64,
+        _window_ms: u64,
+    ) -> Result<(), EnforcementError> {
+        // Keep the optional autonomous hook a no-op for appliers without kernel controls.
+        Ok(())
+    }
     /// Reconcile both per-IP hash maps and CIDR LPM-trie maps against the
     /// userspace source of truth. CIDRs are included explicitly because they
     /// are not represented by `Store::get_all_blocked_ips()`.
