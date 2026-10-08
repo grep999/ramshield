@@ -45,11 +45,13 @@ impl EnforcementService {
         // Keep the guard scoped to the non-awaiting section so the enforcement
         // future remains Send when the actor is spawned on Tokio.
 
-        let _ckpt_guard = self.checkpoint_shared.as_ref().map(|shared| {
-            shared
-                .barrier
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
+        // Hold the checkpoint barrier through synchronous WAL/store mutation, then release it before async mesh I/O.
+        let checkpoint_barrier = self
+            .checkpoint_shared
+            .as_ref()
+            .map(|shared| std::sync::Arc::clone(&shared.barrier));
+        let _ckpt_guard = checkpoint_barrier.as_ref().map(|barrier| {
+            barrier.lock().unwrap_or_else(|e| e.into_inner())
         });
 
         // Step 1: commit intent to WAL (durable) — before any state change.
@@ -214,7 +216,6 @@ impl EnforcementService {
                     }
                 }
 
-                drop(_ckpt_guard);
                 // Step 3: dataplane (barrier released — XDP stays outside).
                 let is_cidr = cmd.cidr.is_some();
                 // WAL + Store are complete; release checkpoint coordination before
@@ -270,6 +271,9 @@ impl EnforcementService {
                 };
                 drop(_ckpt_guard);
 
+                // Release checkpoint coordination before network I/O.
+                drop(_ckpt_guard);
+
                 if let (Some(handle), Some(delta)) = (&self.mesh_handle, pending_mesh_block) {
                     handle
                         .broadcast(ramshield_mesh::MeshMessage::Block(delta))
@@ -322,19 +326,14 @@ impl EnforcementService {
                     }
                     self.blocked_ips.remove(&cmd.ip);
                     self.drops_by_blocked.remove(&cmd.ip);
-                    // Ponytail: mesh CRDT unbans — publish so dashboard reflects
-                    // live unblock activity. A CIDR unblock is NOT an IP unban.
-                    if let Some(mesh) = &self.mesh_blocklist {
+                    // Prepare mesh unban deltas while the synchronous state transition is serialized.
+                    let pending_mesh_unblocks = if let Some(mesh) = &self.mesh_blocklist {
                         let deltas = mesh.record_unban(cmd.ip);
                         self.metrics.inc_mesh_record_unban();
-                        if cmd.source != "mesh" {
-                            if let Some(handle) = &self.mesh_handle {
-                                for delta in deltas {
-                                    handle.broadcast(ramshield_mesh::MeshMessage::Unblock(delta)).await;
-                                }
-                            }
-                        }
-                    }
+                        (cmd.source != "mesh").then_some(deltas)
+                    } else {
+                        None
+                    };
                     if cmd.source != "mesh" {
                         self.mesh_operator_suppressions.insert(cmd.ip);
                     }
@@ -343,6 +342,18 @@ impl EnforcementService {
                     self.detach_expiration(cmd.ip);
                     if let Some(shared) = &self.checkpoint_shared {
                         shared.remove_ip_expiration(&cmd.ip);
+                    }
+
+                    // Release checkpoint coordination before network I/O.
+                    drop(_ckpt_guard);
+                    if let (Some(handle), Some(deltas)) =
+                        (&self.mesh_handle, pending_mesh_unblocks)
+                    {
+                        for delta in deltas {
+                            handle
+                                .broadcast(ramshield_mesh::MeshMessage::Unblock(delta))
+                                .await;
+                        }
                     }
                 }
                 let xdp_applied = match cmd.cidr {
