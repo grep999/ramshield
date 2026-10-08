@@ -476,7 +476,7 @@ fn network_contains(network: &IpNetwork, ip: std::net::IpAddr) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+mod tpacket_tests {
     #[test]
     fn tpacket_constants_are_sane() { #[cfg(target_os="linux")] { assert_eq!(super::TPACKET_V3, 2); assert_eq!(super::PACKET_RX_RING, 5); } }
 }
@@ -507,7 +507,7 @@ mod tests {
         ip[33] = 0x02;
         let frame = eth(0x0800, &ip);
         let (src, proto, syn, fragmented, overlay) = parse_l3(&frame).unwrap();
-        assert_eq!(src, "198.51.100.7".parse().unwrap());
+        assert_eq!(src, "198.51.100.7".parse::<std::net::IpAddr>().unwrap());
         assert_eq!(proto, 6);
         assert!(syn);
         assert!(!fragmented);

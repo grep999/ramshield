@@ -65,7 +65,6 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
                 "enforcement service already started",
             )
         })?;
-    let mut shutdown_rx = engine.shutdown_rx();
     // The service follows the engine shutdown flag through a dedicated watcher.
     let enforcement_shutdown = Arc::new(AtomicBool::new(false));
     // Dataplane: real aya XDP when [xdp].enabled, else in-band-only stub.
@@ -377,13 +376,16 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
             }
         }
     }
-    let mut shutdown_rx = engine.shutdown_rx();
-        // Run enforcement directly instead of spawning — avoids Send bound
-        // violation from mesh integration types. Enforcement will block here
-        // until shutdown signal, then boot continues with other services.
+    // Run enforcement on its own Tokio task. The service owns the single-writer
+    // security state, while the boot pipeline remains free to start detection,
+    // IPC, forecasting, and the checkpoint loop.
+    let enforcement_task = tokio::spawn(async move {
         if let Err(e) = enforcement.run(enforcement_rx).await {
             tracing::error!("enforcement service: {e}");
         }
+    });
+
+    let mut shutdown_rx = engine.shutdown_rx();
 
     let detection = Arc::new(DetectionEngine::try_new(
         store.clone(),
@@ -427,7 +429,7 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
 
     let upstream_cfg = Arc::new(cfg_snapshot.clone());
     let upstream_metrics = metrics.clone();
-    let mut upstream_shutdown = engine.shutdown_rx();
+    let upstream_shutdown = engine.shutdown_rx();
     tokio::spawn(async move {
         crate::engine::upstream::run(upstream_cfg, upstream_metrics, upstream_shutdown).await;
     });
@@ -567,16 +569,18 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
         _ = shutdown_rx.changed() => {
             tracing::info!("pipeline: shutdown signal received, draining...");
             enforcement_shutdown.store(true, Ordering::Release);
-            // Join with timeout to avoid hanging on stuck tasks.
+            // Join with timeout to avoid hanging on a stuck enforcement task.
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-                        tokio::select! {
-                            _ = shutdown_rx.changed() => {
-                                tracing::warn!("enforcement shutdown timed out via rx changed");
-                            }
-                            _ = tokio::time::sleep_until(deadline) => {
-                                tracing::warn!("enforcement shutdown timed out");
-                            }
-                        }
+            tokio::select! {
+                result = enforcement_task => {
+                    if let Err(e) = result {
+                        tracing::error!("enforcement task join failed: {e}");
+                    }
+                }
+                _ = tokio::time::sleep_until(deadline) => {
+                    tracing::warn!("enforcement shutdown timed out");
+                }
+            }
             if let Some((_, handle)) = forecaster.as_mut() {
                 tokio::select! {
                     _ = handle => {}

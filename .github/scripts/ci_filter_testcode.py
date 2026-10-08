@@ -28,7 +28,14 @@ def find_test_lines(src_path: str) -> set[int]:
         content = f.read()
 
     test_lines: set[int] = set()
-    cfg_positions = [m.start() for m in re.finditer(r"#\[cfg\(test\)\]", content)]
+    # Match direct test cfgs and combined all()/any() test cfgs used by platform-specific test modules.
+    cfg_positions = [
+        m.start()
+        for m in re.finditer(
+            r"#\[cfg\((?!\s*not\s*\(\s*test\b)[^]]*\btest\b[^]]*\)\]",
+            content,
+        )
+    ]
 
     for pos in cfg_positions:
         brace_start = content.find("{", pos)

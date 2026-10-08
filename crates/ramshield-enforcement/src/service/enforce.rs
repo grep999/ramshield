@@ -41,17 +41,15 @@ impl EnforcementService {
             ));
         }
 
-        // Checkpoint barrier: serialize [WAL append + store mutation] against
-        // the checkpoint loop's [begin_checkpoint + store capture]. Without it
-        // an entry can be durable BELOW the checkpoint boundary while its store
-        // mutation is still in flight — the snapshot misses it AND tail replay
-        // starts after it: the block silently vanishes on recovery. Steps 1-2
-        // contain no await, so a std guard is safe here; XDP (step 3) stays
-        // outside the barrier.
-        let _ckpt_arc = self.checkpoint_shared.clone();
-        let _ckpt_guard = _ckpt_arc
-            .as_ref()
-            .map(|s| s.barrier.lock().unwrap_or_else(|e| e.into_inner()));
+        // Serialize the synchronous WAL + Store commit against checkpoint capture.
+        // Keep the guard scoped to the non-awaiting section so the enforcement
+        // future remains Send when the actor is spawned on Tokio.
+
+        // Hold the checkpoint barrier through synchronous WAL/store mutation, then release it before async mesh I/O.
+        let checkpoint_shared = self.checkpoint_shared.clone();
+        let _ckpt_guard = checkpoint_shared.as_ref().map(|shared| {
+            shared.barrier.lock().unwrap_or_else(|e| e.into_inner())
+        });
 
         // Step 1: commit intent to WAL (durable) — before any state change.
         let wal_lsn = if let Some(ref wal) = self.wal {
@@ -215,9 +213,12 @@ impl EnforcementService {
                     }
                 }
 
-                drop(_ckpt_guard);
                 // Step 3: dataplane (barrier released — XDP stays outside).
                 let is_cidr = cmd.cidr.is_some();
+                // WAL + Store are complete; release checkpoint coordination before
+                // any dataplane or mesh await.
+                drop(_ckpt_guard);
+
                 let xdp_applied = match cmd.cidr {
                     Some(network) => {
                         self.xdp
@@ -251,17 +252,25 @@ impl EnforcementService {
                     false
                 });
                 self.metrics.inc_blocks();
-                // First-party local/operator blocks clear a prior mesh suppression
-                // and may publish the decision to peers. Mesh-originated blocks do
-                // not rebroadcast, preventing gossip amplification.
-                if cmd.cidr.is_none() && cmd.source != "mesh" {
+                // Prepare the mesh mutation while still on the synchronous
+                // enforcement path; perform network I/O only after the checkpoint
+                // guard has been released so no std::sync::MutexGuard crosses await.
+                let pending_mesh_block = if cmd.cidr.is_none() && cmd.source != "mesh" {
                     self.mesh_operator_suppressions.remove(&cmd.ip);
-                    if let (Some(mesh), Some(handle)) = (&self.mesh_blocklist, &self.mesh_handle) {
+                    self.mesh_blocklist.as_ref().map(|mesh| {
                         let ttl_ms = cmd.ttl_seconds.saturating_mul(1000);
                         let delta = mesh.record_ban(cmd.ip, ttl_ms, 2);
                         self.metrics.inc_mesh_record_ban();
-                        handle.broadcast(ramshield_mesh::MeshMessage::Block(delta)).await;
-                    }
+                        delta
+                    })
+                } else {
+                    None
+                };
+
+                if let (Some(handle), Some(delta)) = (&self.mesh_handle, pending_mesh_block) {
+                    handle
+                        .broadcast(ramshield_mesh::MeshMessage::Block(delta))
+                        .await;
                 }
                 let result = EnforceResult {
                     decision_id: cmd.decision_id,
@@ -310,19 +319,14 @@ impl EnforcementService {
                     }
                     self.blocked_ips.remove(&cmd.ip);
                     self.drops_by_blocked.remove(&cmd.ip);
-                    // Ponytail: mesh CRDT unbans — publish so dashboard reflects
-                    // live unblock activity. A CIDR unblock is NOT an IP unban.
-                    if let Some(mesh) = &self.mesh_blocklist {
+                    // Prepare mesh unban deltas while the synchronous state transition is serialized.
+                    let pending_mesh_unblocks = if let Some(mesh) = &self.mesh_blocklist {
                         let deltas = mesh.record_unban(cmd.ip);
                         self.metrics.inc_mesh_record_unban();
-                        if cmd.source != "mesh" {
-                            if let Some(handle) = &self.mesh_handle {
-                                for delta in deltas {
-                                    handle.broadcast(ramshield_mesh::MeshMessage::Unblock(delta)).await;
-                                }
-                            }
-                        }
-                    }
+                        (cmd.source != "mesh").then_some(deltas)
+                    } else {
+                        None
+                    };
                     if cmd.source != "mesh" {
                         self.mesh_operator_suppressions.insert(cmd.ip);
                     }
@@ -331,6 +335,18 @@ impl EnforcementService {
                     self.detach_expiration(cmd.ip);
                     if let Some(shared) = &self.checkpoint_shared {
                         shared.remove_ip_expiration(&cmd.ip);
+                    }
+
+                    // Release checkpoint coordination before network I/O.
+                    drop(_ckpt_guard);
+                    if let (Some(handle), Some(deltas)) =
+                        (&self.mesh_handle, pending_mesh_unblocks)
+                    {
+                        for delta in deltas {
+                            handle
+                                .broadcast(ramshield_mesh::MeshMessage::Unblock(delta))
+                                .await;
+                        }
                     }
                 }
                 let xdp_applied = match cmd.cidr {
