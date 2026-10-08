@@ -266,10 +266,6 @@ impl EnforcementService {
                 } else {
                     None
                 };
-                drop(_ckpt_guard);
-
-                // Release checkpoint coordination before network I/O.
-                drop(_ckpt_guard);
 
                 if let (Some(handle), Some(delta)) = (&self.mesh_handle, pending_mesh_block) {
                     handle
