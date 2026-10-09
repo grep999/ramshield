@@ -53,6 +53,17 @@ class FilterTestCodeTests(unittest.TestCase):
         self.assertEqual(len(violations), 1)
         self.assertIn("fn production()", violations[0])
 
+    def test_compound_cfg_test_module_is_filtered(self) -> None:
+        violations = self.run_filter(
+            '#[cfg(all(test, target_os = "linux"))]\n'
+            "mod tests {\n"
+            "    fn test_only() { value.unwrap(); }\n"
+            "}\n"
+            "fn production() { value.expect(\"required\"); }\n"
+        )
+        self.assertEqual(len(violations), 1)
+        self.assertIn("fn production()", violations[0])
+
     def test_no_hits_is_clean(self) -> None:
         self.assertEqual(self.run_filter("fn production() {}\n"), [])
 
