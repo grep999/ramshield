@@ -335,7 +335,7 @@ pub(crate) fn process_request(
                 bytes,
                 status_code,
 proto_fingerprint: proto_fp,
-                l7: l7,
+                l7,
             };
             // STAGE 1: Semantic shedding — at >=75% occupancy, shed low-signal
             // (routine 200 OK / benign fingerprint) to preserve space for
@@ -388,7 +388,7 @@ proto_fingerprint: proto_fp,
                     bytes: cr.bytes,
                     status_code: cr.status_code,
                     proto_fingerprint: cr.proto_fp,
-                    l7: cr.l7.clone(),
+                    l7: cr.l7,
                 };
                 // STAGE 1: Semantic shedding — at >=75% occupancy, shed low-signal
                 // (routine 200 OK / benign fingerprint) to preserve space for
