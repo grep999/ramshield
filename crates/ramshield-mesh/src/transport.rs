@@ -125,7 +125,7 @@ mod tests {
     #[tokio::test]
     async fn bounded_reader_accepts_frame_at_limit() {
         let mut bytes = vec![b'x'; MAX_FRAME - 1];
-        bytes.push(b'\\n');
+        bytes.push(b'\n');
         let (mut writer, stream) = duplex(MAX_FRAME);
         writer.write_all(&bytes).await.expect("write test frame");
         drop(writer);
