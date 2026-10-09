@@ -48,7 +48,7 @@ else
   printf '[SKIP] keystore-jsonl-current: no metric-keystore.jsonl\n' | tee -a "$REPORT"
 fi
 run python-syntax python3 -m py_compile scripts/*.py
-run rustfmt cargo +stable fmt --all -- --check
+run rustfmt cargo fmt --all -- --check
 run cargo-check cargo check --workspace --locked --all-targets --features full
 run clippy cargo clippy --workspace --locked --all-targets --features full -- -D warnings
 run cargo-test cargo test --workspace --locked --features full
