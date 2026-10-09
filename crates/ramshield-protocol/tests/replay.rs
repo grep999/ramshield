@@ -119,7 +119,7 @@ fn concurrent_valid_frame_is_accepted_exactly_once() {
     const WORKERS: usize = 32;
 
     let keys = Arc::new(keys());
-    let payload = Arc::new(br#"{\"type\":\"check_ip\",\"ip\":\"192.0.2.1\"}"#.to_vec());
+    let payload = Arc::new(br#"{"type":"check_ip","ip":"192.0.2.1"}"#.to_vec());
     let ts = now_ms();
     let sig = Arc::new(auth::sign(b"server-key", "k1", ts, &payload).expect("test key non-empty"));
     let store = Arc::new(ReplayStore::new(WORKERS, Duration::from_secs(60)));
