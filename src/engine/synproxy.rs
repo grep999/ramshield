@@ -269,30 +269,31 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn sysctl_update_failure_rolls_back_prior_values() {
+        use std::cell::RefCell;
         use std::collections::HashMap;
 
-        let mut values = HashMap::from([
+        let values = RefCell::new(HashMap::from([
             ("a".to_string(), "old-a".to_string()),
             ("b".to_string(), "old-b".to_string()),
             ("c".to_string(), "old-c".to_string()),
-        ]);
+        ]));
         let desired = [("a", "new-a"), ("b", "new-b"), ("c", "new-c")];
         let result = super::apply_sysctls_transactionally(
             &desired,
-            |key| values.get(key).cloned().ok_or_else(|| format!("missing {key}")),
+            |key| values.borrow().get(key).cloned().ok_or_else(|| format!("missing {key}")),
             |key, value| {
                 if key == "b" && value == "new-b" {
                     return Err("injected write failure".into());
                 }
-                values.insert(key.to_string(), value.to_string());
+                values.borrow_mut().insert(key.to_string(), value.to_string());
                 Ok(())
             },
         );
 
         assert!(result.is_err());
-        assert_eq!(values.get("a").map(String::as_str), Some("old-a"));
-        assert_eq!(values.get("b").map(String::as_str), Some("old-b"));
-        assert_eq!(values.get("c").map(String::as_str), Some("old-c"));
+        assert_eq!(values.borrow().get("a").map(String::as_str), Some("old-a"));
+        assert_eq!(values.borrow().get("b").map(String::as_str), Some("old-b"));
+        assert_eq!(values.borrow().get("c").map(String::as_str), Some("old-c"));
     }
 
     #[cfg(target_os = "linux")]
