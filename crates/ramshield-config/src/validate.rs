@@ -98,7 +98,7 @@ impl Config {
         }
         if self.synproxy.enabled {
             if self.synproxy.ports.is_empty() || self.synproxy.ports.len() > 32 { anyhow::bail!("synproxy.ports must contain 1..=32 ports"); }
-            if self.synproxy.ports.iter().any(|p| *p == 0) { anyhow::bail!("synproxy.ports must not contain port 0"); }
+            if self.synproxy.ports.contains(&0) { anyhow::bail!("synproxy.ports must not contain port 0"); }
             if self.synproxy.mss < 536 { anyhow::bail!("synproxy.mss must be >= 536"); }
             if self.synproxy.wscale > 14 { anyhow::bail!("synproxy.wscale must be <= 14"); }
             if self.synproxy.max_connections_per_source == 0 { anyhow::bail!("synproxy.max_connections_per_source must be > 0"); }
