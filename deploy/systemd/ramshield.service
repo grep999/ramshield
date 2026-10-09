@@ -1,7 +1,7 @@
 [Unit]
 Description=RamShield Autonomous Ingress Defense Daemon
 Documentation=https://github.com/grep999/ramshield
-After=network-online.target
+After=network-online.target systemd-sysctl.service
 Wants=network-online.target
 
 [Service]
