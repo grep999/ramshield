@@ -22,6 +22,18 @@ nft -c -f "$fixture"
 nft -f "$fixture"
 nft list chain inet "$table" input >/dev/null
 
+# Exercise the same delete-and-recreate batch used by the daemon when replacing
+# an existing ruleset. Validation and application must both succeed atomically.
+{
+  printf 'delete table inet %s\\n' "$table"
+  cat "$fixture"
+} | nft -c -f -
+{
+  printf 'delete table inet %s\\n' "$table"
+  cat "$fixture"
+} | nft -f -
+nft list chain inet "$table" input >/dev/null
+
 # The duplicate add is syntactically valid but must fail at transaction apply.
 # nftables must roll back the preceding delete and first add atomically.
 if printf '%s\n' \
