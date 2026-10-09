@@ -7,6 +7,7 @@
 //! with a required store: identical signed frames are rejected as replays
 //! inside the store TTL, and frames outside the skew window are rejected
 //! regardless of store state.
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -108,4 +109,51 @@ fn replay_store_capacity_preserves_live_markers() {
     assert_eq!(store.check_and_record("k1", b"new-nonce"), Err("capacity"));
     assert_eq!(store.check_and_record("k1", b"n0"), Err("replay"));
     assert_eq!(store.len(), cap);
+}
+
+
+/// Concurrent verification of one valid frame must have exactly one winner.
+/// This exercises the full verifier/store path, not only the store primitive.
+#[test]
+fn concurrent_valid_frame_is_accepted_exactly_once() {
+    const WORKERS: usize = 32;
+
+    let keys = Arc::new(keys());
+    let payload = Arc::new(br#"{\"type\":\"check_ip\",\"ip\":\"192.0.2.1\"}"#.to_vec());
+    let ts = now_ms();
+    let sig = Arc::new(auth::sign(b"server-key", "k1", ts, &payload).expect("test key non-empty"));
+    let store = Arc::new(ReplayStore::new(WORKERS, Duration::from_secs(60)));
+    let barrier = Arc::new(Barrier::new(WORKERS));
+
+    let workers = (0..WORKERS)
+        .map(|_| {
+            let keys = Arc::clone(&keys);
+            let payload = Arc::clone(&payload);
+            let sig = Arc::clone(&sig);
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                auth::verify(&keys, "k1", ts, &sig, &payload, &store)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut accepted = 0;
+    let mut rejected_as_replay = 0;
+    for worker in workers {
+        match worker.join().expect("verification worker panicked") {
+            Ok(()) => accepted += 1,
+            Err("replay") => rejected_as_replay += 1,
+            other => panic!("unexpected concurrent verification result: {other:?}"),
+        }
+    }
+
+    assert_eq!(accepted, 1, "one concurrent copy of a valid frame may win");
+    assert_eq!(
+        rejected_as_replay,
+        WORKERS - 1,
+        "all other copies must be rejected as replays"
+    );
+    assert_eq!(store.len(), 1, "one replay marker must be retained");
 }
