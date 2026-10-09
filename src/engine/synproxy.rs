@@ -78,11 +78,7 @@ pub fn install(cfg: &SynproxyConfig, interface: &str) -> Result<(), String> {
     // be submitted as one nft transaction; a failed transaction keeps the old
     // ruleset active instead of leaving a protection gap.
     let existing = table_exists()?;
-    let transaction = if existing {
-        format!("delete table inet ramshield_synproxy\n{script}")
-    } else {
-        script
-    };
+    let transaction = ruleset_transaction(existing, &script);
 
     // The daemon verifies host policy but never mutates global kernel tunables.
     // Configure these through sysctl.d before enabling SYNPROXY.
@@ -166,6 +162,17 @@ fn apply_ruleset_with_preflight(
 }
 
 #[cfg(target_os = "linux")]
+fn ruleset_transaction(table_exists: bool, script: &str) -> String {
+    if table_exists {
+        // Delete and recreate the owned table in one nft batch so a rejected
+        // replacement leaves the previously installed ruleset intact.
+        format!("delete table inet ramshield_synproxy\n{script}")
+    } else {
+        script.to_owned()
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn table_exists() -> Result<bool, String> {
     let out = Command::new("nft")
         .args(["list", "table", "inet", "ramshield_synproxy"])
@@ -236,6 +243,18 @@ mod tests {
             assert!(rules.contains("meter syn_rate4 { ip saddr limit rate over 50/second burst 100 packets } drop"));
             assert!(rules.contains("tcp flags syn tcp dport { 22, 443 } notrack"));
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn replacing_synproxy_table_is_one_nft_transaction() {
+        let candidate = "table inet ramshield_synproxy { }";
+        let transaction = super::ruleset_transaction(true, candidate);
+        assert_eq!(
+            transaction,
+            "delete table inet ramshield_synproxy\ntable inet ramshield_synproxy { }"
+        );
+        assert_eq!(super::ruleset_transaction(false, candidate), candidate);
     }
 
     #[cfg(target_os = "linux")]
