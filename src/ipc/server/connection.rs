@@ -158,12 +158,24 @@ pub(crate) async fn handle_connection(
                         }
                     },
                     Err(reason) => {
-                        warn!("IPC auth rejected: {}", reason);
+                        // Replay-store saturation/poison is an availability failure,
+                        // not an authentication failure. Fail closed without exposing
+                        // internal capacity/lock details to an unauthenticated peer.
+                        let (code, message) = match reason {
+                            "capacity" | "replay store poisoned" => {
+                                warn!("IPC auth temporarily unavailable: replay store unavailable");
+                                (503, "temporarily unavailable".to_string())
+                            }
+                            _ => {
+                                warn!("IPC auth rejected: {}", reason);
+                                (401, "unauthorized".to_string())
+                            }
+                        };
                         engine.metrics.inc_rejected(1);
                         engine.metrics.inc_ipc_auth_rejections(1);
                         let resp = Response::Error {
-                            code: 401,
-                            message: format!("unauthorized: {}", reason),
+                            code,
+                            message,
                         };
                         if timeout(config.write_timeout, write_resp(&mut socket, &resp))
                             .await
