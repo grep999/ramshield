@@ -68,9 +68,11 @@ fn ipc_wiring_oversize_connection_gets_error_frame_not_bare_reset() {
     std::thread::sleep(Duration::from_secs(1));
 
     let mut stream = TcpStream::connect("127.0.0.1:17892").expect("connect");
-    // Push >1MB (default max_connection_bytes) with no newline — cap trips first.
+    // Send exactly the default 1 MiB cap. The server detects the cap at the
+    // top of its next read loop; sending more leaves unread payload in the
+    // socket and Windows may correctly reset the connection on close.
     let chunk = vec![b'a'; 65536];
-    for _ in 0..20 {
+    for _ in 0..16 {
         if stream.write_all(&chunk).is_err() {
             break; // server may close mid-send after sending the error frame
         }
