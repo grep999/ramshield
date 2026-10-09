@@ -87,9 +87,18 @@ pub fn snapshot_exists(wal_dir: &str, lsn: u64) -> bool {
     PathBuf::from(snapshot_path(wal_dir, lsn)).exists()
 }
 
+#[cfg(unix)]
 fn fsync_dir(dir: &str) -> Result<()> {
     let d = File::open(dir)?;
     d.sync_all()?;
+    Ok(())
+}
+
+// Opening a directory as a file is not supported on Windows. The snapshot
+// file itself is synced before rename; directory-entry durability relies on
+// Windows filesystem semantics here.
+#[cfg(not(unix))]
+fn fsync_dir(_dir: &str) -> Result<()> {
     Ok(())
 }
 
