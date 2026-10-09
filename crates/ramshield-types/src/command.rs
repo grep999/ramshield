@@ -9,15 +9,12 @@ use crate::IpNetwork;
 /// Provenance of an enforcement decision. Community reputation is deliberately
 /// not representable here: RamShield decisions must originate from local
 /// telemetry, trusted RamShield fleet evidence, or an explicit operator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum EvidenceSource {
+    #[default]
     LocalSignals,
     FleetSignals,
     Operator,
-}
-
-impl Default for EvidenceSource {
-    fn default() -> Self { Self::LocalSignals }
 }
 use uuid::Uuid;
 
