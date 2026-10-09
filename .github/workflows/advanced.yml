@@ -16,11 +16,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly-2026-08-29
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +stable fmt --all -- --check
+      - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings -A clippy::pedantic
 
   test:
