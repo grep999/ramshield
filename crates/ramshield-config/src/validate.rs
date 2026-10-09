@@ -126,8 +126,8 @@ impl Config {
         if self.ipc.max_connections == 0 {
             anyhow::bail!("ipc.max_connections must be > 0");
         }
-        if self.ipc.max_connections > 1_024 {
-            anyhow::bail!("ipc.max_connections should not exceed 1,024");
+        if self.ipc.max_connections > 8_192 {
+            anyhow::bail!("ipc.max_connections should not exceed 8,192");
         }
         if let Some(mll) = self.ipc.max_line_length
             && mll < 256
