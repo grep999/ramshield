@@ -393,7 +393,7 @@ impl XdpApplier for AyaXdpApplier {
         Ok(())
     }
 
-    fn configure_autonomous(&mut self, enabled: bool, syn_pps_per_cpu: u64, udp_pps_per_cpu: u64, packet_pps_per_cpu: u64, window_ms: u64) -> Result<(), EnforcementError> {
+    fn configure_autonomous(&mut self, enabled: bool, _syn_pps_per_cpu: u64, _udp_pps_per_cpu: u64, _packet_pps_per_cpu: u64, _window_ms: u64) -> Result<(), EnforcementError> {
         if !enabled {
             return Ok(());
         }
