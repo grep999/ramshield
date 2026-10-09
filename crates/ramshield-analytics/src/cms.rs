@@ -64,7 +64,7 @@ impl DecayingCountMinSketch {
     /// exceeds a threshold (e.g. 1M) to keep counts bounded.
     pub fn decay(&self) {
         for c in &self.counts {
-            c.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| Some(v / 2))
+            c.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| Some(v / 2))
                 .ok();
         }
         self.inserted_since_decay.store(0, Ordering::Relaxed);

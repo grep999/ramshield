@@ -158,6 +158,7 @@ ramshield_shm_flush_all(RamshieldShmRuleEntry *table, uint64_t now_ms)
         atomic_store_explicit(&table[i].flags, 0, memory_order_relaxed);
         atomic_store_explicit(&table[i].challenge_seed_lo, 0, memory_order_relaxed);
         atomic_store_explicit(&table[i].challenge_seed_hi, 0, memory_order_relaxed);
+        /* The final even seq increment publishes the completely cleared slot. */
         atomic_fetch_add_explicit(&table[i].seq, 1, memory_order_release);
     }
 }

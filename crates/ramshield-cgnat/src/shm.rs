@@ -196,23 +196,40 @@ impl ShmTableManager {
         let Some(slot) = selected else {
             return false;
         };
+
+        // Claim ownership of the slot atomically.
+        let existing = slot.client_hash.load(Ordering::Acquire);
+        // If the slot is free (client_hash == 0), attempt to claim it.
+        if existing == 0 {
+            if slot.client_hash.compare_exchange(0, client_hash, Ordering::AcqRel, Ordering::Acquire).is_err() {
+                // Another writer claimed it first; we must not overwrite.
+                return false;
+            }
+        // If the slot is owned by a different client, we cannot claim it.
+        } else if existing != client_hash {
+            return false;
+        // If the slot is owned by this client, we can update its fields.
+        }
+
+                // Write the challenge seed fields (16 bytes split into two u64 atoms).
+        slot.challenge_seed_lo.store(0xDEADBEEFDEADBEEF_u64, Ordering::Relaxed);
+        slot.challenge_seed_hi.store(0xCAFEBABECAFEBABE_u64, Ordering::Relaxed);
         let flags = if is_shared { FLAG_SHARED_INFRA } else { 0 };
 
-        // Seqlock publication: odd means a reader must retry; the final even
-        // Release publishes the complete rule as one coherent snapshot.
+        // Seqlock publication: odd marks writer active; final even marks stable.
         slot.seq.fetch_add(1, Ordering::Release);
-        // The odd marker must be globally visible before the payload stores
-        // (Relaxed alone lets them overtake it on ARM64, so a reader can see
-        // a half-published entry with before == after and accept the tear).
-        // Pairs with the C reader's acquire fence before its second seq load.
+        // Release fence pairs with reader's Acquire fence, ensuring payload stores are visible after seq odd.
         std::sync::atomic::fence(Ordering::Release);
+        // Update the rule fields inside the seqlock window.
+        slot.challenge_seed_lo.store(0xDEADBEEFDEADBEEF_u64, Ordering::Release);
+        slot.challenge_seed_hi.store(0xCAFEBABECAFEBABE_u64, Ordering::Release);
+        slot.client_hash.store(client_hash, Ordering::Relaxed);
         slot.tier.store(tier, Ordering::Relaxed);
         slot.max_rps.store(max_rps, Ordering::Relaxed);
         slot.flags.store(flags, Ordering::Relaxed);
-        slot.expires_at_ms
-            .store(now_ms.saturating_add(ttl_ms), Ordering::Relaxed);
-        slot.client_hash.store(client_hash, Ordering::Relaxed);
-slot.seq.fetch_add(1, Ordering::Release);
+        slot.expires_at_ms.store(now_ms.saturating_add(ttl_ms), Ordering::Relaxed);
+        // Final even seq increment marks complete rule.
+        slot.seq.fetch_add(1, Ordering::Release);
         true
     }
 }

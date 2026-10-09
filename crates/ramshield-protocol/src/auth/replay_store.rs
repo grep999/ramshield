@@ -91,6 +91,18 @@ impl ReplayStore {
         if g.map.get(&key).is_some_and(|prev| now.duration_since(*prev) < self.ttl) {
             return Err("replay");
         }
+        // B06: Check per-key capacity BEFORE mutating. The store must never
+        // change state when it returns an error — a rejected request leaves
+        // the store exactly as it was.
+        if self.per_key_cap < self.cap {
+            let own_count = g.order.iter()
+                .filter(|k| k.key_id == key.key_id)
+                .filter(|k| g.map.get(*k).is_some_and(|ts| now.duration_since(*ts) < self.ttl))
+                .count();
+            if own_count >= self.per_key_cap {
+                return Err("capacity");
+            }
+        }
         // Insert / refresh.
         g.order.retain(|k| k != &key);
         g.map.insert(key.clone(), now);
@@ -98,13 +110,6 @@ impl ReplayStore {
         // LRU bound: drop the oldest ONLY if exceeds global capacity.
         while g.order.len() > self.cap {
             if let Some(old) = g.order.pop_front() { g.map.remove(&old); }
-        }
-        // Per-key capacity: reject without evicting valid entries.
-        if self.per_key_cap < self.cap {
-            let own_keys: Vec<NonceKey> = g.order.iter().filter(|k| k.key_id == key.key_id).cloned().collect();
-            if own_keys.len() > self.per_key_cap {
-                return Err("capacity");
-            }
         }
         Ok(())
     }
@@ -118,10 +123,11 @@ mod tests {
     #[test]
     fn per_key_limit_prevents_flood_across_keys() {
         let s = ReplayStore::with_per_key_cap(64, 2, Duration::from_millis(100000));
-        // Fill one key with 3 entries — should only keep last 2
+        // Fill one key with 2 entries — should be ok
         assert!(s.check_and_record("kA", &[1; 32]).is_ok());
         assert!(s.check_and_record("kA", &[2; 32]).is_ok());
-        assert!(s.check_and_record("kA", &[3; 32]).is_ok());
+        // Third entry for same key should fail due to per-key capacity (no eviction)
+        assert!(s.check_and_record("kA", &[3; 32]).is_err());
         // kB entries should still be accepted (global cap not hit)
         assert!(s.check_and_record("kB", &[4; 32]).is_ok());
     }

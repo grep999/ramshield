@@ -102,7 +102,7 @@ pub fn install(cfg: &SynproxyConfig, interface: &str) -> Result<(), String> {
     .map(|k| (*k, read_sysctl(k)))
     .collect();
     let mut sysctl_applied: Vec<(&'static str, String)> = Vec::new();
-    let mut apply_err = (|| -> Result<(), String> {
+    let apply_err = (|| -> Result<(), String> {
         for (k, v) in [
             ("net.ipv4.tcp_syncookies", "1"),
             ("net.ipv4.tcp_timestamps", "1"),

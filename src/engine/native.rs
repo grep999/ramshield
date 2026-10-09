@@ -290,7 +290,15 @@ fn run_socket(
             let snaplen = unsafe { (*hdr).tp_snaplen as usize };
             let mac = unsafe { (*hdr).tp_mac as usize };
             let packet_off = block_idx * block_size + off + mac;
-            if mac <= frame_size && snaplen <= frame_size && packet_off + snaplen <= (block_idx + 1) * block_size {
+            // B02: absolute ring bound guards overflow in packet_off itself;
+            // the block bound alone can pass if off+mac wrapped. saturating_add
+            // keeps the check panic-free on overflow instead of wrapping.
+            let packet_end = packet_off.saturating_add(snaplen);
+            if mac <= frame_size
+                && snaplen <= frame_size
+                && packet_end <= (block_idx + 1) * block_size
+                && packet_end <= ring_len
+            {
                 let packet = unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
                 process_packet(packet, max_eps, trusted_overlay_cidrs, tx, budget, epoch, epoch_base);
             }
@@ -327,7 +335,7 @@ fn process_packet(packet: &[u8], max_eps: u64, trusted_overlay_cidrs: &[IpNetwor
         return;
     }
     let admitted = budget
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
             let next = n.checked_add(1)?;
             if next <= max_eps { Some(next) } else { None }
         })
