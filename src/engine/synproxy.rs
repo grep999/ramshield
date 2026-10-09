@@ -60,30 +60,41 @@ pub fn install(cfg: &SynproxyConfig, interface: &str) -> Result<(), String> {
     if nft_quote(interface) != interface { return Err("synproxy interface contains unsupported nft identifier characters".into()); }
     if !command_exists("nft") { return Err("synproxy requires nftables >= 0.9.2".into()); }
 
-    // Validate the complete ruleset before mutating the live firewall.
-    // Then remove only RamShield's own table; never flush a host firewall ruleset.
     let ports = cfg.ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
-    let per_source = cfg.max_connections_per_source;
-    let total = cfg.max_connections_total;
-    let new_rate = cfg.new_connections_per_second;
-    let burst = cfg.new_connection_burst;
-    let total_rate = cfg.new_connections_total_per_second;
-    let total_burst = cfg.new_connection_total_burst;
-    let script = render_ruleset(interface, &ports, cfg.mss, cfg.wscale, per_source, total, new_rate, burst, total_rate, total_burst);
-    let mut check = Command::new("nft").args(["-c", "-f", "-"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|e| format!("nft syntax check: {e}"))?;
-    check.stdin.take().ok_or("nft syntax-check stdin unavailable")?.write_all(script.as_bytes()).map_err(|e| format!("nft syntax-check write: {e}"))?;
-    let checked = check.wait_with_output().map_err(|e| format!("nft syntax-check wait: {e}"))?;
-    if !checked.status.success() { return Err(format!("nft synproxy ruleset syntax invalid: {}", String::from_utf8_lossy(&checked.stderr))); }
-    let _ = Command::new("nft").args(["delete", "table", "inet", "ramshield_synproxy"]).status();
+    let script = render_ruleset(
+        interface,
+        &ports,
+        cfg.mss,
+        cfg.wscale,
+        cfg.max_connections_per_source,
+        cfg.max_connections_total,
+        cfg.new_connections_per_second,
+        cfg.new_connection_burst,
+        cfg.new_connections_total_per_second,
+        cfg.new_connection_total_burst,
+    );
 
-    run_sysctl("net.ipv4.tcp_syncookies", "1")?;
-    run_sysctl("net.ipv4.tcp_timestamps", "1")?;
-    run_sysctl("net.netfilter.nf_conntrack_tcp_loose", "0")?;
+    // Detect whether the owned table exists so replacement and creation can
+    // be submitted as one nft transaction; a failed transaction keeps the old
+    // ruleset active instead of leaving a protection gap.
+    let existing = table_exists()?;
+    let transaction = ruleset_transaction(existing, &script);
 
-    let mut child = Command::new("nft").args(["-f", "-"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|e| format!("nft: {e}"))?;
-    child.stdin.take().ok_or("nft stdin unavailable")?.write_all(script.as_bytes()).map_err(|e| format!("nft write: {e}"))?;
-    let out = child.wait_with_output().map_err(|e| format!("nft wait: {e}"))?;
-    if !out.status.success() { return Err(format!("nft synproxy ruleset failed: {}", String::from_utf8_lossy(&out.stderr))); }
+    // The daemon verifies host policy but never mutates global kernel tunables.
+    // Configure these through sysctl.d before enabling SYNPROXY.
+    let required = [
+        ("net.ipv4.tcp_syncookies", "1"),
+        ("net.ipv4.tcp_timestamps", "1"),
+        ("net.netfilter.nf_conntrack_tcp_loose", "0"),
+    ];
+    apply_ruleset_with_preflight(
+        &transaction,
+        &required,
+        |ruleset| run_nft_script(ruleset, true),
+        read_sysctl,
+        |ruleset| run_nft_script(ruleset, false),
+    )?;
+
     info!(iface=%interface, ports=?cfg.ports, "kernel SYNPROXY transport guard active");
     Ok(())
 }
@@ -110,9 +121,98 @@ pub fn uninstall() -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-fn run_sysctl(key: &str, value: &str) -> Result<(), String> {
-    let out = Command::new("sysctl").args(["-w", &format!("{key}={value}")]).output().map_err(|e| format!("sysctl {key}: {e}"))?;
-    if !out.status.success() { return Err(format!("sysctl {key} failed: {}", String::from_utf8_lossy(&out.stderr))); }
+fn read_sysctl(key: &str) -> Result<String, String> {
+    let out = Command::new("sysctl")
+        .args(["-n", key])
+        .output()
+        .map_err(|e| format!("sysctl read {key}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("sysctl read {key} failed: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn verify_sysctls(
+    required: &[(&str, &str)],
+    mut read: impl FnMut(&str) -> Result<String, String>,
+) -> Result<(), String> {
+    for (key, expected) in required {
+        let actual = read(key)?;
+        if actual != *expected {
+            return Err(format!(
+                "SYNPROXY requires {key}={expected}, found {actual}; configure deploy/sysctl.d/ramshield-synproxy.conf in /etc/sysctl.d and reload sysctl settings before starting RamShield"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn apply_ruleset_with_preflight(
+    ruleset: &str,
+    required: &[(&str, &str)],
+    mut validate: impl FnMut(&str) -> Result<(), String>,
+    read: impl FnMut(&str) -> Result<String, String>,
+    mut apply: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    validate(ruleset)?;
+    verify_sysctls(required, read)?;
+    apply(ruleset)
+}
+
+#[cfg(target_os = "linux")]
+fn ruleset_transaction(table_exists: bool, script: &str) -> String {
+    if table_exists {
+        // Delete and recreate the owned table in one nft batch so a rejected
+        // replacement leaves the previously installed ruleset intact.
+        format!("delete table inet ramshield_synproxy\n{script}")
+    } else {
+        script.to_owned()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn table_exists() -> Result<bool, String> {
+    let out = Command::new("nft")
+        .args(["list", "table", "inet", "ramshield_synproxy"])
+        .output()
+        .map_err(|e| format!("nft table preflight: {e}"))?;
+    if out.status.success() {
+        return Ok(true);
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("No such file or directory")
+        || stderr.contains("No such table")
+        || stderr.contains("does not exist")
+    {
+        return Ok(false);
+    }
+    Err(format!("nft table preflight failed: {stderr}"))
+}
+
+#[cfg(target_os = "linux")]
+fn run_nft_script(script: &str, validate_only: bool) -> Result<(), String> {
+    let args: &[&str] = if validate_only { &["-c", "-f", "-"] } else { &["-f", "-"] };
+    let mut child = Command::new("nft")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("nft {}: {e}", if validate_only { "syntax check" } else { "apply" }))?;
+    child.stdin.take()
+        .ok_or("nft stdin unavailable")?
+        .write_all(script.as_bytes())
+        .map_err(|e| format!("nft script write: {e}"))?;
+    let out = child.wait_with_output().map_err(|e| format!("nft wait: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "nft {} failed: {}",
+            if validate_only { "synproxy ruleset syntax check" } else { "synproxy ruleset apply" },
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
     Ok(())
 }
 
@@ -145,9 +245,115 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn replacing_synproxy_table_is_one_nft_transaction() {
+        let candidate = "table inet ramshield_synproxy { }";
+        let transaction = super::ruleset_transaction(true, candidate);
+        assert_eq!(
+            transaction,
+            "delete table inet ramshield_synproxy\ntable inet ramshield_synproxy { }"
+        );
+        assert_eq!(super::ruleset_transaction(false, candidate), candidate);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn synproxy_sysctl_preflight_rejects_mismatch_without_mutating_host() {
+        let required = [
+            ("net.ipv4.tcp_syncookies", "1"),
+            ("net.ipv4.tcp_timestamps", "1"),
+            ("net.netfilter.nf_conntrack_tcp_loose", "0"),
+        ];
+        let mut reads = Vec::new();
+        let result = super::verify_sysctls(&required, |key| {
+            reads.push(key.to_string());
+            let value = if key == "net.ipv4.tcp_syncookies" {
+                "0"
+            } else if key == "net.ipv4.tcp_timestamps" {
+                "1"
+            } else {
+                "0"
+            };
+            Ok(value.to_string())
+        });
+
+        let error = result.expect_err("misconfigured sysctl must fail closed");
+        assert!(error.contains("net.ipv4.tcp_syncookies=1"));
+        assert_eq!(reads, vec!["net.ipv4.tcp_syncookies"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nft_rules_are_not_applied_when_validation_fails() {
+        let mut reads = 0;
+        let mut applies = 0;
+        let result = super::apply_ruleset_with_preflight(
+            "candidate rules",
+            &[("sysctl.test", "1")],
+            |_| Err("injected nft validation failure".into()),
+            |_| {
+                reads += 1;
+                Ok("1".into())
+            },
+            |_| {
+                applies += 1;
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Err("injected nft validation failure".into()));
+        assert_eq!(reads, 0);
+        assert_eq!(applies, 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nft_rules_are_not_applied_when_sysctl_preflight_fails() {
+        let mut applies = 0;
+        let result = super::apply_ruleset_with_preflight(
+            "candidate rules",
+            &[("sysctl.test", "1")],
+            |_| Ok(()),
+            |_| Ok("0".into()),
+            |_| {
+                applies += 1;
+                Ok(())
+            },
+        );
+
+        assert!(result.expect_err("mismatched sysctl must fail closed").contains("sysctl.test=1"));
+        assert_eq!(applies, 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nft_apply_failure_is_returned_after_preflight() {
+        let stages = std::cell::RefCell::new(Vec::new());
+        let result = super::apply_ruleset_with_preflight(
+            "candidate rules",
+            &[("sysctl.test", "1")],
+            |_| {
+                stages.borrow_mut().push("validate");
+                Ok(())
+            },
+            |_| {
+                stages.borrow_mut().push("sysctl");
+                Ok("1".into())
+            },
+            |_| {
+                stages.borrow_mut().push("apply");
+                Err("injected nft apply failure".into())
+            },
+        );
+
+        assert_eq!(result, Err("injected nft apply failure".into()));
+        assert_eq!(*stages.borrow(), vec!["validate", "sysctl", "apply"]);
+    }
+
     #[test]
     fn nft_interface_filter_is_alphanumeric() {
         #[cfg(target_os="linux")]
-        assert_eq!(super::nft_quote("eth0; drop table inet filter"), "eth0drop_table_inet_filter");
+        assert_eq!(super::nft_quote("eth0; drop table inet filter"), "eth0droptableinetfilter");
     }
 }

@@ -1,0 +1,37 @@
+name: Replay Protection Focused Tests
+
+on:
+  pull_request:
+    paths:
+      - "crates/ramshield-protocol/**"
+      - "src/ipc/server/connection.rs"
+      - ".github/workflows/replay-protection.yml"
+  push:
+    branches:
+      - kiddo_fix
+    paths:
+      - "crates/ramshield-protocol/**"
+      - "src/ipc/server/connection.rs"
+      - ".github/workflows/replay-protection.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: replay-protection-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay-protection:
+    name: Focused replay integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-08-29
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      - name: Run replay integration tests
+        run: cargo test -p ramshield-protocol --test replay --locked

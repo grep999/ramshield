@@ -137,6 +137,24 @@ info
 
 When changing these, update `docs/QUICKSTART.md` and `docs/OPERATIONS.md`.
 
+## SYNPROXY nftables integration test
+
+The SYNPROXY rules touch host firewall state, so the optional kernel test runs
+inside a fresh network namespace. Run it only on a Linux host with root
+privileges, `unshare`, and `nft` installed:
+
+```bash
+sudo scripts/test_synproxy_netns.sh
+```
+
+The harness syntax-checks and loads the rules fixture in the isolated namespace,
+then submits a deliberately failing multi-command nft transaction that deletes
+and recreates the owned table. It verifies the transaction failure leaves the
+original table and chain intact. It does not modify the host network namespace
+or its firewall. This exercises nftables transaction behavior and fixture
+compatibility; the normal Rust tests separately cover the daemon's fail-closed
+preflight ordering.
+
 ## XDP development
 
 XDP code lives in `ramshield-xdp` and the enforcement integration.

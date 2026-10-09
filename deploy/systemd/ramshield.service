@@ -1,7 +1,7 @@
 [Unit]
 Description=RamShield Autonomous Ingress Defense Daemon
 Documentation=https://github.com/grep999/ramshield
-After=network-online.target
+After=network-online.target systemd-sysctl.service
 Wants=network-online.target
 
 [Service]
@@ -28,11 +28,9 @@ ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectControlGroups=true
-# SYNPROXY changes exactly three kernel tunables at startup. ProtectKernelTunables
-# cannot be combined with those writes; the service remains capability-bounded and
-# does not grant general device/filesystem access.
-ProtectKernelTunables=false
-ReadWritePaths=/proc/sys/net/ipv4/tcp_syncookies /proc/sys/net/ipv4/tcp_timestamps /proc/sys/net/netfilter/nf_conntrack_tcp_loose
+# Kernel sysctls are managed by the host's sysctl.d configuration.
+# The daemon only verifies their values before applying SYNPROXY rules.
+ProtectKernelTunables=true
 ProtectKernelModules=true
 # Write access is restricted to these three locations:
 #   /var/lib/ramshield  — WAL segments + checkpoint

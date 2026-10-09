@@ -19,18 +19,46 @@ fn parse_request(request: &[u8], max_bytes: usize) -> Result<RequestParts<'_>, F
     if request.len() > max_bytes { return Err(Finding::Oversized); }
     let sep = request.windows(4).position(|w| w == b"\r\n\r\n").ok_or(Finding::Malformed)?;
     if sep > MAX_HEADER_BYTES { return Err(Finding::Oversized); }
-    let head = &request[..sep];
-    let mut lines = head.split(|&b| b == b'\n');
-    let request_line = lines.next().ok_or(Finding::Malformed)?.strip_suffix(b"\r").ok_or(Finding::Malformed)?;
-    let mut parts = request_line.split(|&b| b == b' ' || b == b'\t').filter(|p| !p.is_empty());
+    // Include the first CRLF of the header terminator in the head. This keeps
+    // the request-line CRLF for headerless requests and the final header's
+    // CRLF for requests with headers; the second CRLF remains the body boundary.
+    let head_end = sep.checked_add(2).ok_or(Finding::Malformed)?;
+    let head = request.get(..head_end).ok_or(Finding::Malformed)?;
+    // Drop only the final LF used to terminate the captured head. Keeping each
+    // line's CR lets strict per-line CRLF validation work without producing an
+    // artificial empty segment from splitting a buffer that ends in LF.
+    let line_bytes = head.strip_suffix(b"\n").ok_or(Finding::Malformed)?;
+    let mut lines = line_bytes.split(|&b| b == b'\n');
+    let request_line = lines
+        .next()
+        .ok_or(Finding::Malformed)?
+        .strip_suffix(b"\r")
+        .ok_or(Finding::Malformed)?;
+    let mut parts = request_line
+        .split(|&b| b == b' ' || b == b'\t')
+        .filter(|p| !p.is_empty());
     let method = parts.next().ok_or(Finding::Malformed)?;
     let target = parts.next().ok_or(Finding::Malformed)?;
     let version = parts.next().ok_or(Finding::Malformed)?;
-    if parts.next().is_some() || method.len() > 16 || target.len() > MAX_TARGET_BYTES || (version != b"HTTP/1.1" && version != b"HTTP/1.0") { return Err(Finding::Malformed); }
-    if !method.iter().all(|b| b.is_ascii_alphabetic()) || target.iter().any(|b| *b == 0 || *b == b'\r' || *b == b'\n') { return Err(Finding::Malformed); }
+    if parts.next().is_some()
+        || method.len() > 16
+        || target.len() > MAX_TARGET_BYTES
+        || (version != b"HTTP/1.1" && version != b"HTTP/1.0")
+    {
+        return Err(Finding::Malformed);
+    }
+    if !method.iter().all(|b| b.is_ascii_alphabetic())
+        || target.iter().any(|b| *b == 0 || *b == b'\r' || *b == b'\n')
+    {
+        return Err(Finding::Malformed);
+    }
 
-    let headers_start = request_line.len() + 2;
-    let headers = &head[headers_start..];
+    let headers_start = request_line
+        .len()
+        .checked_add(2)
+        .filter(|start| *start <= head.len())
+        .ok_or(Finding::Malformed)?;
+    let headers = head.get(headers_start..).ok_or(Finding::Malformed)?;
     let mut content_length: Option<usize> = None;
     let mut transfer_chunked = false;
     let mut header_count = 0usize;
@@ -108,6 +136,34 @@ fn decode_chunked(raw: &[u8], max_bytes: usize) -> Result<Vec<u8>, Finding> {
     }
 }
 
+fn percent_decode_for_inspection(input: &[u8]) -> Vec<u8> {
+    fn hex_value(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let mut decoded = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] == b'%' && index + 2 < input.len() {
+            if let (Some(high), Some(low)) =
+                (hex_value(input[index + 1]), hex_value(input[index + 2]))
+            {
+                decoded.push((high << 4) | low);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(input[index]);
+        index += 1;
+    }
+    decoded
+}
+
 fn parse_decimal(v: &[u8]) -> Option<usize> {
     if v.is_empty() { return None; }
     let mut n = 0usize;
@@ -123,13 +179,17 @@ fn contains_ci(a: &[u8], needle: &[u8]) -> bool { a.windows(needle.len()).any(|w
 
 pub fn inspect(request: &[u8], max_bytes: usize) -> Option<Finding> {
     let p = match parse_request(request, max_bytes.min(256 * 1024)) { Ok(p) => p, Err(f) => return Some(f) };
-    let mut hay = Vec::with_capacity(p.target.len() + p.headers.len() + p.body.len());
-    hay.extend_from_slice(p.target); hay.push(b'\n'); hay.extend_from_slice(p.headers); hay.push(b'\n'); hay.extend_from_slice(&p.body);
+    // Inspect a single percent-decoded copy of the request target so common
+    // URL-encoded attack tokens cannot bypass signatures. Parsing and framing
+    // continue to use the original bytes.
+    let decoded_target = percent_decode_for_inspection(p.target);
+    let mut hay = Vec::with_capacity(decoded_target.len() + p.headers.len() + p.body.len());
+    hay.extend_from_slice(&decoded_target); hay.push(b'\n'); hay.extend_from_slice(p.headers); hay.push(b'\n'); hay.extend_from_slice(&p.body);
     let lower = hay.iter().map(|b| b.to_ascii_lowercase()).collect::<Vec<_>>();
     // SSRF detection must not inspect Host: because localhost/loopback are
     // legitimate authority values for local health checks and loopback APIs.
-    let mut ssrf_hay = Vec::with_capacity(p.target.len() + p.body.len());
-    ssrf_hay.extend_from_slice(p.target); ssrf_hay.push(b'\n'); ssrf_hay.extend_from_slice(&p.body);
+    let mut ssrf_hay = Vec::with_capacity(decoded_target.len() + p.body.len());
+    ssrf_hay.extend_from_slice(&decoded_target); ssrf_hay.push(b'\n'); ssrf_hay.extend_from_slice(&p.body);
     let ssrf_lower = ssrf_hay.iter().map(|b| b.to_ascii_lowercase()).collect::<Vec<_>>();
     if lower.windows(3).any(|w| w == b"../") || lower.windows(6).any(|w| w == b"%2e%2e/") || lower.windows(9).any(|w| w == b"%2e%2e%2f") { return Some(Finding::PathTraversal); }
     if contains_ci(&lower, b"union select") || contains_ci(&lower, b" or 1=1") || contains_ci(&lower, b"' or '") || contains_ci(&lower, b"information_schema") || contains_ci(&lower, b"sleep(") { return Some(Finding::SqlInjection); }
@@ -154,5 +214,56 @@ mod tests {
     #[test] fn rejects_bad_length() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 9\r\n\r\nabc", 65536), Some(Finding::Malformed)); }
     #[test] fn rejects_conflicting_content_lengths() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabc", 65536), Some(Finding::HeaderSmuggling)); }
     #[test] fn rejects_content_length_and_chunked_together() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n", 65536), Some(Finding::HeaderSmuggling)); }
-    #[test] fn parses_chunked_body() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n9\r\n<script>x</script>\r\n0\r\n\r\n", 65536), Some(Finding::Xss)); }
+    #[test] fn parses_chunked_body() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n12\r\n<script>x</script>\r\n0\r\n\r\n", 65536), Some(Finding::Xss)); }
+
+    #[test]
+    fn parses_headerless_request_line_and_preserves_detection() {
+        assert_eq!(
+            inspect(b"GET /../../etc/passwd HTTP/1.1\r\n\r\n", 65536),
+            Some(Finding::PathTraversal)
+        );
+    }
+
+    #[test]
+    fn parses_single_header_with_terminating_crlf() {
+        assert_eq!(
+            inspect(b"GET /healthz HTTP/1.1\r\nHost: example.test\r\n\r\n", 65536),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_final_header_without_delimiter_ambiguity() {
+        assert_eq!(
+            inspect(b"GET /?q=1%20OR%201=1 HTTP/1.1\r\nHost: example.test\r\n\r\n", 65536),
+            Some(Finding::SqlInjection)
+        );
+    }
+
+    #[test]
+    fn rejects_mismatched_content_length_as_malformed() {
+        assert_eq!(
+            inspect(b"POST / HTTP/1.1\r\nContent-Length: 4\r\n\r\nabc", 65536),
+            Some(Finding::Malformed)
+        );
+    }
+
+    #[test]
+    fn rejects_conflicting_framing_without_loosening_smuggling_guard() {
+        assert_eq!(
+            inspect(
+                b"POST / HTTP/1.1\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n",
+                65536
+            ),
+            Some(Finding::HeaderSmuggling)
+        );
+    }
+
+    #[test]
+    fn rejects_bare_lf_header_framing() {
+        assert_eq!(
+            inspect(b"GET / HTTP/1.1\nHost: example.test\n\n", 65536),
+            Some(Finding::Malformed)
+        );
+    }
 }

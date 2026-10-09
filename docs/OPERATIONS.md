@@ -96,6 +96,38 @@ Look for:
 - shutdown messages;
 - authentication or authorization failures.
 
+## SYNPROXY host prerequisites
+
+When `synproxy.enabled = true`, RamShield verifies these host settings before
+installing nftables rules:
+
+- `net.ipv4.tcp_syncookies = 1`
+- `net.ipv4.tcp_timestamps = 1`
+- `net.netfilter.nf_conntrack_tcp_loose = 0`
+
+Install and apply the supplied system-level configuration **before** starting
+RamShield:
+
+```bash
+sudo install -D -m 0644 deploy/sysctl.d/ramshield-synproxy.conf \
+  /etc/sysctl.d/90-ramshield-synproxy.conf
+sudo sysctl --system
+sudo sysctl -n net.ipv4.tcp_syncookies
+sudo sysctl -n net.ipv4.tcp_timestamps
+sudo sysctl -n net.netfilter.nf_conntrack_tcp_loose
+```
+
+The expected output values are `1`, `1`, and `0`, respectively. The
+systemd unit is ordered after `systemd-sysctl.service` and uses
+`ProtectKernelTunables=true`; the daemon checks these values but does not
+write global kernel tunables. Setting `nf_conntrack_tcp_loose=0` changes
+host-wide conntrack behavior, so qualify it against the host's other
+firewall/conntrack consumers before enabling SYNPROXY on a production host.
+
+If the daemon reports a SYNPROXY sysctl preflight failure, correct the
+system-level settings and restart the service. Do not treat a running process
+as proof that SYNPROXY rules were installed.
+
 ## WAL
 
 Check the configured WAL directory:

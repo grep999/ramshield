@@ -12,7 +12,6 @@
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use std::time::Duration;
 
 mod replay_store;
 pub use replay_store::ReplayStore;
@@ -128,6 +127,7 @@ fn decode_hex(s: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn roundtrip_signs_and_verifies() {

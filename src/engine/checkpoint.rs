@@ -54,12 +54,11 @@ pub fn write_snapshot(dir: &str, snap: &CheckpointSnapshot, lsn: u64) -> Result<
     let tmp = format!("{path}.tmp");
     let json = serde_json::to_vec(snap).map_err(|e| RsError::Serde(e.to_string()))?;
     {
-        let mut f = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut f = options.open(&tmp)?;
         f.write_all(&json)?;
         f.sync_all()?;
     }
@@ -88,9 +87,18 @@ pub fn snapshot_exists(wal_dir: &str, lsn: u64) -> bool {
     PathBuf::from(snapshot_path(wal_dir, lsn)).exists()
 }
 
+#[cfg(unix)]
 fn fsync_dir(dir: &str) -> Result<()> {
     let d = File::open(dir)?;
     d.sync_all()?;
+    Ok(())
+}
+
+// Opening a directory as a file is not supported on Windows. The snapshot
+// file itself is synced before rename; directory-entry durability relies on
+// Windows filesystem semantics here.
+#[cfg(not(unix))]
+fn fsync_dir(_dir: &str) -> Result<()> {
     Ok(())
 }
 

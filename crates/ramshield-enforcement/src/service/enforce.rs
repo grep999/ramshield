@@ -335,11 +335,9 @@ impl EnforcementService {
                 }
                 // Barrier protects WAL+store only; mesh IO and XDP stay outside.
                 drop(_ckpt_guard);
-                if !pending_unban_deltas.is_empty() {
-                    if let Some(handle) = &self.mesh_handle {
-                        for delta in pending_unban_deltas {
-                            handle.broadcast(ramshield_mesh::MeshMessage::Unblock(delta)).await;
-                        }
+                if !pending_unban_deltas.is_empty() && let Some(handle) = &self.mesh_handle {
+                    for delta in pending_unban_deltas {
+                        handle.broadcast(ramshield_mesh::MeshMessage::Unblock(delta)).await;
                     }
                 }
                 let xdp_applied = match cmd.cidr {

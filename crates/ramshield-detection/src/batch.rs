@@ -1,6 +1,7 @@
 use ahash::AHashMap as HashMap;
 use ramshield_types::IpNetwork;
-use ramshield_types::events::{ConnectionEvent, HttpMethod};
+use ramshield_types::HttpMethod;
+use ramshield_types::events::ConnectionEvent;
 use std::net::IpAddr;
 
 /// In-memory aggregation for one flush window — no store access until flush completes.
@@ -66,10 +67,10 @@ impl IpAgg {
                     slot.method = l7.method;
                 } else if let Some(slot) = self.routes.iter_mut().find(|r| r.route_hash == 0) {
                     *slot = RouteAgg { route_hash: l7.route_hash, method: l7.method, count: 1, latency_sum_us: l7.latency_us, latency_max_us: l7.latency_us, http2_opened: l7.http2.map_or(0, |h| h.streams_opened), http2_reset: l7.http2.map_or(0, |h| h.streams_reset) };
-                } else if let Some((idx, _)) = self.routes.iter().enumerate().min_by_key(|(_, r)| r.count) {
-                    if self.routes[idx].count <= 1 {
-                        self.routes[idx] = RouteAgg { route_hash: l7.route_hash, method: l7.method, count: 1, latency_sum_us: l7.latency_us, latency_max_us: l7.latency_us, http2_opened: l7.http2.map_or(0, |h| h.streams_opened), http2_reset: l7.http2.map_or(0, |h| h.streams_reset) };
-                    }
+                } else if let Some((idx, _)) = self.routes.iter().enumerate().min_by_key(|(_, r)| r.count)
+                    && self.routes[idx].count <= 1
+                {
+                    self.routes[idx] = RouteAgg { route_hash: l7.route_hash, method: l7.method, count: 1, latency_sum_us: l7.latency_us, latency_max_us: l7.latency_us, http2_opened: l7.http2.map_or(0, |h| h.streams_opened), http2_reset: l7.http2.map_or(0, |h| h.streams_reset) };
                 }
             }
         }
@@ -234,7 +235,7 @@ mod tests {
 
     #[test]
     fn absorb_invalid_status_no_panic() {
-        use ramshield_types::events::{ConnectionEvent, HttpMethod};
+        use ramshield_types::events::ConnectionEvent;
         use std::net::IpAddr;
         use std::net::Ipv4Addr;
 
