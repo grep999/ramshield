@@ -310,26 +310,26 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn nft_apply_failure_is_returned_after_preflight() {
-        let mut stages = Vec::new();
+        let stages = std::cell::RefCell::new(Vec::new());
         let result = super::apply_ruleset_with_preflight(
             "candidate rules",
             &[("sysctl.test", "1")],
             |_| {
-                stages.push("validate");
+                stages.borrow_mut().push("validate");
                 Ok(())
             },
             |_| {
-                stages.push("sysctl");
+                stages.borrow_mut().push("sysctl");
                 Ok("1".into())
             },
             |_| {
-                stages.push("apply");
+                stages.borrow_mut().push("apply");
                 Err("injected nft apply failure".into())
             },
         );
 
         assert_eq!(result, Err("injected nft apply failure".into()));
-        assert_eq!(stages, vec!["validate", "sysctl", "apply"]);
+        assert_eq!(*stages.borrow(), vec!["validate", "sysctl", "apply"]);
     }
 
     #[test]
