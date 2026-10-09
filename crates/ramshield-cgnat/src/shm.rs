@@ -153,9 +153,23 @@ impl ShmTableManager {
         unsafe { &*(self.mmap.as_ptr().add(offset) as *const ShmRuleEntry) }
     }
 
-    /// Publish into the first matching, empty, or expired slot in the bounded
-    /// probe window. Returning false means the window is saturated; callers
-    /// must not pretend the SHM projection succeeded.
+    /// Publish a rule into the shared-memory table.
+    ///
+    /// Returns `false` when the 8-slot probe window is saturated, a concurrent
+    /// writer holds the seqlock, or the selected slot became a live foreign
+    /// rule after we observed it. Callers must treat `false` as “projection
+    /// failed; userspace enforcement remains authoritative”.
+    ///
+    /// Writer protocol (must be mirrored by every other writer path):
+    /// 1. Select a candidate slot (prefer existing hash, else free/expired).
+    /// 2. Acquire exclusive writer ownership by CAS of `seq` even→odd.
+    /// 3. Re-validate claim eligibility under the lock.
+    /// 4. Write the full payload while `seq` is odd.
+    /// 5. Release-fence, then publish stable even `seq`.
+    ///
+    /// Critical ordering: `client_hash` and every other payload field are
+    /// written ONLY while `seq` is odd. Readers that observe an even `seq`
+    /// therefore never see a mixed-generation snapshot.
     pub fn publish_rule(
         &self,
         client_hash: u64,
@@ -172,9 +186,7 @@ impl ShmTableManager {
         let primary = client_hash as usize & (SHM_TABLE_CAPACITY - 1);
         let mut selected = None;
 
-        // Prefer an existing rule before considering reusable slots. This keeps
-        // the probe sequence canonical and prevents an expired earlier slot
-        // from creating a duplicate of a still-live later slot.
+        // Phase 1: prefer an existing rule for this hash (canonical probe order).
         for probe in 0..SHM_PROBE_LIMIT {
             let slot = self.get_slot(primary.wrapping_add(probe));
             if slot.client_hash.load(Ordering::Acquire) == client_hash {
@@ -182,6 +194,7 @@ impl ShmTableManager {
                 break;
             }
         }
+        // Phase 2: first free (0) or expired slot.
         if selected.is_none() {
             for probe in 0..SHM_PROBE_LIMIT {
                 let slot = self.get_slot(primary.wrapping_add(probe));
@@ -197,41 +210,66 @@ impl ShmTableManager {
             return false;
         };
 
-        // Claim ownership of the slot atomically.
-        let existing = slot.client_hash.load(Ordering::Acquire);
-        // If the slot is free (client_hash == 0), attempt to claim it.
-        if existing == 0 {
-            if slot.client_hash.compare_exchange(0, client_hash, Ordering::AcqRel, Ordering::Acquire).is_err() {
-                // Another writer claimed it first; we must not overwrite.
-                return false;
+        // Phase 3: acquire exclusive writer ownership via seq even→odd CAS.
+        // Spin a bounded number of times if another writer holds the lock.
+        let mut acquired = false;
+        for _ in 0..64 {
+            let s = slot.seq.load(Ordering::Acquire);
+            if s & 1 != 0 {
+                // Another writer is active; brief pause then retry.
+                std::hint::spin_loop();
+                continue;
             }
-        // If the slot is owned by a different client, we cannot claim it.
-        } else if existing != client_hash {
+            // CAS even → odd claims the writer lock.
+            if slot
+                .seq
+                .compare_exchange(s, s.wrapping_add(1), Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                acquired = true;
+                break;
+            }
+            // Lost the CAS race; retry.
+            std::hint::spin_loop();
+        }
+        if !acquired {
             return false;
-        // If the slot is owned by this client, we can update its fields.
         }
 
-                // Write the challenge seed fields (16 bytes split into two u64 atoms).
-        slot.challenge_seed_lo.store(0xDEADBEEFDEADBEEF_u64, Ordering::Relaxed);
-        slot.challenge_seed_hi.store(0xCAFEBABECAFEBABE_u64, Ordering::Relaxed);
-        let flags = if is_shared { FLAG_SHARED_INFRA } else { 0 };
+        // Phase 4: re-validate under the lock. A concurrent writer may have
+        // refreshed this slot between our probe and the CAS.
+        let existing = slot.client_hash.load(Ordering::Acquire);
+        let expires = slot.expires_at_ms.load(Ordering::Acquire);
+        let claimable = existing == 0
+            || existing == client_hash
+            || expires <= now_ms;
+        if !claimable {
+            // Release writer lock without mutating payload (seq odd → even).
+            slot.seq.fetch_add(1, Ordering::Release);
+            return false;
+        }
 
-        // Seqlock publication: odd marks writer active; final even marks stable.
-        slot.seq.fetch_add(1, Ordering::Release);
-        // Release fence pairs with reader's Acquire fence, ensuring payload stores are visible after seq odd.
-        std::sync::atomic::fence(Ordering::Release);
-        // Update the rule fields inside the seqlock window.
-        slot.challenge_seed_lo.store(0xDEADBEEFDEADBEEF_u64, Ordering::Release);
-        slot.challenge_seed_hi.store(0xCAFEBABECAFEBABE_u64, Ordering::Release);
+        // Phase 5: write full payload while seq is odd.
+        // Readers observing even seq will never see a partial update.
+        let flags = if is_shared { FLAG_SHARED_INFRA } else { 0 };
+        // Challenge seed: zeros until a real generator is wired. Written under
+        // the odd-seq window so readers never observe a torn seed.
+        slot.challenge_seed_lo.store(0, Ordering::Relaxed);
+        slot.challenge_seed_hi.store(0, Ordering::Relaxed);
         slot.client_hash.store(client_hash, Ordering::Relaxed);
         slot.tier.store(tier, Ordering::Relaxed);
         slot.max_rps.store(max_rps, Ordering::Relaxed);
         slot.flags.store(flags, Ordering::Relaxed);
-        slot.expires_at_ms.store(now_ms.saturating_add(ttl_ms), Ordering::Relaxed);
-        // Final even seq increment marks complete rule.
-        slot.seq.fetch_add(1, Ordering::Release);
+        slot.expires_at_ms
+            .store(now_ms.saturating_add(ttl_ms), Ordering::Relaxed);
+
+        // Phase 6: publish stable snapshot. Release fence ensures all payload
+        // stores are globally visible before the even seq is observed.
+        std::sync::atomic::fence(Ordering::Release);
+        slot.seq.fetch_add(1, Ordering::Release); // odd → even
         true
     }
+
 }
 
 #[cfg(test)]
