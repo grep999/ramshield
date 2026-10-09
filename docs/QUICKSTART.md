@@ -63,6 +63,27 @@ curl http://127.0.0.1:9999/healthz
 curl http://127.0.0.1:9999/metrics
 ```
 
+## SYNPROXY host prerequisites
+
+When enabling SYNPROXY, install the host-level kernel settings before starting
+RamShield. The daemon checks these values and fails closed if they do not match;
+it does not change global kernel tunables itself.
+
+```bash
+sudo install -D -m 0644 deploy/sysctl.d/ramshield-synproxy.conf \
+  /etc/sysctl.d/90-ramshield-synproxy.conf
+sudo modprobe nf_conntrack
+sudo sysctl --system
+
+# Confirm all required values before enabling SYNPROXY.
+sysctl -n net.ipv4.tcp_syncookies
+sysctl -n net.ipv4.tcp_timestamps
+sysctl -n net.netfilter.nf_conntrack_tcp_loose
+```
+
+Expected values, in order: `1`, `1`, `0`. The systemd service keeps
+`ProtectKernelTunables=true`; do not add write access to `/proc/sys`.
+
 ## Production Notes
 
 - Do not expose IPC or dashboard publicly without authentication and TLS boundary

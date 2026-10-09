@@ -84,27 +84,16 @@ pub fn install(cfg: &SynproxyConfig, interface: &str) -> Result<(), String> {
         script
     };
 
-    run_nft_script(&transaction, true)?;
-
-    // Read all old values before the first write. If a later sysctl or the
-    // firewall transaction fails, restore the values observed at entry.
-    let desired = [
+    // The daemon verifies host policy but never mutates global kernel tunables.
+    // Configure these through sysctl.d before enabling SYNPROXY.
+    let required = [
         ("net.ipv4.tcp_syncookies", "1"),
         ("net.ipv4.tcp_timestamps", "1"),
         ("net.netfilter.nf_conntrack_tcp_loose", "0"),
     ];
-    let previous = apply_sysctls_transactionally(&desired, read_sysctl, run_sysctl)?;
-
-    if let Err(error) = run_nft_script(&transaction, false) {
-        let rollback_errors = restore_sysctls(&previous, run_sysctl);
-        if rollback_errors.is_empty() {
-            return Err(error);
-        }
-        return Err(format!(
-            "{error}; sysctl rollback incomplete: {}",
-            rollback_errors.join("; ")
-        ));
-    }
+    run_nft_script(&transaction, true)?;
+    verify_sysctls(&required, read_sysctl)?;
+    run_nft_script(&transaction, false)?;
 
     info!(iface=%interface, ports=?cfg.ports, "kernel SYNPROXY transport guard active");
     Ok(())
@@ -144,53 +133,19 @@ fn read_sysctl(key: &str) -> Result<String, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn run_sysctl(key: &str, value: &str) -> Result<(), String> {
-    let out = Command::new("sysctl")
-        .args(["-w", &format!("{key}={value}")])
-        .output()
-        .map_err(|e| format!("sysctl {key}: {e}"))?;
-    if !out.status.success() {
-        return Err(format!("sysctl {key} failed: {}", String::from_utf8_lossy(&out.stderr)));
+fn verify_sysctls(
+    required: &[(&str, &str)],
+    mut read: impl FnMut(&str) -> Result<String, String>,
+) -> Result<(), String> {
+    for (key, expected) in required {
+        let actual = read(key)?;
+        if actual != *expected {
+            return Err(format!(
+                "SYNPROXY requires {key}={expected}, found {actual}; configure deploy/sysctl.d/ramshield-synproxy.conf in /etc/sysctl.d and reload sysctl settings before starting RamShield"
+            ));
+        }
     }
     Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn apply_sysctls_transactionally(
-    desired: &[(&str, &str)],
-    mut read: impl FnMut(&str) -> Result<String, String>,
-    mut write: impl FnMut(&str, &str) -> Result<(), String>,
-) -> Result<Vec<(String, String)>, String> {
-    let previous = desired
-        .iter()
-        .map(|(key, _)| read(key).map(|value| ((*key).to_string(), value)))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    for (index, (key, value)) in desired.iter().enumerate() {
-        if let Err(error) = write(key, value) {
-            let rollback_errors = restore_sysctls(&previous[..index], &mut write);
-            return if rollback_errors.is_empty() {
-                Err(error)
-            } else {
-                Err(format!("{error}; sysctl rollback incomplete: {}", rollback_errors.join("; ")))
-            };
-        }
-    }
-    Ok(previous)
-}
-
-#[cfg(target_os = "linux")]
-fn restore_sysctls(
-    previous: &[(String, String)],
-    mut write: impl FnMut(&str, &str) -> Result<(), String>,
-) -> Vec<String> {
-    let mut errors = Vec::new();
-    for (key, value) in previous.iter().rev() {
-        if let Err(error) = write(key, value) {
-            errors.push(error);
-        }
-    }
-    errors
 }
 
 #[cfg(target_os = "linux")]
@@ -268,55 +223,28 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn sysctl_update_failure_rolls_back_prior_values() {
-        use std::cell::RefCell;
-        use std::collections::HashMap;
-
-        let values = RefCell::new(HashMap::from([
-            ("a".to_string(), "old-a".to_string()),
-            ("b".to_string(), "old-b".to_string()),
-            ("c".to_string(), "old-c".to_string()),
-        ]));
-        let desired = [("a", "new-a"), ("b", "new-b"), ("c", "new-c")];
-        let result = super::apply_sysctls_transactionally(
-            &desired,
-            |key| values.borrow().get(key).cloned().ok_or_else(|| format!("missing {key}")),
-            |key, value| {
-                if key == "b" && value == "new-b" {
-                    return Err("injected write failure".into());
-                }
-                values.borrow_mut().insert(key.to_string(), value.to_string());
-                Ok(())
-            },
-        );
-
-        assert!(result.is_err());
-        assert_eq!(values.borrow().get("a").map(String::as_str), Some("old-a"));
-        assert_eq!(values.borrow().get("b").map(String::as_str), Some("old-b"));
-        assert_eq!(values.borrow().get("c").map(String::as_str), Some("old-c"));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn sysctl_snapshot_is_complete_before_any_mutation() {
+    fn synproxy_sysctl_preflight_rejects_mismatch_without_mutating_host() {
+        let required = [
+            ("net.ipv4.tcp_syncookies", "1"),
+            ("net.ipv4.tcp_timestamps", "1"),
+            ("net.netfilter.nf_conntrack_tcp_loose", "0"),
+        ];
         let mut reads = Vec::new();
-        let mut writes = Vec::new();
-        let desired = [("a", "1"), ("b", "0")];
-        let result = super::apply_sysctls_transactionally(
-            &desired,
-            |key| {
-                reads.push(key.to_string());
-                Ok(format!("original-{key}"))
-            },
-            |key, value| {
-                writes.push((key.to_string(), value.to_string()));
-                Ok(())
-            },
-        ).expect("all injected sysctl operations succeed");
+        let result = super::verify_sysctls(&required, |key| {
+            reads.push(key.to_string());
+            let value = if key == "net.ipv4.tcp_syncookies" {
+                "0"
+            } else if key == "net.ipv4.tcp_timestamps" {
+                "1"
+            } else {
+                "0"
+            };
+            Ok(value.to_string())
+        });
 
-        assert_eq!(reads, vec!["a", "b"]);
-        assert_eq!(writes, vec![("a".into(), "1".into()), ("b".into(), "0".into())]);
-        assert_eq!(result, vec![("a".into(), "original-a".into()), ("b".into(), "original-b".into())]);
+        let error = result.expect_err("misconfigured sysctl must fail closed");
+        assert!(error.contains("net.ipv4.tcp_syncookies=1"));
+        assert_eq!(reads, vec!["net.ipv4.tcp_syncookies"]);
     }
 
     #[test]
