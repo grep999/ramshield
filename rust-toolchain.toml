@@ -3,4 +3,4 @@
 # drift to a different compiler than the one this tree was verified with.
 # Bump deliberately, then re-run the full gate.
 channel = "nightly-2026-08-29"
-components = ["rust-src"]
+components = ["rust-src", "rustfmt"]
