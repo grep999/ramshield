@@ -404,7 +404,7 @@ impl XdpApplier for AyaXdpApplier {
     fn apply_block(
         &mut self,
         ip: IpAddr,
-        decision_id: Uuid,
+        _decision_id: Uuid,
         ttl_seconds: u64,
     ) -> Result<(), EnforcementError> {
         // CLOCK_MONOTONIC — same clock as BPF's bpf_ktime_get_ns, so the
