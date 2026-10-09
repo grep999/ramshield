@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn absorb_invalid_status_no_panic() {
-        use ramshield_types::events::{ConnectionEvent, HttpMethod};
+        use ramshield_types::events::ConnectionEvent;
         use std::net::IpAddr;
         use std::net::Ipv4Addr;
 
