@@ -54,12 +54,11 @@ pub fn write_snapshot(dir: &str, snap: &CheckpointSnapshot, lsn: u64) -> Result<
     let tmp = format!("{path}.tmp");
     let json = serde_json::to_vec(snap).map_err(|e| RsError::Serde(e.to_string()))?;
     {
-        let mut f = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut f = options.open(&tmp)?;
         f.write_all(&json)?;
         f.sync_all()?;
     }
