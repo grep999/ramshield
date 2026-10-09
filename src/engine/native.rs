@@ -326,7 +326,12 @@ fn process_packet(packet: &[u8], max_eps: u64, trusted_overlay_cidrs: &[IpNetwor
         // supply the real client identity separately.
         return;
     }
-    let admitted = budget.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1).filter(|v| *v <= max_eps)).is_ok();
+    let admitted = budget
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+            let next = n.checked_add(1)?;
+            if next <= max_eps { Some(next) } else { None }
+        })
+        .is_ok();
     if !admitted { return; }
     let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
     let mut fp = proto as u32;
