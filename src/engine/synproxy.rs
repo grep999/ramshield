@@ -322,6 +322,6 @@ mod tests {
     #[test]
     fn nft_interface_filter_is_alphanumeric() {
         #[cfg(target_os="linux")]
-        assert_eq!(super::nft_quote("eth0; drop table inet filter"), "eth0drop_table_inet_filter");
+        assert_eq!(super::nft_quote("eth0; drop table inet filter"), "eth0droptableinetfilter");
     }
 }
