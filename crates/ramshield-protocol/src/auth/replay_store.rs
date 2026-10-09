@@ -123,6 +123,13 @@ impl ReplayStore {
     }
 }
 
+
+impl Default for ReplayStore {
+    fn default() -> Self {
+        Self::new(10, Duration::from_secs(1))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,11 +184,5 @@ mod tests {
         })
         .join();
         assert_eq!(s.check_and_record("k1", b"nonce"), Err("replay store poisoned"));
-    }
-}
-
-impl Default for ReplayStore {
-    fn default() -> Self {
-        Self::new(10, Duration::from_secs(1))
     }
 }
