@@ -136,6 +136,34 @@ fn decode_chunked(raw: &[u8], max_bytes: usize) -> Result<Vec<u8>, Finding> {
     }
 }
 
+fn percent_decode_for_inspection(input: &[u8]) -> Vec<u8> {
+    fn hex_value(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let mut decoded = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] == b'%' && index + 2 < input.len() {
+            if let (Some(high), Some(low)) =
+                (hex_value(input[index + 1]), hex_value(input[index + 2]))
+            {
+                decoded.push((high << 4) | low);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(input[index]);
+        index += 1;
+    }
+    decoded
+}
+
 fn parse_decimal(v: &[u8]) -> Option<usize> {
     if v.is_empty() { return None; }
     let mut n = 0usize;
@@ -151,8 +179,12 @@ fn contains_ci(a: &[u8], needle: &[u8]) -> bool { a.windows(needle.len()).any(|w
 
 pub fn inspect(request: &[u8], max_bytes: usize) -> Option<Finding> {
     let p = match parse_request(request, max_bytes.min(256 * 1024)) { Ok(p) => p, Err(f) => return Some(f) };
-    let mut hay = Vec::with_capacity(p.target.len() + p.headers.len() + p.body.len());
-    hay.extend_from_slice(p.target); hay.push(b'\n'); hay.extend_from_slice(p.headers); hay.push(b'\n'); hay.extend_from_slice(&p.body);
+    // Inspect a single percent-decoded copy of the request target so common
+    // URL-encoded attack tokens cannot bypass signatures. Parsing and framing
+    // continue to use the original bytes.
+    let decoded_target = percent_decode_for_inspection(p.target);
+    let mut hay = Vec::with_capacity(decoded_target.len() + p.headers.len() + p.body.len());
+    hay.extend_from_slice(&decoded_target); hay.push(b'\n'); hay.extend_from_slice(p.headers); hay.push(b'\n'); hay.extend_from_slice(&p.body);
     let lower = hay.iter().map(|b| b.to_ascii_lowercase()).collect::<Vec<_>>();
     // SSRF detection must not inspect Host: because localhost/loopback are
     // legitimate authority values for local health checks and loopback APIs.
@@ -182,7 +214,7 @@ mod tests {
     #[test] fn rejects_bad_length() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 9\r\n\r\nabc", 65536), Some(Finding::Malformed)); }
     #[test] fn rejects_conflicting_content_lengths() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabc", 65536), Some(Finding::HeaderSmuggling)); }
     #[test] fn rejects_content_length_and_chunked_together() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n", 65536), Some(Finding::HeaderSmuggling)); }
-    #[test] fn parses_chunked_body() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n9\r\n<script>x</script>\r\n0\r\n\r\n", 65536), Some(Finding::Xss)); }
+    #[test] fn parses_chunked_body() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n12\r\n<script>x</script>\r\n0\r\n\r\n", 65536), Some(Finding::Xss)); }
 
     #[test]
     fn parses_headerless_request_line_and_preserves_detection() {
