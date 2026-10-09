@@ -51,7 +51,7 @@ impl MeshHandle {
         q.push_back(env.body); }
 }
 fn push_frame_bytes(line: &mut Vec<u8>, bytes: &[u8]) -> std::io::Result<bool> {
-    if let Some(end) = bytes.iter().position(|byte| *byte == b'\\n') {
+    if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
         if line.len() + end > MAX_FRAME {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "mesh frame too large"));
         }
@@ -94,9 +94,9 @@ mod frame_tests {
     fn accepts_frame_at_limit_with_delimiter() {
         let mut frame = Vec::new();
         assert!(!push_frame_bytes(&mut frame, &vec![b'x'; MAX_FRAME]).unwrap());
-        assert!(push_frame_bytes(&mut frame, b"\\n").unwrap());
+        assert!(push_frame_bytes(&mut frame, b"\n").unwrap());
         assert_eq!(frame.len(), MAX_FRAME + 1);
-        assert_eq!(frame.last(), Some(&b'\\n'));
+        assert_eq!(frame.last(), Some(&b'\n'));
     }
 
     #[test]
@@ -111,7 +111,7 @@ mod frame_tests {
     #[test]
     fn rejects_oversized_frame_when_delimiter_arrives_late() {
         let mut frame = vec![b'x'; MAX_FRAME];
-        let error = push_frame_bytes(&mut frame, b"x\\n").unwrap_err();
+        let error = push_frame_bytes(&mut frame, b"x\n").unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert_eq!(frame.len(), MAX_FRAME);
     }
