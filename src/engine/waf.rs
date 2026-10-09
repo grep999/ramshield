@@ -19,18 +19,42 @@ fn parse_request(request: &[u8], max_bytes: usize) -> Result<RequestParts<'_>, F
     if request.len() > max_bytes { return Err(Finding::Oversized); }
     let sep = request.windows(4).position(|w| w == b"\r\n\r\n").ok_or(Finding::Malformed)?;
     if sep > MAX_HEADER_BYTES { return Err(Finding::Oversized); }
-    let head = &request[..sep];
+    // Include the first CRLF of the header terminator in the head. This keeps
+    // the request-line CRLF for headerless requests and the final header's
+    // CRLF for requests with headers; the second CRLF remains the body boundary.
+    let head_end = sep.checked_add(2).ok_or(Finding::Malformed)?;
+    let head = request.get(..head_end).ok_or(Finding::Malformed)?;
     let mut lines = head.split(|&b| b == b'\n');
-    let request_line = lines.next().ok_or(Finding::Malformed)?.strip_suffix(b"\r").ok_or(Finding::Malformed)?;
-    let mut parts = request_line.split(|&b| b == b' ' || b == b'\t').filter(|p| !p.is_empty());
+    let request_line = lines
+        .next()
+        .ok_or(Finding::Malformed)?
+        .strip_suffix(b"\r")
+        .ok_or(Finding::Malformed)?;
+    let mut parts = request_line
+        .split(|&b| b == b' ' || b == b'\t')
+        .filter(|p| !p.is_empty());
     let method = parts.next().ok_or(Finding::Malformed)?;
     let target = parts.next().ok_or(Finding::Malformed)?;
     let version = parts.next().ok_or(Finding::Malformed)?;
-    if parts.next().is_some() || method.len() > 16 || target.len() > MAX_TARGET_BYTES || (version != b"HTTP/1.1" && version != b"HTTP/1.0") { return Err(Finding::Malformed); }
-    if !method.iter().all(|b| b.is_ascii_alphabetic()) || target.iter().any(|b| *b == 0 || *b == b'\r' || *b == b'\n') { return Err(Finding::Malformed); }
+    if parts.next().is_some()
+        || method.len() > 16
+        || target.len() > MAX_TARGET_BYTES
+        || (version != b"HTTP/1.1" && version != b"HTTP/1.0")
+    {
+        return Err(Finding::Malformed);
+    }
+    if !method.iter().all(|b| b.is_ascii_alphabetic())
+        || target.iter().any(|b| *b == 0 || *b == b'\r' || *b == b'\n')
+    {
+        return Err(Finding::Malformed);
+    }
 
-    let headers_start = request_line.len() + 2;
-    let headers = &head[headers_start..];
+    let headers_start = request_line
+        .len()
+        .checked_add(2)
+        .filter(|start| *start <= head.len())
+        .ok_or(Finding::Malformed)?;
+    let headers = head.get(headers_start..).ok_or(Finding::Malformed)?;
     let mut content_length: Option<usize> = None;
     let mut transfer_chunked = false;
     let mut header_count = 0usize;
@@ -155,4 +179,55 @@ mod tests {
     #[test] fn rejects_conflicting_content_lengths() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabc", 65536), Some(Finding::HeaderSmuggling)); }
     #[test] fn rejects_content_length_and_chunked_together() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n", 65536), Some(Finding::HeaderSmuggling)); }
     #[test] fn parses_chunked_body() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n9\r\n<script>x</script>\r\n0\r\n\r\n", 65536), Some(Finding::Xss)); }
+
+    #[test]
+    fn parses_headerless_request_line_and_preserves_detection() {
+        assert_eq!(
+            inspect(b"GET /../../etc/passwd HTTP/1.1\r\n\r\n", 65536),
+            Some(Finding::PathTraversal)
+        );
+    }
+
+    #[test]
+    fn parses_single_header_with_terminating_crlf() {
+        assert_eq!(
+            inspect(b"GET /healthz HTTP/1.1\r\nHost: example.test\r\n\r\n", 65536),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_final_header_without_delimiter_ambiguity() {
+        assert_eq!(
+            inspect(b"GET /?q=1%20OR%201=1 HTTP/1.1\r\nHost: example.test\r\n\r\n", 65536),
+            Some(Finding::SqlInjection)
+        );
+    }
+
+    #[test]
+    fn rejects_mismatched_content_length_as_malformed() {
+        assert_eq!(
+            inspect(b"POST / HTTP/1.1\r\nContent-Length: 4\r\n\r\nabc", 65536),
+            Some(Finding::Malformed)
+        );
+    }
+
+    #[test]
+    fn rejects_conflicting_framing_without_loosening_smuggling_guard() {
+        assert_eq!(
+            inspect(
+                b"POST / HTTP/1.1\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n",
+                65536
+            ),
+            Some(Finding::HeaderSmuggling)
+        );
+    }
+
+    #[test]
+    fn rejects_bare_lf_header_framing() {
+        assert_eq!(
+            inspect(b"GET / HTTP/1.1\nHost: example.test\n\n", 65536),
+            Some(Finding::Malformed)
+        );
+    }
 }
