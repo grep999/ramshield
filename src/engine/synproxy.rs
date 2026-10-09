@@ -74,16 +74,58 @@ pub fn install(cfg: &SynproxyConfig, interface: &str) -> Result<(), String> {
     check.stdin.take().ok_or("nft syntax-check stdin unavailable")?.write_all(script.as_bytes()).map_err(|e| format!("nft syntax-check write: {e}"))?;
     let checked = check.wait_with_output().map_err(|e| format!("nft syntax-check wait: {e}"))?;
     if !checked.status.success() { return Err(format!("nft synproxy ruleset syntax invalid: {}", String::from_utf8_lossy(&checked.stderr))); }
-    let _ = Command::new("nft").args(["delete", "table", "inet", "ramshield_synproxy"]).status();
 
-    run_sysctl("net.ipv4.tcp_syncookies", "1")?;
-    run_sysctl("net.ipv4.tcp_timestamps", "1")?;
-    run_sysctl("net.netfilter.nf_conntrack_tcp_loose", "0")?;
+    // B03: Replace atomically. The old table is deleted INSIDE the same nft
+    // transaction as the new ruleset, so a failed apply leaves the previous
+    // protection active instead of tearing it down first (which created an
+    // unprotected window between the standalone delete and the apply).
+    let table_exists = Command::new("nft")
+        .args(["list", "table", "inet", "ramshield_synproxy"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    let mut apply_script = String::new();
+    if table_exists {
+        apply_script.push_str("delete table inet ramshield_synproxy\n");
+    }
+    apply_script.push_str(&script);
 
-    let mut child = Command::new("nft").args(["-f", "-"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|e| format!("nft: {e}"))?;
-    child.stdin.take().ok_or("nft stdin unavailable")?.write_all(script.as_bytes()).map_err(|e| format!("nft write: {e}"))?;
-    let out = child.wait_with_output().map_err(|e| format!("nft wait: {e}"))?;
-    if !out.status.success() { return Err(format!("nft synproxy ruleset failed: {}", String::from_utf8_lossy(&out.stderr))); }
+    // B03: sysctl changes are a separate reversible phase. Record originals
+    // so a failed rule apply can restore administrator-managed settings.
+    let originals: Vec<(&'static str, String)> = [
+        "net.ipv4.tcp_syncookies",
+        "net.ipv4.tcp_timestamps",
+        "net.netfilter.nf_conntrack_tcp_loose",
+    ]
+    .iter()
+    .map(|k| (*k, read_sysctl(k)))
+    .collect();
+    let mut sysctl_applied: Vec<(&'static str, String)> = Vec::new();
+    let mut apply_err = (|| -> Result<(), String> {
+        for (k, v) in [
+            ("net.ipv4.tcp_syncookies", "1"),
+            ("net.ipv4.tcp_timestamps", "1"),
+            ("net.netfilter.nf_conntrack_tcp_loose", "0"),
+        ] {
+            run_sysctl(k, v)?;
+            sysctl_applied.push((k, originals.iter().find(|(ok, _)| *ok == k).unwrap().1.clone()));
+        }
+        let mut child = Command::new("nft").args(["-f", "-"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|e| format!("nft: {e}"))?;
+        child.stdin.take().ok_or("nft stdin unavailable")?.write_all(apply_script.as_bytes()).map_err(|e| format!("nft write: {e}"))?;
+        let out = child.wait_with_output().map_err(|e| format!("nft wait: {e}"))?;
+        if !out.status.success() { return Err(format!("nft synproxy ruleset failed: {}", String::from_utf8_lossy(&out.stderr))); }
+        Ok(())
+    })();
+    // Restore sysctls on failure; the old table (if any) is untouched because
+    // the nft transaction is all-or-nothing.
+    if let Err(e) = &apply_err {
+        for (k, v) in &sysctl_applied {
+            let _ = run_sysctl(k, v);
+        }
+        return Err(e.clone());
+    }
+    apply_err?;
     info!(iface=%interface, ports=?cfg.ports, "kernel SYNPROXY transport guard active");
     Ok(())
 }
@@ -114,6 +156,15 @@ fn run_sysctl(key: &str, value: &str) -> Result<(), String> {
     let out = Command::new("sysctl").args(["-w", &format!("{key}={value}")]).output().map_err(|e| format!("sysctl {key}: {e}"))?;
     if !out.status.success() { return Err(format!("sysctl {key} failed: {}", String::from_utf8_lossy(&out.stderr))); }
     Ok(())
+}
+
+/// Read the current value of a sysctl key. Returns the value as a string, or an empty string on error.
+fn read_sysctl(key: &str) -> String {
+    let out = Command::new("sysctl").args(["-n", key]).output();
+    match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => String::new(),
+    }
 }
 
 #[cfg(target_os = "linux")]

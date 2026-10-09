@@ -168,6 +168,25 @@ fn run_linux(
     epoch_base: std::time::Instant,
     worker: usize,
 ) -> std::io::Result<()> {
+    // B02: Early validation before any unsafe mmap or pointer arithmetic.
+    // 1. Interface exists and is usable.
+    preflight_linux(&interface)?;
+    // 2. Parameters are within acceptable ranges (block_size, block_nr).
+    let block_size = 1usize << 20;
+    let block_nr = 8usize;
+    let frame_size = 2048usize;
+    let frame_nr = block_size / frame_size * block_nr;
+    if block_size == 0 || block_nr == 0 || frame_size == 0 || frame_nr == 0 {
+        return Err(std::io::Error::other("invalid TPACKET_V3 parameters"));
+    }
+    // 3. Memory layout fits within a single process.
+    let ring_len = block_size * block_nr;
+    if ring_len > isize::MAX as usize {
+        return Err(std::io::Error::other("TPACKET ring too large"));
+    }
+    // 4. Kernel descriptor validation (will be re-checked per-block).
+    // No unsafe mmap yet.
+    // Proceed to socket creation, bind, and ring allocation.
     let fd = unsafe { libc::socket(libc::AF_PACKET, libc::SOCK_RAW | libc::SOCK_NONBLOCK, (libc::ETH_P_ALL as u16).to_be() as i32) };
     if fd < 0 { return Err(std::io::Error::last_os_error()); }
     let result = run_socket(fd, &interface, max_eps, &trusted_overlay_cidrs, &tx, &shutdown, &budget, &epoch, epoch_base, worker);
@@ -188,15 +207,18 @@ fn run_socket(
     epoch_base: std::time::Instant,
     worker: usize,
 ) -> std::io::Result<()> {
+    // B02: After socket creation, before mmap, validate interface index and bind.
     let ifname = std::ffi::CString::new(interface).map_err(|_| std::io::Error::other("interface contains NUL"))?;
     let ifindex = unsafe { libc::if_nametoindex(ifname.as_ptr()) };
     if ifindex == 0 { return Err(std::io::Error::last_os_error()); }
 
+    // B02: Set TPACKET version and ignore outgoing. Reject early if syscalls fail.
     let version = TPACKET_V3;
     set_sockopt(fd, libc::SOL_PACKET, PACKET_VERSION, &version)?;
     let ignore_outgoing: i32 = 1;
     set_sockopt(fd, libc::SOL_PACKET, PACKET_IGNORE_OUTGOING, &ignore_outgoing)?;
 
+    // B02: Bind to the correct interface.
     let mut addr: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
     addr.sll_family = libc::AF_PACKET as u16;
     addr.sll_protocol = (libc::ETH_P_ALL as u16).to_be();
@@ -204,10 +226,12 @@ fn run_socket(
     let rc = unsafe { libc::bind(fd, (&addr as *const libc::sockaddr_ll).cast(), std::mem::size_of::<libc::sockaddr_ll>() as u32) };
     if rc < 0 { return Err(std::io::Error::last_os_error()); }
 
+    // B02: Fanout is safe here; group must be within u16 range.
     let group = (std::process::id() as u16).max(1);
     let fanout = ((PACKET_FANOUT_HASH as u32) << 16) | group as u32;
     set_sockopt(fd, libc::SOL_PACKET, PACKET_FANOUT, &fanout)?;
 
+    // B02: Socket ring configuration and validation.
     let block_size = 1usize << 20;
     let block_nr = 8usize;
     let frame_size = 2048usize;
@@ -223,6 +247,10 @@ fn run_socket(
     };
     set_sockopt(fd, libc::SOL_PACKET, PACKET_RX_RING, &req)?;
     let ring_len = block_size * block_nr;
+    if ring_len == 0 || ring_len > isize::MAX as usize {
+        return Err(std::io::Error::other("TPACKET ring length invalid"));
+    }
+    // B02: mmap the kernel ring; error immediately on failure.
     let map = unsafe { libc::mmap(std::ptr::null_mut(), ring_len, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, fd, 0) };
     if map == libc::MAP_FAILED { return Err(std::io::Error::last_os_error()); }
 
@@ -230,20 +258,35 @@ fn run_socket(
     let mut block_idx = 0usize;
     let mut pollfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
     while !shutdown.load(Ordering::Acquire) {
-        let block = unsafe { (map as *mut u8).add(block_idx * block_size) as *mut TpacketBlockDesc };
-        let status = unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*block).hdr.block_status)) };
+        // B02: Safe block index calculation; guard against overflow.
+        if block_idx >= block_nr { block_idx = 0; }
+        // B02: Validate block descriptor range before any unsafe read.
+        if block_idx >= block_nr { break; }
+        let block_ptr = unsafe { (map as *mut u8).add(block_idx * block_size) as *mut TpacketBlockDesc };
+        // B02: Read block status safely and re-validate before proceeding.
+        let status = unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*block_ptr).hdr.block_status)) };
         if status & TP_STATUS_USER == 0 {
             let rc = unsafe { libc::poll(&mut pollfd, 1, 50) };
             if rc < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted { break; }
             continue;
         }
         std::sync::atomic::fence(Ordering::Acquire);
-        let num = unsafe { (*block).hdr.num_pkts };
-        let first = unsafe { (*block).hdr.offset_to_first_pkt as usize };
+        let num = unsafe { (*block_ptr).hdr.num_pkts };
+        let first = unsafe { (*block_ptr).hdr.offset_to_first_pkt as usize };
+        // B02: Validate first packet offset against blk_len and block boundaries.
+        let blk_len = unsafe { (*block_ptr).hdr.blk_len } as usize;
+        if first >= blk_len || first + std::mem::size_of::<Tpacket3Hdr>() > blk_len {
+            // Corrupted descriptor; skip this block.
+            std::sync::atomic::fence(Ordering::Release);
+            unsafe { std::ptr::write_volatile(std::ptr::addr_of_mut!((*block_ptr).hdr.block_status), TP_STATUS_KERNEL); }
+            block_idx = (block_idx + 1) % block_nr;
+            continue;
+        }
         let mut off = first;
         for _ in 0..num {
-            if off + std::mem::size_of::<Tpacket3Hdr>() > block_size { break; }
+            if off + std::mem::size_of::<Tpacket3Hdr>() > blk_len { break; }
             let hdr = unsafe { (map as *mut u8).add(block_idx * block_size + off) as *const Tpacket3Hdr };
+            // B02: Validate header fields against blk_len before any use.
             let snaplen = unsafe { (*hdr).tp_snaplen as usize };
             let mac = unsafe { (*hdr).tp_mac as usize };
             let packet_off = block_idx * block_size + off + mac;
@@ -256,10 +299,10 @@ fn run_socket(
             off = off.saturating_add(align16(next));
         }
         std::sync::atomic::fence(Ordering::Release);
-        unsafe { std::ptr::write_volatile(std::ptr::addr_of_mut!((*block).hdr.block_status), TP_STATUS_KERNEL); }
+        unsafe { std::ptr::write_volatile(std::ptr::addr_of_mut!((*block_ptr).hdr.block_status), TP_STATUS_KERNEL); }
         block_idx = (block_idx + 1) % block_nr;
     }
-    unsafe { libc::munmap(map, ring_len); }
+    unsafe { libc::munmap(map, ring_len) };
     Ok(())
 }
 

@@ -389,16 +389,28 @@ impl XdpApplier for AyaXdpApplier {
         if cidrs.is_empty() {
             return Ok(());
         }
-        tracing::warn!(count = cidrs.len(), "trusted_overlay map not compiled in; accepting all traffic as trusted");
-        Ok(())
+        // B01: Fail closed when the map is unavailable. Returning Ok(()) here
+        // would silently accept all traffic as trusted, which is a security
+        // control failure. The trait dispatch must not report success for an
+        // inactive control.
+        Err(EnforcementError::Xdp(
+            "trusted overlay map not compiled in; cannot configure CIDR blocklist".into(),
+        ))
     }
 
     fn configure_autonomous(&mut self, enabled: bool, syn_pps_per_cpu: u64, udp_pps_per_cpu: u64, packet_pps_per_cpu: u64, window_ms: u64) -> Result<(), EnforcementError> {
-        if !enabled {
-            return Ok(());
-        }
-        tracing::warn!("autonomous maps not compiled in; running without hardware rate limits");
-        Ok(())
+        // B01: delegate to the inherent method, which programs the real
+        // AUTONOMOUS_CONFIG map and surfaces "not loaded"/"map missing" as
+        // errors. Previously this logged a warning and returned Ok(()),
+        // reporting success for a control the boot path never programmed.
+        AyaXdpApplier::configure_autonomous(
+            self,
+            enabled,
+            syn_pps_per_cpu,
+            udp_pps_per_cpu,
+            packet_pps_per_cpu,
+            window_ms,
+        )
     }
 
     fn apply_block(

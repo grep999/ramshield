@@ -18,9 +18,9 @@ use ahash::AHashMap;
 
 /// Composite key: `(key_id_hash, nonce_bytes)`. Length-prefixed so
 /// `"a\0bc"` and `"ab\0c"` don't collide even if `key_id` is empty.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NonceKey {
-    pub key_id_hash: u64,
+    pub key_id: String,
     pub nonce: Vec<u8>,
 }
 
@@ -44,16 +44,7 @@ struct StoreInner {
 
 impl ReplayStore {
     pub fn new(capacity: usize, ttl: Duration) -> Self {
-        Self {
-            cap: capacity.max(1),
-            per_key_cap: capacity,
-            ttl,
-            key_hasher: ahash::RandomState::new(),
-            inner: Mutex::new(StoreInner {
-                order: VecDeque::with_capacity(capacity),
-                map: AHashMap::with_capacity(capacity),
-            }),
-        }
+        Self::with_per_key_cap(capacity, capacity, ttl)
     }
 
     /// Construct with per-key capacity limit. `per_key_cap` bounds how many
@@ -72,65 +63,6 @@ impl ReplayStore {
         }
     }
 
-    /// Record a freshly-observed nonce under `key_id`. Returns
-    /// `Err("replay")` if the same `(key_id, nonce)` was seen within `ttl`,
-    /// `Ok(())` otherwise. Evicts expired entries and overflows the LRU.
-    pub fn check_and_record(&self, key_id: &str, nonce: &[u8]) -> Result<(), &'static str> {
-        let key = NonceKey {
-            key_id_hash: self.key_hasher.hash_one(key_id),
-            nonce: nonce.to_vec(),
-        };
-        let now = Instant::now();
-        let mut g = self.inner.lock().map_err(|_| "replay store poisoned")?;
-        // Lazy TTL sweep on the front (oldest). A full sweep is O(n) and
-        // not needed — old entries fall out of the LRU window anyway.
-        while g
-            .order
-            .front()
-            .and_then(|k| g.map.get(k))
-            .is_some_and(|ts| now.duration_since(*ts) >= self.ttl)
-        {
-            if let Some(expired) = g.order.pop_front() {
-                g.map.remove(&expired);
-            }
-        }
-        if g.map
-            .get(&key)
-            .is_some_and(|prev| now.duration_since(*prev) < self.ttl)
-        {
-            return Err("replay");
-        }
-        // Insert / refresh.
-        let key_id_hash = key.key_id_hash;
-        g.order.retain(|k| k != &key);
-        g.map.insert(key.clone(), now);
-        g.order.push_back(key);
-        // LRU bound: drop the oldest.
-        while g.order.len() > self.cap {
-            if let Some(old) = g.order.pop_front() {
-                g.map.remove(&old);
-            }
-        }
-        // Per-key eviction: count how many entries belong to this key_id_hash.
-        // If above per_key_cap, remove own-key oldest until under limit.
-        if self.per_key_cap < self.cap {
-            let own_keys: Vec<NonceKey> = g
-                .order
-                .iter()
-                .filter(|k| k.key_id_hash == key_id_hash)
-                .cloned()
-                .collect();
-            if own_keys.len() > self.per_key_cap {
-                let evict = own_keys.len() - self.per_key_cap;
-                for k in own_keys.into_iter().take(evict) {
-                    g.order.retain(|ok| ok != &k);
-                    g.map.remove(&k);
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Current entry count (test/diagnostic only).
     pub fn len(&self) -> usize {
         self.inner.lock().map(|g| g.order.len()).unwrap_or(0)
@@ -138,6 +70,43 @@ impl ReplayStore {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Record a freshly-observed nonce under `key_id`. Returns
+    /// `Err("replay")` if the same `(key_id, nonce)` was seen within `ttl`,
+    /// `Ok(())` otherwise. Evicts expired entries and overflows the LRU.
+    /// Per-key capacity rejection without evicting unexpired entries (B06).
+    pub fn check_and_record(&self, key_id: &str, nonce: &[u8]) -> Result<(), &'static str> {
+        // B06: Ensure full identity and atomic check-and-record, not lossy hash.
+        // Use the actual key_id string to preserve identity.
+        let key = NonceKey { key_id: key_id.to_string(), nonce: nonce.to_vec() };
+        let now = Instant::now();
+        let mut g = self.inner.lock().map_err(|_| "replay store poisoned")?;
+        // Lazy TTL sweep on the front (oldest). A full sweep is O(n) and
+        // not needed — old entries fall out of the LRU window anyway.
+        while g.order.front().and_then(|k| g.map.get(k)).is_some_and(|ts| now.duration_since(*ts) >= self.ttl) {
+            if let Some(expired) = g.order.pop_front() { g.map.remove(&expired); }
+        }
+        // Reject only if unexpired duplicate already exists.
+        if g.map.get(&key).is_some_and(|prev| now.duration_since(*prev) < self.ttl) {
+            return Err("replay");
+        }
+        // Insert / refresh.
+        g.order.retain(|k| k != &key);
+        g.map.insert(key.clone(), now);
+        g.order.push_back(key.clone());
+        // LRU bound: drop the oldest ONLY if exceeds global capacity.
+        while g.order.len() > self.cap {
+            if let Some(old) = g.order.pop_front() { g.map.remove(&old); }
+        }
+        // Per-key capacity: reject without evicting valid entries.
+        if self.per_key_cap < self.cap {
+            let own_keys: Vec<NonceKey> = g.order.iter().filter(|k| k.key_id == key.key_id).cloned().collect();
+            if own_keys.len() > self.per_key_cap {
+                return Err("capacity");
+            }
+        }
+        Ok(())
     }
 }
 
