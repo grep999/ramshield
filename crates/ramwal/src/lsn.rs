@@ -32,13 +32,11 @@ impl Lsn {
 
     /// Return the next sequential LSN.
     ///
-    /// Storage identity must never silently wrap, so exhaustion is fatal
-    /// here; use [`Lsn::checked_next`] to handle it explicitly.
-    pub const fn next(self) -> Self {
-        match self.0.checked_add(1) {
-            Some(value) => Self(value),
-            None => panic!("LSN exhausted"),
-        }
+    /// Storage identity must never silently wrap, so exhaustion is a typed
+    /// error instead of a panic; use [`Lsn::checked_next`] for Option-based
+    /// handling. (not const: `Option::ok_or` is not const-stable.)
+    pub fn next(&self) -> Result<Self, crate::error::Error> {
+        self.checked_next().ok_or(crate::error::Error::LsnExhausted)
     }
 
     /// Return the next sequential LSN, or `None` at `u64::MAX`.

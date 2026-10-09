@@ -93,9 +93,12 @@ pub enum Error {
 
     Closed,
 
-    /// The WAL encountered a write-side storage failure and must be reopened
-    /// so recovery can establish a new verified append boundary.
+/// The WAL encountered a write-side storage failure and must be reopened
+/// so recovery can establish a new verified append boundary.
     Poisoned,
+
+    /// The LSN sequence counter exhausted (reached u64::MAX).
+    LsnExhausted,
 
     /// Retention/checkpoint operation attempted to advance beyond
     /// the checkpoint currently recorded by RAMWAL.
@@ -232,6 +235,8 @@ impl fmt::Display for Error {
             Self::InvalidConfiguration(msg) => {
                 write!(f, "invalid configuration: {msg}")
             }
+
+            Self::LsnExhausted => write!(f, "LSN sequence exhausted (reached u64::MAX)"),
         }
     }
 }

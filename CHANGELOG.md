@@ -3,6 +3,13 @@
 ## Unreleased — Maturity hardening
 - Fix synproxy nftables syntax error (meta nfproto ipv4/ipv6), restore XDP stubs, ensure E0277 guard dropped before await, and adjust config defaults for dev boot (wal.dir, enable inband fallback).
 
+### Security
+- SEC-06: Reject `prefix_len > 32` in `ramshield_ipv4_subnet_key` (nested header) before the mask shift — a shift width ≥ 32 on a 32-bit value is undefined behavior under C99 §6.5.7.
+- SEC-10: HTML-escape dashboard template substitutions via `sanitize_html` so reflected error text cannot inject markup.
+- SEC-14: `Lsn::next` returns `Result<Lsn, Error::LsnExhausted>` instead of panicking at `u64::MAX`, so sequence exhaustion fails closed instead of aborting the storage engine.
+- SEC-16: ExaBGP FIFO bridge opens the FIFO `O_RDWR`, so a writer restart no longer delivers EOF and kills the bridge process.
+- SEC-17: `[profile.release]` hardening — `lto`, `codegen-units = 1`, `panic = "abort"`, `strip`, `overflow-checks`.
+
 - Restore the XDP packet-boundary helpers, counters, and drop-event emitter required by the Aya program.
 - Make VXLAN/Geneve raw-pointer access verifier-safe.
 - Replace private AF_PACKET fanout groups with a shared `PACKET_FANOUT_HASH` group and remove a per-packet mutex from the native event budget.

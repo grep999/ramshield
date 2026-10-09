@@ -66,6 +66,24 @@ struct FailureWindow {
 /// Failed attempts older than this decay to zero — transient brute force
 /// stops locking the IP after a cool-down instead of until restart.
 const LOCKOUT_WINDOW: Duration = Duration::from_secs(15 * 60);
+
+/// HTML-escape user-controlled strings before template substitution (SEC-10,
+/// reflected XSS). Only markup-significant chars need escaping; everything
+/// passes through unchanged.
+fn sanitize_html(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for c in input.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#x27;"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
+}
 /// Sweep interval for the session store. Rather than scanning all
 /// sessions on every authenticated request (O(n)), we sweep at most
 /// once per SWEEP_INTERVAL. Entries that outlive the TTL are still
@@ -308,7 +326,7 @@ async fn login_page(State(auth): State<AuthState>) -> Response {
         )
             .into_response();
     }
-    Html(include_str!("login.html").replace("{{ERR}}", "")).into_response()
+    Html(include_str!("login.html").replace("{{ERR}}", "")).into_response() // static "" — no user input
 }
 
 #[derive(Deserialize)]
@@ -410,8 +428,16 @@ async fn login_submit(
         None => {
             auth.note_failure(ip);
             // Same page, inline error — no context-switch to a bare HTML stub.
-            let page = include_str!("login.html")
-                .replace("{{ERR}}", "<p class=\"err\">Invalid credentials.</p>");
+            // SEC-10: error text passes through sanitize_html before template
+            // substitution — static today, safe if the message ever becomes
+            // caller-influenced (lockout reason, IP echo, etc).
+            let page = include_str!("login.html").replace(
+                "{{ERR}}",
+                &format!(
+                    r#"<p class="err">{}</p>"#,
+                    sanitize_html("Invalid credentials.")
+                ),
+            );
             (StatusCode::UNAUTHORIZED, Html(page)).into_response()
         }
     }

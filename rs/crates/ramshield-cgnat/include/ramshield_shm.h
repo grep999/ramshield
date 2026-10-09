@@ -24,7 +24,12 @@ ramshield_subnet_key(uint32_t network, uint8_t prefix_len)
 static inline uint64_t
 ramshield_ipv4_subnet_key(uint32_t client_ip, uint8_t prefix_len)
 {
-    uint32_t mask = prefix_len == 0 ? 0 : 0xffffffffU << (32 - prefix_len);
+    /* Reject invalid CIDR bounds to prevent undefined shift counts.
+     * Callers treat 0 as an invalid/unroutable subnet token. */
+    if (prefix_len > 32) {
+        return 0;
+    }
+    uint32_t mask = (prefix_len == 0) ? 0 : (0xffffffffU << (32 - prefix_len));
     return ramshield_subnet_key(client_ip & mask, prefix_len);
 }
 

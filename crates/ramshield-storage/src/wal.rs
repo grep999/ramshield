@@ -100,6 +100,7 @@ fn map_error(error: RamWalError) -> RsError {
         RamWalError::DiskFull => RsError::Io(std::io::Error::other("disk full")),
         RamWalError::Closed => RsError::Io(std::io::Error::other("WAL closed")),
         RamWalError::InvalidConfiguration(msg) => RsError::Io(std::io::Error::other(msg)),
+        RamWalError::LsnExhausted => RsError::Io(std::io::Error::other("LSN sequence exhausted")),
         RamWalError::Corruption {
             segment: _,
             offset,
