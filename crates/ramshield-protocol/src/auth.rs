@@ -12,7 +12,6 @@
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use std::time::Duration;
 
 mod replay_store;
 pub use replay_store::ReplayStore;
