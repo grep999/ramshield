@@ -91,9 +91,13 @@ pub fn install(cfg: &SynproxyConfig, interface: &str) -> Result<(), String> {
         ("net.ipv4.tcp_timestamps", "1"),
         ("net.netfilter.nf_conntrack_tcp_loose", "0"),
     ];
-    run_nft_script(&transaction, true)?;
-    verify_sysctls(&required, read_sysctl)?;
-    run_nft_script(&transaction, false)?;
+    apply_ruleset_with_preflight(
+        &transaction,
+        &required,
+        |ruleset| run_nft_script(ruleset, true),
+        read_sysctl,
+        |ruleset| run_nft_script(ruleset, false),
+    )?;
 
     info!(iface=%interface, ports=?cfg.ports, "kernel SYNPROXY transport guard active");
     Ok(())
@@ -146,6 +150,19 @@ fn verify_sysctls(
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn apply_ruleset_with_preflight(
+    ruleset: &str,
+    required: &[(&str, &str)],
+    mut validate: impl FnMut(&str) -> Result<(), String>,
+    read: impl FnMut(&str) -> Result<String, String>,
+    mut apply: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    validate(ruleset)?;
+    verify_sysctls(required, read)?;
+    apply(ruleset)
 }
 
 #[cfg(target_os = "linux")]
@@ -245,6 +262,74 @@ mod tests {
         let error = result.expect_err("misconfigured sysctl must fail closed");
         assert!(error.contains("net.ipv4.tcp_syncookies=1"));
         assert_eq!(reads, vec!["net.ipv4.tcp_syncookies"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nft_rules_are_not_applied_when_validation_fails() {
+        let mut reads = 0;
+        let mut applies = 0;
+        let result = super::apply_ruleset_with_preflight(
+            "candidate rules",
+            &[("sysctl.test", "1")],
+            |_| Err("injected nft validation failure".into()),
+            |_| {
+                reads += 1;
+                Ok("1".into())
+            },
+            |_| {
+                applies += 1;
+                Ok(())
+            },
+        );
+
+        assert_eq!(result, Err("injected nft validation failure".into()));
+        assert_eq!(reads, 0);
+        assert_eq!(applies, 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nft_rules_are_not_applied_when_sysctl_preflight_fails() {
+        let mut applies = 0;
+        let result = super::apply_ruleset_with_preflight(
+            "candidate rules",
+            &[("sysctl.test", "1")],
+            |_| Ok(()),
+            |_| Ok("0".into()),
+            |_| {
+                applies += 1;
+                Ok(())
+            },
+        );
+
+        assert!(result.expect_err("mismatched sysctl must fail closed").contains("sysctl.test=1"));
+        assert_eq!(applies, 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn nft_apply_failure_is_returned_after_preflight() {
+        let mut stages = Vec::new();
+        let result = super::apply_ruleset_with_preflight(
+            "candidate rules",
+            &[("sysctl.test", "1")],
+            |_| {
+                stages.push("validate");
+                Ok(())
+            },
+            |_| {
+                stages.push("sysctl");
+                Ok("1".into())
+            },
+            |_| {
+                stages.push("apply");
+                Err("injected nft apply failure".into())
+            },
+        );
+
+        assert_eq!(result, Err("injected nft apply failure".into()));
+        assert_eq!(stages, vec!["validate", "sysctl", "apply"]);
     }
 
     #[test]
