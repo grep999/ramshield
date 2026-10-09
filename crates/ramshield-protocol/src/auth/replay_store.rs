@@ -29,10 +29,7 @@ pub struct ReplayStore {
     cap: usize,
     per_key_cap: usize,
     ttl: Duration,
-    /// Process-random hash builder for key_id -> u64. Fixed seeds (0,0,0,0)
-    /// made the digest deterministic across restarts; random per-process
-    /// seed removes cross-key collision availability risk.
-    key_hasher: ahash::RandomState,
+
     // Map key -> insert instant. Insertion order = LRU order (front = oldest).
     inner: Mutex<StoreInner>,
 }
@@ -55,7 +52,6 @@ impl ReplayStore {
             cap: capacity.max(1),
             per_key_cap: per_key_cap.max(1),
             ttl,
-            key_hasher: ahash::RandomState::new(),
             inner: Mutex::new(StoreInner {
                 order: VecDeque::with_capacity(capacity),
                 map: AHashMap::with_capacity(capacity),

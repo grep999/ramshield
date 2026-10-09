@@ -16,14 +16,6 @@ impl WelfordState {
     fn pack(self) -> [u32; 2] {
         [self.mean.to_bits(), self.variance.to_bits()]
     }
-
-    #[inline]
-    fn unpack(packed: &[u32; 2]) -> Self {
-        Self {
-            mean: f32::from_bits(packed[0]),
-            variance: f32::from_bits(packed[1]),
-        }
-    }
 }
 
 pub struct Welford {
