@@ -24,7 +24,11 @@ fn parse_request(request: &[u8], max_bytes: usize) -> Result<RequestParts<'_>, F
     // CRLF for requests with headers; the second CRLF remains the body boundary.
     let head_end = sep.checked_add(2).ok_or(Finding::Malformed)?;
     let head = request.get(..head_end).ok_or(Finding::Malformed)?;
-    let mut lines = head.split(|&b| b == b'\n');
+    // Drop only the final LF used to terminate the captured head. Keeping each
+    // line's CR lets strict per-line CRLF validation work without producing an
+    // artificial empty segment from splitting a buffer that ends in LF.
+    let line_bytes = head.strip_suffix(b"\n").ok_or(Finding::Malformed)?;
+    let mut lines = line_bytes.split(|&b| b == b'\n');
     let request_line = lines
         .next()
         .ok_or(Finding::Malformed)?
