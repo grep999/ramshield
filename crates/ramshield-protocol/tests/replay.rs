@@ -95,19 +95,17 @@ fn replay_store_per_key_isolation() {
     );
 }
 
-/// GREEN: store never exceeds its configured capacity (LRU evicts oldest).
+/// Capacity pressure rejects new nonces and never evicts live replay markers.
 #[test]
-fn replay_store_lru_bounded() {
+fn replay_store_capacity_preserves_live_markers() {
     let cap = 8;
     let store = ReplayStore::new(cap, Duration::from_secs(60));
-    for i in 0u8..(cap as u8 * 4) {
+    for i in 0u8..cap as u8 {
         let n = format!("n{}", i);
-        store.check_and_record("k1", n.as_bytes()).unwrap();
+        assert!(store.check_and_record("k1", n.as_bytes()).is_ok());
     }
-    assert!(
-        store.len() <= cap,
-        "store len {} exceeded cap {}",
-        store.len(),
-        cap
-    );
+    assert_eq!(store.len(), cap);
+    assert_eq!(store.check_and_record("k1", b"new-nonce"), Err("capacity"));
+    assert_eq!(store.check_and_record("k1", b"n0"), Err("replay"));
+    assert_eq!(store.len(), cap);
 }
