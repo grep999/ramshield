@@ -136,23 +136,6 @@ fn parse_rx_bytes(contents: &str) -> Option<u64> {
     contents.trim().parse().ok()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::parse_rx_bytes;
-
-    #[test]
-    fn rx_byte_counter_parses_trimmed_decimal_values() {
-        assert_eq!(parse_rx_bytes(" 12345\n"), Some(12345));
-    }
-
-    #[test]
-    fn rx_byte_counter_rejects_empty_and_malformed_values() {
-        assert_eq!(parse_rx_bytes(""), None);
-        assert_eq!(parse_rx_bytes("not-a-counter"), None);
-        assert_eq!(parse_rx_bytes("-1"), None);
-    }
-}
-
 async fn post_webhook(url: &str, signal: &SaturationSignal) -> Result<(), String> {
     let raw = url.strip_prefix("http://").ok_or_else(|| {
         "upstream webhook currently requires http://; terminate TLS in the deployment proxy"
@@ -266,3 +249,21 @@ fn write_bgp_fifo(path: &str, bytes: &[u8]) -> Result<(), String> {
         Err("BGP FIFO integration requires Linux".into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_rx_bytes;
+
+    #[test]
+    fn rx_byte_counter_parses_trimmed_decimal_values() {
+        assert_eq!(parse_rx_bytes(" 12345\n"), Some(12345));
+    }
+
+    #[test]
+    fn rx_byte_counter_rejects_empty_and_malformed_values() {
+        assert_eq!(parse_rx_bytes(""), None);
+        assert_eq!(parse_rx_bytes("not-a-counter"), None);
+        assert_eq!(parse_rx_bytes("-1"), None);
+    }
+}
+
