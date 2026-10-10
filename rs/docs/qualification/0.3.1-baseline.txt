@@ -1,7 +1,0 @@
-commit=fb66c2ed9092e0df67fc89170d4af81f06e4bfe5
-version=v0.3.0-3-gfb66c2e
-toolchain=rustc 1.100.0-nightly (fd7ed57df 2026-08-29)
-test=PASS
-fmt=PASS
-clippy=PASS
-review_pipeline=PENDING

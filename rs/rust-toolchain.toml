@@ -1,6 +1,0 @@
-[toolchain]
-# Pinned nightly — audit 2026-09-30 P1 #21/#30: an unpinned `nightly` lets CI
-# drift to a different compiler than the one this tree was verified with.
-# Bump deliberately, then re-run the full gate.
-channel = "nightly-2026-08-29"
-components = ["rust-src"]
