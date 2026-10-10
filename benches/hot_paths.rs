@@ -410,6 +410,7 @@ fn bench_hll_insert(n: usize) -> f64 {
     t0.elapsed().as_nanos() as f64 / n as f64
 }
 
+#[cfg(feature = "mesh")]
 fn bench_mesh_record_ban(n: usize) -> f64 {
     use std::net::IpAddr;
     let mesh = ramshield_mesh::aworset::AworsetBlocklist::new(1);
@@ -565,6 +566,7 @@ fn main() {
     bench!("CGNAT classify (entropy)", bench_cgnat_classify, n_medium);
     bench!("CMS::increment", bench_cms_update, n_fast);
     bench!("HLL::insert", bench_hll_insert, n_fast);
+    #[cfg(feature = "mesh")]
     bench!("Mesh record_ban", bench_mesh_record_ban, n_medium);
 
     println!("\n── 2000-Subnet DDoS Simulation ─────────────────────────────────────");
