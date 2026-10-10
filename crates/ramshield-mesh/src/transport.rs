@@ -60,6 +60,7 @@ pub struct PeerSendResult {
 
 /// A broadcast is successful only for peers whose outcome is `Written`.
 /// Application success is reported separately by the receiving enforcement service.
+#[must_use = "inspect per-peer mesh delivery outcomes"]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BroadcastReport {
     pub peers: Vec<PeerSendResult>,
@@ -258,7 +259,14 @@ impl MeshHandle {
     async fn broadcast_sync(&self) {
         let (blocks, unblocks) = self.blocklist.snapshot(MAX_SYNC_ENTRIES);
         for message in chunk_sync(&blocks, &unblocks) {
-            self.broadcast(message).await;
+            let report = self.broadcast(message).await;
+            if !report.all_written() {
+                warn!(
+                    written = report.written_count(),
+                    failed = report.failed_count(),
+                    "mesh anti-entropy sync was not delivered to every configured peer"
+                );
+            }
         }
     }
     async fn send_to(&self, peer: SocketAddr, body: MeshMessage) -> std::io::Result<()> {
