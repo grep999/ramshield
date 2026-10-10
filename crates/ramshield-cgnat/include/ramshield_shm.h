@@ -7,7 +7,7 @@
 #include <stddef.h>
 
 #define RAMSHIELD_SHM_TABLE_CAPACITY 262144
-#define RAMSHIELD_SHM_PROBE_LIMIT 8
+#define RAMSHIELD_SHM_PROBE_LIMIT 4
 #define RAMSHIELD_FLAG_SHARED_INFRA 0x01
 
 static inline uint64_t
@@ -123,7 +123,8 @@ ramshield_shm_read(const RamshieldShmRuleEntry *table,
             // an older rule may have expired while a later live collision
             // remains in the bounded probe window.
             if (client_hash == 0) break;
-            continue;
+            /* Coherent occupied slot with another key: advance probe now. */
+            break;
         }
     }
     return false;
