@@ -33,7 +33,8 @@ impl EnforcementService {
             // CRDT state can be merged before enforcement fails (e.g. WAL
             // append or storage error). Retry an unchanged delta until its
             // projection has succeeded; only skip duplicates already applied.
-            if !mesh.merge_delta(&delta) && self.mesh_applied_ips.contains(&delta.ip) {
+            let changed = mesh.merge_delta(&delta);
+            if should_skip_mesh_block(changed, self.mesh_applied_ips.contains(&delta.ip)) {
                 return Ok(());
             }
             let remaining_ms = delta.expires_at_ms.saturating_sub(now_ms);
@@ -72,9 +73,9 @@ impl EnforcementService {
             // As with blocks, retain retryability if the tombstone was
             // merged but the local enforcement unblock failed.
             mesh.merge_unblock_delta(&delta);
-            if mesh.is_blocked(&delta.ip, now_ms)
-                || !self.mesh_applied_ips.contains(&delta.ip)
-            {
+            let still_blocked = mesh.is_blocked(&delta.ip, now_ms);
+            let locally_applied = self.mesh_applied_ips.contains(&delta.ip);
+            if should_skip_mesh_unblock(still_blocked, locally_applied) {
                 return Ok(());
             }
             let cmd = EnforceCommand {
@@ -96,4 +97,32 @@ impl EnforcementService {
             }
             enforce_result.map(|_| ())
         }
+}
+
+
+fn should_skip_mesh_block(crdt_changed: bool, locally_applied: bool) -> bool {
+    !crdt_changed && locally_applied
+}
+
+fn should_skip_mesh_unblock(still_blocked: bool, locally_applied: bool) -> bool {
+    still_blocked || !locally_applied
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::{should_skip_mesh_block, should_skip_mesh_unblock};
+
+    #[test]
+    fn unchanged_block_is_retried_until_local_projection_succeeds() {
+        assert!(!should_skip_mesh_block(false, false), "failed prior apply must retry");
+        assert!(should_skip_mesh_block(false, true), "successful duplicate can be skipped");
+        assert!(!should_skip_mesh_block(true, true), "new CRDT state must be applied");
+    }
+
+    #[test]
+    fn merged_unblock_is_retried_until_local_projection_succeeds() {
+        assert!(!should_skip_mesh_unblock(false, true), "failed prior unblock must retry");
+        assert!(should_skip_mesh_unblock(true, true), "another live ban still blocks the IP");
+        assert!(should_skip_mesh_unblock(false, false), "already-unapplied IP needs no duplicate unblock");
+    }
 }
