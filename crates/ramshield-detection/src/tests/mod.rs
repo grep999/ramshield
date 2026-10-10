@@ -104,6 +104,55 @@ fn local_merge_preserves_cross_worker_semantics() {
     assert!(a.is_empty(), "local buffer is drained into shared");
 }
 
+/// A-020 regression: the shared pre-aggregation map never exceeds its
+/// configured distinct-IP limit, even when one worker contributes a batch
+/// larger than the remaining capacity. Flushed plus pending counts are exact.
+#[test]
+fn local_merge_enforces_shared_pre_aggregation_capacity() {
+    let mut config = Config::default();
+    config.detection.pre_aggs_max_size = 2;
+    let cfg = config.into_handle();
+    let store = Arc::new(Store::new(16));
+    let metrics = Arc::new(Metrics::new());
+    let (etx, _erx) = mpsc::channel(64);
+    let eng = DetectionEngine::try_new(
+        store,
+        cfg,
+        etx,
+        metrics,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .expect("detection try_new");
+
+    let mut local: HashMap<IpAddr, IpAgg> = HashMap::new();
+    for octet in 1..=5 {
+        let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, octet));
+        local.entry(ip).or_default().absorb(&ConnectionEvent {
+            ip,
+            timestamp_ns: u64::from(octet),
+            bytes: 1,
+            status_code: 200,
+            proto_fingerprint: 0,
+            l7: None,
+        });
+    }
+
+    eng.merge_local(&mut local);
+    assert!(local.is_empty(), "all local aggregates must be transferred");
+    assert!(
+        eng.pre_aggs.len() <= 2,
+        "shared map exceeded configured capacity: {}",
+        eng.pre_aggs.len()
+    );
+    let pending: u64 = eng.pre_aggs.iter().map(|entry| entry.value().count as u64).sum();
+    let ingested = eng.metrics.events_ingested.load(Ordering::Relaxed);
+    assert_eq!(
+        ingested + pending,
+        5,
+        "capacity-triggered flush must preserve every event"
+    );
+}
+
 /// Step 3 fast path: crossing the emergency burst threshold on the
 /// per-event path emits a block BEFORE any flush, fires exactly once per
 /// window (count only rises, so the threshold is crossed once), and —
