@@ -68,9 +68,7 @@ impl Config {
         if self.detection.pre_aggs_max_size == 0
             || self.detection.pre_aggs_max_size > MAX_PRE_AGGS_SIZE
         {
-            anyhow::bail!(
-                "detection.pre_aggs_max_size must be between 1 and {MAX_PRE_AGGS_SIZE}"
-            );
+            anyhow::bail!("detection.pre_aggs_max_size must be between 1 and {MAX_PRE_AGGS_SIZE}");
         }
 
         // L7 detector validation
