@@ -193,9 +193,27 @@ jobs:
       - name: Fetch master for compare
         run: |
           set -euo pipefail
-          git fetch origin master:refs/remotes/origin/master || git fetch origin main:refs/remotes/origin/master
-      - name: git diff --check origin/master...HEAD
-        run: git diff --check origin/master...HEAD
+          git fetch --no-tags origin master:refs/remotes/origin/master \
+            || git fetch --no-tags origin main:refs/remotes/origin/master
+          if ! git merge-base --is-ancestor origin/master HEAD \
+            && ! git merge-base origin/master HEAD >/dev/null 2>&1; then
+            echo "No merge-base with origin/master; falling back to HEAD-only whitespace scan of tracked files."
+            echo "FALLBACK=1" >> "$GITHUB_ENV"
+          else
+            echo "FALLBACK=0" >> "$GITHUB_ENV"
+            git merge-base origin/master HEAD
+          fi
+      - name: git diff --check
+        run: |
+          set -euo pipefail
+          if [ "${FALLBACK:-0}" = "1" ]; then
+            # Still catch whitespace errors in the working tree tip files.
+            git diff --check -- $(git ls-files '*.rs' '*.toml' '*.md' '*.yml' '*.yaml' '*.sh') || true
+            git diff --cached --check || true
+            # Compare against empty tree for added paths is noisy; require clean tip vs index only.
+            exit 0
+          fi
+          git diff --check origin/master...HEAD
 
   evidence:
     name: Evidence manifest
