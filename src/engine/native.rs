@@ -575,7 +575,7 @@ fn valid_tpacket_packet_count(
     let header_size = std::mem::size_of::<Tpacket3Hdr>();
     if first < std::mem::size_of::<TpacketBlockDesc>()
         || first > blk_len
-        || first % TPACKET_ALIGNMENT != 0
+        || !first.is_multiple_of(TPACKET_ALIGNMENT)
     {
         return false;
     }
@@ -599,7 +599,7 @@ fn checked_tpacket_header_offset(
     let header_size = std::mem::size_of::<Tpacket3Hdr>();
     if !valid_tpacket_block_len(blk_len, block_size)
         || off < std::mem::size_of::<TpacketBlockDesc>()
-        || off % TPACKET_ALIGNMENT != 0
+        || !off.is_multiple_of(TPACKET_ALIGNMENT)
     {
         return None;
     }
