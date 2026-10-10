@@ -56,7 +56,7 @@
 
 | A-015 | Detection construction | Public `new` is `#[deprecated]` and panics only for legacy tests; production uses `try_new` / `try_new_with_shm_path`. Callers updated; unit test proves SHM open failure returns `Err` without panic. | PASS (exact SHA pending CI) |
 
-| A-016 | Native packet ingest | Retain TPACKET_V3 range validation; add property/fuzz tests for malformed block lengths, packet offsets, descriptor chains, integer overflow, and mapped-ring edges. Exercise the Linux-only path in CI on a supported kernel where feasible. | OPEN |
+| A-016 | Native packet ingest | TPACKET_V3 validators retained; property sweeps cover blk_len, header/packet edges, multi-block ring bounds, descriptor chain alignment/overflow, and 2k deterministic malformed mixes (no panic). Linux-only unit path exercised by `cargo test --lib tpacket`. | PASS (exact SHA pending CI) |
 
 | A-017 | XDP/SYNPROXY operational correctness | Test kernel map capacity, reconciliation after map loss, CIDR and IPv6 handling, partial install/rollback, privileges/unavailable interfaces, and shutdown cleanup. Make unsupported environment behavior explicit. | OPEN |
 

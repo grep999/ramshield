@@ -1011,6 +1011,220 @@ mod tpacket_tests {
             Ok(Some(96))
         );
     }
+
+    /// Property-style sweep: blk_len must sit in [desc_size, block_size].
+    #[test]
+    fn property_block_len_all_boundaries() {
+        let desc = std::mem::size_of::<TpacketBlockDesc>();
+        for block_size in [desc, 64, 128, 256, 4096, 1 << 16] {
+            assert!(!valid_tpacket_block_len(0, block_size));
+            if desc > 0 {
+                assert!(!valid_tpacket_block_len(desc - 1, block_size));
+            }
+            assert!(valid_tpacket_block_len(desc, block_size));
+            assert!(valid_tpacket_block_len(block_size, block_size));
+            assert!(!valid_tpacket_block_len(
+                block_size.saturating_add(1),
+                block_size
+            ));
+            assert!(!valid_tpacket_block_len(usize::MAX, block_size));
+        }
+    }
+
+    /// Header offsets near desc, near blk_len, and across multi-block rings.
+    #[test]
+    fn property_header_offset_edges_and_ring() {
+        let desc = std::mem::size_of::<TpacketBlockDesc>();
+        let hdr = std::mem::size_of::<Tpacket3Hdr>();
+        let block_size = 256usize;
+        let blocks = 4usize;
+        let ring_len = block_size * blocks;
+        let blk_len = block_size;
+
+        // Offsets below the block descriptor are illegal.
+        for off in 0..desc {
+            assert!(
+                checked_tpacket_header_offset(0, block_size, ring_len, blk_len, off).is_none(),
+                "off={off} must be rejected"
+            );
+        }
+        // First legal header offset.
+        assert!(checked_tpacket_header_offset(0, block_size, ring_len, blk_len, desc).is_some());
+
+        // Header that would end past blk_len / block_size.
+        let last_ok = blk_len - hdr;
+        assert!(checked_tpacket_header_offset(0, block_size, ring_len, blk_len, last_ok).is_some());
+        assert!(
+            checked_tpacket_header_offset(0, block_size, ring_len, blk_len, last_ok + 1).is_none()
+        );
+
+        // Final block in a full mapping is OK; one byte short mapping is not.
+        let last_block = blocks - 1;
+        assert!(
+            checked_tpacket_header_offset(last_block, block_size, ring_len, blk_len, desc)
+                .is_some()
+        );
+        assert!(
+            checked_tpacket_header_offset(last_block, block_size, ring_len - 1, blk_len, desc)
+                .is_none()
+        );
+
+        // block_idx * block_size overflow / out of ring.
+        assert!(
+            checked_tpacket_header_offset(blocks, block_size, ring_len, blk_len, desc).is_none()
+        );
+        assert!(
+            checked_tpacket_header_offset(usize::MAX / 2, block_size, ring_len, blk_len, desc)
+                .is_none()
+        );
+    }
+
+    /// Packet (mac, snaplen) combinations at block and ring edges.
+    #[test]
+    fn property_packet_mac_snaplen_edges() {
+        let desc = std::mem::size_of::<TpacketBlockDesc>();
+        let block_size = 256usize;
+        let ring_len = block_size * 2;
+        let blk_len = block_size;
+        let off = desc;
+
+        // Empty packet is fine if the header itself is valid.
+        assert!(
+            checked_tpacket_packet_offsets(0, block_size, ring_len, blk_len, off, 0, 0).is_some()
+        );
+
+        // Packet that ends exactly at blk_len.
+        let max_payload = blk_len - off;
+        assert!(
+            checked_tpacket_packet_offsets(0, block_size, ring_len, blk_len, off, 0, max_payload)
+                .is_some()
+        );
+        assert!(
+            checked_tpacket_packet_offsets(
+                0,
+                block_size,
+                ring_len,
+                blk_len,
+                off,
+                0,
+                max_payload + 1
+            )
+            .is_none()
+        );
+
+        // mac + snaplen overflow.
+        assert!(
+            checked_tpacket_packet_offsets(0, block_size, ring_len, blk_len, off, usize::MAX, 1)
+                .is_none()
+        );
+        assert!(
+            checked_tpacket_packet_offsets(0, block_size, ring_len, blk_len, off, 1, usize::MAX)
+                .is_none()
+        );
+
+        // Second block: packet may not cross into unmapped tail.
+        assert!(
+            checked_tpacket_packet_offsets(1, block_size, ring_len, blk_len, off, 0, max_payload)
+                .is_some()
+        );
+        assert!(
+            checked_tpacket_packet_offsets(
+                1,
+                block_size,
+                ring_len - 1,
+                blk_len,
+                off,
+                0,
+                max_payload
+            )
+            .is_none()
+        );
+    }
+
+    /// Descriptor chain must advance, stay aligned, and remain inside the block.
+    #[test]
+    fn property_descriptor_chain_progress_and_alignment() {
+        let hdr = std::mem::size_of::<Tpacket3Hdr>();
+        let block_size = 512usize;
+        let blk_len = block_size;
+        let off = 48usize;
+
+        // Zero next only legal on last packet.
+        assert!(checked_next_tpacket_offset(off, 0, false, blk_len, block_size).is_err());
+        assert_eq!(
+            checked_next_tpacket_offset(off, 0, true, blk_len, block_size),
+            Ok(None)
+        );
+
+        // next whose *aligned* stride is still shorter than a header.
+        for next in 1..hdr {
+            let aligned = (next + TPACKET_ALIGNMENT - 1) & !(TPACKET_ALIGNMENT - 1);
+            if aligned < hdr {
+                assert!(
+                    checked_next_tpacket_offset(off, next, false, blk_len, block_size).is_err(),
+                    "next={next} aligned={aligned}"
+                );
+            }
+        }
+
+        // Aligned step that lands a full header inside the block.
+        let step = ((hdr + TPACKET_ALIGNMENT - 1) / TPACKET_ALIGNMENT) * TPACKET_ALIGNMENT;
+        assert!(step >= hdr);
+        let next_off = checked_next_tpacket_offset(off, step, false, blk_len, block_size)
+            .expect("aligned step");
+        assert_eq!(next_off, Some(off + step));
+
+        // Step that would put the next header past blk_len.
+        let too_far = blk_len - off - hdr + 1;
+        if too_far >= hdr {
+            assert!(checked_next_tpacket_offset(off, too_far, false, blk_len, block_size).is_err());
+        }
+
+        // Addition overflow on off + aligned next.
+        assert!(
+            checked_next_tpacket_offset(usize::MAX - 8, 32, false, usize::MAX, usize::MAX).is_err()
+        );
+    }
+
+    /// Deterministic pseudo-fuzz over mixed malformed inputs (no external fuzzer).
+    #[test]
+    fn property_mixed_malformed_inputs_never_panic() {
+        let desc = std::mem::size_of::<TpacketBlockDesc>();
+        let hdr = std::mem::size_of::<Tpacket3Hdr>();
+        let mut seed = 0xC0FFEE_u64;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .wrapping_add(0x144C_BC75);
+            seed as usize
+        };
+
+        for _ in 0..2_000 {
+            let block_size = (next() % 4096).max(desc);
+            let blocks = (next() % 8).max(1);
+            let ring_len = block_size.saturating_mul(blocks);
+            let blk_len = next() % (block_size.saturating_add(64));
+            let block_idx = next() % (blocks + 2);
+            let off = next() % (block_size.saturating_add(32));
+            let mac = next() % 256;
+            let snaplen = next() % 512;
+            let next_step = next() % 256;
+
+            let _ = valid_tpacket_block_len(blk_len, block_size);
+            let _ = checked_tpacket_header_offset(block_idx, block_size, ring_len, blk_len, off);
+            let _ = checked_tpacket_packet_offsets(
+                block_idx, block_size, ring_len, blk_len, off, mac, snaplen,
+            );
+            let _ = checked_next_tpacket_offset(
+                off,
+                next_step,
+                next() % 2 == 0,
+                blk_len.max(hdr),
+                block_size.max(hdr),
+            );
+            let _ = checked_range_end(next(), next() % 128, next());
+        }
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
