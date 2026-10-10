@@ -498,7 +498,7 @@ def layer_load(args: argparse.Namespace) -> int:
             return sh(*args_)
     if args.load_cmd == "bench":
         with Server(load_config()) as _srv:
-            return sh(sys.executable, str(REPO / "scripts" / "subnet_ddos_bench.sh"))
+            return sh("bash", str(REPO / "scripts" / "subnet_ddos_bench.sh"))
     print(f"unknown load command: {args.load_cmd}")
     return 1
 
