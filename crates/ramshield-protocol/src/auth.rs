@@ -157,7 +157,17 @@ mod tests {
             .unwrap()
             .as_millis() as u64;
         let sig = sign(b"secret-key", "k1", now, b"honest payload").expect("test key non-empty");
-        assert!(verify(&keys, "k1", now, &sig, b"evil payload", &ReplayStore::default()).is_err());
+        assert!(
+            verify(
+                &keys,
+                "k1",
+                now,
+                &sig,
+                b"evil payload",
+                &ReplayStore::default()
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -63,62 +63,186 @@ impl Config {
         }
 
         // L7 detector validation
-        if self.detection.l7_rps_threshold == 0 { anyhow::bail!("detection.l7_rps_threshold must be > 0"); }
-        if self.detection.l7_http2_min_streams == 0 { anyhow::bail!("detection.l7_http2_min_streams must be > 0"); }
-        if self.detection.l7_http2_reset_ratio_pct > 100 { anyhow::bail!("detection.l7_http2_reset_ratio_pct must be <= 100"); }
-        if self.detection.l7_block_ttl_secs == 0 { anyhow::bail!("detection.l7_block_ttl_secs must be > 0"); }
-        if self.detection.l7_rules.len() > 64 { anyhow::bail!("detection.l7_rules must contain at most 64 rules"); }
-        if self.detection.l7_rules.iter().any(|r| r.route_hash == 0) { anyhow::bail!("detection.l7_rules.route_hash must be non-zero"); }
-        if self.detection.l7_rules.iter().any(|r| r.max_rps == Some(0)) { anyhow::bail!("detection.l7_rules.max_rps must be > 0"); }
-        if self.detection.l7_rules.iter().any(|r| r.max_http2_reset_ratio_pct.is_some_and(|v| v > 100)) { anyhow::bail!("detection.l7_rules.max_http2_reset_ratio_pct must be <= 100"); }
-        if self.detection.l7_rules.iter().any(|r| r.max_latency_us == Some(0)) { anyhow::bail!("detection.l7_rules.max_latency_us must be > 0"); }
-        if self.detection.l7_rules.iter().any(|r| !r.cost_weight.is_finite() || r.cost_weight <= 0.0) { anyhow::bail!("detection.l7_rules.cost_weight must be finite and > 0"); }
-        if self.detection.l7_rules.iter().any(|r| r.baseline_latency_us == 0) { anyhow::bail!("detection.l7_rules.baseline_latency_us must be > 0"); }
-        if self.detection.l7_rules.iter().any(|r| r.max_effective_rps == Some(0)) { anyhow::bail!("detection.l7_rules.max_effective_rps must be > 0"); }
+        if self.detection.l7_rps_threshold == 0 {
+            anyhow::bail!("detection.l7_rps_threshold must be > 0");
+        }
+        if self.detection.l7_http2_min_streams == 0 {
+            anyhow::bail!("detection.l7_http2_min_streams must be > 0");
+        }
+        if self.detection.l7_http2_reset_ratio_pct > 100 {
+            anyhow::bail!("detection.l7_http2_reset_ratio_pct must be <= 100");
+        }
+        if self.detection.l7_block_ttl_secs == 0 {
+            anyhow::bail!("detection.l7_block_ttl_secs must be > 0");
+        }
+        if self.detection.l7_rules.len() > 64 {
+            anyhow::bail!("detection.l7_rules must contain at most 64 rules");
+        }
+        if self.detection.l7_rules.iter().any(|r| r.route_hash == 0) {
+            anyhow::bail!("detection.l7_rules.route_hash must be non-zero");
+        }
+        if self.detection.l7_rules.iter().any(|r| r.max_rps == Some(0)) {
+            anyhow::bail!("detection.l7_rules.max_rps must be > 0");
+        }
+        if self
+            .detection
+            .l7_rules
+            .iter()
+            .any(|r| r.max_http2_reset_ratio_pct.is_some_and(|v| v > 100))
+        {
+            anyhow::bail!("detection.l7_rules.max_http2_reset_ratio_pct must be <= 100");
+        }
+        if self
+            .detection
+            .l7_rules
+            .iter()
+            .any(|r| r.max_latency_us == Some(0))
+        {
+            anyhow::bail!("detection.l7_rules.max_latency_us must be > 0");
+        }
+        if self
+            .detection
+            .l7_rules
+            .iter()
+            .any(|r| !r.cost_weight.is_finite() || r.cost_weight <= 0.0)
+        {
+            anyhow::bail!("detection.l7_rules.cost_weight must be finite and > 0");
+        }
+        if self
+            .detection
+            .l7_rules
+            .iter()
+            .any(|r| r.baseline_latency_us == 0)
+        {
+            anyhow::bail!("detection.l7_rules.baseline_latency_us must be > 0");
+        }
+        if self
+            .detection
+            .l7_rules
+            .iter()
+            .any(|r| r.max_effective_rps == Some(0))
+        {
+            anyhow::bail!("detection.l7_rules.max_effective_rps must be > 0");
+        }
 
         if self.mesh.enabled {
-            if self.mesh.node_id == 0 { anyhow::bail!("mesh.node_id must be non-zero when mesh is enabled"); }
-            if self.mesh.peers.len() > 256 { anyhow::bail!("mesh.peers must contain at most 256 peers"); }
-            if self.mesh.peers.iter().any(|p| p.trim().is_empty()) { anyhow::bail!("mesh.peers must not contain empty addresses"); }
-            if self.mesh.auth_key.trim().is_empty() { anyhow::bail!("mesh.auth_key must be non-empty when mesh is enabled"); }
-            let key = hex::decode(self.mesh.auth_key.trim()).map_err(|_| anyhow::anyhow!("mesh.auth_key must be hex"))?;
-            if key.len() < 16 { anyhow::bail!("mesh.auth_key must decode to at least 16 bytes"); }
+            if self.mesh.node_id == 0 {
+                anyhow::bail!("mesh.node_id must be non-zero when mesh is enabled");
+            }
+            if self.mesh.peers.len() > 256 {
+                anyhow::bail!("mesh.peers must contain at most 256 peers");
+            }
+            if self.mesh.peers.iter().any(|p| p.trim().is_empty()) {
+                anyhow::bail!("mesh.peers must not contain empty addresses");
+            }
+            if self.mesh.auth_key.trim().is_empty() {
+                anyhow::bail!("mesh.auth_key must be non-empty when mesh is enabled");
+            }
+            let key = hex::decode(self.mesh.auth_key.trim())
+                .map_err(|_| anyhow::anyhow!("mesh.auth_key must be hex"))?;
+            if key.len() < 16 {
+                anyhow::bail!("mesh.auth_key must decode to at least 16 bytes");
+            }
         }
 
-        if self.xdp.trusted_overlay_cidrs.len() > 256 { anyhow::bail!("xdp.trusted_overlay_cidrs must contain at most 256 prefixes"); }
+        if self.xdp.trusted_overlay_cidrs.len() > 256 {
+            anyhow::bail!("xdp.trusted_overlay_cidrs must contain at most 256 prefixes");
+        }
         if self.autonomous.enabled {
-            if !self.xdp.enabled { anyhow::bail!("autonomous protection requires xdp.enabled=true"); }
-            if self.xdp.require_native_for_autonomous && self.xdp.mode != "drv" && self.xdp.mode != "native" { anyhow::bail!("autonomous protection requires native/driver XDP (mode=drv or mode=native)"); }
-            if self.autonomous.window_ms == 0 || self.autonomous.window_ms > 1000 { anyhow::bail!("autonomous.window_ms must be between 1 and 1000"); }
-            if self.autonomous.syn_pps_per_cpu == 0 && self.autonomous.udp_pps_per_cpu == 0 && self.autonomous.packet_pps_per_cpu == 0 { anyhow::bail!("autonomous protection requires at least one non-zero packet budget"); }
+            if !self.xdp.enabled {
+                anyhow::bail!("autonomous protection requires xdp.enabled=true");
+            }
+            if self.xdp.require_native_for_autonomous
+                && self.xdp.mode != "drv"
+                && self.xdp.mode != "native"
+            {
+                anyhow::bail!(
+                    "autonomous protection requires native/driver XDP (mode=drv or mode=native)"
+                );
+            }
+            if self.autonomous.window_ms == 0 || self.autonomous.window_ms > 1000 {
+                anyhow::bail!("autonomous.window_ms must be between 1 and 1000");
+            }
+            if self.autonomous.syn_pps_per_cpu == 0
+                && self.autonomous.udp_pps_per_cpu == 0
+                && self.autonomous.packet_pps_per_cpu == 0
+            {
+                anyhow::bail!("autonomous protection requires at least one non-zero packet budget");
+            }
         }
         if self.native_ingest.enabled {
-            if self.native_ingest.interface.trim().is_empty() { anyhow::bail!("native_ingest.interface must not be empty"); }
-            if self.native_ingest.max_events_per_sec == 0 { anyhow::bail!("native_ingest.max_events_per_sec must be > 0"); }
+            if self.native_ingest.interface.trim().is_empty() {
+                anyhow::bail!("native_ingest.interface must not be empty");
+            }
+            if self.native_ingest.max_events_per_sec == 0 {
+                anyhow::bail!("native_ingest.max_events_per_sec must be > 0");
+            }
         }
         if self.synproxy.enabled {
-            if self.synproxy.ports.is_empty() || self.synproxy.ports.len() > 32 { anyhow::bail!("synproxy.ports must contain 1..=32 ports"); }
-            if self.synproxy.ports.contains(&0) { anyhow::bail!("synproxy.ports must not contain port 0"); }
-            if self.synproxy.mss < 536 { anyhow::bail!("synproxy.mss must be >= 536"); }
-            if self.synproxy.wscale > 14 { anyhow::bail!("synproxy.wscale must be <= 14"); }
-            if self.synproxy.max_connections_per_source == 0 { anyhow::bail!("synproxy.max_connections_per_source must be > 0"); }
-            if self.synproxy.max_connections_total < self.synproxy.max_connections_per_source { anyhow::bail!("synproxy.max_connections_total must be >= max_connections_per_source"); }
-            if self.synproxy.new_connections_per_second == 0 || self.synproxy.new_connection_burst == 0 || self.synproxy.new_connections_total_per_second == 0 || self.synproxy.new_connection_total_burst == 0 { anyhow::bail!("synproxy new-connection rates and bursts must be > 0"); }
+            if self.synproxy.ports.is_empty() || self.synproxy.ports.len() > 32 {
+                anyhow::bail!("synproxy.ports must contain 1..=32 ports");
+            }
+            if self.synproxy.ports.contains(&0) {
+                anyhow::bail!("synproxy.ports must not contain port 0");
+            }
+            if self.synproxy.mss < 536 {
+                anyhow::bail!("synproxy.mss must be >= 536");
+            }
+            if self.synproxy.wscale > 14 {
+                anyhow::bail!("synproxy.wscale must be <= 14");
+            }
+            if self.synproxy.max_connections_per_source == 0 {
+                anyhow::bail!("synproxy.max_connections_per_source must be > 0");
+            }
+            if self.synproxy.max_connections_total < self.synproxy.max_connections_per_source {
+                anyhow::bail!(
+                    "synproxy.max_connections_total must be >= max_connections_per_source"
+                );
+            }
+            if self.synproxy.new_connections_per_second == 0
+                || self.synproxy.new_connection_burst == 0
+                || self.synproxy.new_connections_total_per_second == 0
+                || self.synproxy.new_connection_total_burst == 0
+            {
+                anyhow::bail!("synproxy new-connection rates and bursts must be > 0");
+            }
         }
         if self.upstream.enabled {
-            if self.upstream.link_capacity_mbps == 0 { anyhow::bail!("upstream.link_capacity_mbps must be > 0 when enabled"); }
-            if self.upstream.saturation_pct < 50 || self.upstream.saturation_pct > 99 { anyhow::bail!("upstream.saturation_pct must be between 50 and 99"); }
-            if self.upstream.poll_ms < 250 { anyhow::bail!("upstream.poll_ms must be >= 250"); }
-            if !matches!(self.upstream.bgp_mode.as_str(), "none" | "flowspec" | "rtbh") { anyhow::bail!("upstream.bgp_mode must be none, flowspec, or rtbh"); }
-            if self.upstream.bgp_mode != "none" && self.upstream.bgp_fifo.as_deref().unwrap_or("").is_empty() { anyhow::bail!("upstream.bgp_fifo is required when BGP mode is enabled"); }
+            if self.upstream.link_capacity_mbps == 0 {
+                anyhow::bail!("upstream.link_capacity_mbps must be > 0 when enabled");
+            }
+            if self.upstream.saturation_pct < 50 || self.upstream.saturation_pct > 99 {
+                anyhow::bail!("upstream.saturation_pct must be between 50 and 99");
+            }
+            if self.upstream.poll_ms < 250 {
+                anyhow::bail!("upstream.poll_ms must be >= 250");
+            }
+            if !matches!(
+                self.upstream.bgp_mode.as_str(),
+                "none" | "flowspec" | "rtbh"
+            ) {
+                anyhow::bail!("upstream.bgp_mode must be none, flowspec, or rtbh");
+            }
+            if self.upstream.bgp_mode != "none"
+                && self.upstream.bgp_fifo.as_deref().unwrap_or("").is_empty()
+            {
+                anyhow::bail!("upstream.bgp_fifo is required when BGP mode is enabled");
+            }
             if self.upstream.bgp_mode != "none" {
                 let prefix = self.upstream.protected_prefix.as_deref().unwrap_or("").parse::<ramshield_types::IpNetwork>().map_err(|_| anyhow::anyhow!("upstream.protected_prefix must be a valid CIDR when BGP mode is enabled"))?;
-                if prefix.prefix_len == 0 { anyhow::bail!("upstream.protected_prefix must not be /0"); }
+                if prefix.prefix_len == 0 {
+                    anyhow::bail!("upstream.protected_prefix must not be /0");
+                }
             }
             if self.upstream.bgp_mode == "rtbh" {
                 let c = self.upstream.bgp_community.as_deref().unwrap_or("");
                 let mut it = c.split(':');
-                if it.next().and_then(|v| v.parse::<u32>().ok()).is_none() || it.next().and_then(|v| v.parse::<u32>().ok()).is_none() || it.next().is_some() { anyhow::bail!("upstream.bgp_community must be ASN:VALUE"); }
+                if it.next().and_then(|v| v.parse::<u32>().ok()).is_none()
+                    || it.next().and_then(|v| v.parse::<u32>().ok()).is_none()
+                    || it.next().is_some()
+                {
+                    anyhow::bail!("upstream.bgp_community must be ASN:VALUE");
+                }
             }
         }
 

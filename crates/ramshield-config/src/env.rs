@@ -72,45 +72,110 @@ impl Config {
         }
 
         // L7 / application-cost detection overrides
-        if let Some(v) = parse::<bool>("RAMSHIELD_DETECTION__L7_ENABLED")? { self.detection.l7_enabled = v; }
-        if let Some(v) = parse::<u64>("RAMSHIELD_DETECTION__L7_RPS_THRESHOLD")? { self.detection.l7_rps_threshold = v; }
-        if let Some(v) = parse::<u32>("RAMSHIELD_DETECTION__L7_HTTP2_MIN_STREAMS")? { self.detection.l7_http2_min_streams = v; }
-        if let Some(v) = parse::<u8>("RAMSHIELD_DETECTION__L7_HTTP2_RESET_RATIO_PCT")? { self.detection.l7_http2_reset_ratio_pct = v; }
-        if let Some(v) = parse::<u64>("RAMSHIELD_DETECTION__L7_BLOCK_TTL_SECS")? { self.detection.l7_block_ttl_secs = v; }
+        if let Some(v) = parse::<bool>("RAMSHIELD_DETECTION__L7_ENABLED")? {
+            self.detection.l7_enabled = v;
+        }
+        if let Some(v) = parse::<u64>("RAMSHIELD_DETECTION__L7_RPS_THRESHOLD")? {
+            self.detection.l7_rps_threshold = v;
+        }
+        if let Some(v) = parse::<u32>("RAMSHIELD_DETECTION__L7_HTTP2_MIN_STREAMS")? {
+            self.detection.l7_http2_min_streams = v;
+        }
+        if let Some(v) = parse::<u8>("RAMSHIELD_DETECTION__L7_HTTP2_RESET_RATIO_PCT")? {
+            self.detection.l7_http2_reset_ratio_pct = v;
+        }
+        if let Some(v) = parse::<u64>("RAMSHIELD_DETECTION__L7_BLOCK_TTL_SECS")? {
+            self.detection.l7_block_ttl_secs = v;
+        }
 
         // Mesh overrides
-        if let Some(v) = parse::<bool>("RAMSHIELD_MESH__ENABLED")? { self.mesh.enabled = v; }
-        if let Some(v) = parse::<u32>("RAMSHIELD_MESH__NODE_ID")? { self.mesh.node_id = v; }
-        if let Ok(v) = std::env::var("RAMSHIELD_MESH__LISTEN_ADDR") { self.mesh.listen_addr = v; }
-        if let Ok(v) = std::env::var("RAMSHIELD_MESH__PEERS") { self.mesh.peers = v.split(',').map(str::trim).filter(|v| !v.is_empty()).map(ToOwned::to_owned).collect(); }
-        if let Ok(v) = std::env::var("RAMSHIELD_MESH__AUTH_KEY") { self.mesh.auth_key = v; }
+        if let Some(v) = parse::<bool>("RAMSHIELD_MESH__ENABLED")? {
+            self.mesh.enabled = v;
+        }
+        if let Some(v) = parse::<u32>("RAMSHIELD_MESH__NODE_ID")? {
+            self.mesh.node_id = v;
+        }
+        if let Ok(v) = std::env::var("RAMSHIELD_MESH__LISTEN_ADDR") {
+            self.mesh.listen_addr = v;
+        }
+        if let Ok(v) = std::env::var("RAMSHIELD_MESH__PEERS") {
+            self.mesh.peers = v
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned)
+                .collect();
+        }
+        if let Ok(v) = std::env::var("RAMSHIELD_MESH__AUTH_KEY") {
+            self.mesh.auth_key = v;
+        }
 
         // Autonomous/native/SYNPROXY overrides
-        if let Some(v) = parse::<bool>("RAMSHIELD_AUTONOMOUS__ENABLED")? { self.autonomous.enabled = v; }
-        if let Some(v) = parse::<u64>("RAMSHIELD_AUTONOMOUS__SYN_PPS_PER_CPU")? { self.autonomous.syn_pps_per_cpu = v; }
-        if let Some(v) = parse::<u64>("RAMSHIELD_AUTONOMOUS__UDP_PPS_PER_CPU")? { self.autonomous.udp_pps_per_cpu = v; }
-        if let Some(v) = parse::<u64>("RAMSHIELD_AUTONOMOUS__PACKET_PPS_PER_CPU")? { self.autonomous.packet_pps_per_cpu = v; }
-        if let Some(v) = parse::<u64>("RAMSHIELD_AUTONOMOUS__WINDOW_MS")? { self.autonomous.window_ms = v; }
-        if let Some(v) = parse::<bool>("RAMSHIELD_NATIVE_INGEST__ENABLED")? { self.native_ingest.enabled = v; }
-        if let Ok(v) = std::env::var("RAMSHIELD_NATIVE_INGEST__INTERFACE") { self.native_ingest.interface = v; }
-        if let Some(v) = parse::<u64>("RAMSHIELD_NATIVE_INGEST__MAX_EVENTS_PER_SEC")? { self.native_ingest.max_events_per_sec = v; }
-        if let Some(v) = parse::<bool>("RAMSHIELD_SYNPROXY__ENABLED")? { self.synproxy.enabled = v; }
+        if let Some(v) = parse::<bool>("RAMSHIELD_AUTONOMOUS__ENABLED")? {
+            self.autonomous.enabled = v;
+        }
+        if let Some(v) = parse::<u64>("RAMSHIELD_AUTONOMOUS__SYN_PPS_PER_CPU")? {
+            self.autonomous.syn_pps_per_cpu = v;
+        }
+        if let Some(v) = parse::<u64>("RAMSHIELD_AUTONOMOUS__UDP_PPS_PER_CPU")? {
+            self.autonomous.udp_pps_per_cpu = v;
+        }
+        if let Some(v) = parse::<u64>("RAMSHIELD_AUTONOMOUS__PACKET_PPS_PER_CPU")? {
+            self.autonomous.packet_pps_per_cpu = v;
+        }
+        if let Some(v) = parse::<u64>("RAMSHIELD_AUTONOMOUS__WINDOW_MS")? {
+            self.autonomous.window_ms = v;
+        }
+        if let Some(v) = parse::<bool>("RAMSHIELD_NATIVE_INGEST__ENABLED")? {
+            self.native_ingest.enabled = v;
+        }
+        if let Ok(v) = std::env::var("RAMSHIELD_NATIVE_INGEST__INTERFACE") {
+            self.native_ingest.interface = v;
+        }
+        if let Some(v) = parse::<u64>("RAMSHIELD_NATIVE_INGEST__MAX_EVENTS_PER_SEC")? {
+            self.native_ingest.max_events_per_sec = v;
+        }
+        if let Some(v) = parse::<bool>("RAMSHIELD_SYNPROXY__ENABLED")? {
+            self.synproxy.enabled = v;
+        }
         if let Ok(v) = std::env::var("RAMSHIELD_SYNPROXY__PORTS") {
             self.synproxy.ports = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
         }
 
         // Upstream saturation/BGP escalation overrides
-        if let Some(v) = parse::<bool>("RAMSHIELD_UPSTREAM__ENABLED")? { self.upstream.enabled = v; }
-        if let Ok(v) = std::env::var("RAMSHIELD_UPSTREAM__INTERFACE") { self.upstream.interface = v; }
-        if let Some(v) = parse::<u64>("RAMSHIELD_UPSTREAM__LINK_CAPACITY_MBPS")? { self.upstream.link_capacity_mbps = v; }
-        if let Some(v) = parse::<u8>("RAMSHIELD_UPSTREAM__SATURATION_PCT")? { self.upstream.saturation_pct = v; }
-        if let Some(v) = parse::<u64>("RAMSHIELD_UPSTREAM__POLL_MS")? { self.upstream.poll_ms = v; }
-        if let Ok(v) = std::env::var("RAMSHIELD_UPSTREAM__WEBHOOK_URL") { self.upstream.webhook_url = if v.trim().is_empty() { None } else { Some(v) }; }
-        if let Some(v) = parse::<u64>("RAMSHIELD_UPSTREAM__COOLDOWN_SECS")? { self.upstream.cooldown_secs = v; }
-        if let Ok(v) = std::env::var("RAMSHIELD_UPSTREAM__BGP_MODE") { self.upstream.bgp_mode = v; }
-        if let Ok(v) = std::env::var("RAMSHIELD_UPSTREAM__BGP_FIFO") { self.upstream.bgp_fifo = if v.trim().is_empty() { None } else { Some(v) }; }
-        if let Ok(v) = std::env::var("RAMSHIELD_UPSTREAM__PROTECTED_PREFIX") { self.upstream.protected_prefix = if v.trim().is_empty() { None } else { Some(v) }; }
-        if let Ok(v) = std::env::var("RAMSHIELD_UPSTREAM__BGP_COMMUNITY") { self.upstream.bgp_community = if v.trim().is_empty() { None } else { Some(v) }; }
+        if let Some(v) = parse::<bool>("RAMSHIELD_UPSTREAM__ENABLED")? {
+            self.upstream.enabled = v;
+        }
+        if let Ok(v) = std::env::var("RAMSHIELD_UPSTREAM__INTERFACE") {
+            self.upstream.interface = v;
+        }
+        if let Some(v) = parse::<u64>("RAMSHIELD_UPSTREAM__LINK_CAPACITY_MBPS")? {
+            self.upstream.link_capacity_mbps = v;
+        }
+        if let Some(v) = parse::<u8>("RAMSHIELD_UPSTREAM__SATURATION_PCT")? {
+            self.upstream.saturation_pct = v;
+        }
+        if let Some(v) = parse::<u64>("RAMSHIELD_UPSTREAM__POLL_MS")? {
+            self.upstream.poll_ms = v;
+        }
+        if let Ok(v) = std::env::var("RAMSHIELD_UPSTREAM__WEBHOOK_URL") {
+            self.upstream.webhook_url = if v.trim().is_empty() { None } else { Some(v) };
+        }
+        if let Some(v) = parse::<u64>("RAMSHIELD_UPSTREAM__COOLDOWN_SECS")? {
+            self.upstream.cooldown_secs = v;
+        }
+        if let Ok(v) = std::env::var("RAMSHIELD_UPSTREAM__BGP_MODE") {
+            self.upstream.bgp_mode = v;
+        }
+        if let Ok(v) = std::env::var("RAMSHIELD_UPSTREAM__BGP_FIFO") {
+            self.upstream.bgp_fifo = if v.trim().is_empty() { None } else { Some(v) };
+        }
+        if let Ok(v) = std::env::var("RAMSHIELD_UPSTREAM__PROTECTED_PREFIX") {
+            self.upstream.protected_prefix = if v.trim().is_empty() { None } else { Some(v) };
+        }
+        if let Ok(v) = std::env::var("RAMSHIELD_UPSTREAM__BGP_COMMUNITY") {
+            self.upstream.bgp_community = if v.trim().is_empty() { None } else { Some(v) };
+        }
 
         // IPC overrides
         if let Ok(v) = std::env::var("RAMSHIELD_IPC__AUTH_KEYS") {

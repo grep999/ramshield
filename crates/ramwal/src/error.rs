@@ -93,8 +93,8 @@ pub enum Error {
 
     Closed,
 
-/// The WAL encountered a write-side storage failure and must be reopened
-/// so recovery can establish a new verified append boundary.
+    /// The WAL encountered a write-side storage failure and must be reopened
+    /// so recovery can establish a new verified append boundary.
     Poisoned,
 
     /// The LSN sequence counter exhausted (reached u64::MAX).

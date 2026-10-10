@@ -261,7 +261,9 @@ impl EnforcementService {
                         let ttl_ms = cmd.ttl_seconds.saturating_mul(1000);
                         let delta = mesh.record_ban(cmd.ip, ttl_ms, 2);
                         self.metrics.inc_mesh_record_ban();
-                        handle.broadcast(ramshield_mesh::MeshMessage::Block(delta)).await;
+                        handle
+                            .broadcast(ramshield_mesh::MeshMessage::Block(delta))
+                            .await;
                     }
                 }
                 let result = EnforceResult {
@@ -344,7 +346,9 @@ impl EnforcementService {
                 if !pending_unban_deltas.is_empty() {
                     if let Some(handle) = &self.mesh_handle {
                         for delta in pending_unban_deltas {
-                            handle.broadcast(ramshield_mesh::MeshMessage::Unblock(delta)).await;
+                            handle
+                                .broadcast(ramshield_mesh::MeshMessage::Unblock(delta))
+                                .await;
                         }
                     }
                 }

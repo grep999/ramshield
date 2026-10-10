@@ -10,7 +10,10 @@
 //! enforcement layers.
 use crossbeam_channel::Sender;
 use ramshield_types::{ConnectionEvent, IpNetwork};
-use std::sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
@@ -90,37 +93,71 @@ struct Tpacket3Hdr {
     tp_padding2: [u8; 8],
 }
 
-pub fn spawn(interface: String, max_events_per_sec: u64, trusted_overlay_cidrs: Vec<IpNetwork>, tx: Sender<ConnectionEvent>, shutdown: Arc<AtomicBool>) -> std::io::Result<std::thread::JoinHandle<()>> {
+pub fn spawn(
+    interface: String,
+    max_events_per_sec: u64,
+    trusted_overlay_cidrs: Vec<IpNetwork>,
+    tx: Sender<ConnectionEvent>,
+    shutdown: Arc<AtomicBool>,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
     #[cfg(target_os = "linux")]
     {
         preflight_linux(&interface)?;
-        let workers = std::thread::available_parallelism().map(|n| n.get().min(8)).unwrap_or(1);
-        std::thread::Builder::new().name("rs-native-ingest-supervisor".into()).spawn(move || {
-            let budget = Arc::new(AtomicU64::new(0));
+        let workers = std::thread::available_parallelism()
+            .map(|n| n.get().min(8))
+            .unwrap_or(1);
+        std::thread::Builder::new()
+            .name("rs-native-ingest-supervisor".into())
+            .spawn(move || {
+                let budget = Arc::new(AtomicU64::new(0));
                 let epoch = Arc::new(AtomicU64::new(0));
-            let epoch_base = std::time::Instant::now();
-            let mut handles = Vec::with_capacity(workers);
-            for worker in 0..workers {
-                let iface = interface.clone();
-                let txc = tx.clone();
-                let stop = shutdown.clone();
-                let trusted = trusted_overlay_cidrs.clone();
-                let b = budget.clone();
-                let e = epoch.clone();
-                let base = epoch_base;
-                handles.push(std::thread::Builder::new().name(format!("rs-native-{worker}")).spawn(move || {
-                    if let Err(err) = run_linux(iface, max_events_per_sec, trusted, txc, stop, b, e, base, worker) {
-                        warn!(worker, error=%err, "native packet capture stopped");
-                    }
-                }));
-            }
-            for handle in handles.into_iter().flatten() { let _ = handle.join(); }
-        })
+                let epoch_base = std::time::Instant::now();
+                let mut handles = Vec::with_capacity(workers);
+                for worker in 0..workers {
+                    let iface = interface.clone();
+                    let txc = tx.clone();
+                    let stop = shutdown.clone();
+                    let trusted = trusted_overlay_cidrs.clone();
+                    let b = budget.clone();
+                    let e = epoch.clone();
+                    let base = epoch_base;
+                    handles.push(
+                        std::thread::Builder::new()
+                            .name(format!("rs-native-{worker}"))
+                            .spawn(move || {
+                                if let Err(err) = run_linux(
+                                    iface,
+                                    max_events_per_sec,
+                                    trusted,
+                                    txc,
+                                    stop,
+                                    b,
+                                    e,
+                                    base,
+                                    worker,
+                                ) {
+                                    warn!(worker, error=%err, "native packet capture stopped");
+                                }
+                            }),
+                    );
+                }
+                for handle in handles.into_iter().flatten() {
+                    let _ = handle.join();
+                }
+            })
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (interface, max_events_per_sec, trusted_overlay_cidrs, tx, shutdown);
-        Err(std::io::Error::other("native_ingest requires Linux AF_PACKET"))
+        let _ = (
+            interface,
+            max_events_per_sec,
+            trusted_overlay_cidrs,
+            tx,
+            shutdown,
+        );
+        Err(std::io::Error::other(
+            "native_ingest requires Linux AF_PACKET",
+        ))
     }
 }
 
@@ -132,7 +169,13 @@ fn preflight_linux(interface: &str) -> std::io::Result<()> {
     if ifindex == 0 {
         return Err(std::io::Error::last_os_error());
     }
-    let fd = unsafe { libc::socket(libc::AF_PACKET, libc::SOCK_RAW | libc::SOCK_NONBLOCK, (libc::ETH_P_ALL as u16).to_be() as i32) };
+    let fd = unsafe {
+        libc::socket(
+            libc::AF_PACKET,
+            libc::SOCK_RAW | libc::SOCK_NONBLOCK,
+            (libc::ETH_P_ALL as u16).to_be() as i32,
+        )
+    };
     if fd < 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -140,16 +183,31 @@ fn preflight_linux(interface: &str) -> std::io::Result<()> {
         let version = TPACKET_V3;
         set_sockopt(fd, libc::SOL_PACKET, PACKET_VERSION, &version)?;
         let ignore_outgoing: i32 = 1;
-        set_sockopt(fd, libc::SOL_PACKET, PACKET_IGNORE_OUTGOING, &ignore_outgoing)?;
+        set_sockopt(
+            fd,
+            libc::SOL_PACKET,
+            PACKET_IGNORE_OUTGOING,
+            &ignore_outgoing,
+        )?;
         let mut addr: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
         addr.sll_family = libc::AF_PACKET as u16;
         addr.sll_protocol = (libc::ETH_P_ALL as u16).to_be();
         addr.sll_ifindex = ifindex as i32;
-        let rc = unsafe { libc::bind(fd, (&addr as *const libc::sockaddr_ll).cast(), std::mem::size_of::<libc::sockaddr_ll>() as u32) };
-        if rc < 0 { return Err(std::io::Error::last_os_error()); }
+        let rc = unsafe {
+            libc::bind(
+                fd,
+                (&addr as *const libc::sockaddr_ll).cast(),
+                std::mem::size_of::<libc::sockaddr_ll>() as u32,
+            )
+        };
+        if rc < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
         Ok(())
     })();
-    unsafe { libc::close(fd); }
+    unsafe {
+        libc::close(fd);
+    }
     result
 }
 
@@ -187,10 +245,31 @@ fn run_linux(
     // 4. Kernel descriptor validation (will be re-checked per-block).
     // No unsafe mmap yet.
     // Proceed to socket creation, bind, and ring allocation.
-    let fd = unsafe { libc::socket(libc::AF_PACKET, libc::SOCK_RAW | libc::SOCK_NONBLOCK, (libc::ETH_P_ALL as u16).to_be() as i32) };
-    if fd < 0 { return Err(std::io::Error::last_os_error()); }
-    let result = run_socket(fd, &interface, max_eps, &trusted_overlay_cidrs, &tx, &shutdown, &budget, &epoch, epoch_base, worker);
-    unsafe { libc::close(fd); }
+    let fd = unsafe {
+        libc::socket(
+            libc::AF_PACKET,
+            libc::SOCK_RAW | libc::SOCK_NONBLOCK,
+            (libc::ETH_P_ALL as u16).to_be() as i32,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let result = run_socket(
+        fd,
+        &interface,
+        max_eps,
+        &trusted_overlay_cidrs,
+        &tx,
+        &shutdown,
+        &budget,
+        &epoch,
+        epoch_base,
+        worker,
+    );
+    unsafe {
+        libc::close(fd);
+    }
     result
 }
 
@@ -209,23 +288,39 @@ fn run_socket(
     worker: usize,
 ) -> std::io::Result<()> {
     // B02: After socket creation, before mmap, validate interface index and bind.
-    let ifname = std::ffi::CString::new(interface).map_err(|_| std::io::Error::other("interface contains NUL"))?;
+    let ifname = std::ffi::CString::new(interface)
+        .map_err(|_| std::io::Error::other("interface contains NUL"))?;
     let ifindex = unsafe { libc::if_nametoindex(ifname.as_ptr()) };
-    if ifindex == 0 { return Err(std::io::Error::last_os_error()); }
+    if ifindex == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
 
     // B02: Set TPACKET version and ignore outgoing. Reject early if syscalls fail.
     let version = TPACKET_V3;
     set_sockopt(fd, libc::SOL_PACKET, PACKET_VERSION, &version)?;
     let ignore_outgoing: i32 = 1;
-    set_sockopt(fd, libc::SOL_PACKET, PACKET_IGNORE_OUTGOING, &ignore_outgoing)?;
+    set_sockopt(
+        fd,
+        libc::SOL_PACKET,
+        PACKET_IGNORE_OUTGOING,
+        &ignore_outgoing,
+    )?;
 
     // B02: Bind to the correct interface.
     let mut addr: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
     addr.sll_family = libc::AF_PACKET as u16;
     addr.sll_protocol = (libc::ETH_P_ALL as u16).to_be();
     addr.sll_ifindex = ifindex as i32;
-    let rc = unsafe { libc::bind(fd, (&addr as *const libc::sockaddr_ll).cast(), std::mem::size_of::<libc::sockaddr_ll>() as u32) };
-    if rc < 0 { return Err(std::io::Error::last_os_error()); }
+    let rc = unsafe {
+        libc::bind(
+            fd,
+            (&addr as *const libc::sockaddr_ll).cast(),
+            std::mem::size_of::<libc::sockaddr_ll>() as u32,
+        )
+    };
+    if rc < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
 
     // B02: Fanout is safe here; group must be within u16 range.
     let group = (std::process::id() as u16).max(1);
@@ -252,40 +347,77 @@ fn run_socket(
         return Err(std::io::Error::other("TPACKET ring length invalid"));
     }
     // B02: mmap the kernel ring; error immediately on failure.
-    let map = unsafe { libc::mmap(std::ptr::null_mut(), ring_len, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, fd, 0) };
-    if map == libc::MAP_FAILED { return Err(std::io::Error::last_os_error()); }
+    let map = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            ring_len,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        )
+    };
+    if map == libc::MAP_FAILED {
+        return Err(std::io::Error::last_os_error());
+    }
 
     info!(iface=%interface, worker, workers=?std::thread::available_parallelism().ok().map(|n| n.get().min(8)), max_events_per_sec=max_eps, "native TPACKET_V3 ingest active");
     let mut block_idx = 0usize;
-    let mut pollfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+    let mut pollfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
     while !shutdown.load(Ordering::Acquire) {
         // B02: Safe block index calculation; guard against overflow.
-        if block_idx >= block_nr { block_idx = 0; }
+        if block_idx >= block_nr {
+            block_idx = 0;
+        }
         // Validate the complete block range before reading any descriptor fields.
-        if block_idx >= block_nr { break; }
+        if block_idx >= block_nr {
+            break;
+        }
         let block_offset = match block_idx.checked_mul(block_size) {
             Some(offset) if checked_range_end(offset, block_size, ring_len).is_some() => offset,
             _ => {
-                warn!(worker, block_idx, block_size, ring_len, "rejecting invalid TPACKET_V3 block offset");
-                unsafe { libc::munmap(map, ring_len); }
-                return Err(std::io::Error::other("TPACKET block offset outside mapped ring"));
+                warn!(
+                    worker,
+                    block_idx, block_size, ring_len, "rejecting invalid TPACKET_V3 block offset"
+                );
+                unsafe {
+                    libc::munmap(map, ring_len);
+                }
+                return Err(std::io::Error::other(
+                    "TPACKET block offset outside mapped ring",
+                ));
             }
         };
         let block_ptr = unsafe { (map as *mut u8).add(block_offset) as *mut TpacketBlockDesc };
         // B02: Read block status safely and re-validate before proceeding.
-        let status = unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*block_ptr).hdr.block_status)) };
+        let status =
+            unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*block_ptr).hdr.block_status)) };
         if status & TP_STATUS_USER == 0 {
             let rc = unsafe { libc::poll(&mut pollfd, 1, 50) };
-            if rc < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted { break; }
+            if rc < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+                break;
+            }
             continue;
         }
         std::sync::atomic::fence(Ordering::Acquire);
         // Validate kernel-provided lengths before using packet offsets.
         let blk_len = unsafe { (*block_ptr).hdr.blk_len } as usize;
         if !valid_tpacket_block_len(blk_len, block_size) {
-            warn!(worker, block_idx, blk_len, block_size, "rejecting invalid TPACKET_V3 block length");
+            warn!(
+                worker,
+                block_idx, blk_len, block_size, "rejecting invalid TPACKET_V3 block length"
+            );
             std::sync::atomic::fence(Ordering::Release);
-            unsafe { std::ptr::write_volatile(std::ptr::addr_of_mut!((*block_ptr).hdr.block_status), TP_STATUS_KERNEL); }
+            unsafe {
+                std::ptr::write_volatile(
+                    std::ptr::addr_of_mut!((*block_ptr).hdr.block_status),
+                    TP_STATUS_KERNEL,
+                );
+            }
             block_idx = (block_idx + 1) % block_nr;
             continue;
         }
@@ -298,7 +430,14 @@ fn run_socket(
             ) {
                 Some(value) => value,
                 None => {
-                    warn!(worker, block_idx, packet_idx, off, blk_len, "rejecting invalid TPACKET_V3 packet-header offset");
+                    warn!(
+                        worker,
+                        block_idx,
+                        packet_idx,
+                        off,
+                        blk_len,
+                        "rejecting invalid TPACKET_V3 packet-header offset"
+                    );
                     break;
                 }
             };
@@ -312,17 +451,36 @@ fn run_socket(
             ) {
                 Some(value) if mac <= frame_size && snaplen <= frame_size => value,
                 _ => {
-                    warn!(worker, block_idx, packet_idx, off, mac, snaplen, blk_len, "rejecting invalid TPACKET_V3 packet range");
+                    warn!(
+                        worker,
+                        block_idx,
+                        packet_idx,
+                        off,
+                        mac,
+                        snaplen,
+                        blk_len,
+                        "rejecting invalid TPACKET_V3 packet range"
+                    );
                     break;
                 }
             };
             // SAFETY: checked_tpacket_packet_offsets proves [packet_off,
             // packet_off + snaplen) lies in the current block and mapped ring.
-            let packet = unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
-            process_packet(packet, max_eps, trusted_overlay_cidrs, tx, budget, epoch, epoch_base);
+            let packet =
+                unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
+            process_packet(
+                packet,
+                max_eps,
+                trusted_overlay_cidrs,
+                tx,
+                budget,
+                epoch,
+                epoch_base,
+            );
 
             let next = unsafe { (*hdr).tp_next_offset as usize };
-            match checked_next_tpacket_offset(off, next, packet_idx + 1 == num, blk_len, block_size) {
+            match checked_next_tpacket_offset(off, next, packet_idx + 1 == num, blk_len, block_size)
+            {
                 Ok(Some(next_off)) => off = next_off,
                 Ok(None) => {}
                 Err(reason) => {
@@ -332,13 +490,17 @@ fn run_socket(
             }
         }
         std::sync::atomic::fence(Ordering::Release);
-        unsafe { std::ptr::write_volatile(std::ptr::addr_of_mut!((*block_ptr).hdr.block_status), TP_STATUS_KERNEL); }
+        unsafe {
+            std::ptr::write_volatile(
+                std::ptr::addr_of_mut!((*block_ptr).hdr.block_status),
+                TP_STATUS_KERNEL,
+            );
+        }
         block_idx = (block_idx + 1) % block_nr;
     }
     unsafe { libc::munmap(map, ring_len) };
     Ok(())
 }
-
 
 #[cfg(target_os = "linux")]
 fn valid_tpacket_block_len(blk_len: usize, block_size: usize) -> bool {
@@ -405,7 +567,11 @@ fn checked_next_tpacket_offset(
     block_size: usize,
 ) -> Result<Option<usize>, &'static str> {
     if next == 0 {
-        return if is_last { Ok(None) } else { Err("zero tp_next_offset before final packet") };
+        return if is_last {
+            Ok(None)
+        } else {
+            Err("zero tp_next_offset before final packet")
+        };
     }
     let aligned = next
         .checked_add(TPACKET_ALIGNMENT - 1)
@@ -414,7 +580,9 @@ fn checked_next_tpacket_offset(
     if aligned < std::mem::size_of::<Tpacket3Hdr>() {
         return Err("tp_next_offset does not advance past the current header");
     }
-    let next_off = off.checked_add(aligned).ok_or("tp_next_offset addition overflow")?;
+    let next_off = off
+        .checked_add(aligned)
+        .ok_or("tp_next_offset addition overflow")?;
     checked_range_end(next_off, std::mem::size_of::<Tpacket3Hdr>(), blk_len)
         .ok_or("next packet header exceeds declared block")?;
     checked_range_end(next_off, std::mem::size_of::<Tpacket3Hdr>(), block_size)
@@ -424,19 +592,50 @@ fn checked_next_tpacket_offset(
 
 #[cfg(target_os = "linux")]
 fn set_sockopt<T>(fd: i32, level: i32, name: i32, value: &T) -> std::io::Result<()> {
-    let rc = unsafe { libc::setsockopt(fd, level, name, (value as *const T).cast(), std::mem::size_of::<T>() as libc::socklen_t) };
-    if rc < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
+    let rc = unsafe {
+        libc::setsockopt(
+            fd,
+            level,
+            name,
+            (value as *const T).cast(),
+            std::mem::size_of::<T>() as libc::socklen_t,
+        )
+    };
+    if rc < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "linux")]
-fn process_packet(packet: &[u8], max_eps: u64, trusted_overlay_cidrs: &[IpNetwork], tx: &Sender<ConnectionEvent>, budget: &Arc<AtomicU64>, epoch: &Arc<AtomicU64>, epoch_base: std::time::Instant) {
+fn process_packet(
+    packet: &[u8],
+    max_eps: u64,
+    trusted_overlay_cidrs: &[IpNetwork],
+    tx: &Sender<ConnectionEvent>,
+    budget: &Arc<AtomicU64>,
+    epoch: &Arc<AtomicU64>,
+    epoch_base: std::time::Instant,
+) {
     let second = epoch_base.elapsed().as_secs();
     let seen = epoch.load(Ordering::Relaxed);
-    if seen != second && epoch.compare_exchange(seen, second, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+    if seen != second
+        && epoch
+            .compare_exchange(seen, second, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+    {
         budget.store(0, Ordering::Relaxed);
     }
-    let (ip, proto, syn, _fragmented, overlay_identity) = match parse_l3(packet) { Some(v) => v, None => return };
-    if trusted_overlay_cidrs.iter().any(|n| network_contains(n, ip)) && !overlay_identity {
+    let (ip, proto, syn, _fragmented, overlay_identity) = match parse_l3(packet) {
+        Some(v) => v,
+        None => return,
+    };
+    if trusted_overlay_cidrs
+        .iter()
+        .any(|n| network_contains(n, ip))
+        && !overlay_identity
+    {
         // A shared cloud/LB/node address is not a safe enforcement identity.
         // Do not feed it into local detection; tenant-aware telemetry must
         // supply the real client identity separately.
@@ -448,23 +647,45 @@ fn process_packet(packet: &[u8], max_eps: u64, trusted_overlay_cidrs: &[IpNetwor
             if next <= max_eps { Some(next) } else { None }
         })
         .is_ok();
-    if !admitted { return; }
-    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+    if !admitted {
+        return;
+    }
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
     let mut fp = proto as u32;
-    if syn { fp |= 0x4000_0000; }
-    if overlay_identity { fp |= 0x8000_0000; }
-    let ev = ConnectionEvent { ip, timestamp_ns: ts, bytes: packet.len() as u64, status_code: 0, proto_fingerprint: fp, l7: None };
+    if syn {
+        fp |= 0x4000_0000;
+    }
+    if overlay_identity {
+        fp |= 0x8000_0000;
+    }
+    let ev = ConnectionEvent {
+        ip,
+        timestamp_ns: ts,
+        bytes: packet.len() as u64,
+        status_code: 0,
+        proto_fingerprint: fp,
+        l7: None,
+    };
     let _ = tx.try_send(ev);
 }
 
 #[cfg(target_os = "linux")]
 fn parse_l3(frame: &[u8]) -> Option<(std::net::IpAddr, u8, bool, bool, bool)> {
-    if frame.len() < 14 { return None; }
+    if frame.len() < 14 {
+        return None;
+    }
     let mut off = 14usize;
     let mut eth = u16::from_be_bytes([frame[12], frame[13]]);
     for _ in 0..4 {
-        if eth != 0x8100 && eth != 0x88a8 { break; }
-        if frame.len() < off + 4 { return None; }
+        if eth != 0x8100 && eth != 0x88a8 {
+            break;
+        }
+        if frame.len() < off + 4 {
+            return None;
+        }
         eth = u16::from_be_bytes([frame[off + 2], frame[off + 3]]);
         off += 4;
     }
@@ -477,15 +698,26 @@ fn parse_l3(frame: &[u8]) -> Option<(std::net::IpAddr, u8, bool, bool, bool)> {
 
 #[cfg(target_os = "linux")]
 fn parse_ipv4(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, bool, bool)> {
-    if frame.len() < off + 20 { return None; }
+    if frame.len() < off + 20 {
+        return None;
+    }
     let ihl = (frame[off] & 0x0f) as usize * 4;
-    if ihl < 20 || frame.len() < off + ihl { return None; }
+    if ihl < 20 || frame.len() < off + ihl {
+        return None;
+    }
     let flags_frag = u16::from_be_bytes([frame[off + 6], frame[off + 7]]);
     let fragmented = (flags_frag & 0x1fff) != 0 || (flags_frag & 0x2000) != 0;
     let proto = frame[off + 9];
-    let ip = std::net::Ipv4Addr::new(frame[off+12], frame[off+13], frame[off+14], frame[off+15]);
+    let ip = std::net::Ipv4Addr::new(
+        frame[off + 12],
+        frame[off + 13],
+        frame[off + 14],
+        frame[off + 15],
+    );
     let l4 = off + ihl;
-    if fragmented { return Some((std::net::IpAddr::V4(ip), proto, false, true, false)); }
+    if fragmented {
+        return Some((std::net::IpAddr::V4(ip), proto, false, true, false));
+    }
 
     // Native telemetry follows the same common overlay subset as XDP: IP-in-IP,
     // GRE without optional fields, VXLAN and Geneve with bounded option length.
@@ -494,13 +726,19 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
         return Some((ip, next, syn, frag, true));
     }
     if proto == 47 && frame.len() >= l4 + 4 {
-        let flags = u16::from_be_bytes([frame[l4], frame[l4+1]]);
-        let inner_proto = u16::from_be_bytes([frame[l4+2], frame[l4+3]]);
+        let flags = u16::from_be_bytes([frame[l4], frame[l4 + 1]]);
+        let inner_proto = u16::from_be_bytes([frame[l4 + 2], frame[l4 + 3]]);
         if (flags & 0x4F00) == 0 && (inner_proto == 0x0800 || inner_proto == 0x86dd) {
             let mut inner = l4 + 4;
-            if (flags & 0x8000) != 0 { inner += 4; }
-            if (flags & 0x2000) != 0 { inner += 4; }
-            if (flags & 0x1000) != 0 { inner += 4; }
+            if (flags & 0x8000) != 0 {
+                inner += 4;
+            }
+            if (flags & 0x2000) != 0 {
+                inner += 4;
+            }
+            if (flags & 0x1000) != 0 {
+                inner += 4;
+            }
             if inner_proto == 0x0800 {
                 let (ip, next, syn, frag, _) = parse_ipv4(frame, inner)?;
                 return Some((ip, next, syn, frag, true));
@@ -510,13 +748,15 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
         }
     }
     if proto == 17 && frame.len() >= l4 + 8 {
-        let sport = u16::from_be_bytes([frame[l4], frame[l4+1]]);
-        let dport = u16::from_be_bytes([frame[l4+2], frame[l4+3]]);
+        let sport = u16::from_be_bytes([frame[l4], frame[l4 + 1]]);
+        let dport = u16::from_be_bytes([frame[l4 + 2], frame[l4 + 3]]);
         if sport == 4789 || dport == 4789 {
-            if frame.len() < l4 + 16 || frame[l4 + 8] & 0x08 == 0 { return None; }
+            if frame.len() < l4 + 16 || frame[l4 + 8] & 0x08 == 0 {
+                return None;
+            }
             let inner_eth = l4 + 16;
             if frame.len() >= inner_eth + 14 {
-                let inner_type = u16::from_be_bytes([frame[inner_eth+12], frame[inner_eth+13]]);
+                let inner_type = u16::from_be_bytes([frame[inner_eth + 12], frame[inner_eth + 13]]);
                 if inner_type == 0x0800 {
                     let (ip, next, syn, frag, _) = parse_ipv4(frame, inner_eth + 14)?;
                     return Some((ip, next, syn, frag, true));
@@ -527,12 +767,16 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
                 }
             }
         } else if sport == 6081 || dport == 6081 {
-            if frame.len() < l4 + 8 { return None; }
-            if frame[l4] >> 6 != 0 { return None; }
+            if frame.len() < l4 + 8 {
+                return None;
+            }
+            if frame[l4] >> 6 != 0 {
+                return None;
+            }
             let opt_len = (frame[l4] & 0x3f) as usize * 4;
             let inner_eth = l4 + 8 + opt_len;
             if frame.len() >= inner_eth + 14 {
-                let inner_type = u16::from_be_bytes([frame[inner_eth+12], frame[inner_eth+13]]);
+                let inner_type = u16::from_be_bytes([frame[inner_eth + 12], frame[inner_eth + 13]]);
                 if inner_type == 0x0800 {
                     let (ip, next, syn, frag, _) = parse_ipv4(frame, inner_eth + 14)?;
                     return Some((ip, next, syn, frag, true));
@@ -544,28 +788,64 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
             }
         }
     }
-    let syn = proto == 6 && frame.len() >= l4 + 14 && frame[l4+13] & 0x02 != 0 && frame[l4+13] & 0x10 == 0;
+    let syn = proto == 6
+        && frame.len() >= l4 + 14
+        && frame[l4 + 13] & 0x02 != 0
+        && frame[l4 + 13] & 0x10 == 0;
     Some((std::net::IpAddr::V4(ip), proto, syn, false, false))
 }
 
 #[cfg(target_os = "linux")]
 fn parse_ipv6(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, bool, bool)> {
-    if frame.len() < off + 40 { return None; }
-    let mut b=[0u8;16]; b.copy_from_slice(&frame[off+8..off+24]);
-    let mut next = frame[off+6];
+    if frame.len() < off + 40 {
+        return None;
+    }
+    let mut b = [0u8; 16];
+    b.copy_from_slice(&frame[off + 8..off + 24]);
+    let mut next = frame[off + 6];
     let mut cursor = off + 40;
     let mut fragmented = false;
     for _ in 0..8 {
         match next {
             0 | 43 | 60 => {
-                if frame.len() < cursor + 2 { return None; }
+                if frame.len() < cursor + 2 {
+                    return None;
+                }
                 let len = (frame[cursor + 1] as usize + 1) * 8;
-                next = frame[cursor]; cursor = cursor.checked_add(len)?;
-                if frame.len() < cursor { return None; }
+                next = frame[cursor];
+                cursor = cursor.checked_add(len)?;
+                if frame.len() < cursor {
+                    return None;
+                }
             }
-            44 => { fragmented = true; if frame.len() < cursor + 8 { return None; } next = frame[cursor]; cursor += 8; }
-            51 => { if frame.len() < cursor + 2 { return None; } let len=(frame[cursor+1] as usize+2)*4; next=frame[cursor]; cursor += len; if frame.len()<cursor{return None;} }
-            50 => { return Some((std::net::IpAddr::V6(std::net::Ipv6Addr::from(b)), next, false, true, false)); }
+            44 => {
+                fragmented = true;
+                if frame.len() < cursor + 8 {
+                    return None;
+                }
+                next = frame[cursor];
+                cursor += 8;
+            }
+            51 => {
+                if frame.len() < cursor + 2 {
+                    return None;
+                }
+                let len = (frame[cursor + 1] as usize + 2) * 4;
+                next = frame[cursor];
+                cursor += len;
+                if frame.len() < cursor {
+                    return None;
+                }
+            }
+            50 => {
+                return Some((
+                    std::net::IpAddr::V6(std::net::Ipv6Addr::from(b)),
+                    next,
+                    false,
+                    true,
+                    false,
+                ));
+            }
             _ => break,
         }
     }
@@ -578,9 +858,15 @@ fn parse_ipv6(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
         let inner_proto = u16::from_be_bytes([frame[cursor + 2], frame[cursor + 3]]);
         if (flags & 0x4F00) == 0 && inner_proto == 0x86dd && frame.len() >= cursor + 44 {
             let mut inner = cursor + 4;
-            if (flags & 0x8000) != 0 { inner += 4; }
-            if (flags & 0x2000) != 0 { inner += 4; }
-            if (flags & 0x1000) != 0 { inner += 4; }
+            if (flags & 0x8000) != 0 {
+                inner += 4;
+            }
+            if (flags & 0x2000) != 0 {
+                inner += 4;
+            }
+            if (flags & 0x1000) != 0 {
+                inner += 4;
+            }
             let (ip, proto, syn, frag, _) = parse_ipv6(frame, inner)?;
             return Some((ip, proto, syn, frag, true));
         }
@@ -589,7 +875,9 @@ fn parse_ipv6(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
         let sport = u16::from_be_bytes([frame[cursor], frame[cursor + 1]]);
         let dport = u16::from_be_bytes([frame[cursor + 2], frame[cursor + 3]]);
         if sport == 4789 || dport == 4789 {
-            if frame.len() < cursor + 16 || frame[cursor + 8] & 0x08 == 0 { return None; }
+            if frame.len() < cursor + 16 || frame[cursor + 8] & 0x08 == 0 {
+                return None;
+            }
             let inner_eth = cursor + 16;
             if frame.len() >= inner_eth + 14 {
                 let et = u16::from_be_bytes([frame[inner_eth + 12], frame[inner_eth + 13]]);
@@ -602,7 +890,9 @@ fn parse_ipv6(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
                 }
             }
         } else if sport == 6081 || dport == 6081 {
-            if frame.len() < cursor + 8 || frame[cursor] >> 6 != 0 { return None; }
+            if frame.len() < cursor + 8 || frame[cursor] >> 6 != 0 {
+                return None;
+            }
             let opt_len = (frame[cursor] & 0x3f) as usize * 4;
             let inner_eth = cursor + 8 + opt_len;
             if frame.len() >= inner_eth + 14 {
@@ -617,8 +907,18 @@ fn parse_ipv6(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
             }
         }
     }
-    let syn = !fragmented && next == 6 && frame.len() >= cursor + 14 && frame[cursor+13] & 0x02 != 0 && frame[cursor+13] & 0x10 == 0;
-    Some((std::net::IpAddr::V6(std::net::Ipv6Addr::from(b)), next, syn, fragmented, false))
+    let syn = !fragmented
+        && next == 6
+        && frame.len() >= cursor + 14
+        && frame[cursor + 13] & 0x02 != 0
+        && frame[cursor + 13] & 0x10 == 0;
+    Some((
+        std::net::IpAddr::V6(std::net::Ipv6Addr::from(b)),
+        next,
+        syn,
+        fragmented,
+        false,
+    ))
 }
 
 fn network_contains(network: &IpNetwork, ip: std::net::IpAddr) -> bool {
@@ -627,13 +927,21 @@ fn network_contains(network: &IpNetwork, ip: std::net::IpAddr) -> bool {
             let n = u32::from(net);
             let h = u32::from(host);
             let bits = network.prefix_len;
-            if bits == 0 { true } else { (n & (!0u32 << (32 - bits))) == (h & (!0u32 << (32 - bits))) }
+            if bits == 0 {
+                true
+            } else {
+                (n & (!0u32 << (32 - bits))) == (h & (!0u32 << (32 - bits)))
+            }
         }
         (std::net::IpAddr::V6(net), std::net::IpAddr::V6(host)) => {
             let n = u128::from(net);
             let h = u128::from(host);
             let bits = network.prefix_len;
-            if bits == 0 { true } else { (n & (!0u128 << (128 - bits))) == (h & (!0u128 << (128 - bits))) }
+            if bits == 0 {
+                true
+            } else {
+                (n & (!0u128 << (128 - bits))) == (h & (!0u128 << (128 - bits)))
+            }
         }
         _ => false,
     }
@@ -669,7 +977,9 @@ mod tpacket_tests {
     #[test]
     fn checked_range_rejects_offset_overflow() {
         assert!(checked_range_end(usize::MAX - 1, 8, usize::MAX).is_none());
-        assert!(checked_next_tpacket_offset(usize::MAX - 8, 32, false, usize::MAX, usize::MAX).is_err());
+        assert!(
+            checked_next_tpacket_offset(usize::MAX - 8, 32, false, usize::MAX, usize::MAX).is_err()
+        );
     }
 
     #[test]
@@ -696,10 +1006,12 @@ mod tpacket_tests {
         assert!(checked_next_tpacket_offset(48, 0, false, 128, 128).is_err());
         assert!(checked_next_tpacket_offset(48, 1, false, 128, 128).is_err());
         assert_eq!(checked_next_tpacket_offset(48, 0, true, 128, 128), Ok(None));
-        assert_eq!(checked_next_tpacket_offset(48, 48, false, 192, 192), Ok(Some(96)));
+        assert_eq!(
+            checked_next_tpacket_offset(48, 48, false, 192, 192),
+            Ok(Some(96))
+        );
     }
 }
-
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {

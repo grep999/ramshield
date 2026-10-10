@@ -142,7 +142,9 @@ impl Store {
             // Hard cardinality ceiling: IPv6 prefix hopping can manufacture an
             // unbounded number of /64 keys. Detection continues to operate, but
             // the reverse index refuses new keys once bounded capacity is reached.
-            if !self.subnet_index.contains_key(&sk) && self.subnet_index.len() >= Self::MAX_SUBNET_INDEX_KEYS {
+            if !self.subnet_index.contains_key(&sk)
+                && self.subnet_index.len() >= Self::MAX_SUBNET_INDEX_KEYS
+            {
                 return;
             }
             self.subnet_index

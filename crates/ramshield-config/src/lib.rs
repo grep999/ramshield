@@ -10,8 +10,8 @@ mod validate;
 
 pub use net::{is_loopback_bind, peer_is_trusted_proxy, xff_client};
 pub use sections::{
-    AutonomousConfig, DashboardConfig, DetectionConfig, EngineConfig, ForecastingConfig, IpcConfig, L7Rule,
-    KeyRole, KeyRoleConfig, MeshConfig, NativeIngestConfig, SynproxyConfig, UpstreamConfig,
+    AutonomousConfig, DashboardConfig, DetectionConfig, EngineConfig, ForecastingConfig, IpcConfig,
+    KeyRole, KeyRoleConfig, L7Rule, MeshConfig, NativeIngestConfig, SynproxyConfig, UpstreamConfig,
     WalConfig, XdpConfig,
 };
 

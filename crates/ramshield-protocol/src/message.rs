@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use ramshield_types::L7Metadata;
+use serde::{Deserialize, Serialize};
 
 /// Protocol version for compatibility checks.
 pub const PROTOCOL_VERSION: u16 = 1;

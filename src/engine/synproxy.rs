@@ -10,8 +10,8 @@
 //! backend is used because nftables updates are atomic and the rules live in a
 //! dedicated table owned by RamShield.
 use ramshield_config::SynproxyConfig;
-use std::process::{Command, Stdio};
 use std::io::Write;
+use std::process::{Command, Stdio};
 use tracing::info;
 
 #[cfg(target_os = "linux")]
@@ -28,7 +28,8 @@ fn render_ruleset(
     total_rate: u32,
     total_burst: u32,
 ) -> String {
-    format!(r#"table inet ramshield_synproxy {{
+    format!(
+        r#"table inet ramshield_synproxy {{
     set conn_limit4 {{ type ipv4_addr; size 65536; flags dynamic; }}
     set conn_limit6 {{ type ipv6_addr; size 65536; flags dynamic; }}
     chain preraw {{
@@ -48,33 +49,82 @@ fn render_ruleset(
     }}
 }}
 "#,
-        interface = nft_quote(interface), ports = ports, mss = mss, wscale = wscale,
-        per_source = per_source, total = total, new_rate = new_rate, burst = burst,
-        total_rate = total_rate, total_burst = total_burst,
+        interface = nft_quote(interface),
+        ports = ports,
+        mss = mss,
+        wscale = wscale,
+        per_source = per_source,
+        total = total,
+        new_rate = new_rate,
+        burst = burst,
+        total_rate = total_rate,
+        total_burst = total_burst,
     )
 }
 
 #[cfg(target_os = "linux")]
 pub fn install(cfg: &SynproxyConfig, interface: &str) -> Result<(), String> {
-    if !cfg.enabled { return Ok(()); }
-    if interface.trim().is_empty() { return Err("synproxy interface must not be empty".into()); }
-    if nft_quote(interface) != interface { return Err("synproxy interface contains unsupported nft identifier characters".into()); }
-    if !command_exists("nft") { return Err("synproxy requires nftables >= 0.9.2".into()); }
+    if !cfg.enabled {
+        return Ok(());
+    }
+    if interface.trim().is_empty() {
+        return Err("synproxy interface must not be empty".into());
+    }
+    if nft_quote(interface) != interface {
+        return Err("synproxy interface contains unsupported nft identifier characters".into());
+    }
+    if !command_exists("nft") {
+        return Err("synproxy requires nftables >= 0.9.2".into());
+    }
 
     // Validate the complete ruleset before mutating the live firewall.
     // Then remove only RamShield's own table; never flush a host firewall ruleset.
-    let ports = cfg.ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
+    let ports = cfg
+        .ports
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
     let per_source = cfg.max_connections_per_source;
     let total = cfg.max_connections_total;
     let new_rate = cfg.new_connections_per_second;
     let burst = cfg.new_connection_burst;
     let total_rate = cfg.new_connections_total_per_second;
     let total_burst = cfg.new_connection_total_burst;
-    let script = render_ruleset(interface, &ports, cfg.mss, cfg.wscale, per_source, total, new_rate, burst, total_rate, total_burst);
-    let mut check = Command::new("nft").args(["-c", "-f", "-"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|e| format!("nft syntax check: {e}"))?;
-    check.stdin.take().ok_or("nft syntax-check stdin unavailable")?.write_all(script.as_bytes()).map_err(|e| format!("nft syntax-check write: {e}"))?;
-    let checked = check.wait_with_output().map_err(|e| format!("nft syntax-check wait: {e}"))?;
-    if !checked.status.success() { return Err(format!("nft synproxy ruleset syntax invalid: {}", String::from_utf8_lossy(&checked.stderr))); }
+    let script = render_ruleset(
+        interface,
+        &ports,
+        cfg.mss,
+        cfg.wscale,
+        per_source,
+        total,
+        new_rate,
+        burst,
+        total_rate,
+        total_burst,
+    );
+    let mut check = Command::new("nft")
+        .args(["-c", "-f", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("nft syntax check: {e}"))?;
+    check
+        .stdin
+        .take()
+        .ok_or("nft syntax-check stdin unavailable")?
+        .write_all(script.as_bytes())
+        .map_err(|e| format!("nft syntax-check write: {e}"))?;
+    let checked = check
+        .wait_with_output()
+        .map_err(|e| format!("nft syntax-check wait: {e}"))?;
+    if !checked.status.success() {
+        return Err(format!(
+            "nft synproxy ruleset syntax invalid: {}",
+            String::from_utf8_lossy(&checked.stderr)
+        ));
+    }
 
     // B03: Replace atomically. The old table is deleted INSIDE the same nft
     // transaction as the new ruleset, so a failed apply leaves the previous
@@ -110,12 +160,33 @@ pub fn install(cfg: &SynproxyConfig, interface: &str) -> Result<(), String> {
             ("net.netfilter.nf_conntrack_tcp_loose", "0"),
         ] {
             run_sysctl(k, v)?;
-            sysctl_applied.push((k, originals.iter().find(|(ok, _)| *ok == k).unwrap().1.clone()));
+            sysctl_applied.push((
+                k,
+                originals.iter().find(|(ok, _)| *ok == k).unwrap().1.clone(),
+            ));
         }
-        let mut child = Command::new("nft").args(["-f", "-"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|e| format!("nft: {e}"))?;
-        child.stdin.take().ok_or("nft stdin unavailable")?.write_all(apply_script.as_bytes()).map_err(|e| format!("nft write: {e}"))?;
-        let out = child.wait_with_output().map_err(|e| format!("nft wait: {e}"))?;
-        if !out.status.success() { return Err(format!("nft synproxy ruleset failed: {}", String::from_utf8_lossy(&out.stderr))); }
+        let mut child = Command::new("nft")
+            .args(["-f", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("nft: {e}"))?;
+        child
+            .stdin
+            .take()
+            .ok_or("nft stdin unavailable")?
+            .write_all(apply_script.as_bytes())
+            .map_err(|e| format!("nft write: {e}"))?;
+        let out = child
+            .wait_with_output()
+            .map_err(|e| format!("nft wait: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "nft synproxy ruleset failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
         Ok(())
     })();
     // Restore sysctls on failure; the old table (if any) is untouched because
@@ -143,7 +214,10 @@ pub fn uninstall() -> Result<(), String> {
     if out.status.success() || String::from_utf8_lossy(&out.stderr).contains("No such file") {
         Ok(())
     } else {
-        Err(format!("nft synproxy teardown failed: {}", String::from_utf8_lossy(&out.stderr)))
+        Err(format!(
+            "nft synproxy teardown failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ))
     }
 }
 
@@ -154,8 +228,16 @@ pub fn uninstall() -> Result<(), String> {
 
 #[cfg(target_os = "linux")]
 fn run_sysctl(key: &str, value: &str) -> Result<(), String> {
-    let out = Command::new("sysctl").args(["-w", &format!("{key}={value}")]).output().map_err(|e| format!("sysctl {key}: {e}"))?;
-    if !out.status.success() { return Err(format!("sysctl {key} failed: {}", String::from_utf8_lossy(&out.stderr))); }
+    let out = Command::new("sysctl")
+        .args(["-w", &format!("{key}={value}")])
+        .output()
+        .map_err(|e| format!("sysctl {key}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "sysctl {key} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
     Ok(())
 }
 
@@ -170,7 +252,12 @@ fn read_sysctl(key: &str) -> String {
 
 #[cfg(target_os = "linux")]
 fn command_exists(name: &str) -> bool {
-    Command::new(name).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
+    Command::new(name)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 #[cfg(target_os = "linux")]
@@ -204,19 +291,25 @@ pub fn install(_cfg: &SynproxyConfig, _interface: &str) -> Result<(), String> {
 mod tests {
     #[test]
     fn rendered_ruleset_uses_kernel_supported_connlimit_forms() {
-        #[cfg(target_os="linux")]
+        #[cfg(target_os = "linux")]
         {
-            let rules = super::render_ruleset("eth0", "22, 443", 1460, 7, 128, 16384, 50, 100, 2000, 4000);
+            let rules =
+                super::render_ruleset("eth0", "22, 443", 1460, 7, 128, 16384, 50, 100, 2000, 4000);
             assert!(rules.contains("ct count over 16384 drop"));
             assert!(rules.contains("add @conn_limit4 { ip saddr ct count over 128 } drop"));
-            assert!(rules.contains("meter syn_rate4 { ip saddr limit rate over 50/second burst 100 packets } drop"));
+            assert!(rules.contains(
+                "meter syn_rate4 { ip saddr limit rate over 50/second burst 100 packets } drop"
+            ));
             assert!(rules.contains("tcp flags syn tcp dport { 22, 443 } notrack"));
         }
     }
 
     #[test]
     fn nft_interface_filter_is_alphanumeric() {
-        #[cfg(target_os="linux")]
-        assert_eq!(super::nft_quote("eth0; drop table inet filter"), "eth0drop_table_inet_filter");
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            super::nft_quote("eth0; drop table inet filter"),
+            "eth0drop_table_inet_filter"
+        );
     }
 }

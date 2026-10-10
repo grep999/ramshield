@@ -43,7 +43,14 @@ impl XdpApplier for RecordingApplier {
     fn configure_trusted_overlay(&mut self, _cidrs: &[IpNetwork]) -> Result<(), EnforcementError> {
         Ok(())
     }
-    fn configure_autonomous(&mut self, _enabled: bool, _syn_pps_per_cpu: u64, _udp_pps_per_cpu: u64, _packet_pps_per_cpu: u64, _window_ms: u64) -> Result<(), EnforcementError> {
+    fn configure_autonomous(
+        &mut self,
+        _enabled: bool,
+        _syn_pps_per_cpu: u64,
+        _udp_pps_per_cpu: u64,
+        _packet_pps_per_cpu: u64,
+        _window_ms: u64,
+    ) -> Result<(), EnforcementError> {
         Ok(())
     }
 }
@@ -264,7 +271,14 @@ impl XdpApplier for DroppingApplier {
     fn configure_trusted_overlay(&mut self, _cidrs: &[IpNetwork]) -> Result<(), EnforcementError> {
         Ok(())
     }
-    fn configure_autonomous(&mut self, _enabled: bool, _syn_pps_per_cpu: u64, _udp_pps_per_cpu: u64, _packet_pps_per_cpu: u64, _window_ms: u64) -> Result<(), EnforcementError> {
+    fn configure_autonomous(
+        &mut self,
+        _enabled: bool,
+        _syn_pps_per_cpu: u64,
+        _udp_pps_per_cpu: u64,
+        _packet_pps_per_cpu: u64,
+        _window_ms: u64,
+    ) -> Result<(), EnforcementError> {
         Ok(())
     }
 }
@@ -554,7 +568,14 @@ impl XdpApplier for FailingApplier {
     fn configure_trusted_overlay(&mut self, _cidrs: &[IpNetwork]) -> Result<(), EnforcementError> {
         Ok(())
     }
-    fn configure_autonomous(&mut self, _enabled: bool, _syn_pps_per_cpu: u64, _udp_pps_per_cpu: u64, _packet_pps_per_cpu: u64, _window_ms: u64) -> Result<(), EnforcementError> {
+    fn configure_autonomous(
+        &mut self,
+        _enabled: bool,
+        _syn_pps_per_cpu: u64,
+        _udp_pps_per_cpu: u64,
+        _packet_pps_per_cpu: u64,
+        _window_ms: u64,
+    ) -> Result<(), EnforcementError> {
         Ok(())
     }
 }
@@ -1054,7 +1075,14 @@ impl XdpApplier for MapApplier {
     fn configure_trusted_overlay(&mut self, _cidrs: &[IpNetwork]) -> Result<(), EnforcementError> {
         Ok(())
     }
-    fn configure_autonomous(&mut self, _enabled: bool, _syn_pps_per_cpu: u64, _udp_pps_per_cpu: u64, _packet_pps_per_cpu: u64, _window_ms: u64) -> Result<(), EnforcementError> {
+    fn configure_autonomous(
+        &mut self,
+        _enabled: bool,
+        _syn_pps_per_cpu: u64,
+        _udp_pps_per_cpu: u64,
+        _packet_pps_per_cpu: u64,
+        _window_ms: u64,
+    ) -> Result<(), EnforcementError> {
         Ok(())
     }
 }
@@ -1122,7 +1150,10 @@ mod send_assert {
     fn run_send() {
         fn fut_is_send<F: Send>(_f: F) {}
         let store = Arc::new(Store::new(16));
-        store.traffic.ram_limit_mb.store(512, std::sync::atomic::Ordering::Relaxed);
+        store
+            .traffic
+            .ram_limit_mb
+            .store(512, std::sync::atomic::Ordering::Relaxed);
         let svc = EnforcementService::new(
             store,
             Arc::new(Metrics::new()),
@@ -1135,4 +1166,3 @@ mod send_assert {
         assert_send::<EnforcementService>();
     }
 }
-

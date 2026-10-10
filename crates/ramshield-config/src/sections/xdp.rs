@@ -48,4 +48,6 @@ fn default_xdp_mode() -> String {
     "skb".into()
 }
 
-fn default_require_native_xdp() -> bool { true }
+fn default_require_native_xdp() -> bool {
+    true
+}

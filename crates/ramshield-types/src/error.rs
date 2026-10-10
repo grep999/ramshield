@@ -79,14 +79,16 @@ pub enum Durability {
     GroupCommit,
 }
 
-
 #[cfg(test)]
 mod block_reason_tests {
     use super::BlockReason;
 
     #[test]
     fn l7_cost_reason_round_trips() {
-        assert_eq!(BlockReason::from_reason_str("l7_cost"), Some(BlockReason::L7Cost));
+        assert_eq!(
+            BlockReason::from_reason_str("l7_cost"),
+            Some(BlockReason::L7Cost)
+        );
         assert_eq!(BlockReason::L7Cost.as_str(), "l7_cost");
     }
 }

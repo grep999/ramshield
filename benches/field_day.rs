@@ -246,7 +246,7 @@ fn enf_block_cmd(ip: IpAddr, ttl: u64, id: uuid::Uuid) -> ramshield_types::Enfor
         ip,
         cidr: None,
         action: ramshield_types::EnforceAction::Block,
-            evidence_source: ramshield_types::EvidenceSource::LocalSignals,
+        evidence_source: ramshield_types::EvidenceSource::LocalSignals,
     }
 }
 

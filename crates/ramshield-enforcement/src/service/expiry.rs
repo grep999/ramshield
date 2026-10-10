@@ -18,7 +18,9 @@ impl EnforcementService {
             }
         }
         for (idx, ip) in due.into_iter().enumerate() {
-            if idx > 0 && idx % 128 == 0 { tokio::task::yield_now().await; }
+            if idx > 0 && idx % 128 == 0 {
+                tokio::task::yield_now().await;
+            }
             let cmd = EnforceCommand {
                 decision_id: Uuid::new_v4(),
                 policy_version: 0,

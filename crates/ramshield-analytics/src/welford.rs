@@ -27,7 +27,11 @@ pub struct Welford {
 
 impl Welford {
     pub fn new(alpha: f32) -> Self {
-        let packed = WelfordState { mean: 0.0, variance: 0.0 }.pack();
+        let packed = WelfordState {
+            mean: 0.0,
+            variance: 0.0,
+        }
+        .pack();
         Self {
             mean: AtomicU32::new(packed[0]),
             variance: AtomicU32::new(packed[1]),
@@ -48,11 +52,17 @@ impl Welford {
             };
             let delta = value - unpacked.mean;
             let new_mean = unpacked.mean + self.alpha * delta;
-            let new_variance = ((1.0 - self.alpha) * (unpacked.variance + self.alpha * delta * delta)).max(0.0);
+            let new_variance =
+                ((1.0 - self.alpha) * (unpacked.variance + self.alpha * delta * delta)).max(0.0);
 
             let next_mean = new_mean.to_bits();
             let next_variance = new_variance.to_bits();
-            match self.mean.compare_exchange_weak(current_mean, next_mean, Ordering::Release, Ordering::Relaxed) {
+            match self.mean.compare_exchange_weak(
+                current_mean,
+                next_mean,
+                Ordering::Release,
+                Ordering::Relaxed,
+            ) {
                 Ok(_) => {
                     self.variance.store(next_variance, Ordering::Relaxed);
                     break;

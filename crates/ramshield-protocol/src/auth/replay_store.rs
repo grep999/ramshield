@@ -75,25 +75,44 @@ impl ReplayStore {
     pub fn check_and_record(&self, key_id: &str, nonce: &[u8]) -> Result<(), &'static str> {
         // B06: Ensure full identity and atomic check-and-record, not lossy hash.
         // Use the actual key_id string to preserve identity.
-        let key = NonceKey { key_id: key_id.to_string(), nonce: nonce.to_vec() };
+        let key = NonceKey {
+            key_id: key_id.to_string(),
+            nonce: nonce.to_vec(),
+        };
         let now = Instant::now();
         let mut g = self.inner.lock().map_err(|_| "replay store poisoned")?;
         // Lazy TTL sweep on the front (oldest). A full sweep is O(n) and
         // not needed — old entries fall out of the LRU window anyway.
-        while g.order.front().and_then(|k| g.map.get(k)).is_some_and(|ts| now.duration_since(*ts) >= self.ttl) {
-            if let Some(expired) = g.order.pop_front() { g.map.remove(&expired); }
+        while g
+            .order
+            .front()
+            .and_then(|k| g.map.get(k))
+            .is_some_and(|ts| now.duration_since(*ts) >= self.ttl)
+        {
+            if let Some(expired) = g.order.pop_front() {
+                g.map.remove(&expired);
+            }
         }
         // Reject only if unexpired duplicate already exists.
-        if g.map.get(&key).is_some_and(|prev| now.duration_since(*prev) < self.ttl) {
+        if g.map
+            .get(&key)
+            .is_some_and(|prev| now.duration_since(*prev) < self.ttl)
+        {
             return Err("replay");
         }
         // B06: Check per-key capacity BEFORE mutating. The store must never
         // change state when it returns an error — a rejected request leaves
         // the store exactly as it was.
         if self.per_key_cap < self.cap {
-            let own_count = g.order.iter()
+            let own_count = g
+                .order
+                .iter()
                 .filter(|k| k.key_id == key.key_id)
-                .filter(|k| g.map.get(*k).is_some_and(|ts| now.duration_since(*ts) < self.ttl))
+                .filter(|k| {
+                    g.map
+                        .get(*k)
+                        .is_some_and(|ts| now.duration_since(*ts) < self.ttl)
+                })
                 .count();
             if own_count >= self.per_key_cap {
                 return Err("capacity");
@@ -105,7 +124,9 @@ impl ReplayStore {
         g.order.push_back(key.clone());
         // LRU bound: drop the oldest ONLY if exceeds global capacity.
         while g.order.len() > self.cap {
-            if let Some(old) = g.order.pop_front() { g.map.remove(&old); }
+            if let Some(old) = g.order.pop_front() {
+                g.map.remove(&old);
+            }
         }
         Ok(())
     }
@@ -164,4 +185,3 @@ mod tests {
         assert!(s.len() <= 4);
     }
 }
-

@@ -160,12 +160,24 @@ pub fn default_relative_min_samples() -> u32 {
 pub fn default_relative_min_breaches() -> u8 {
     3
 }
-pub fn default_l7_cost_weight() -> f64 { 1.0 }
-pub fn default_l7_baseline_latency_us() -> u64 { 100_000 }
-pub fn default_l7_rps_threshold() -> u64 { 500 }
-pub fn default_l7_http2_min_streams() -> u32 { 32 }
-pub fn default_l7_http2_reset_ratio_pct() -> u8 { 80 }
-pub fn default_l7_block_ttl_secs() -> u64 { 300 }
+pub fn default_l7_cost_weight() -> f64 {
+    1.0
+}
+pub fn default_l7_baseline_latency_us() -> u64 {
+    100_000
+}
+pub fn default_l7_rps_threshold() -> u64 {
+    500
+}
+pub fn default_l7_http2_min_streams() -> u32 {
+    32
+}
+pub fn default_l7_http2_reset_ratio_pct() -> u8 {
+    80
+}
+pub fn default_l7_block_ttl_secs() -> u64 {
+    300
+}
 
 impl Default for DetectionConfig {
     fn default() -> Self {

@@ -14,7 +14,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub type Dot = u64;
 
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -218,7 +221,9 @@ impl AworsetBlocklist {
             .retain(|_, (_, _, exp)| now_ms.saturating_sub(*exp) < TOMBSTONE_HORIZON_MS);
         self.tombstone_times.retain(|key, created| {
             let keep = now_ms.saturating_sub(*created) < TOMBSTONE_HORIZON_MS;
-            if !keep { self.tombstones.remove(key); }
+            if !keep {
+                self.tombstones.remove(key);
+            }
             keep
         });
     }
@@ -267,7 +272,9 @@ impl AworsetBlocklist {
                 changed = true;
                 delta.dot.counter
             });
-        if changed { self.tombstone_times.insert(key, now_ms()); }
+        if changed {
+            self.tombstone_times.insert(key, now_ms());
+        }
         // ponytail: avoid let-chains; drop the DashMap guard before remove.
         if self
             .entries
@@ -284,17 +291,27 @@ impl AworsetBlocklist {
         for e in self.entries.iter().take(limit) {
             blocks.push(ClusterBlockDelta {
                 ip: e.key().0,
-                dot: ClusterDot { node_id: e.key().1, counter: e.value().0 },
+                dot: ClusterDot {
+                    node_id: e.key().1,
+                    counter: e.value().0,
+                },
                 created_at_ms: e.value().1,
                 expires_at_ms: e.value().2,
                 tier: 1,
             });
         }
         let mut unblocks = Vec::new();
-        for e in self.tombstones.iter().take(limit.saturating_sub(blocks.len())) {
+        for e in self
+            .tombstones
+            .iter()
+            .take(limit.saturating_sub(blocks.len()))
+        {
             unblocks.push(ClusterUnblockDelta {
                 ip: e.key().0,
-                dot: ClusterDot { node_id: e.key().1, counter: *e.value() },
+                dot: ClusterDot {
+                    node_id: e.key().1,
+                    counter: *e.value(),
+                },
             });
         }
         (blocks, unblocks)
@@ -357,7 +374,10 @@ mod tests {
 
         let finite = receiver.record_ban(finite_ip, 60_000, 1);
         assert_ne!(finite.expires_at_ms, u64::MAX);
-        assert_eq!(finite.expires_at_ms.saturating_sub(finite.created_at_ms), 60_000);
+        assert_eq!(
+            finite.expires_at_ms.saturating_sub(finite.created_at_ms),
+            60_000
+        );
     }
 
     #[test]
@@ -409,5 +429,4 @@ mod tests {
         assert_eq!(tombstones.len(), 1);
         assert_eq!(tombstones[0].dot, ban.dot);
     }
-
 }

@@ -41,10 +41,8 @@ pub struct ShmRuleEntry {
     pub max_rps: AtomicU16,       // 0 = Block, >0 = Rate Limit
     pub tier: AtomicU8,           // 0: Allow, 1: Challenge (429+JS), 2: XDP Drop, 3: Block
     pub flags: AtomicU8,          // Bit 0: Shared Infrastructure / CGNAT
-    pub _padding: [u8; 20], // Exact 64-byte slot alignment
+    pub _padding: [u8; 20],       // Exact 64-byte slot alignment
 }
-
-
 
 #[cfg(test)]
 mod abi_asserts {
@@ -52,10 +50,10 @@ mod abi_asserts {
 
     #[test]
     fn challenge_seed_lo_is_naturally_aligned() {
-        use std::mem::{size_of, align_of};
+        use std::mem::{align_of, size_of};
         assert_eq!(align_of::<ShmRuleEntry>(), 64);
         assert_eq!(size_of::<ShmRuleEntry>(), 64);
-        let entry = ShmRuleEntry { 
+        let entry = ShmRuleEntry {
             seq: AtomicU32::new(0),
             client_hash: AtomicU64::new(0),
             expires_at_ms: AtomicU64::new(0),
@@ -74,7 +72,7 @@ mod abi_asserts {
 
     #[test]
     fn challenge_seed_hi_is_naturally_aligned() {
-        let entry = ShmRuleEntry { 
+        let entry = ShmRuleEntry {
             seq: AtomicU32::new(0),
             client_hash: AtomicU64::new(0),
             expires_at_ms: AtomicU64::new(0),
@@ -240,9 +238,7 @@ impl ShmTableManager {
         // refreshed this slot between our probe and the CAS.
         let existing = slot.client_hash.load(Ordering::Acquire);
         let expires = slot.expires_at_ms.load(Ordering::Acquire);
-        let claimable = existing == 0
-            || existing == client_hash
-            || expires <= now_ms;
+        let claimable = existing == 0 || existing == client_hash || expires <= now_ms;
         if !claimable {
             // Release writer lock without mutating payload (seq odd → even).
             slot.seq.fetch_add(1, Ordering::Release);
@@ -269,7 +265,6 @@ impl ShmTableManager {
         slot.seq.fetch_add(1, Ordering::Release); // odd → even
         true
     }
-
 }
 
 #[cfg(test)]

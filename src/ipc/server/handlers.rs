@@ -334,7 +334,7 @@ pub(crate) fn process_request(
                 timestamp_ns: now_ms() * 1_000_000,
                 bytes,
                 status_code,
-proto_fingerprint: proto_fp,
+                proto_fingerprint: proto_fp,
                 l7,
             };
             // STAGE 1: Semantic shedding — at >=75% occupancy, shed low-signal

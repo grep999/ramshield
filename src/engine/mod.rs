@@ -28,13 +28,13 @@ use crate::metrics::{
 };
 use crate::storage::Store;
 use ramshield_enforcement::{replay_wal_cidrs_seeded, replay_wal_into_store_seeded};
+#[cfg(feature = "mesh")]
+use ramshield_mesh::{MeshHandle, aworset::AworsetBlocklist};
 use ramshield_storage::{
     checkpoint_shared::{CheckpointShared, CheckpointState, CidrSnapshot},
     wal::Wal,
 };
 use ramshield_types::EnforceCommand;
-#[cfg(feature = "mesh")]
-use ramshield_mesh::{aworset::AworsetBlocklist, MeshHandle};
 
 pub struct Engine {
     pub config: Arc<arc_swap::ArcSwap<Config>>,

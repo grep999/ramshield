@@ -40,10 +40,7 @@ pub trait XdpApplier: Send + Sync {
         )))
     }
     /// Configure trusted overlay CIDR blocklist (IPv4/IPv6 LPM trie maps)
-    fn configure_trusted_overlay(
-        &mut self,
-        cidrs: &[IpNetwork],
-    ) -> Result<(), EnforcementError>;
+    fn configure_trusted_overlay(&mut self, cidrs: &[IpNetwork]) -> Result<(), EnforcementError>;
     /// Configure autonomous mode (syn/udp/packet PPS per-CPU limits)
     fn configure_autonomous(
         &mut self,

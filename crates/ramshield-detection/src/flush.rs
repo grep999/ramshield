@@ -106,27 +106,44 @@ impl DetectionEngine {
                 if agg.http2_opened >= det.l7_http2_min_streams {
                     let reset_pct = (agg.http2_reset as u64 * 100) / agg.http2_opened.max(1) as u64;
                     if reset_pct >= det.l7_http2_reset_ratio_pct as u64 {
-                        self.emit_l7_block(ip, BlockReason::Http2StreamAbuse, det.l7_block_ttl_secs);
+                        self.emit_l7_block(
+                            ip,
+                            BlockReason::Http2StreamAbuse,
+                            det.l7_block_ttl_secs,
+                        );
                     }
                 }
-                for route in agg.routes.iter().filter(|r| r.route_hash != 0 && r.count > 0) {
+                for route in agg
+                    .routes
+                    .iter()
+                    .filter(|r| r.route_hash != 0 && r.count > 0)
+                {
                     for rule in &det.l7_rules {
-                        if rule.route_hash != route.route_hash || rule.method.is_some_and(|m| m != route.method) {
+                        if rule.route_hash != route.route_hash
+                            || rule.method.is_some_and(|m| m != route.method)
+                        {
                             continue;
                         }
                         let route_rps = route.count as u64 * 1_000_000_000 / window_ns.max(1);
                         let rate_hit = rule.max_rps.is_some_and(|max| route_rps >= max);
-                        let latency_hit = rule.max_latency_us.is_some_and(|max| route.latency_max_us >= max);
+                        let latency_hit = rule
+                            .max_latency_us
+                            .is_some_and(|max| route.latency_max_us >= max);
                         let avg_latency_us = route.latency_sum_us / route.count.max(1) as u64;
-                        let latency_ratio = (avg_latency_us as f64 / rule.baseline_latency_us as f64).max(1.0);
+                        let latency_ratio =
+                            (avg_latency_us as f64 / rule.baseline_latency_us as f64).max(1.0);
                         let effective_rps = ((route_rps as f64) * rule.cost_weight * latency_ratio)
                             .ceil()
-                            .min(u64::MAX as f64) as u64;
-                        let cost_hit = rule.max_effective_rps.is_some_and(|max| effective_rps >= max);
+                            .min(u64::MAX as f64)
+                            as u64;
+                        let cost_hit = rule
+                            .max_effective_rps
+                            .is_some_and(|max| effective_rps >= max);
                         let h2_hit = rule.max_http2_reset_ratio_pct.is_some_and(|max| {
                             route.http2_opened >= det.l7_http2_min_streams
                                 && route.http2_opened > 0
-                                && (route.http2_reset as u64 * 100) / route.http2_opened as u64 >= max as u64
+                                && (route.http2_reset as u64 * 100) / route.http2_opened as u64
+                                    >= max as u64
                         });
                         if rate_hit || h2_hit || latency_hit || cost_hit {
                             let reason = if cost_hit || latency_hit {

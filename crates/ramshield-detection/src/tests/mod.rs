@@ -79,7 +79,7 @@ fn local_merge_preserves_cross_worker_semantics() {
         bytes: 10,
         status_code: 404,
         proto_fingerprint: 7,
-    l7: None,
+        l7: None,
     });
     b.entry(ip).or_default().absorb(&ConnectionEvent {
         ip,
@@ -87,7 +87,7 @@ fn local_merge_preserves_cross_worker_semantics() {
         bytes: 15,
         status_code: 200,
         proto_fingerprint: 0,
-    l7: None,
+        l7: None,
     });
     eng.merge_local(&mut a);
     eng.merge_local(&mut b);
@@ -134,7 +134,7 @@ fn emergency_burst_fires_once_before_flush() {
         bytes: 10,
         status_code: 200,
         proto_fingerprint: 0,
-    l7: None,
+        l7: None,
     };
     let mut local: HashMap<IpAddr, IpAgg> = HashMap::new();
 
@@ -241,7 +241,7 @@ fn concurrent_flush_never_loses_events() {
                         bytes: 100,
                         status_code: 200,
                         proto_fingerprint: 0,
-                    l7: None,
+                        l7: None,
                     });
                 }
             })
@@ -381,7 +381,7 @@ fn flush_promotes_hot_ip() {
             bytes: 64,
             status_code: 200,
             proto_fingerprint: 0,
-        l7: None,
+            l7: None,
         })
         .collect();
     eng.flush_events(&events);
@@ -398,7 +398,7 @@ fn cold_ip_not_stored() {
         bytes: 1,
         status_code: 200,
         proto_fingerprint: 0,
-    l7: None,
+        l7: None,
     }]);
     assert!(eng.store.get(&ip).is_none());
 }
@@ -416,7 +416,7 @@ fn flush_preserves_status_dist() {
             bytes: 64,
             status_code: 500,
             proto_fingerprint: 0,
-        l7: None,
+            l7: None,
         })
         .collect();
     eng.flush_events(&events);
@@ -441,7 +441,7 @@ fn v6_events_aggregate_and_promote() {
             bytes: 64,
             status_code: 200,
             proto_fingerprint: 0,
-        l7: None,
+            l7: None,
         })
         .collect();
     eng.flush_events(&events);
@@ -700,7 +700,7 @@ fn ev_at(ip: IpAddr, ts: u64) -> ConnectionEvent {
         bytes: 64,
         status_code: 200,
         proto_fingerprint: 0,
-    l7: None,
+        l7: None,
     }
 }
 
@@ -1013,7 +1013,7 @@ fn flush_records_per_flush_promoted_count() {
                 bytes: 64,
                 status_code: 200,
                 proto_fingerprint: 0,
-            l7: None,
+                l7: None,
             })
         })
         .collect();
@@ -1104,7 +1104,7 @@ fn relative_gate_uses_prior_baseline_and_requires_streak() {
                 bytes: 64,
                 status_code: 200,
                 proto_fingerprint: 0,
-            l7: None,
+                l7: None,
             })
             .collect();
         eng.flush_events(&events);
@@ -1129,7 +1129,7 @@ fn relative_gate_uses_prior_baseline_and_requires_streak() {
             bytes: 64,
             status_code: 200,
             proto_fingerprint: 0,
-        l7: None,
+            l7: None,
         })
         .collect();
     eng.flush_events(&events);
@@ -1158,7 +1158,7 @@ fn relative_gate_uses_prior_baseline_and_requires_streak() {
             bytes: 64,
             status_code: 200,
             proto_fingerprint: 0,
-        l7: None,
+            l7: None,
         })
         .collect();
     eng.flush_events(&events);
@@ -1201,7 +1201,7 @@ fn relative_gate_resets_streak_on_non_breach() {
                 bytes: 64,
                 status_code: 200,
                 proto_fingerprint: 0,
-            l7: None,
+                l7: None,
             })
             .collect();
         eng.flush_events(&events);
@@ -1225,7 +1225,7 @@ fn relative_gate_resets_streak_on_non_breach() {
                 bytes: 64,
                 status_code: 200,
                 proto_fingerprint: 0,
-            l7: None,
+                l7: None,
             })
             .collect();
         eng.flush_events(&events);
