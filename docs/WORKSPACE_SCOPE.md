@@ -2,7 +2,7 @@
 
 **Decision date:** 2026-10-10
 **Branch:** `audit-branch`
-**Status:** **RESOLVED — nested `rs/` is not a maintained or shipped product tree.**
+**Status:** **RESOLVED - nested `rs/` is not a maintained or shipped product tree.**
 
 ## Decision
 
@@ -29,7 +29,7 @@ The nested tree at **`rs/`** is **not**:
 | A-004 (SHM writer) | **Root only:** `crates/ramshield-cgnat/src/shm.rs` (and matching C header under root). Nested `rs/crates/ramshield-cgnat` is out of production scope |
 | CI | Must not add a second full product matrix for `rs/` unless this decision is formally reversed |
 | Docs / 100/100 claims | Must not treat `rs/` behavior as evidence of production readiness |
-| Future revival | Requires explicit decision + pinned toolchain CI + lockfile + parity tests against root before any “maintained” status |
+| Future revival | Requires explicit decision + pinned toolchain CI + lockfile + parity tests against root before any "maintained" status |
 
 ## Evidence (current tree)
 
@@ -43,7 +43,7 @@ To reclassify `rs/` as maintained, all of the following must land on one SHA:
 
 1. Written product owner approval
 2. Independent CI workflow with pinned toolchain and `--locked` builds/tests for `rs/`
-3. Documented parity policy vs root (or explicit “fork” versioning)
+3. Documented parity policy vs root (or explicit "fork" versioning)
 4. Security review of nested enforcement/SHM/replay paths
 5. Update of this file and `BACKLOG.md` A-021 status
 
