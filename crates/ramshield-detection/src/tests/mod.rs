@@ -1332,6 +1332,11 @@ fn pending_mitigations_hard_capped_under_flood() {
                         60,
                         now + 1_000 + u64::from(worker * 200 + i),
                     );
+                    assert!(
+                        eng.pending_mitigations_len() <= PENDING_MITIGATION_CAP,
+                        "concurrent admission exceeded cap: {}",
+                        eng.pending_mitigations_len()
+                    );
                 }
             })
         })
