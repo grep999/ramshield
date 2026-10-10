@@ -684,7 +684,7 @@ mod tpacket_tests {
         assert!(checked_next_tpacket_offset(48, 0, false, 128, 128).is_err());
         assert!(checked_next_tpacket_offset(48, 1, false, 128, 128).is_err());
         assert_eq!(checked_next_tpacket_offset(48, 0, true, 128, 128), Ok(None));
-        assert_eq!(checked_next_tpacket_offset(48, 48, false, 128, 128), Ok(Some(96)));
+        assert_eq!(checked_next_tpacket_offset(48, 48, false, 192, 192), Ok(Some(96)));
     }
 }
 
