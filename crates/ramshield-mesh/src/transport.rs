@@ -11,6 +11,7 @@ const MAX_FRAME: usize = 64 * 1024;
 const MAX_CLOCK_SKEW_MS: u64 = 30_000;
 const ANTI_ENTROPY_MS: u64 = 2_000;
 const MAX_SYNC_ENTRIES: usize = 4096;
+const MAX_SYNC_FRAME_ENTRIES: usize = 128;
 const MAX_INCOMING_QUEUE: usize = 8192;
 const MAX_PEER_READERS: usize = 256;
 const MAX_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(5);
@@ -66,7 +67,12 @@ impl MeshHandle {
         }
     }
     pub async fn drain(&self) -> Vec<MeshMessage> { let mut q=self.incoming.lock().await; q.drain(..).collect() }
-    async fn broadcast_sync(&self) { let (blocks,unblocks)=self.blocklist.snapshot(MAX_SYNC_ENTRIES); if blocks.is_empty() && unblocks.is_empty() { return; } self.broadcast(MeshMessage::Sync{blocks,unblocks}).await; }
+    async fn broadcast_sync(&self) {
+        let (blocks, unblocks) = self.blocklist.snapshot(MAX_SYNC_ENTRIES);
+        for message in chunk_sync(&blocks, &unblocks) {
+            self.broadcast(message).await;
+        }
+    }
     async fn send_to(&self, peer: SocketAddr, body: MeshMessage) -> std::io::Result<()> { let ts_ms=now_ms(); let payload=serde_json::to_vec(&(ts_ms,self.node_id,&body)).map_err(std::io::Error::other)?; let mac=sign(&self.auth_key,&payload)?; let frame=serde_json::to_vec(&Envelope{ts_ms,node_id:self.node_id,body,mac}).map_err(std::io::Error::other)?; if frame.len()>MAX_FRAME { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"mesh frame too large")); } let mut stream=TcpStream::connect(peer).await?; stream.write_all(&frame).await?; stream.write_all(b"\n").await?; Ok(()) }
     async fn read_stream(&self, mut stream: TcpStream) { let mut line=match read_bounded_frame_with_timeout(&mut stream, MAX_FRAME_READ_TIMEOUT).await { Ok(Some(frame))=>frame, Ok(None)|Err(_)=>return }; while line.last().is_some_and(|b| *b==b'\n'||*b==b'\r') { line.pop(); } let env:Envelope=match serde_json::from_slice(&line){Ok(v)=>v,Err(_)=>return}; let payload=match serde_json::to_vec(&(env.ts_ms,env.node_id,&env.body)){Ok(v)=>v,Err(_)=>return}; if now_ms().abs_diff(env.ts_ms)>MAX_CLOCK_SKEW_MS || !verify(&self.auth_key,&payload,&env.mac){ warn!(node_id=env.node_id,"mesh frame rejected: authentication or timestamp invalid"); return; }
         if env.node_id==self.node_id{return;} let mut q = self.incoming.lock().await;
@@ -78,6 +84,30 @@ impl MeshHandle {
         }
         q.push_back(env.body); }
 }
+/// Split anti-entropy state into small independently authenticated frames.
+fn chunk_sync(
+    blocks: &[ClusterBlockDelta],
+    unblocks: &[ClusterUnblockDelta],
+) -> Vec<MeshMessage> {
+    let block_chunks = blocks.len().div_ceil(MAX_SYNC_FRAME_ENTRIES);
+    let unblock_chunks = unblocks.len().div_ceil(MAX_SYNC_FRAME_ENTRIES);
+    let mut messages = Vec::with_capacity(block_chunks + unblock_chunks);
+
+    messages.extend(blocks.chunks(MAX_SYNC_FRAME_ENTRIES).map(|chunk| {
+        MeshMessage::Sync {
+            blocks: chunk.to_vec(),
+            unblocks: Vec::new(),
+        }
+    }));
+    messages.extend(unblocks.chunks(MAX_SYNC_FRAME_ENTRIES).map(|chunk| {
+        MeshMessage::Sync {
+            blocks: Vec::new(),
+            unblocks: chunk.to_vec(),
+        }
+    }));
+    messages
+}
+
 async fn with_timeout<F>(timeout: Duration, future: F) -> std::io::Result<()>
 where
     F: Future<Output = std::io::Result<()>>,
@@ -134,7 +164,9 @@ fn now_ms()->u64{SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default(
 
 #[cfg(test)]
 mod frame_tests {
-    use super::{push_frame_bytes, read_bounded_frame_with_timeout, with_timeout, MAX_FRAME};
+    use super::{chunk_sync, push_frame_bytes, read_bounded_frame_with_timeout, with_timeout, Envelope, MeshMessage, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES};
+    use crate::aworset::{ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
+    use std::net::{IpAddr, Ipv6Addr};
     use std::time::Duration;
 
     #[test]
@@ -150,6 +182,60 @@ mod frame_tests {
                 .unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         });
+    }
+
+    #[test]
+    fn sync_chunking_preserves_all_deltas_and_bounds_each_message() {
+        let blocks: Vec<_> = (0..300u128)
+            .map(|ip| ClusterBlockDelta {
+                ip: IpAddr::V6(Ipv6Addr::from(ip)),
+                dot: ClusterDot { node_id: 7, counter: ip as u32 },
+                expires_at_ms: u64::MAX,
+                tier: 3,
+            })
+            .collect();
+        let unblocks: Vec<_> = (300..570u128)
+            .map(|ip| ClusterUnblockDelta {
+                ip: IpAddr::V6(Ipv6Addr::from(ip)),
+                dot: ClusterDot { node_id: 8, counter: ip as u32 },
+            })
+            .collect();
+
+        let messages = chunk_sync(&blocks, &unblocks);
+        let mut block_count = 0;
+        let mut unblock_count = 0;
+        for message in messages {
+            if let MeshMessage::Sync { blocks, unblocks } = message {
+                assert!(blocks.len() + unblocks.len() <= MAX_SYNC_FRAME_ENTRIES);
+                block_count += blocks.len();
+                unblock_count += unblocks.len();
+            } else {
+                panic!("chunk_sync must emit only Sync messages");
+            }
+        }
+        assert_eq!(block_count, 300);
+        assert_eq!(unblock_count, 270);
+    }
+
+    #[test]
+    fn maximum_sync_chunk_fits_authenticated_wire_frame() {
+        let blocks: Vec<_> = (0..MAX_SYNC_FRAME_ENTRIES)
+            .map(|_| ClusterBlockDelta {
+                ip: IpAddr::V6(Ipv6Addr::from(u128::MAX)),
+                dot: ClusterDot { node_id: u32::MAX, counter: u32::MAX },
+                expires_at_ms: u64::MAX,
+                tier: u8::MAX,
+            })
+            .collect();
+        let message = MeshMessage::Sync { blocks, unblocks: Vec::new() };
+        let envelope = Envelope {
+            ts_ms: u64::MAX,
+            node_id: u32::MAX,
+            body: message,
+            mac: "0".repeat(64),
+        };
+        let encoded = serde_json::to_vec(&envelope).expect("serialize worst-case sync frame");
+        assert!(encoded.len() <= MAX_FRAME, "encoded frame is {} bytes", encoded.len());
     }
 
     #[test]
