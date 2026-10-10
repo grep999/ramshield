@@ -159,4 +159,3 @@ The following source-level fixes were applied directly to `audit-branch`:
 ### Acceptance status
 
 These are applied source changes, **not a release sign-off**. The full Rust/C build, formatting, Clippy, zero-unwrap gate, and end-to-end suite must pass on one final immutable SHA before closure. Keep the remaining backlog items open until that evidence is attached.
-
