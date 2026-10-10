@@ -63,6 +63,16 @@ fn render_ruleset(
 }
 
 #[cfg(target_os = "linux")]
+fn transaction_script(script: &str, table_exists: bool) -> String {
+    let mut transaction = String::new();
+    if table_exists {
+        transaction.push_str("delete table inet ramshield_synproxy\n");
+    }
+    transaction.push_str(script);
+    transaction
+}
+
+#[cfg(target_os = "linux")]
 pub fn install(cfg: &SynproxyConfig, interface: &str) -> Result<(), String> {
     if !cfg.enabled {
         return Ok(());
@@ -103,6 +113,17 @@ pub fn install(cfg: &SynproxyConfig, interface: &str) -> Result<(), String> {
         total_rate,
         total_burst,
     );
+    // B03: Validate the exact transaction we will apply. Checking only the
+    // new table declaration fails on reconfiguration when RamShield's table
+    // already exists; deleting it in this *check-only* transaction preserves
+    // the live table while validating the atomic replacement.
+    let table_exists = Command::new("nft")
+        .args(["list", "table", "inet", "ramshield_synproxy"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    let apply_script = transaction_script(&script, table_exists);
     let mut check = Command::new("nft")
         .args(["-c", "-f", "-"])
         .stdin(Stdio::piped())
@@ -114,7 +135,7 @@ pub fn install(cfg: &SynproxyConfig, interface: &str) -> Result<(), String> {
         .stdin
         .take()
         .ok_or("nft syntax-check stdin unavailable")?
-        .write_all(script.as_bytes())
+        .write_all(apply_script.as_bytes())
         .map_err(|e| format!("nft syntax-check write: {e}"))?;
     let checked = check
         .wait_with_output()
@@ -125,22 +146,6 @@ pub fn install(cfg: &SynproxyConfig, interface: &str) -> Result<(), String> {
             String::from_utf8_lossy(&checked.stderr)
         ));
     }
-
-    // B03: Replace atomically. The old table is deleted INSIDE the same nft
-    // transaction as the new ruleset, so a failed apply leaves the previous
-    // protection active instead of tearing it down first (which created an
-    // unprotected window between the standalone delete and the apply).
-    let table_exists = Command::new("nft")
-        .args(["list", "table", "inet", "ramshield_synproxy"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    let mut apply_script = String::new();
-    if table_exists {
-        apply_script.push_str("delete table inet ramshield_synproxy\n");
-    }
-    apply_script.push_str(&script);
 
     // Kernel tunables are managed by sysctl.d at boot. The daemon runs
     // unprivileged and must never try to write /proc/sys at runtime.
@@ -267,6 +272,24 @@ mod tests {
                 "meter syn_rate4 { ip saddr limit rate over 50/second burst 100 packets } drop"
             ));
             assert!(rules.contains("tcp flags syn tcp dport { 22, 443 } notrack"));
+        }
+    }
+
+    #[test]
+    fn replacement_transaction_deletes_only_ramshield_table_when_present() {
+        #[cfg(target_os = "linux")]
+        {
+            let script = "table inet ramshield_synproxy {}\n";
+            assert_eq!(
+                super::transaction_script(script, false),
+                script,
+                "first install must not issue a delete"
+            );
+            assert_eq!(
+                super::transaction_script(script, true),
+                "delete table inet ramshield_synproxy\ntable inet ramshield_synproxy {}\n",
+                "reinstall validates and applies deletion plus replacement atomically"
+            );
         }
     }
 
