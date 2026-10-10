@@ -63,7 +63,7 @@ pub struct AuthState {
     pub(crate) metrics: Arc<ramshield_metrics::Metrics>,
     /// Max concurrent Argon2 hash operations (default 4). Prevents a flood of
     /// bad logins from saturating the blocking pool with 100ms CPU-bound hashes.
-    /// 0 = unlimited (original behavior).
+    /// Constructor inputs below 1 are clamped to 1; zero never disables the bound.
     argon2_parallelism: u32,
     /// Semaphore to limit Argon2 concurrent operations.
     argon2_semaphore: Arc<Semaphore>,
@@ -516,6 +516,22 @@ mod tests {
         let tok = login(&a, "hunter2").expect("good pw logs in");
         assert!(a.validate(&tok));
         assert!(!a.validate("deadbeef"));
+    }
+
+    #[test]
+    fn zero_argon2_parallelism_is_clamped_to_one() {
+        let auth = AuthState::new(
+            None,
+            3600,
+            50,
+            1024,
+            vec![],
+            true,
+            Arc::new(ramshield_metrics::Metrics::new()),
+            0,
+        );
+        assert_eq!(auth.argon2_parallelism, 1);
+        assert_eq!(auth.argon2_semaphore.available_permits(), 1);
     }
 
     #[test]
