@@ -8,7 +8,7 @@
 
 **Baseline master:** `821eab72e93e584cd6835d1f95171d5d380daaec`
 
-**Latest recorded CI:** [run 38041528476](https://github.com/grep999/ramshield/actions/runs/38041528476) — Check, Build, Test, and Clippy passed on HEAD `808f97b8032230146c0012fb928059a0f77e229a`. Formatting is not covered by this workflow and remains unverified.
+**Latest recorded CI:** [run 38075387589](https://github.com/grep999/ramshield/actions/runs/38075387589) — all CI jobs passed on exact HEAD `6af1bd28cd8ca7e86298301676ba508b40ed62a2`, including formatting, check, build, tests, and strict Clippy. [Backlog Gate run 38075387633](https://github.com/grep999/ramshield/actions/runs/38075387633) also passed on that SHA.
 
 **Operating rule:** one bounded fix per pass; every fix is revalidated on the exact resulting SHA. No merge, force-push, rebase, or changes to `kiddo_fix` / PR #3 / PR #5.
 
@@ -56,7 +56,7 @@
 
 | A-015 | Detection construction | Public `new` remains a deprecated compatibility wrapper; production callers use `try_new` / `try_new_with_shm_path`. Unit test proves SHM open failure returns `Err` without panic. PR #6's `#[cfg(test)]` removal of the public wrapper is a downstream API break and needs an explicit breaking-release decision. | IN PROGRESS |
 
-| A-016 | Native packet ingest | TPACKET_V3 validators and malformed-descriptor property sweeps cover block/header/packet bounds, ring edges, chain alignment/overflow, and deterministic malformed mixes. Exact-SHA Linux test and CI evidence must be recorded before closure. | IN PROGRESS |
+| A-016 | Native packet ingest | TPACKET_V3 validators and malformed-descriptor property sweeps cover block/header/packet bounds, ring edges, chain alignment/overflow, and deterministic malformed mixes. Exact-SHA Linux test and CI evidence: Backlog Gate A-016 TPACKET bounds passed on `6af1bd28cd8ca7e86298301676ba508b40ed62a2`. | PASS (exact SHA) |
 
 | A-017 | XDP/SYNPROXY operational correctness | Tests cover capacity rejection, reconcile-after-map-loss (v4/v6/CIDR), partial-install failure isolation, StubXdp no kernel effects, CIDR map routing, and SYNPROXY unsupported-environment / hostile-interface / cleanup behavior. Exact-SHA CI evidence remains pending. | IN PROGRESS |
 
@@ -64,7 +64,7 @@
 
 | A-019 | Dashboard / IPC auth | Session TTL expiry, cookie HttpOnly/SameSite/Secure, per-IP lockout, invalid PHC fail-closed, oversized password reject, deployment defaults (loopback, 8h TTL, lockout 50). Poisoned password-hash lock now denies login and keeps auth enabled; explicit hash replacement clears poison after writing the replacement. Regression test added. IPC: replay reject, malformed frames, parse_ipc_keys fail-closed. | IN PROGRESS |
 
-| A-020 | Resource bounds elsewhere | PulseTracker observations capped at 4,096. `pending_mitigations` enforces the 1,048,576 production / 64 test cap at admission with bounded eviction; batch-flood/concurrency tests added. `detection.pre_aggs_max_size` capped at 1,000,000; enabled forecasting seasonal allocation capped at 86,400 one-second slots; boundary and `usize::MAX` validation tests added. Existing: store capacity CAS, threat_sample≤1024, IPC conn semaphore, SHM/replay caps. Residual: verify worst-case worker-local/shared pre-aggregation memory bound and run exact-SHA gates. | IN PROGRESS |
+| A-020 | Resource bounds elsewhere | PulseTracker observations capped at 4,096. `pending_mitigations` enforces the 1,048,576 production / 64 test cap at admission with bounded eviction; batch-flood/concurrency tests added. `detection.pre_aggs_max_size` capped at 1,000,000; enabled forecasting seasonal allocation capped at 86,400 one-second slots; boundary and `usize::MAX` validation tests added. Existing: store capacity CAS, threat_sample≤1024, IPC conn semaphore, SHM/replay caps. Worker-local maps stop at 8,192 distinct IPs; production shared-map merges serialize with flushes and flush before admitting a new key at configured capacity. Regression test verifies the shared cap and exact event accounting. Exact-SHA CI and Backlog Gate passed on `6af1bd28cd8ca7e86298301676ba508b40ed62a2`. | PASS (exact SHA) |
 
 | A-021 | Root vs nested workspace | **DECIDED 2026-10-10:** `rs/` is archival/experimental only — not maintained, not shipped, not root-CI-gated. Production product is the root workspace. Evidence: `docs/WORKSPACE_SCOPE.md`, `rs/STATUS.md`. Reversal requires pinned CI + parity policy (see doc). | PASS (exact SHA pending push) |
 
@@ -78,7 +78,7 @@
 
 |---|---|---|---|
 
-| A-030 | Formatting and gates | Add `cargo fmt --all -- --check` to CI and run it on the candidate SHA. Current green CI does not include this gate. | OPEN |
+| A-030 | Formatting and gates | `cargo fmt --all -- --check` is enforced in CI and passed on exact SHA `6af1bd28cd8ca7e862983016ba508b40ed62a2`. | PASS (exact SHA) |
 
 | A-031 | Core feature matrix | CI must exercise default/core-only and the production `full` configuration, all-targets check/build, unit/integration tests, and strict Clippy without feature-unification masking a broken core configuration. Mesh-only and mesh-integrated configurations are tracked in the separate mesh feature plan. | IN PROGRESS |
 
