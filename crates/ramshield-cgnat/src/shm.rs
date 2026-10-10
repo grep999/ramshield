@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering};
 
 pub const SHM_TABLE_CAPACITY: usize = 262_144; // 256K rule slots (~16 MiB at 64 B/slot)
-pub const SHM_PROBE_LIMIT: usize = 8;
+pub const SHM_PROBE_LIMIT: usize = 4;
 
 /// Stable Rust/C slot key for an IPv4 network prefix.
 pub fn subnet_key(network: u32, prefix_len: u8) -> u64 {
