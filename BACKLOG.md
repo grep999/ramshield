@@ -150,7 +150,7 @@ The following source-level fixes were applied directly to `audit-branch`:
 
 ### Findings checked against current source
 
-- The invalid `Store::set_block_state` call is **not present** in the tracked enforcement source. The suggested `update_ip` replacement in the report would violate the documented `Store::update_ip` contract, which is for statistics-only mutation; enforcement must retain its block-state-authoritative write path.
+- Removed obsolete `pp.patch`: it contained an invalid `Store::set_block_state` call, unconditional mesh imports, bare lock unwraps, and an `unsafe { mem::zeroed() }` test harness. These hunks were not applied to the tracked source. The suggested `update_ip` replacement in the report would violate the documented `Store::update_ip` contract, which is for statistics-only mutation; enforcement must retain its block-state-authoritative write path.
 - Mesh fields/modules and boot-time mesh construction are already gated behind `feature = "mesh"`; the dependency is optional.
 - The enforcement task's `JoinHandle` is selected by the pipeline; unexpected termination returns a fatal pipeline error rather than leaving the daemon silently healthy.
 - The ExaBGP FIFO bridge already opens the FIFO with `O_RDWR`, preventing EOF on writer restart.
