@@ -31,11 +31,12 @@ import subprocess
 import sys
 import json
 import time
+from pathlib import Path
 
 # Constants
-WORKSPACE = "/home/m/vehicle_of_rationalism/ramshield/beta/rs"
+WORKSPACE = str(Path(__file__).resolve().parent)
 SAFETY_LEVELS = {
-    "dangerous": {"rustup default", "cargo install", "sudo", "#"},
+    "dangerous": {"rustup default", "cargo install", "sudo"},
 }
 
 # Track execution
