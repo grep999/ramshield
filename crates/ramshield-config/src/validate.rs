@@ -1,5 +1,10 @@
 use super::*;
 
+/// Hard ceiling for the shared per-IP pre-aggregation map. Keep this aligned
+/// with the default so an accidental or hostile config cannot disable the
+/// memory-pressure flush by setting an effectively unbounded size.
+const MAX_PRE_AGGS_SIZE: usize = 1_000_000;
+
 impl Config {
     /// Validate configuration with sensible bounds and error messages.
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -58,8 +63,12 @@ impl Config {
         if self.detection.subnet_window_threshold < 10 {
             anyhow::bail!("detection.subnet_window_threshold should be at least 10");
         }
-        if self.detection.pre_aggs_max_size == 0 {
-            anyhow::bail!("detection.pre_aggs_max_size must be > 0");
+        if self.detection.pre_aggs_max_size == 0
+            || self.detection.pre_aggs_max_size > MAX_PRE_AGGS_SIZE
+        {
+            anyhow::bail!(
+                "detection.pre_aggs_max_size must be between 1 and {MAX_PRE_AGGS_SIZE}"
+            );
         }
 
         // L7 detector validation
