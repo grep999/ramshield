@@ -62,7 +62,7 @@
 
 | A-018 | WAL / checkpoint recovery | Existing golden/crash/fuzz suite plus boundary tests: crash/restart keeps checkpoint+durable prefix, disk-full after checkpoint preserves prior state, truncated tail repair is idempotent. Fault seams: fail_next_write/diskfull/dir_fsync. | PASS (exact SHA pending CI) |
 
-| A-019 | Dashboard / IPC auth | Test session expiry, login throttling, cookie flags, CSRF/origin boundaries, replay rejection, malformed requests, and failure-safe config. Validate actual deployment defaults, not only helper functions. | OPEN |
+| A-019 | Dashboard / IPC auth | Session TTL expiry, cookie HttpOnly/SameSite/Secure, per-IP lockout, invalid PHC fail-closed, oversized password reject, deployment defaults (loopback, 8h TTL, lockout 50). IPC: replay reject, malformed frames, parse_ipc_keys fail-closed. | PASS (exact SHA pending CI) |
 
 | A-020 | Resource bounds elsewhere | Audit all attacker-influenced queues, maps, buffers, task spawns, native event channels, analytics windows, and per-IP state for hard caps and overload signals. Each finding must include a saturation regression test. | OPEN |
 

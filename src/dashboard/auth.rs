@@ -22,6 +22,16 @@ use tracing::warn;
 
 const COOKIE_NAME: &str = "rs_session";
 
+/// Build the Set-Cookie value for a session token. Pure so unit tests can
+/// assert HttpOnly / SameSite / Secure / Path / Max-Age without the full
+/// login handler.
+pub(crate) fn session_cookie_value(token: &str, ttl_secs: u64, secure: bool) -> String {
+    let secure_flag = if secure { "; Secure" } else { "" };
+    format!(
+        "{COOKIE_NAME}={token}; HttpOnly; SameSite=Lax{secure_flag}; Path=/; Max-Age={ttl_secs}"
+    )
+}
+
 #[derive(Clone)]
 pub struct AuthState {
     /// Argon2 PHC string from config. RwLock so a hot-reloaded config can
@@ -117,9 +127,14 @@ impl AuthState {
             }
         }
         let parallelism = argon2_parallelism.max(1);
+        // Production floors at 60s. Tests allow 1s to prove expiry without long sleeps.
+        #[cfg(not(test))]
+        let min_ttl = 60u64;
+        #[cfg(test)]
+        let min_ttl = 1u64;
         Self {
             password_hash: Arc::new(std::sync::RwLock::new(password_hash)),
-            ttl: Duration::from_secs(ttl_secs.max(60)),
+            ttl: Duration::from_secs(ttl_secs.max(min_ttl)),
             sessions: Arc::new(DashMap::with_hasher(ahash::RandomState::new())),
             max_login_attempts,
             max_password_length,
@@ -399,14 +414,7 @@ async fn login_submit(
     match verified {
         Some(token) => {
             auth.register_session(&token);
-            let secure = if auth.secure_cookie { "; Secure" } else { "" };
-            let cookie = format!(
-                "{}={}; HttpOnly; SameSite=Lax{}; Path=/; Max-Age={}",
-                COOKIE_NAME,
-                token,
-                secure,
-                auth.ttl.as_secs()
-            );
+            let cookie = session_cookie_value(&token, auth.ttl.as_secs(), auth.secure_cookie);
             // ponytail: cookie value is a hex token (header::HeaderValue::from_str
             // accepts it); attrs are ASCII constants. The match is
             // belt-and-suspenders. If the cookie ever embeds user-supplied bytes,
@@ -528,5 +536,112 @@ mod tests {
         // Same Arc-shared state seen through a clone.
         let b = a.clone();
         assert!(b.is_locked(attacker));
+    }
+
+    #[test]
+    fn session_expires_after_ttl() {
+        let a = AuthState::new(
+            Some(hash_of("hunter2")),
+            1,
+            50,
+            1024,
+            vec![],
+            true,
+            Arc::new(ramshield_metrics::Metrics::new()),
+            4,
+        );
+        let tok = login(&a, "hunter2").expect("login");
+        assert!(a.validate(&tok));
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(!a.validate(&tok), "session must expire after TTL");
+    }
+
+    #[test]
+    fn cookie_flags_http_only_samesite_secure_and_path() {
+        let c = session_cookie_value("abc123", 3600, true);
+        assert!(c.contains("HttpOnly"), "{c}");
+        assert!(c.contains("SameSite=Lax"), "{c}");
+        assert!(c.contains("Secure"), "{c}");
+        assert!(c.contains("Path=/"), "{c}");
+        assert!(c.contains("Max-Age=3600"), "{c}");
+        assert!(c.starts_with("rs_session=abc123"), "{c}");
+        let plain = session_cookie_value("tok", 60, false);
+        assert!(!plain.contains("Secure"), "{plain}");
+        assert!(
+            plain.contains("HttpOnly") && plain.contains("SameSite=Lax"),
+            "{plain}"
+        );
+    }
+
+    #[test]
+    fn login_lockout_blocks_after_max_attempts() {
+        let a = AuthState::new(
+            Some(hash_of("hunter2")),
+            3600,
+            3,
+            1024,
+            vec![],
+            true,
+            Arc::new(ramshield_metrics::Metrics::new()),
+            4,
+        );
+        let ip = IpAddr::from([9, 9, 9, 9]);
+        for _ in 0..3 {
+            a.note_failure(ip);
+        }
+        assert!(a.is_locked(ip));
+        assert!(!a.is_locked(IpAddr::from([8, 8, 8, 8])));
+    }
+
+    #[test]
+    fn invalid_phc_hash_never_authenticates() {
+        let a = AuthState::new(
+            Some("not-a-valid-phc-hash".into()),
+            3600,
+            50,
+            1024,
+            vec![],
+            true,
+            Arc::new(ramshield_metrics::Metrics::new()),
+            4,
+        );
+        assert!(a.enabled());
+        assert!(login(&a, "anything").is_none());
+    }
+
+    #[test]
+    fn oversized_password_is_rejected() {
+        let a = AuthState::new(
+            Some(hash_of("hunter2")),
+            3600,
+            50,
+            16,
+            vec![],
+            true,
+            Arc::new(ramshield_metrics::Metrics::new()),
+            4,
+        );
+        assert!(a.verify_password(&"x".repeat(32)).is_none());
+    }
+
+    #[test]
+    fn sanitize_html_neutralizes_markup() {
+        let s = sanitize_html(r#"<script>alert(1)</script>&""#);
+        assert!(!s.contains('<') && !s.contains('>'), "{s}");
+        assert!(s.contains("&amp;"), "{s}");
+    }
+
+    #[test]
+    fn deployment_defaults_are_loopback_with_finite_ttl_and_lockout() {
+        let d = ramshield_config::DashboardConfig::default();
+        assert!(
+            d.http_addr.starts_with("127.0.0.1"),
+            "default bind must be loopback: {}",
+            d.http_addr
+        );
+        assert_eq!(d.session_ttl_secs, 28_800);
+        assert_eq!(d.max_login_attempts, 50);
+        assert!(d.admin_password_hash.is_none());
+        assert_eq!(d.cookie_secure, None);
     }
 }

@@ -187,3 +187,54 @@ fn enforcement_queue_full_returns_503() {
     // The response builder turns this into 503 "enforcement queue full"
     // Verified by the try_send match arms at 758/813/847/880.
 }
+
+#[test]
+fn verify_frame_auth_rejects_replay() {
+    let keys = vec![(
+        "k1".to_string(),
+        b"0123456789abcdef0123456789abcdef".to_vec(),
+    )];
+    let store = ReplayStore::new(64, Duration::from_secs(65));
+    let frame = signed_frame("k1", b"0123456789abcdef0123456789abcdef");
+    assert!(verify_frame_auth(&keys, &frame, &store).is_ok());
+    assert!(
+        verify_frame_auth(&keys, &frame, &store).is_err(),
+        "identical frame must be rejected as replay"
+    );
+}
+
+#[test]
+fn verify_frame_auth_rejects_malformed_frames() {
+    let keys = vec![(
+        "k1".to_string(),
+        b"0123456789abcdef0123456789abcdef".to_vec(),
+    )];
+    let store = ReplayStore::new(64, Duration::from_secs(65));
+    assert!(verify_frame_auth(&keys, b"not-json", &store).is_err());
+    assert!(verify_frame_auth(&keys, b"[]", &store).is_err());
+    assert!(verify_frame_auth(&keys, br#"{"type":"get_status"}"#, &store).is_err());
+    assert!(verify_frame_auth(&keys, br#"{"auth":"x","type":"get_status"}"#, &store).is_err());
+    assert!(
+        verify_frame_auth(
+            &keys,
+            br#"{"auth":{"key_id":"k1"},"type":"get_status"}"#,
+            &store
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn parse_ipc_keys_fails_closed_on_bad_entries() {
+    use super::parse_ipc_keys;
+    use crate::config::Config;
+    let mut cfg = Config::default();
+    cfg.ipc.auth_keys = vec!["bad".into()];
+    assert!(parse_ipc_keys(&cfg).is_err());
+    cfg.ipc.auth_keys = vec!["k1:not-hex".into()];
+    assert!(parse_ipc_keys(&cfg).is_err());
+    cfg.ipc.auth_keys = vec!["k1:abcd".into()];
+    assert!(parse_ipc_keys(&cfg).is_err());
+    cfg.ipc.auth_keys = vec!["k1:0123456789abcdef0123456789abcdef".into()];
+    assert!(parse_ipc_keys(&cfg).is_ok());
+}
