@@ -217,6 +217,12 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn command_succeeded(command: &mut std::process::Command) -> bool {
+    command
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
 /// Check host readiness non-interactively. Exit 0 if all gates pass.
 fn run_doctor() {
     let mut problems: Vec<String> = Vec::new();
@@ -243,12 +249,9 @@ fn run_doctor() {
             problems.push("IPC auth_keys empty".into());
         }
         let iface = c.xdp.interface;
-        let iface_ok = std::process::Command::new("ip")
-            .arg("link")
-            .arg("show")
-            .arg(iface.clone())
-            .output()
-            .is_ok();
+        let mut iface_check = std::process::Command::new("ip");
+        iface_check.args(["link", "show"]).arg(iface.clone());
+        let iface_ok = command_succeeded(&mut iface_check);
         if iface_ok {
             info!("doctor: XDP interface {iface} exists");
         } else {
@@ -292,6 +295,17 @@ mod cli_tests {
 
     fn cfg(v: &[&str]) -> Option<String> {
         parse_args(&args(v)).unwrap().0
+    }
+
+    #[test]
+    fn command_succeeded_requires_zero_exit_status() {
+        let mut success = std::process::Command::new("sh");
+        success.args(["-c", "exit 0"]);
+        assert!(super::command_succeeded(&mut success));
+
+        let mut failure = std::process::Command::new("sh");
+        failure.args(["-c", "exit 1"]);
+        assert!(!super::command_succeeded(&mut failure));
     }
 
     #[test]
