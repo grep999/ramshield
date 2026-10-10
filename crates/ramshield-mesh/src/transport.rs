@@ -69,7 +69,10 @@ pub struct BroadcastReport {
 
 impl BroadcastReport {
     pub fn written_count(&self) -> usize {
-        self.peers.iter().filter(|p| p.outcome == PeerSendOutcome::Written).count()
+        self.peers
+            .iter()
+            .filter(|p| p.outcome == PeerSendOutcome::Written)
+            .count()
     }
 
     pub fn failed_count(&self) -> usize {
@@ -78,7 +81,10 @@ impl BroadcastReport {
 
     pub fn all_written(&self) -> bool {
         self.task_failures == 0
-            && self.peers.iter().all(|p| p.outcome == PeerSendOutcome::Written)
+            && self
+                .peers
+                .iter()
+                .all(|p| p.outcome == PeerSendOutcome::Written)
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -494,16 +500,15 @@ mod frame_tests {
     use super::{
         Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES, MeshHandle, MeshMessage,
         PeerSendOutcome, chunk_sync, push_frame_bytes, read_bounded_frame,
-        read_bounded_frame_with_timeout,
-        valid_message, validate_bind_args, with_timeout,
+        read_bounded_frame_with_timeout, valid_message, validate_bind_args, with_timeout,
     };
     use crate::aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
     use std::time::Duration;
-    use tokio::io::AsyncWriteExt;
     use std::{
         net::{IpAddr, Ipv6Addr, SocketAddr},
         sync::Arc,
     };
+    use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
 
     #[test]
