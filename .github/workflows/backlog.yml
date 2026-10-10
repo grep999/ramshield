@@ -1,0 +1,259 @@
+# Backlog gate — production-essential task evidence for audit-branch.
+# Maps to BACKLOG.md P0/P1/P2 acceptance commands.
+# Does not merge, force-push, or claim 100/100. Binary evidence only.
+name: Backlog Gate
+
+on:
+  push:
+    branches: [audit-branch]
+  pull_request:
+    branches: [audit-branch, master, main]
+  workflow_dispatch:
+    inputs:
+      task_filter:
+        description: "Optional task id focus (e.g. A-016). Empty = full gate."
+        required: false
+        default: ""
+      run_full_workspace:
+        description: "Run full workspace test/clippy (slower)."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backlog-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  TASK_FILTER: ${{ github.event.inputs.task_filter || '' }}
+
+jobs:
+  inventory:
+    name: Backlog inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      head_sha: ${{ steps.meta.outputs.head_sha }}
+      open_p0: ${{ steps.parse.outputs.open_p0 }}
+      open_p1: ${{ steps.parse.outputs.open_p1 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Record SHAs
+        id: meta
+        run: |
+          set -euo pipefail
+          HEAD_SHA=$(git rev-parse HEAD)
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "### Backlog gate metadata" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Candidate SHA: \`$HEAD_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Ref: \`${{ github.ref }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Event: \`${{ github.event_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Task filter: \`${TASK_FILTER:-full}\`" >> "$GITHUB_STEP_SUMMARY"
+          test -f BACKLOG.md
+
+      - name: Parse OPEN tasks from BACKLOG.md
+        id: parse
+        run: |
+          set -euo pipefail
+          # Status column is last; count OPEN rows for P0/P1 tables only.
+          OPEN_P0=$(awk '
+            /^## P0/ {sec=1; next}
+            /^## / {sec=0}
+            sec && /^\| A-[0-9]+ / && /\| OPEN[ |]*$/ {c++}
+            END {print c+0}
+          ' BACKLOG.md)
+          OPEN_P1=$(awk '
+            /^## P1/ {sec=1; next}
+            /^## / {sec=0}
+            sec && /^\| A-[0-9]+ / && /\| OPEN[ |]*$/ {c++}
+            END {print c+0}
+          ' BACKLOG.md)
+          echo "open_p0=$OPEN_P0" >> "$GITHUB_OUTPUT"
+          echo "open_p1=$OPEN_P1" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Inventory"
+            echo "- OPEN P0 rows (text status): **$OPEN_P0**"
+            echo "- OPEN P1 rows (text status): **$OPEN_P1**"
+            echo ""
+            echo "Text status is not PASS evidence. Gates below are binary."
+            echo ""
+            echo "| ID | Status cell |"
+            echo "|---|---|"
+            awk -F'|' '
+              /^\| A-[0-9]+ / {
+                id=$2; gsub(/^ +| +$/,"",id);
+                st=$NF; gsub(/^ +| +$/,"",st);
+                if (id ~ /^A-/) print "| " id " | " st " |"
+              }
+            ' BACKLOG.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload backlog snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: backlog-md-${{ github.sha }}
+          path: BACKLOG.md
+          retention-days: 14
+
+  fmt:
+    name: A-030 Formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-08-29
+          components: rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+  tpacket:
+    name: A-016 TPACKET bounds
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-08-29
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install bpf-linker
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/bpf-linker.tar.zst \
+            https://github.com/aya-rs/bpf-linker/releases/download/v0.11.1/bpf-linker-x86_64-unknown-linux-musl.tar.zst
+          tar --zstd -xf /tmp/bpf-linker.tar.zst -C /tmp
+          sudo mv /tmp/bpf-linker /usr/local/bin/
+          bpf-linker --version
+      - name: TPACKET unit tests
+        run: cargo test --locked --lib tpacket -- --nocapture
+      - name: Lib tests (report only non-tpacket failures)
+        id: lib
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cargo test --locked --lib 2>&1 | tee /tmp/lib-test.log
+      - name: Summarize lib test outcome
+        if: always()
+        run: |
+          if [ "${{ steps.lib.outcome }}" = "success" ]; then
+            echo "Lib tests: PASS" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Lib tests: FAIL (baseline or new — inspect log; tpacket job already gated A-016)" >> "$GITHUB_STEP_SUMMARY"
+            tail -40 /tmp/lib-test.log || true
+            # Soft signal: do not fail A-016 job solely on unrelated WAF/dashboard failures.
+          fi
+
+  core-matrix:
+    name: A-031 Core matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.run_full_workspace != 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-08-29
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install bpf-linker
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/bpf-linker.tar.zst \
+            https://github.com/aya-rs/bpf-linker/releases/download/v0.11.1/bpf-linker-x86_64-unknown-linux-musl.tar.zst
+          tar --zstd -xf /tmp/bpf-linker.tar.zst -C /tmp
+          sudo mv /tmp/bpf-linker /usr/local/bin/
+          bpf-linker --version
+      - name: Check (locked, all-targets, all-features)
+        run: cargo check --workspace --locked --all-targets --all-features
+      - name: Build (locked, all-targets, all-features)
+        run: cargo build --workspace --locked --all-targets --all-features
+      - name: Test workspace (features full)
+        run: cargo test --workspace --locked --features full
+      - name: Clippy strict
+        run: cargo clippy --workspace --locked --all-targets --features full -- -D warnings
+
+  diff-check:
+    name: Diff whitespace gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch master for compare
+        run: |
+          set -euo pipefail
+          git fetch origin master:refs/remotes/origin/master || git fetch origin main:refs/remotes/origin/master
+      - name: git diff --check origin/master...HEAD
+        run: git diff --check origin/master...HEAD
+
+  evidence:
+    name: Evidence manifest
+    runs-on: ubuntu-latest
+    needs: [inventory, fmt, tpacket, core-matrix, diff-check]
+    if: always()
+    steps:
+      - name: Write evidence
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cat > evidence/manifest.md << MANIFEST
+          # Backlog gate evidence
+
+          - Timestamp (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          - Candidate SHA: ${{ needs.inventory.outputs.head_sha }}
+          - Workflow: ${{ github.workflow }} run ${{ github.run_id }}
+          - URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - OPEN P0 (text): ${{ needs.inventory.outputs.open_p0 }}
+          - OPEN P1 (text): ${{ needs.inventory.outputs.open_p1 }}
+
+          ## Job results
+
+          | Job | Result |
+          |-----|--------|
+          | inventory | ${{ needs.inventory.result }} |
+          | fmt (A-030) | ${{ needs.fmt.result }} |
+          | tpacket (A-016) | ${{ needs.tpacket.result }} |
+          | core-matrix (A-031) | ${{ needs.core-matrix.result }} |
+          | diff-check | ${{ needs.diff-check.result }} |
+
+          ## Rules
+
+          - PASS on a task requires regression evidence on this exact SHA.
+          - Green CI alone is not 100/100.
+          - Do not merge/force-push as part of backlog workflow.
+          MANIFEST
+          cat evidence/manifest.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backlog-evidence-${{ github.sha }}
+          path: evidence/
+          retention-days: 30
+
+      - name: Fail if required gates failed
+        run: |
+          set -euo pipefail
+          fail=0
+          for r in \
+            "${{ needs.fmt.result }}" \
+            "${{ needs.tpacket.result }}" \
+            "${{ needs.core-matrix.result }}" \
+            "${{ needs.diff-check.result }}"
+          do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "Required gate result: $r"
+              fail=1
+            fi
+          done
+          exit "$fail"
