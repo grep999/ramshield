@@ -2,7 +2,7 @@ use crate::aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterUnblockDelta};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use std::{collections::VecDeque, net::SocketAddr, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::VecDeque, future::Future, net::SocketAddr, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
 use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::{Mutex, Semaphore}};
 use tracing::{debug, warn};
 
@@ -14,18 +14,20 @@ const MAX_SYNC_ENTRIES: usize = 4096;
 const MAX_INCOMING_QUEUE: usize = 8192;
 const MAX_PEER_READERS: usize = 256;
 const MAX_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_PEER_WRITERS: usize = 64;
+const MAX_PEER_WRITE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MeshMessage { Block(ClusterBlockDelta), Unblock(ClusterUnblockDelta), Sync { blocks: Vec<ClusterBlockDelta>, unblocks: Vec<ClusterUnblockDelta> } }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Envelope { ts_ms: u64, node_id: u32, body: MeshMessage, mac: String }
 #[derive(Clone)]
-pub struct MeshHandle { node_id: u32, blocklist: Arc<AworsetBlocklist>, peers: Arc<Vec<SocketAddr>>, auth_key: Arc<Vec<u8>>, incoming: Arc<Mutex<VecDeque<MeshMessage>>>, readers: Arc<Semaphore> }
+pub struct MeshHandle { node_id: u32, blocklist: Arc<AworsetBlocklist>, peers: Arc<Vec<SocketAddr>>, auth_key: Arc<Vec<u8>>, incoming: Arc<Mutex<VecDeque<MeshMessage>>>, readers: Arc<Semaphore>, writers: Arc<Semaphore> }
 
 impl MeshHandle {
     pub async fn bind(node_id: u32, blocklist: Arc<AworsetBlocklist>, listen: SocketAddr, peers: Vec<SocketAddr>, auth_key: Vec<u8>) -> std::io::Result<Self> {
         let listener = TcpListener::bind(listen).await?;
-        let handle = Self { node_id, blocklist, peers: Arc::new(peers), auth_key: Arc::new(auth_key), incoming: Arc::new(Mutex::new(VecDeque::new())), readers: Arc::new(Semaphore::new(MAX_PEER_READERS)) };
+        let handle = Self { node_id, blocklist, peers: Arc::new(peers), auth_key: Arc::new(auth_key), incoming: Arc::new(Mutex::new(VecDeque::new())), readers: Arc::new(Semaphore::new(MAX_PEER_READERS)), writers: Arc::new(Semaphore::new(MAX_PEER_WRITERS)) };
         let accept_handle = handle.clone();
         tokio::spawn(async move {
             loop { match listener.accept().await { Ok((stream, _)) => {
@@ -38,7 +40,31 @@ impl MeshHandle {
         tokio::spawn(async move { let mut tick=tokio::time::interval(Duration::from_millis(ANTI_ENTROPY_MS)); loop { tick.tick().await; sync_handle.broadcast_sync().await; } });
         Ok(handle)
     }
-    pub async fn broadcast(&self, body: MeshMessage) { for peer in self.peers.iter().copied() { let h=self.clone(); let msg=body.clone(); tokio::spawn(async move { if let Err(e)=h.send_to(peer,msg).await { debug!(peer=%peer,error=%e,"mesh send failed"); } }); } }
+    /// Send to configured peers with a strict cap on concurrent outbound tasks.
+    /// The permit is acquired before spawning, so there is no unbounded waiter/task queue.
+    pub async fn broadcast(&self, body: MeshMessage) {
+        for peer in self.peers.iter().copied() {
+            let permit = match self.writers.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => {
+                    warn!(peer = %peer, "mesh outbound semaphore closed; peer send skipped");
+                    continue;
+                }
+            };
+            let handle = self.clone();
+            let message = body.clone();
+            tokio::spawn(async move {
+                let _permit = permit;
+                match with_timeout(MAX_PEER_WRITE_TIMEOUT, handle.send_to(peer, message)).await {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                        warn!(peer = %peer, "mesh outbound send timed out");
+                    }
+                    Err(error) => debug!(peer = %peer, error = %error, "mesh send failed"),
+                }
+            });
+        }
+    }
     pub async fn drain(&self) -> Vec<MeshMessage> { let mut q=self.incoming.lock().await; q.drain(..).collect() }
     async fn broadcast_sync(&self) { let (blocks,unblocks)=self.blocklist.snapshot(MAX_SYNC_ENTRIES); if blocks.is_empty() && unblocks.is_empty() { return; } self.broadcast(MeshMessage::Sync{blocks,unblocks}).await; }
     async fn send_to(&self, peer: SocketAddr, body: MeshMessage) -> std::io::Result<()> { let ts_ms=now_ms(); let payload=serde_json::to_vec(&(ts_ms,self.node_id,&body)).map_err(std::io::Error::other)?; let mac=sign(&self.auth_key,&payload)?; let frame=serde_json::to_vec(&Envelope{ts_ms,node_id:self.node_id,body,mac}).map_err(std::io::Error::other)?; if frame.len()>MAX_FRAME { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"mesh frame too large")); } let mut stream=TcpStream::connect(peer).await?; stream.write_all(&frame).await?; stream.write_all(b"\n").await?; Ok(()) }
@@ -52,6 +78,15 @@ impl MeshHandle {
         }
         q.push_back(env.body); }
 }
+async fn with_timeout<F>(timeout: Duration, future: F) -> std::io::Result<()>
+where
+    F: Future<Output = std::io::Result<()>>,
+{
+    tokio::time::timeout(timeout, future)
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "mesh outbound send timed out"))?
+}
+
 fn push_frame_bytes(line: &mut Vec<u8>, bytes: &[u8]) -> std::io::Result<bool> {
     if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
         if line.len() + end > MAX_FRAME {
@@ -99,7 +134,7 @@ fn now_ms()->u64{SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default(
 
 #[cfg(test)]
 mod frame_tests {
-    use super::{push_frame_bytes, read_bounded_frame_with_timeout, MAX_FRAME};
+    use super::{push_frame_bytes, read_bounded_frame_with_timeout, with_timeout, MAX_FRAME};
     use std::time::Duration;
 
     #[test]
@@ -111,6 +146,20 @@ mod frame_tests {
         runtime.block_on(async {
             let (_writer, mut reader) = tokio::io::duplex(8);
             let error = read_bounded_frame_with_timeout(&mut reader, Duration::from_millis(10))
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        });
+    }
+
+    #[test]
+    fn outbound_send_deadline_releases_stalled_send() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async {
+            let error = with_timeout(Duration::from_millis(10), std::future::pending())
                 .await
                 .unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
