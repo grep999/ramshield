@@ -142,7 +142,17 @@ impl EnforcementService {
             action: EnforceAction::Block,
             evidence_source: ramshield_types::EvidenceSource::FleetSignals,
         };
-        let enforce_result = self.enforce(cmd).await;
+        let enforce_result = self.enforce(cmd).await.and_then(|result| {
+            if result.xdp_applied {
+                Ok(result)
+            } else {
+                Err(EnforcementError::Xdp(
+                    result.error.unwrap_or_else(|| {
+                        "mesh block committed but XDP projection was not applied".into()
+                    }),
+                ))
+            }
+        });
         if enforce_result.is_ok() {
             self.mesh_applied_ips.insert(delta.ip);
         }
@@ -178,7 +188,17 @@ impl EnforcementService {
             action: EnforceAction::Unblock,
             evidence_source: ramshield_types::EvidenceSource::FleetSignals,
         };
-        let enforce_result = self.enforce(cmd).await;
+        let enforce_result = self.enforce(cmd).await.and_then(|result| {
+            if result.xdp_applied {
+                Ok(result)
+            } else {
+                Err(EnforcementError::Xdp(
+                    result.error.unwrap_or_else(|| {
+                        "mesh unblock committed but XDP projection was not applied".into()
+                    }),
+                ))
+            }
+        });
         if enforce_result.is_ok() {
             self.mesh_applied_ips.remove(&delta.ip);
         }
@@ -196,7 +216,31 @@ fn should_skip_mesh_unblock(still_blocked: bool, locally_applied: bool) -> bool 
 
 #[cfg(test)]
 mod retry_tests {
-    use super::{should_skip_mesh_block, should_skip_mesh_unblock};
+    use super::{
+        MeshApplyOutcome, MeshApplyReport, should_skip_mesh_block, should_skip_mesh_unblock,
+    };
+    use crate::EnforcementError;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn application_report_distinguishes_applied_ignored_and_failed() {
+        let mut report = MeshApplyReport::default();
+        let ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1));
+
+        report.record(Ok(MeshApplyOutcome::Applied), 7, ip, "block");
+        report.record(Ok(MeshApplyOutcome::Ignored), 7, ip, "duplicate");
+        report.record(
+            Err(EnforcementError::Xdp("test projection failure".into())),
+            7,
+            ip,
+            "block",
+        );
+
+        assert_eq!(report.received, 3);
+        assert_eq!(report.applied, 1);
+        assert_eq!(report.ignored, 1);
+        assert_eq!(report.failed, 1);
+    }
 
     #[test]
     fn unchanged_block_is_retried_until_local_projection_succeeds() {
