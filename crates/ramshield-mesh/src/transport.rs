@@ -14,6 +14,7 @@ const MAX_SYNC_ENTRIES: usize = 4096;
 const MAX_SYNC_FRAME_ENTRIES: usize = 128;
 const MAX_INCOMING_QUEUE: usize = 2048;
 const MAX_PEER_READERS: usize = 256;
+const MAX_CONFIGURED_PEERS: usize = 256;
 const MAX_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PEER_WRITERS: usize = 64;
 const MAX_PEER_WRITE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -27,6 +28,7 @@ pub struct MeshHandle { node_id: u32, blocklist: Arc<AworsetBlocklist>, peers: A
 
 impl MeshHandle {
     pub async fn bind(node_id: u32, blocklist: Arc<AworsetBlocklist>, listen: SocketAddr, peers: Vec<SocketAddr>, auth_key: Vec<u8>) -> std::io::Result<Self> {
+        validate_bind_args(node_id, &peers, &auth_key)?;
         let listener = TcpListener::bind(listen).await?;
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let handle = Self {
@@ -161,6 +163,28 @@ impl MeshHandle {
         }
         q.push_back(env.body); }
 }
+/// Validate the public library boundary as well as the higher-level config.
+fn validate_bind_args(
+    node_id: u32,
+    peers: &[SocketAddr],
+    auth_key: &[u8],
+) -> std::io::Result<()> {
+    let invalid = |message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message);
+    if node_id == 0 {
+        return Err(invalid("mesh node_id must be non-zero"));
+    }
+    if auth_key.len() < 16 {
+        return Err(invalid("mesh authentication key must be at least 16 bytes"));
+    }
+    if peers.len() > MAX_CONFIGURED_PEERS {
+        return Err(invalid("mesh peer list exceeds 256 peers"));
+    }
+    if peers.iter().any(|peer| peer.port() == 0 || peer.ip().is_unspecified()) {
+        return Err(invalid("mesh peers must have a concrete IP address and non-zero port"));
+    }
+    Ok(())
+}
+
 /// Reject authenticated-but-invalid CRDT fields before they can poison the HLC
 /// or amplify the bounded incoming queue. Zero creation time is accepted for
 /// compatibility with peers that predate the created_at_ms field.
@@ -264,9 +288,9 @@ fn now_ms()->u64{SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default(
 
 #[cfg(test)]
 mod frame_tests {
-    use super::{chunk_sync, push_frame_bytes, read_bounded_frame_with_timeout, valid_message, with_timeout, Envelope, MeshHandle, MeshMessage, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES};
+    use super::{chunk_sync, push_frame_bytes, read_bounded_frame_with_timeout, valid_message, validate_bind_args, with_timeout, Envelope, MeshHandle, MeshMessage, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES};
     use crate::aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
-    use std::{net::{IpAddr, Ipv6Addr}, sync::Arc};
+    use std::{net::{IpAddr, Ipv6Addr, SocketAddr}, sync::Arc};
     use tokio::net::TcpListener;
     use std::time::Duration;
 
@@ -283,6 +307,26 @@ mod frame_tests {
                 .unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         });
+    }
+
+    #[test]
+    fn bind_rejects_invalid_node_key_and_peer_configuration() {
+        let valid_key = [7u8; 32];
+        let error = validate_bind_args(0, &[], &valid_key).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        let error = validate_bind_args(1, &[], &[7u8; 15]).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        let peers: Vec<SocketAddr> = (0..=MAX_CONFIGURED_PEERS)
+            .map(|_| "127.0.0.1:1234".parse().expect("peer address"))
+            .collect();
+        let error = validate_bind_args(1, &peers, &valid_key).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        let invalid_peer = ["0.0.0.0:1234".parse().expect("unspecified peer")];
+        let error = validate_bind_args(1, &invalid_peer, &valid_key).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]
