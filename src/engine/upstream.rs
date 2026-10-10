@@ -53,12 +53,27 @@ pub async fn run(
         tokio::select! {
             _ = tick.tick() => {
                 let now = Instant::now();
-                let current = read_rx_bytes(&cfg.interface);
-                let elapsed = now.duration_since(previous_ts).as_secs_f64().max(0.001);
                 let events = metrics.events_ingested.load(std::sync::atomic::Ordering::Relaxed);
-                let rx_bps = current.saturating_sub(previous) as f64 * 8.0 / elapsed;
+                let current = match read_rx_bytes(&cfg.interface) {
+                    Some(bytes) => bytes,
+                    None => {
+                        warn!(interface=%cfg.interface, "upstream RX byte counter unavailable; skipping sample");
+                        previous = None;
+                        previous_events = events;
+                        previous_ts = now;
+                        continue;
+                    }
+                };
+                let Some(previous_bytes) = previous.replace(current) else {
+                    // Establish a fresh baseline after startup or a counter-read
+                    // failure; never interpret missing stats as a zero-byte sample.
+                    previous_events = events;
+                    previous_ts = now;
+                    continue;
+                };
+                let elapsed = now.duration_since(previous_ts).as_secs_f64().max(0.001);
+                let rx_bps = current.saturating_sub(previous_bytes) as f64 * 8.0 / elapsed;
                 let rps = events.saturating_sub(previous_events) as f64 / elapsed;
-                previous = current;
                 previous_events = events;
                 previous_ts = now;
                 let capacity_bps = cfg.link_capacity_mbps as f64 * 1_000_000.0;
@@ -102,19 +117,39 @@ pub async fn run(
     }
 }
 
-fn read_rx_bytes(interface: &str) -> u64 {
+fn read_rx_bytes(interface: &str) -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
         let path = format!("/sys/class/net/{interface}/statistics/rx_bytes");
         std::fs::read_to_string(path)
             .ok()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(0)
+            .and_then(|contents| parse_rx_bytes(&contents))
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = interface;
-        0
+        None
+    }
+}
+
+fn parse_rx_bytes(contents: &str) -> Option<u64> {
+    contents.trim().parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_rx_bytes;
+
+    #[test]
+    fn rx_byte_counter_parses_trimmed_decimal_values() {
+        assert_eq!(parse_rx_bytes(" 12345\n"), Some(12345));
+    }
+
+    #[test]
+    fn rx_byte_counter_rejects_empty_and_malformed_values() {
+        assert_eq!(parse_rx_bytes(""), None);
+        assert_eq!(parse_rx_bytes("not-a-counter"), None);
+        assert_eq!(parse_rx_bytes("-1"), None);
     }
 }
 
