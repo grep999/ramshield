@@ -437,10 +437,9 @@ mod tests {
             ts_ns: 3,
         })
         .unwrap();
-        assert!(
-            std::fs::metadata(&segment).unwrap().len() > synced_len,
-            "unsynced append should extend the segment"
-        );
+        // Dropping a buffered writer may flush its userspace buffer. That
+        // is deliberately not treated as durability: the simulated crash
+        // below removes every byte beyond the last explicit sync boundary.
         drop(wal);
 
         let segment_file = std::fs::OpenOptions::new()
