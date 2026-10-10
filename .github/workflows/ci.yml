@@ -7,6 +7,26 @@ on:
     branches: [main, develop, master, audit-branch]
 
 jobs:
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-08-29
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Audit advisories and yanked crates
+        run: cargo audit --no-yanked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Check dependency advisories, licenses, bans, and sources
+        run: cargo deny check
+
   formatting:
     name: Formatting
     runs-on: ubuntu-latest
