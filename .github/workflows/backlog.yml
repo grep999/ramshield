@@ -20,6 +20,7 @@ on:
         default: true
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -280,6 +281,102 @@ jobs:
           - Do not merge/force-push as part of backlog workflow.
           MANIFEST
           cat evidence/manifest.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Research failed jobs
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          mkdir -p evidence/failure-research
+          echo "# Failed-job research" > evidence/failure-research/research.md
+          echo "- Candidate SHA: ${{ needs.inventory.outputs.head_sha }}" >> evidence/failure-research/research.md
+          echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> evidence/failure-research/research.md
+          gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
+            --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | [.name, .conclusion, .url] | @tsv' \
+            > evidence/failure-research/failed-jobs.tsv 2> evidence/failure-research/jobs-query-error.txt
+          if [ -s evidence/failure-research/failed-jobs.tsv ]; then
+            echo "" >> evidence/failure-research/research.md
+            echo "## Jobs needing investigation" >> evidence/failure-research/research.md
+            cat evidence/failure-research/failed-jobs.tsv >> evidence/failure-research/research.md
+            gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed \
+              > evidence/failure-research/failed-logs.txt 2>&1
+            rc=$?
+            if [ "$rc" -ne 0 ]; then
+              echo "Log retrieval unavailable (exit $rc); inspect job URLs above." >> evidence/failure-research/research.md
+            else
+              echo "" >> evidence/failure-research/research.md
+              echo "## Error signatures (triage clues, not root-cause proof)" >> evidence/failure-research/research.md
+              grep -Ein -m 80 'error\[E[0-9]+\]|error:|FAILED|panicked at|timed out|timeout|No space left|permission denied|429|502|503|connection reset|download failed|cancelled|canceled' evidence/failure-research/failed-logs.txt \
+                > evidence/failure-research/error-signatures.txt
+              if [ -s evidence/failure-research/error-signatures.txt ]; then
+                cat evidence/failure-research/error-signatures.txt >> evidence/failure-research/research.md
+              else
+                echo "No common error signature matched; manual log inspection required." >> evidence/failure-research/research.md
+              fi
+            fi
+          else
+            echo "No failed/cancelled/timed-out jobs were reported, or job query failed." >> evidence/failure-research/research.md
+            if [ -s evidence/failure-research/jobs-query-error.txt ]; then
+              cat evidence/failure-research/jobs-query-error.txt >> evidence/failure-research/research.md
+            fi
+          fi
+          cat evidence/failure-research/research.md >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Reassess failed jobs
+        if: always()
+        continue-on-error: true
+        env:
+          INVENTORY_RESULT: ${{ needs.inventory.result }}
+          FORMAT_RESULT: ${{ needs.fmt.result }}
+          TPACKET_RESULT: ${{ needs.tpacket.result }}
+          CORE_MATRIX_RESULT: ${{ needs.core-matrix.result }}
+          SHM_ABI_RESULT: ${{ needs.shm_abi.result }}
+          DIFF_CHECK_RESULT: ${{ needs.diff-check.result }}
+          CANDIDATE_SHA: ${{ needs.inventory.outputs.head_sha }}
+        run: |
+          set +e
+          mkdir -p evidence/failure-research
+          {
+            echo "# Failure reassessment"
+            echo ""
+            echo "- Candidate SHA: $CANDIDATE_SHA"
+            echo "- Reassessment time (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+            echo "| Gate | Result | Reassessment |"
+            echo "|---|---|---|"
+            for item in \
+              "inventory:$INVENTORY_RESULT" \
+              "formatting:$FORMAT_RESULT" \
+              "TPACKET:$TPACKET_RESULT" \
+              "core-matrix:$CORE_MATRIX_RESULT" \
+              "SHM-ABI:$SHM_ABI_RESULT" \
+              "diff-check:$DIFF_CHECK_RESULT"
+            do
+              name="${item%%:*}"
+              result="${item#*:}"
+              case "$result" in
+                success) assessment="PASS on this run/SHA" ;;
+                failure) assessment="RESEARCH LOGS; identify source/test/tooling cause; add regression evidence before retry" ;;
+                cancelled) assessment="NOT PASS; determine cancellation/concurrency cause; rerun only after cause or scheduling is addressed" ;;
+                timed_out) assessment="NOT PASS; inspect last completed step and resource/network symptoms before changing timeout" ;;
+                skipped) assessment="NOT independently verified; establish whether skip was expected and whether this gate is required" ;;
+                *) assessment="UNRESOLVED ($result); inspect run metadata/log availability and assign next action" ;;
+              esac
+              echo "| $name | $result | $assessment |"
+            done
+            echo ""
+            echo "## Reassessment rules"
+            echo "- A failed, cancelled, timed-out, skipped, or unavailable gate is never re-labelled PASS."
+            echo "- Separate product/source defects from runner, dependency-download, permission, and scheduling failures using exact logs."
+            echo "- Retry only when justified by evidence; preserve the original failure evidence."
+            echo "- If logs are unavailable, record the limitation and assign a bounded manual source/test review."
+            echo "- Do not merge, force-push, reset, rebase, or weaken tests."
+          } > evidence/failure-research/reassessment.md
+          cat evidence/failure-research/reassessment.md >> "$GITHUB_STEP_SUMMARY"
+          exit 0
 
       - uses: actions/upload-artifact@v4
         with:
