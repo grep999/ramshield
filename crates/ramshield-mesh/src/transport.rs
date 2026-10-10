@@ -595,7 +595,7 @@ mod frame_tests {
             assert_eq!(report.failed_count(), 1);
             assert!(!report.all_written());
             assert!(matches!(
-                report.peers[0].outcome,
+                &report.peers[0].outcome,
                 PeerSendOutcome::Failed { .. }
             ));
             handle.shutdown();
