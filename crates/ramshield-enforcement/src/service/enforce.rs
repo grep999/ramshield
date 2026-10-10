@@ -254,6 +254,7 @@ impl EnforcementService {
                 // First-party local/operator blocks clear a prior mesh suppression
                 // and may publish the decision to peers. Mesh-originated blocks do
                 // not rebroadcast, preventing gossip amplification.
+                #[cfg(feature = "mesh")]
                 if cmd.cidr.is_none() && cmd.source != "mesh" {
                     self.mesh_operator_suppressions.remove(&cmd.ip);
                     if let (Some(mesh), Some(handle)) = (&self.mesh_blocklist, &self.mesh_handle) {
@@ -291,6 +292,7 @@ impl EnforcementService {
                 // Mesh deltas are collected under the barrier (CRDT mutation is
                 // store-side); gossip IO happens after drop so the std mutex
                 // never lives across .await (P0-A: run() future must be Send).
+                #[cfg(feature = "mesh")]
                 let mut pending_unban_deltas = Vec::new();
                 if let Some(network) = cmd.cidr {
                     self.cidr_expirations.remove(&network);
@@ -316,17 +318,20 @@ impl EnforcementService {
                     self.drops_by_blocked.remove(&cmd.ip);
                     // Ponytail: mesh CRDT unbans — publish so dashboard reflects
                     // live unblock activity. A CIDR unblock is NOT an IP unban.
-                    if let Some(mesh) = &self.mesh_blocklist {
-                        let deltas = mesh.record_unban(cmd.ip);
-                        self.metrics.inc_mesh_record_unban();
-                        if cmd.source != "mesh" {
-                            pending_unban_deltas = deltas;
+                    #[cfg(feature = "mesh")]
+                    {
+                        if let Some(mesh) = &self.mesh_blocklist {
+                            let deltas = mesh.record_unban(cmd.ip);
+                            self.metrics.inc_mesh_record_unban();
+                            if cmd.source != "mesh" {
+                                pending_unban_deltas = deltas;
+                            }
                         }
+                        if cmd.source != "mesh" {
+                            self.mesh_operator_suppressions.insert(cmd.ip);
+                        }
+                        self.mesh_applied_ips.remove(&cmd.ip);
                     }
-                    if cmd.source != "mesh" {
-                        self.mesh_operator_suppressions.insert(cmd.ip);
-                    }
-                    self.mesh_applied_ips.remove(&cmd.ip);
                     // Purge any pending TTL so a later re-block starts clean.
                     self.detach_expiration(cmd.ip);
                     if let Some(shared) = &self.checkpoint_shared {
@@ -335,6 +340,7 @@ impl EnforcementService {
                 }
                 // Barrier protects WAL+store only; mesh IO and XDP stay outside.
                 drop(_ckpt_guard);
+                #[cfg(feature = "mesh")]
                 if !pending_unban_deltas.is_empty() {
                     if let Some(handle) = &self.mesh_handle {
                         for delta in pending_unban_deltas {
