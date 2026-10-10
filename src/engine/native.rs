@@ -177,7 +177,9 @@ fn run_linux(
         return Err(std::io::Error::other("invalid TPACKET_V3 parameters"));
     }
     // 3. Memory layout fits within a single process.
-    let ring_len = block_size * block_nr;
+    let ring_len = block_size
+        .checked_mul(block_nr)
+        .ok_or_else(|| std::io::Error::other("TPACKET ring length overflow"))?;
     if ring_len > isize::MAX as usize {
         return Err(std::io::Error::other("TPACKET ring too large"));
     }
@@ -257,9 +259,17 @@ fn run_socket(
     while !shutdown.load(Ordering::Acquire) {
         // B02: Safe block index calculation; guard against overflow.
         if block_idx >= block_nr { block_idx = 0; }
-        // B02: Validate block descriptor range before any unsafe read.
+        // Validate the complete block range before reading any descriptor fields.
         if block_idx >= block_nr { break; }
-        let block_ptr = unsafe { (map as *mut u8).add(block_idx * block_size) as *mut TpacketBlockDesc };
+        let block_offset = match block_idx.checked_mul(block_size) {
+            Some(offset) if checked_range_end(offset, block_size, ring_len).is_some() => offset,
+            _ => {
+                warn!(worker, block_idx, block_size, ring_len, "rejecting invalid TPACKET_V3 block offset");
+                unsafe { libc::munmap(map, ring_len); }
+                return Err(std::io::Error::other("TPACKET block offset outside mapped ring"));
+            }
+        };
+        let block_ptr = unsafe { (map as *mut u8).add(block_offset) as *mut TpacketBlockDesc };
         // B02: Read block status safely and re-validate before proceeding.
         let status = unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*block_ptr).hdr.block_status)) };
         if status & TP_STATUS_USER == 0 {
