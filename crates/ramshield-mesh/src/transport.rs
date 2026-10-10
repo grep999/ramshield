@@ -12,7 +12,7 @@ const MAX_CLOCK_SKEW_MS: u64 = 30_000;
 const ANTI_ENTROPY_MS: u64 = 2_000;
 const MAX_SYNC_ENTRIES: usize = 4096;
 const MAX_SYNC_FRAME_ENTRIES: usize = 128;
-const MAX_INCOMING_QUEUE: usize = 8192;
+const MAX_INCOMING_QUEUE: usize = 2048;
 const MAX_PEER_READERS: usize = 256;
 const MAX_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PEER_WRITERS: usize = 64;
@@ -75,7 +75,12 @@ impl MeshHandle {
     }
     async fn send_to(&self, peer: SocketAddr, body: MeshMessage) -> std::io::Result<()> { let ts_ms=now_ms(); let payload=serde_json::to_vec(&(ts_ms,self.node_id,&body)).map_err(std::io::Error::other)?; let mac=sign(&self.auth_key,&payload)?; let frame=serde_json::to_vec(&Envelope{ts_ms,node_id:self.node_id,body,mac}).map_err(std::io::Error::other)?; if frame.len()>MAX_FRAME { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"mesh frame too large")); } let mut stream=TcpStream::connect(peer).await?; stream.write_all(&frame).await?; stream.write_all(b"\n").await?; Ok(()) }
     async fn read_stream(&self, mut stream: TcpStream) { let mut line=match read_bounded_frame_with_timeout(&mut stream, MAX_FRAME_READ_TIMEOUT).await { Ok(Some(frame))=>frame, Ok(None)|Err(_)=>return }; while line.last().is_some_and(|b| *b==b'\n'||*b==b'\r') { line.pop(); } let env:Envelope=match serde_json::from_slice(&line){Ok(v)=>v,Err(_)=>return}; let payload=match serde_json::to_vec(&(env.ts_ms,env.node_id,&env.body)){Ok(v)=>v,Err(_)=>return}; if now_ms().abs_diff(env.ts_ms)>MAX_CLOCK_SKEW_MS || !verify(&self.auth_key,&payload,&env.mac){ warn!(node_id=env.node_id,"mesh frame rejected: authentication or timestamp invalid"); return; }
-        if env.node_id==self.node_id{return;} let mut q = self.incoming.lock().await;
+        if env.node_id==self.node_id{return;}
+        if !valid_message(&env.body, now_ms()) {
+            warn!(node_id = env.node_id, "mesh frame rejected: message fields outside accepted bounds");
+            return;
+        }
+        let mut q = self.incoming.lock().await;
         if q.len() >= MAX_INCOMING_QUEUE {
             // Prefer the newest authenticated state; anti-entropy will recover
             // an older delta if it was displaced. Never allow mesh traffic to
@@ -84,6 +89,29 @@ impl MeshHandle {
         }
         q.push_back(env.body); }
 }
+/// Reject authenticated-but-invalid CRDT fields before they can poison the HLC
+/// or amplify the bounded incoming queue. Zero creation time is accepted for
+/// compatibility with peers that predate the created_at_ms field.
+fn valid_message(message: &MeshMessage, now_ms: u64) -> bool {
+    let latest_creation = now_ms.saturating_add(MAX_CLOCK_SKEW_MS);
+    let valid_block = |delta: &ClusterBlockDelta| {
+        delta.dot.node_id != 0
+            && (delta.created_at_ms == 0 || delta.created_at_ms <= latest_creation)
+            && (delta.expires_at_ms == u64::MAX
+                || delta.expires_at_ms >= delta.created_at_ms)
+    };
+
+    match message {
+        MeshMessage::Block(delta) => valid_block(delta),
+        MeshMessage::Unblock(delta) => delta.dot.node_id != 0,
+        MeshMessage::Sync { blocks, unblocks } => {
+            blocks.len().saturating_add(unblocks.len()) <= MAX_SYNC_FRAME_ENTRIES
+                && blocks.iter().all(valid_block)
+                && unblocks.iter().all(|delta| delta.dot.node_id != 0)
+        }
+    }
+}
+
 /// Split anti-entropy state into small independently authenticated frames.
 fn chunk_sync(
     blocks: &[ClusterBlockDelta],
@@ -164,7 +192,7 @@ fn now_ms()->u64{SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default(
 
 #[cfg(test)]
 mod frame_tests {
-    use super::{chunk_sync, push_frame_bytes, read_bounded_frame_with_timeout, with_timeout, Envelope, MeshMessage, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES};
+    use super::{chunk_sync, push_frame_bytes, read_bounded_frame_with_timeout, valid_message, with_timeout, Envelope, MeshMessage, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES};
     use crate::aworset::{ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
     use std::net::{IpAddr, Ipv6Addr};
     use std::time::Duration;
@@ -182,6 +210,35 @@ mod frame_tests {
                 .unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         });
+    }
+
+    #[test]
+    fn rejects_future_creation_time_that_would_poison_hlc() {
+        let delta = ClusterBlockDelta {
+            ip: IpAddr::V6(Ipv6Addr::LOCALHOST),
+            dot: ClusterDot { node_id: 7, counter: 1 },
+            created_at_ms: u64::MAX,
+            expires_at_ms: u64::MAX,
+            tier: 1,
+        };
+        assert!(!valid_message(&MeshMessage::Block(delta), 1_000));
+    }
+
+    #[test]
+    fn rejects_sync_messages_over_entry_budget() {
+        let blocks: Vec<_> = (0..=MAX_SYNC_FRAME_ENTRIES)
+            .map(|counter| ClusterBlockDelta {
+                ip: IpAddr::V6(Ipv6Addr::LOCALHOST),
+                dot: ClusterDot { node_id: 7, counter: counter as u32 },
+                created_at_ms: 0,
+                expires_at_ms: u64::MAX,
+                tier: 1,
+            })
+            .collect();
+        assert!(!valid_message(
+            &MeshMessage::Sync { blocks, unblocks: Vec::new() },
+            1_000,
+        ));
     }
 
     #[test]
