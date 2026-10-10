@@ -90,9 +90,6 @@ struct Tpacket3Hdr {
     tp_padding2: [u8; 8],
 }
 
-#[cfg(target_os = "linux")]
-fn align16(v: usize) -> usize { (v + (TPACKET_ALIGNMENT - 1)) & !(TPACKET_ALIGNMENT - 1) }
-
 pub fn spawn(interface: String, max_events_per_sec: u64, trusted_overlay_cidrs: Vec<IpNetwork>, tx: Sender<ConnectionEvent>, shutdown: Arc<AtomicBool>) -> std::io::Result<std::thread::JoinHandle<()>> {
     #[cfg(target_os = "linux")]
     {
@@ -271,8 +268,6 @@ fn run_socket(
             continue;
         }
         std::sync::atomic::fence(Ordering::Acquire);
-        let num = unsafe { (*block_ptr).hdr.num_pkts };
-        let first = unsafe { (*block_ptr).hdr.offset_to_first_pkt as usize };
         // Validate kernel-provided lengths before using packet offsets.
         let blk_len = unsafe { (*block_ptr).hdr.blk_len } as usize;
         if !valid_tpacket_block_len(blk_len, block_size) {
@@ -285,7 +280,6 @@ fn run_socket(
         let num = unsafe { (*block_ptr).hdr.num_pkts };
         let first = unsafe { (*block_ptr).hdr.offset_to_first_pkt as usize };
         let mut off = first;
-        let mut malformed = false;
         for packet_idx in 0..num {
             let header_abs = match checked_tpacket_header_offset(
                 block_idx, block_size, ring_len, blk_len, off,
@@ -293,7 +287,6 @@ fn run_socket(
                 Some(value) => value,
                 None => {
                     warn!(worker, block_idx, packet_idx, off, blk_len, "rejecting invalid TPACKET_V3 packet-header offset");
-                    malformed = true;
                     break;
                 }
             };
@@ -302,7 +295,7 @@ fn run_socket(
             let hdr = unsafe { (map as *const u8).add(header_abs) as *const Tpacket3Hdr };
             let snaplen = unsafe { (*hdr).tp_snaplen as usize };
             let mac = unsafe { (*hdr).tp_mac as usize };
-            let (header_abs, packet_off) = match checked_tpacket_packet_offsets(
+            let (_header_abs, packet_off) = match checked_tpacket_packet_offsets(
                 block_idx, block_size, ring_len, blk_len, off, mac, snaplen,
             ) {
                 Some(value) if mac <= frame_size && snaplen <= frame_size => value,
@@ -312,9 +305,6 @@ fn run_socket(
                     break;
                 }
             };
-            // Revalidate the header as part of the combined range check above;
-            // keep the binding explicit to make the pre-dereference invariant clear.
-            let _validated_header_abs = header_abs;
             // SAFETY: checked_tpacket_packet_offsets proves [packet_off,
             // packet_off + snaplen) lies in the current block and mapped ring.
             let packet = unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
@@ -330,10 +320,6 @@ fn run_socket(
                     break;
                 }
             }
-        }
-        if malformed {
-            // The malformed descriptor is observable in logs and the block is
-            // recycled so a corrupt block cannot stall the capture ring.
         }
         std::sync::atomic::fence(Ordering::Release);
         unsafe { std::ptr::write_volatile(std::ptr::addr_of_mut!((*block_ptr).hdr.block_status), TP_STATUS_KERNEL); }
