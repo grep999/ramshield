@@ -48,6 +48,9 @@ pub struct AuthState {
     /// every admin with 50 garbage POSTs (process-wide DoS). Windowed per IP:
     /// failures older than LOCKOUT_WINDOW decay and the slot is reclaimed.
     failures: Arc<DashMap<IpAddr, FailureWindow, ahash::RandomState>>,
+    /// Serializes failure-window admission so unique-source floods cannot race
+    /// past the hard entry cap.
+    failure_lock: Arc<std::sync::Mutex<()>>,
     /// Last time the session store was swept. Used by validate() to throttle
     /// the O(n) retain to once per SWEEP_INTERVAL instead of every request.
     last_sweep: Arc<std::sync::atomic::AtomicI64>,
@@ -140,6 +143,7 @@ impl AuthState {
             max_password_length,
             trusted_proxies: Arc::new(trusted_proxies),
             failures: Arc::new(DashMap::with_hasher(ahash::RandomState::new())),
+            failure_lock: Arc::new(std::sync::Mutex::new(())),
             last_sweep: Arc::new(std::sync::atomic::AtomicI64::new(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -195,28 +199,38 @@ impl AuthState {
     }
 
     fn note_failure(&self, ip: IpAddr) {
-        // P3 fix: entries were only reclaimed when the SAME ip returned —
-        // a many-source (IPv6-rotating) bad-password flood grew the map
-        // without bound. Cheap cap: sweep expired windows past 10k entries.
-        if self.failures.len() > 10_000 {
-            self.failures
-                .retain(|_, w| w.first_fail.elapsed() < LOCKOUT_WINDOW);
+        // The write lock makes capacity admission atomic across concurrent
+        // login handlers. Existing IPs keep their window; new IPs at capacity
+        // evict one tracked slot rather than growing memory or scanning the
+        // whole map on every attacker-controlled source address.
+        const MAX_TRACKED_FAILURE_IPS: usize = 10_000;
+        let _guard = self
+            .failure_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if let Some(mut window) = self.failures.get_mut(&ip) {
+            if window.first_fail.elapsed() >= LOCKOUT_WINDOW {
+                window.count = 1;
+                window.first_fail = Instant::now();
+            } else {
+                window.count = window.count.saturating_add(1);
+            }
+            return;
         }
-        self.failures
-            .entry(ip)
-            .and_modify(|w| {
-                if w.first_fail.elapsed() >= LOCKOUT_WINDOW {
-                    // Window expired — restart it with this failure.
-                    w.count = 1;
-                    w.first_fail = Instant::now();
-                } else {
-                    w.count += 1;
-                }
-            })
-            .or_insert(FailureWindow {
+
+        if self.failures.len() >= MAX_TRACKED_FAILURE_IPS {
+            if let Some(victim) = self.failures.iter().next().map(|entry| *entry.key()) {
+                self.failures.remove(&victim);
+            }
+        }
+        self.failures.insert(
+            ip,
+            FailureWindow {
                 count: 1,
                 first_fail: Instant::now(),
-            });
+            },
+        );
     }
 
     /// Pure password verification — no shared state, safe to run on a
@@ -540,6 +554,53 @@ mod tests {
         // Same Arc-shared state seen through a clone.
         let b = a.clone();
         assert!(b.is_locked(attacker));
+    }
+
+    #[test]
+    fn failure_tracking_is_hard_bounded_under_unique_ip_flood() {
+        const WORKERS: u32 = 8;
+        const IPS_PER_WORKER: u32 = 2_000;
+        let a = AuthState::new(
+            Some("not-a-valid-phc-hash".into()),
+            3600,
+            3,
+            1024,
+            vec![],
+            true,
+            Arc::new(ramshield_metrics::Metrics::new()),
+            4,
+        );
+
+        let workers: Vec<_> = (0..WORKERS)
+            .map(|worker| {
+                let auth = a.clone();
+                std::thread::spawn(move || {
+                    for i in 0..IPS_PER_WORKER {
+                        let ip = IpAddr::from([
+                            10,
+                            worker as u8,
+                            ((i >> 8) & 0xff) as u8,
+                            (i & 0xff) as u8,
+                        ]);
+                        auth.note_failure(ip);
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().expect("failure-tracking worker");
+        }
+
+        assert!(
+            a.failures.len() <= 10_000,
+            "unique-source login flood exceeded hard cap: {}",
+            a.failures.len()
+        );
+        assert_eq!(
+            a.failures.len(),
+            10_000,
+            "the map should fill to, but never exceed, its configured cap"
+        );
     }
 
     #[test]
