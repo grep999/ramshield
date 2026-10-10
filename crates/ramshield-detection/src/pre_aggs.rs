@@ -10,11 +10,27 @@ impl DetectionEngine {
         if local.is_empty() {
             return;
         }
+        let max_entries = self.config.load().detection.pre_aggs_max_size;
         for (ip, agg) in local.drain() {
-            self.pre_aggs
-                .entry(ip)
-                .and_modify(|cur| cur.merge_with(&agg))
-                .or_insert(agg);
+            // Serialize only the batch-boundary merge path, not per-event
+            // ingestion. If the shared map is full and this is a new key,
+            // flush before admitting it; the current aggregate remains owned
+            // locally until there is room, so pressure never drops counts.
+            loop {
+                let guard = self
+                    .pre_aggs_merge_lock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if self.pre_aggs.contains_key(&ip) || self.pre_aggs.len() < max_entries {
+                    self.pre_aggs
+                        .entry(ip)
+                        .and_modify(|cur| cur.merge_with(&agg))
+                        .or_insert(agg);
+                    break;
+                }
+                drop(guard);
+                self.flush_pre_aggs_to_store();
+            }
         }
     }
 
@@ -51,6 +67,13 @@ impl DetectionEngine {
         //     passed to flush_batch so events_last_second is a true rate
         //     even when prod flushes every 100ms (old code stored raw
         //     per-flush counts, lieing 10x to the forecaster).
+        // Pair with merge_local's admission lock: while a flush snapshots and
+        // removes entries, no production worker can refill the map past its
+        // configured bound.
+        let _merge_guard = self
+            .pre_aggs_merge_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self
             .flushing
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
