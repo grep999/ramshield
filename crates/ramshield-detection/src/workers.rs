@@ -155,8 +155,14 @@ impl DetectionEngine {
                 }
             }
 
-            // Drain remaining events up to batch_max_events
+            // Drain remaining events up to batch_max_events. Check the
+            // distinct-IP cap BEFORE consuming another event: checking only
+            // after this loop allowed one large configured batch to grow the
+            // worker-local map far beyond LOCAL_MERGE_SOFT_CAP before flushing.
             for _ in 0..max.saturating_sub(1) {
+                if local.len() >= LOCAL_MERGE_SOFT_CAP {
+                    break;
+                }
                 match rx.try_recv() {
                     Ok(ev) => self.absorb_or_emergency(&mut local, &ev, emergency_threshold),
                     Err(_) => break,
