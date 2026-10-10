@@ -122,6 +122,9 @@ pub struct DetectionEngine {
     /// Pre-aggregation buffer — DashMap is internally thread-safe, no Arc needed.
     /// ahash (item 1): every event hashes its IP here under attacker volume.
     pre_aggs: DashMap<IpAddr, IpAgg, ahash::RandomState>,
+    /// Serializes production merges with flush drains so the configured
+    /// pre-aggregation entry limit is a hard bound, not a racy trigger.
+    pre_aggs_merge_lock: std::sync::Mutex<()>,
     last_pre_aggs_flush_ns: AtomicU64,
     /// F1: single-flusher gate (N batch workers share the flush trigger).
     flushing: AtomicBool,
@@ -235,6 +238,7 @@ impl DetectionEngine {
             bloom: ArcSwap::from_pointee(BloomFilter::new(bloom_bits)),
             shutdown,
             pre_aggs: DashMap::with_hasher_and_shard_amount(ahash::RandomState::new(), 64),
+            pre_aggs_merge_lock: std::sync::Mutex::new(()),
             last_pre_aggs_flush_ns: AtomicU64::new(now_ns()),
             flushing: AtomicBool::new(false),
             worker_handles: std::sync::Mutex::new(Vec::new()),
