@@ -1,8 +1,8 @@
 # RamShield Mesh Feature Plan
 
-**Status:** In development; not part of the production-essential remediation backlog.  
-**Target branch:** `audit-branch`  
-**Current baseline when split:** `808f97b8032230146c0012fb928059a0f77e229a`  
+**Status:** In development; not part of the production-essential remediation backlog.
+**Target branch:** `audit-branch`
+**Current baseline when split:** `808f97b8032230146c0012fb928059a0f77e229a`
 **Scope:** design, implementation, hardening, and eventual acceptance of the optional mesh feature. The core production backlog is tracked separately in the repository root `BACKLOG.md`.
 
 ## Product boundary

@@ -1,7 +1,7 @@
 # Audit Branch Recovery Plan
 
-**Target branch:** `audit-branch`  
-**Operating rule:** one bounded change per fixer pass; reviewer independently inspects the exact resulting commit and actual gate output.  
+**Target branch:** `audit-branch`
+**Operating rule:** one bounded change per fixer pass; reviewer independently inspects the exact resulting commit and actual gate output.
 **No merge, force-push, or changes to `kiddo_fix` / existing PRs as part of this plan.**
 
 ## Goal

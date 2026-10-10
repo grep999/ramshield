@@ -1,11 +1,11 @@
 # RamShield Production-Essential Audit Backlog
 
-**Target branch:** `audit-branch`  
-**Baseline HEAD:** `70cd373f3c543ea796dd684197535956b49d6b0c`  
-**Baseline master:** `821eab72e93e584cd6835d1f95171d5d380daaec`  
-**Latest recorded CI:** [run 38041528476](https://github.com/grep999/ramshield/actions/runs/38041528476) — Check, Build, Test, and Clippy passed on HEAD `808f97b8032230146c0012fb928059a0f77e229a`. Formatting is not covered by this workflow and remains unverified.  
-**Operating rule:** one bounded fix per pass; every fix is revalidated on the exact resulting SHA. No merge, force-push, rebase, or changes to `kiddo_fix` / PR #3 / PR #5.  
-**Scope:** this backlog tracks only production-essential fixes for the core RamShield product. Mesh feature design and in-development mesh implementation work live in [`docs/development/MESH_FEATURE_PLAN.md`](docs/development/MESH_FEATURE_PLAN.md) and are not core release blockers while mesh remains optional and disabled. Any mesh code enabled in a deployment must still meet its own acceptance gate before production use.  
+**Target branch:** `audit-branch`
+**Baseline HEAD:** `70cd373f3c543ea796dd684197535956b49d6b0c`
+**Baseline master:** `821eab72e93e584cd6835d1f95171d5d380daaec`
+**Latest recorded CI:** [run 38041528476](https://github.com/grep999/ramshield/actions/runs/38041528476) — Check, Build, Test, and Clippy passed on HEAD `808f97b8032230146c0012fb928059a0f77e229a`. Formatting is not covered by this workflow and remains unverified.
+**Operating rule:** one bounded fix per pass; every fix is revalidated on the exact resulting SHA. No merge, force-push, rebase, or changes to `kiddo_fix` / PR #3 / PR #5.
+**Scope:** this backlog tracks only production-essential fixes for the core RamShield product. Mesh feature design and in-development mesh implementation work live in [`docs/development/MESH_FEATURE_PLAN.md`](docs/development/MESH_FEATURE_PLAN.md) and are not core release blockers while mesh remains optional and disabled. Any mesh code enabled in a deployment must still meet its own acceptance gate before production use.
 **Meaning of 100/100:** every applicable production-essential P0/P1 is closed with regression evidence, P2s are closed or explicitly justified as non-applicable, all core acceptance gates pass on one SHA, and an independent reviewer approves that SHA. A green build alone is not 100/100.
 
 ## Priority definitions
