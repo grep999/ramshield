@@ -143,14 +143,8 @@ impl Drop for FlushGuard<'_> {
 }
 
 impl DetectionEngine {
-    /// Compatibility constructor for tests and legacy callers.
-    ///
-    /// Prefer [`Self::try_new`]: this panics if SHM initialization fails and
-    /// must not be used on production boot paths.
-    #[deprecated(
-        since = "0.6.0",
-        note = "use DetectionEngine::try_new; new() panics on SHM init failure"
-    )]
+    /// Test-only panic constructor. Production code must use [`Self::try_new`].
+    #[cfg(test)]
     pub fn new(
         store: Arc<Store>,
         config: ConfigHandle,
@@ -158,10 +152,8 @@ impl DetectionEngine {
         metrics: Arc<Metrics>,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
-        match Self::try_new(store, config, enforcement_tx, metrics, shutdown) {
-            Ok(engine) => engine,
-            Err(error) => panic!("detection SHM initialization failed: {error}"),
-        }
+        Self::try_new(store, config, enforcement_tx, metrics, shutdown)
+            .expect("detection SHM initialization failed in test")
     }
 
     /// Fallible constructor used by production boot and tests.

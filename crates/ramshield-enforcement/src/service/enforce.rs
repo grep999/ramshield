@@ -45,13 +45,20 @@ impl EnforcementService {
         // the checkpoint loop's [begin_checkpoint + store capture]. Without it
         // an entry can be durable BELOW the checkpoint boundary while its store
         // mutation is still in flight — the snapshot misses it AND tail replay
-        // starts after it: the block silently vanishes on recovery. Steps 1-2
-        // contain no await, so a std guard is safe here; XDP (step 3) stays
-        // outside the barrier.
+        // starts after it: the block silently vanishes on recovery.
+        //
+        // INVARIANT: this std::sync::MutexGuard must not be held across `.await`.
+        // Steps 1–2 are synchronous; XDP (step 3) runs only after explicit
+        // `drop(_ckpt_guard)`. Poisoned barrier = fail closed (do not continue
+        // with possibly broken checkpoint ordering).
         let _ckpt_arc = self.checkpoint_shared.clone();
-        let _ckpt_guard = _ckpt_arc
-            .as_ref()
-            .map(|s| s.barrier.lock().unwrap_or_else(|e| e.into_inner()));
+        let _ckpt_guard =
+            match _ckpt_arc.as_ref() {
+                Some(s) => Some(s.barrier.lock().map_err(|_| {
+                    EnforcementError::Internal("checkpoint barrier poisoned".into())
+                })?),
+                None => None,
+            };
 
         // Step 1: commit intent to WAL (durable) — before any state change.
         let wal_lsn = if let Some(ref wal) = self.wal {
@@ -59,30 +66,26 @@ impl EnforcementService {
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_nanos() as u64)
                 .unwrap_or(0);
-            let entry = match cmd.action {
-                EnforceAction::Block => match cmd.cidr {
-                    Some(cidr) => WalEntry::BlockCidr {
-                        cidr,
-                        reason: cmd.reason.clone(),
-                        ttl_secs: (cmd.ttl_seconds > 0).then_some(cmd.ttl_seconds),
-                        ts_ns: now_ns,
-                    },
-                    None => WalEntry::BlockIp {
-                        ip: cmd.ip.to_string(),
-                        reason: cmd.reason.clone(),
-                        ttl_secs: (cmd.ttl_seconds > 0).then_some(cmd.ttl_seconds),
-                        ts_ns: now_ns,
-                    },
+            let entry = match (&cmd.action, cmd.cidr) {
+                (EnforceAction::Block, Some(cidr)) => WalEntry::BlockCidr {
+                    cidr,
+                    reason: cmd.reason.clone(),
+                    ttl_secs: (cmd.ttl_seconds > 0).then_some(cmd.ttl_seconds),
+                    ts_ns: now_ns,
                 },
-                EnforceAction::Unblock => match cmd.cidr {
-                    Some(cidr) => WalEntry::UnblockCidr {
-                        cidr,
-                        ts_ns: now_ns,
-                    },
-                    None => WalEntry::UnblockIp {
-                        ip: cmd.ip.to_string(),
-                        ts_ns: now_ns,
-                    },
+                (EnforceAction::Block, None) => WalEntry::BlockIp {
+                    ip: cmd.ip.to_string(),
+                    reason: cmd.reason.clone(),
+                    ttl_secs: (cmd.ttl_seconds > 0).then_some(cmd.ttl_seconds),
+                    ts_ns: now_ns,
+                },
+                (EnforceAction::Unblock, Some(cidr)) => WalEntry::UnblockCidr {
+                    cidr,
+                    ts_ns: now_ns,
+                },
+                (EnforceAction::Unblock, None) => WalEntry::UnblockIp {
+                    ip: cmd.ip.to_string(),
+                    ts_ns: now_ns,
                 },
             };
             let lsn = wal

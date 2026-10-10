@@ -66,6 +66,8 @@ pub enum EnforcementError {
     Duplicate(Uuid),
     #[error("Invalid command: {0}")]
     InvalidCommand(String),
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
 
 #[cfg(test)]

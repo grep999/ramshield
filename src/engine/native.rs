@@ -165,6 +165,7 @@ pub fn spawn(
 fn preflight_linux(interface: &str) -> std::io::Result<()> {
     let ifname = std::ffi::CString::new(interface)
         .map_err(|_| std::io::Error::other("interface contains NUL"))?;
+    // SAFETY: ifname is a NUL-terminated CString; if_nametoindex only reads it.
     let ifindex = unsafe { libc::if_nametoindex(ifname.as_ptr()) };
     if ifindex == 0 {
         return Err(std::io::Error::last_os_error());
@@ -290,6 +291,7 @@ fn run_socket(
     // B02: After socket creation, before mmap, validate interface index and bind.
     let ifname = std::ffi::CString::new(interface)
         .map_err(|_| std::io::Error::other("interface contains NUL"))?;
+    // SAFETY: ifname is a NUL-terminated CString; if_nametoindex only reads it.
     let ifindex = unsafe { libc::if_nametoindex(ifname.as_ptr()) };
     if ifindex == 0 {
         return Err(std::io::Error::last_os_error());
@@ -405,7 +407,14 @@ fn run_socket(
         }
         std::sync::atomic::fence(Ordering::Acquire);
         // Validate kernel-provided lengths before using packet offsets.
-        let blk_len = unsafe { (*block_ptr).hdr.blk_len } as usize;
+        // SAFETY: block_ptr points into the mmap'd ring at a validated block_offset.
+        let blk_len = match usize::try_from(unsafe { (*block_ptr).hdr.blk_len }) {
+            Ok(v) => v,
+            Err(_) => {
+                warn!(worker, block_idx, "blk_len does not fit usize");
+                break;
+            }
+        };
         if !valid_tpacket_block_len(blk_len, block_size) {
             warn!(
                 worker,
@@ -444,8 +453,25 @@ fn run_socket(
             // SAFETY: checked_tpacket_header_offset proves the complete header
             // lies in both the declared block and mapped ring before this read.
             let hdr = unsafe { (map as *const u8).add(header_abs) as *const Tpacket3Hdr };
-            let snaplen = unsafe { (*hdr).tp_snaplen as usize };
-            let mac = unsafe { (*hdr).tp_mac as usize };
+            // SAFETY: hdr points at a valid Tpacket3Hdr inside the mapping.
+            let snaplen = match usize::try_from(unsafe { (*hdr).tp_snaplen }) {
+                Ok(v) => v,
+                Err(_) => {
+                    warn!(
+                        worker,
+                        block_idx, packet_idx, "tp_snaplen does not fit usize"
+                    );
+                    break;
+                }
+            };
+            // SAFETY: same hdr validity as above.
+            let mac = match usize::try_from(unsafe { (*hdr).tp_mac }) {
+                Ok(v) => v,
+                Err(_) => {
+                    warn!(worker, block_idx, packet_idx, "tp_mac does not fit usize");
+                    break;
+                }
+            };
             let (_header_abs, packet_off) = match checked_tpacket_packet_offsets(
                 block_idx, block_size, ring_len, blk_len, off, mac, snaplen,
             ) {
@@ -478,7 +504,17 @@ fn run_socket(
                 epoch_base,
             );
 
-            let next = unsafe { (*hdr).tp_next_offset as usize };
+            // SAFETY: hdr still points at the validated packet header in this block.
+            let next = match usize::try_from(unsafe { (*hdr).tp_next_offset }) {
+                Ok(v) => v,
+                Err(_) => {
+                    warn!(
+                        worker,
+                        block_idx, packet_idx, "tp_next_offset does not fit usize"
+                    );
+                    break;
+                }
+            };
             match checked_next_tpacket_offset(off, next, packet_idx + 1 == num, blk_len, block_size)
             {
                 Ok(Some(next_off)) => off = next_off,
@@ -498,6 +534,7 @@ fn run_socket(
         }
         block_idx = (block_idx + 1) % block_nr;
     }
+    // SAFETY: map was returned by mmap with length ring_len in this function.
     unsafe { libc::munmap(map, ring_len) };
     Ok(())
 }
