@@ -72,8 +72,11 @@ def run_integration_tests(scripts: list[pathlib.Path], profile: str = "all") -> 
         suite_script = SCRIPT_DIR / "suite.py"
         if suite_script.exists():
             print(f"\n1️⃣  Executing {suite_script.name} (main orchestrator)...")
+            # These are integration profiles, not suite.py subcommands.
+            # T19/cold-start/full all run the supported aggregate suite.
+            suite_layer = "all" if profile in ("all", "full", "t19", "cold-start") else profile
             result = subprocess.run(
-                [sys.executable, str(suite_script), profile],
+                [sys.executable, str(suite_script), suite_layer],
                 capture_output=True,
                 text=True,
                 timeout=300,
@@ -110,7 +113,7 @@ def run_integration_tests(scripts: list[pathlib.Path], profile: str = "all") -> 
                 
                 try:
                     result = subprocess.run(
-                        [sys.executable, str(script_path), profile],
+                        [sys.executable, str(script_path)],
                         capture_output=True,
                         text=True,
                         timeout=180,
