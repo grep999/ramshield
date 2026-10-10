@@ -75,19 +75,54 @@ impl DetectionEngine {
         } else {
             (ttl_secs.saturating_mul(1_000_000_000) / 2).max(1_000_000_000)
         };
-        let suppressed = self
+        // The check/evict/insert must be one critical section: separate
+        // DashMap operations allow concurrent emitters to all observe spare
+        // capacity and then exceed the hard limit.
+        let _guard = self
+            .pending_mitigation_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if self
             .pending_mitigations
             .get(&key)
-            .is_some_and(|g| now.saturating_sub(*g) < cooldown_ns);
-        if suppressed {
+            .is_some_and(|g| now.saturating_sub(*g) < cooldown_ns)
+        {
             return false;
         }
+
+        // If saturated, first discard entries older than one hour. If the
+        // table is still full, evict the oldest admission to make room. This
+        // preserves a strict bound while allowing fresh mitigations through;
+        // eviction may permit a duplicate, but never suppresses all new keys.
+        if !self.pending_mitigations.contains_key(&key)
+            && self.pending_mitigations.len() >= PENDING_MITIGATION_CAP
+        {
+            self.pending_mitigations
+                .retain(|_, ts| now.saturating_sub(*ts) < 3_600_000_000_000);
+            if self.pending_mitigations.len() >= PENDING_MITIGATION_CAP {
+                let oldest = self
+                    .pending_mitigations
+                    .iter()
+                    .map(|entry| (*entry.key(), *entry.value()))
+                    .min_by_key(|(_, timestamp)| *timestamp)
+                    .map(|(oldest_key, _)| oldest_key);
+                if let Some(oldest_key) = oldest {
+                    self.pending_mitigations.remove(&oldest_key);
+                }
+            }
+        }
+
         self.pending_mitigations.insert(key, now);
         true
     }
 
     /// Undo an admission whose command never reached the enforcement queue.
     pub(crate) fn retreat_mitigation(&self, key: (IpAddr, BlockReason)) {
+        let _guard = self
+            .pending_mitigation_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.pending_mitigations.remove(&key);
     }
 
