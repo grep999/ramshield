@@ -387,4 +387,93 @@ mod tests {
         );
         let _ = std::fs::remove_file(path);
     }
+
+    #[test]
+    fn concurrent_writers_preserve_even_seq_and_no_torn_hash() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let path = std::env::temp_dir().join(format!(
+            "ramshield-shm-stress-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let manager = Arc::new(ShmTableManager::open_or_create(&path).unwrap());
+        let mut handles = Vec::new();
+        for t_id in 0..8u64 {
+            let mgr = Arc::clone(&manager);
+            handles.push(thread::spawn(move || {
+                for i in 0..200u64 {
+                    // Distinct hashes that still collide into nearby probe windows.
+                    let hash = (t_id << 16) ^ i.wrapping_mul(0x9E37_79B9);
+                    let _ = mgr.publish_rule(hash, 60_000, 3, 0, false);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("writer thread");
+        }
+
+        // Every occupied slot must end on an even seq; client_hash must be
+        // stable under a double-read (seqlock reader pattern).
+        for idx in 0..SHM_TABLE_CAPACITY {
+            let slot = manager.get_slot(idx);
+            let s1 = slot.seq.load(Ordering::Acquire);
+            if s1 & 1 != 0 {
+                // Transient writer should not remain after join.
+                panic!("slot {idx} left with odd seq after writers finished");
+            }
+            let h1 = slot.client_hash.load(Ordering::Acquire);
+            let s2 = slot.seq.load(Ordering::Acquire);
+            assert_eq!(s1, s2, "seq changed mid-read on slot {idx}");
+            if h1 != 0 {
+                let h2 = slot.client_hash.load(Ordering::Acquire);
+                assert_eq!(h1, h2, "torn client_hash on slot {idx}");
+            }
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn concurrent_same_hash_writers_leave_consistent_rule() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let path = std::env::temp_dir().join(format!(
+            "ramshield-shm-samehash-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let manager = Arc::new(ShmTableManager::open_or_create(&path).unwrap());
+        let hash = 42u64;
+        let mut handles = Vec::new();
+        for tier in 0..4u8 {
+            let mgr = Arc::clone(&manager);
+            handles.push(thread::spawn(move || {
+                for _ in 0..100 {
+                    let _ = mgr.publish_rule(hash, 30_000, tier, 10, false);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("writer thread");
+        }
+        let slot = manager.get_slot(hash as usize);
+        let seq = slot.seq.load(Ordering::Acquire);
+        assert_eq!(seq % 2, 0, "must finish even");
+        assert_eq!(
+            slot.client_hash.load(Ordering::Acquire),
+            hash,
+            "same-hash writers must leave the canonical hash"
+        );
+        let tier = slot.tier.load(Ordering::Acquire);
+        assert!(tier <= 3, "tier out of range: {tier}");
+        let _ = std::fs::remove_file(path);
+    }
 }

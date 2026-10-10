@@ -40,7 +40,7 @@
 
 |---|---|---|---|
 
-| A-004 | Shared-memory writer parity | **Scoped by A-021 to root only.** Ensure exclusive even→odd CAS writer claim and under-lock revalidation in `crates/ramshield-cgnat/src/shm.rs` (+ C ABI). Nested `rs/crates/ramshield-cgnat` is out of production scope unless A-021 is reversed. Concurrent-writer stress tests remain required for root. | OPEN |
+| A-004 | Shared-memory writer parity | Root `publish_rule` uses exclusive even→odd CAS + under-lock revalidation. C `ramshield_shm_clear_slot`/`flush_all` mirrors CAS protocol. Concurrent writer stress tests added. `verify_shm_header.sh` asserts 64-byte ABI. Nested `rs/` out of scope (A-021). | PASS (exact SHA pending CI) |
 
 | A-005 | Replay-store security | Live markers are never LRU-evicted under global/per-key pressure; saturation returns `capacity`. Time sampled under lock; poison fails closed. Tests: unit module + `crates/ramshield-protocol/tests/replay.rs`. Ported security model aligned with kiddo_fix review. | PASS (exact SHA pending CI) |
 

@@ -14,7 +14,7 @@ trap 'rm -f "$TMP"' EXIT
 cat > "${TMP%.o}.c" <<'EOF'
 #include "crates/ramshield-cgnat/include/ramshield_shm.h"
 int main(void) {
-    return sizeof(RamshieldShmRuleEntry) == 128 ? 0 : 1;
+    return sizeof(RamshieldShmRuleEntry) == 64 ? 0 : 1;
 }
 EOF
 cc -std=c11 -Wall -Wextra -Werror -I. -c "${TMP%.o}.c" -o "$TMP"
