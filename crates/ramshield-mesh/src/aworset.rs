@@ -36,6 +36,10 @@ pub struct ClusterDot {
 pub struct ClusterBlockDelta {
     pub ip: IpAddr,
     pub dot: ClusterDot,
+    /// Physical HLC time when the ban was created (not its expiry time).
+    /// Defaults to zero when reading legacy wire messages.
+    #[serde(default)]
+    pub created_at_ms: u64,
     pub expires_at_ms: u64,
     pub tier: u8,
 }
@@ -105,11 +109,11 @@ impl Default for Aworset {
 
 /// IP-keyed blocklist CRDT: ban dots per (ip, node), HLC-ordered so the
 /// highest counter per node wins on merge. Internal map is
-/// DashMap<(IpAddr, node_id), (seq, expires_at_ms)>.
+/// DashMap<(IpAddr, node_id), (seq, created_at_ms, expires_at_ms)>.
 pub struct AworsetBlocklist {
     node_id: u32,
     hlc: Hlc,
-    pub(crate) entries: DashMap<(IpAddr, u32), (u32, u64)>,
+    pub(crate) entries: DashMap<(IpAddr, u32), (u32, u64, u64)>,
     pub(crate) tombstones: DashMap<(IpAddr, u32), u32>,
     tombstone_times: DashMap<(IpAddr, u32), u64>,
 }
@@ -127,19 +131,24 @@ impl AworsetBlocklist {
 
     /// Record a local ban. Returns the delta to broadcast to peers.
     pub fn record_ban(&self, ip: IpAddr, ttl_ms: u64, tier: u8) -> ClusterBlockDelta {
-        let (phys_ms, seq) = self.hlc.tick(0, 0);
-        let expires_at_ms = if ttl_ms == 0 { u64::MAX } else { phys_ms.saturating_add(ttl_ms) };
+        let (created_at_ms, seq) = self.hlc.tick(0, 0);
+        let expires_at_ms = if ttl_ms == 0 {
+            u64::MAX
+        } else {
+            created_at_ms.saturating_add(ttl_ms)
+        };
 
         let dot = ClusterDot {
             node_id: self.node_id,
             counter: seq,
         };
         self.entries
-            .insert((ip, self.node_id), (seq, expires_at_ms));
+            .insert((ip, self.node_id), (seq, created_at_ms, expires_at_ms));
 
         ClusterBlockDelta {
             ip,
             dot,
+            created_at_ms,
             expires_at_ms,
             tier,
         }
@@ -147,7 +156,7 @@ impl AworsetBlocklist {
 
     /// Absorb a peer delta. True if it changed local state.
     pub fn merge_delta(&self, delta: &ClusterBlockDelta) -> bool {
-        self.hlc.tick(delta.expires_at_ms, delta.dot.counter);
+        self.hlc.tick(delta.created_at_ms, delta.dot.counter);
         let key = (delta.ip, delta.dot.node_id);
         if self
             .tombstones
@@ -161,16 +170,17 @@ impl AworsetBlocklist {
         let mut inserted = false;
         self.entries
             .entry(key)
-            .and_modify(|(existing_seq, existing_exp)| {
+            .and_modify(|(existing_seq, existing_created, existing_exp)| {
                 if delta.dot.counter > *existing_seq {
                     *existing_seq = delta.dot.counter;
+                    *existing_created = delta.created_at_ms;
                     *existing_exp = delta.expires_at_ms;
                     inserted = true;
                 }
             })
             .or_insert_with(|| {
                 inserted = true;
-                (delta.dot.counter, delta.expires_at_ms)
+                (delta.dot.counter, delta.created_at_ms, delta.expires_at_ms)
             });
 
         inserted
@@ -179,7 +189,7 @@ impl AworsetBlocklist {
     pub fn is_blocked(&self, ip: &IpAddr, now_ms: u64) -> bool {
         self.entries
             .iter()
-            .any(|entry| entry.key().0 == *ip && entry.value().1 > now_ms)
+            .any(|entry| entry.key().0 == *ip && entry.value().2 > now_ms)
     }
 
     pub fn len(&self) -> usize {
@@ -205,7 +215,7 @@ impl AworsetBlocklist {
     pub fn purge_expired(&self, now_ms: u64) {
         const TOMBSTONE_HORIZON_MS: u64 = 86_400_000;
         self.entries
-            .retain(|_, (_, exp)| now_ms.saturating_sub(*exp) < TOMBSTONE_HORIZON_MS);
+            .retain(|_, (_, _, exp)| now_ms.saturating_sub(*exp) < TOMBSTONE_HORIZON_MS);
         self.tombstone_times.retain(|key, created| {
             let keep = now_ms.saturating_sub(*created) < TOMBSTONE_HORIZON_MS;
             if !keep { self.tombstones.remove(key); }
@@ -275,7 +285,8 @@ impl AworsetBlocklist {
             blocks.push(ClusterBlockDelta {
                 ip: e.key().0,
                 dot: ClusterDot { node_id: e.key().1, counter: e.value().0 },
-                expires_at_ms: e.value().1,
+                created_at_ms: e.value().1,
+                expires_at_ms: e.value().2,
                 tier: 1,
             });
         }
@@ -331,6 +342,22 @@ mod tests {
         let delta = mesh.record_ban(ip, 60_000, 2);
         mesh.purge_expired(delta.expires_at_ms + 86_400_000);
         assert!(mesh.is_empty(), "expired mesh state must be bounded");
+    }
+
+    #[test]
+    fn permanent_remote_ban_does_not_poison_local_hlc() {
+        let sender = AworsetBlocklist::new(1);
+        let receiver = AworsetBlocklist::new(2);
+        let permanent_ip = IpAddr::from([198, 51, 100, 11]);
+        let finite_ip = IpAddr::from([198, 51, 100, 12]);
+
+        let permanent = sender.record_ban(permanent_ip, 0, 3);
+        assert_eq!(permanent.expires_at_ms, u64::MAX);
+        assert!(receiver.merge_delta(&permanent));
+
+        let finite = receiver.record_ban(finite_ip, 60_000, 1);
+        assert_ne!(finite.expires_at_ms, u64::MAX);
+        assert_eq!(finite.expires_at_ms.saturating_sub(finite.created_at_ms), 60_000);
     }
 
     #[test]
