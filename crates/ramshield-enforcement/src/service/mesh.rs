@@ -30,7 +30,12 @@ impl EnforcementService {
             if delta.expires_at_ms <= now_ms { return Ok(()); }
             let Some(mesh) = &self.mesh_blocklist else { return Ok(()); };
             if self.mesh_operator_suppressions.contains(&delta.ip) { return Ok(()); }
-            if !mesh.merge_delta(&delta) { return Ok(()); }
+            // CRDT state can be merged before enforcement fails (e.g. WAL
+            // append or storage error). Retry an unchanged delta until its
+            // projection has succeeded; only skip duplicates already applied.
+            if !mesh.merge_delta(&delta) && self.mesh_applied_ips.contains(&delta.ip) {
+                return Ok(());
+            }
             let remaining_ms = delta.expires_at_ms.saturating_sub(now_ms);
             let ttl = if delta.expires_at_ms == u64::MAX {
                 0
@@ -64,8 +69,10 @@ impl EnforcementService {
             now_ms: u64,
         ) -> Result<(), EnforcementError> {
             let Some(mesh) = &self.mesh_blocklist else { return Ok(()); };
-            if !mesh.merge_unblock_delta(&delta)
-                || mesh.is_blocked(&delta.ip, now_ms)
+            // As with blocks, retain retryability if the tombstone was
+            // merged but the local enforcement unblock failed.
+            mesh.merge_unblock_delta(&delta);
+            if mesh.is_blocked(&delta.ip, now_ms)
                 || !self.mesh_applied_ips.contains(&delta.ip)
             {
                 return Ok(());
