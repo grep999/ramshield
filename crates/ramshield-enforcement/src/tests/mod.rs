@@ -1143,10 +1143,8 @@ impl BoundedMapApplier {
 #[async_trait::async_trait]
 impl XdpApplier for BoundedMapApplier {
     fn apply_block(&mut self, ip: IpAddr, _: Uuid, _: u64) -> Result<(), EnforcementError> {
-        if let Some(n) = self.fail_after {
-            if self.applies >= n {
-                return Err(EnforcementError::Xdp("partial install failed".into()));
-            }
+        if self.fail_after.is_some_and(|n| self.applies >= n) {
+            return Err(EnforcementError::Xdp("partial install failed".into()));
         }
         if !self.blocked.contains(&ip) && self.blocked.len() >= self.cap {
             return Err(EnforcementError::Xdp(format!(
