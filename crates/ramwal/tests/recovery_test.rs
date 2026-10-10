@@ -1275,7 +1275,11 @@ fn disk_full_after_checkpoint_preserves_checkpoint_and_durable_prefix() {
         let lsn = wal.append(b"durable-before-checkpoint").unwrap();
         wal.sync().unwrap();
         wal.checkpoint(lsn).unwrap();
-        assert_eq!(wal.ckpt_lsn(), lsn, "checkpoint must be published before fault");
+        assert_eq!(
+            wal.ckpt_lsn(),
+            lsn,
+            "checkpoint must be published before fault"
+        );
 
         wal.fail_next_diskfull();
         assert!(
@@ -1287,7 +1291,10 @@ fn disk_full_after_checkpoint_preserves_checkpoint_and_durable_prefix() {
     };
 
     let recovered = Wal::open(wal_cfg(&d)).unwrap();
-    assert!(!recovered.is_poisoned(), "reopen must restore a healthy writer");
+    assert!(
+        !recovered.is_poisoned(),
+        "reopen must restore a healthy writer"
+    );
     assert_eq!(
         recovered.ckpt_lsn(),
         checkpoint_lsn,
@@ -1310,7 +1317,10 @@ fn disk_full_after_checkpoint_preserves_checkpoint_and_durable_prefix() {
 
     let next_lsn = recovered.append(b"after-recovery").unwrap();
     recovered.sync().unwrap();
-    assert!(next_lsn > checkpoint_lsn, "recovered writer must continue LSN order");
+    assert!(
+        next_lsn > checkpoint_lsn,
+        "recovered writer must continue LSN order"
+    );
     drop(recovered);
 
     let reopened = Wal::open(wal_cfg(&d)).unwrap();
