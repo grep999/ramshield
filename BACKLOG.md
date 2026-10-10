@@ -8,7 +8,7 @@
 
 **Baseline master:** `821eab72e93e584cd6835d1f95171d5d380daaec`
 
-**Latest recorded CI:** [run 38075387589](https://github.com/grep999/ramshield/actions/runs/38075387589) — all CI jobs passed on exact HEAD `6af1bd28cd8ca7e86298301676ba508b40ed62a2`, including formatting, check, build, tests, and strict Clippy. [Backlog Gate run 38075387633](https://github.com/grep999/ramshield/actions/runs/38075387633) also passed on that SHA.
+**Latest recorded CI:** [run 38075565723](https://github.com/grep999/ramshield/actions/runs/38075565723) — all CI jobs passed on exact HEAD `0405398ae53e7363f02f2c541418bbea7cf1c17c`, including formatting, check, build, tests, and strict Clippy. [Backlog Gate run 38075565713](https://github.com/grep999/ramshield/actions/runs/38075565713) also passed on that SHA.
 
 **Operating rule:** one bounded fix per pass; every fix is revalidated on the exact resulting SHA. No merge, force-push, rebase, or changes to `kiddo_fix` / PR #3 / PR #5.
 
@@ -54,7 +54,7 @@
 
 |---|---|---|---|
 
-| A-015 | Detection construction | Public `new` remains a deprecated compatibility wrapper; production callers use `try_new` / `try_new_with_shm_path`. Unit test proves SHM open failure returns `Err` without panic. PR #6's `#[cfg(test)]` removal of the public wrapper is a downstream API break and needs an explicit breaking-release decision. | IN PROGRESS |
+| A-015 | Detection construction | Public `new` remains a deprecated compatibility wrapper; production boot uses `try_new`, and `try_new_with_shm_path` supports deterministic initialization tests. `try_new_propagates_shm_open_failure` verifies the invalid SHM path returns `Err` without panic. Exact-SHA CI and Backlog Gate passed on `0405398ae53e7363f02f2c541418bbea7cf1c17c`. PR #6's `#[cfg(test)]` removal of the public wrapper is a downstream API break and requires an explicit breaking-release decision. | PASS (exact SHA) |
 
 | A-016 | Native packet ingest | TPACKET_V3 validators and malformed-descriptor property sweeps cover block/header/packet bounds, ring edges, chain alignment/overflow, and deterministic malformed mixes. Exact-SHA Linux test and CI evidence: Backlog Gate A-016 TPACKET bounds passed on `6af1bd28cd8ca7e86298301676ba508b40ed62a2`. | PASS (exact SHA) |
 
