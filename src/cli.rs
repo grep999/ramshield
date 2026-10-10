@@ -22,7 +22,7 @@ fn read_response_line<R: BufRead>(reader: &mut R) -> Result<String> {
 
         let remaining = MAX_IPC_RESPONSE_BYTES.saturating_sub(response.len());
         let inspect_len = available.len().min(remaining);
-        if let Some(newline) = available[..inspect_len].iter().position(|byte| *byte == b'\\n') {
+        if let Some(newline) = available[..inspect_len].iter().position(|byte| *byte == b'\n') {
             response.extend_from_slice(&available[..=newline]);
             reader.consume(newline + 1);
             return String::from_utf8(response).context("IPC response is not valid UTF-8");
