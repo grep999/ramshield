@@ -75,7 +75,7 @@ impl Default for IpcConfig {
     fn default() -> Self {
         Self {
             tcp_addr: "127.0.0.1:7890".into(),
-            max_connections: 8192,
+            max_connections: 1024,
             max_connection_bytes: None,
             read_timeout_ms: None,
             write_timeout_ms: None,
