@@ -3,7 +3,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::{collections::VecDeque, future::Future, net::SocketAddr, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}};
-use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::{Mutex, Semaphore}};
+use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::{watch, Mutex, Semaphore}};
 use tracing::{debug, warn};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -23,24 +23,72 @@ pub enum MeshMessage { Block(ClusterBlockDelta), Unblock(ClusterUnblockDelta), S
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Envelope { ts_ms: u64, node_id: u32, body: MeshMessage, mac: String }
 #[derive(Clone)]
-pub struct MeshHandle { node_id: u32, blocklist: Arc<AworsetBlocklist>, peers: Arc<Vec<SocketAddr>>, auth_key: Arc<Vec<u8>>, incoming: Arc<Mutex<VecDeque<MeshMessage>>>, readers: Arc<Semaphore>, writers: Arc<Semaphore> }
+pub struct MeshHandle { node_id: u32, blocklist: Arc<AworsetBlocklist>, peers: Arc<Vec<SocketAddr>>, auth_key: Arc<Vec<u8>>, incoming: Arc<Mutex<VecDeque<MeshMessage>>>, readers: Arc<Semaphore>, writers: Arc<Semaphore>, shutdown_tx: watch::Sender<bool> }
 
 impl MeshHandle {
     pub async fn bind(node_id: u32, blocklist: Arc<AworsetBlocklist>, listen: SocketAddr, peers: Vec<SocketAddr>, auth_key: Vec<u8>) -> std::io::Result<Self> {
         let listener = TcpListener::bind(listen).await?;
-        let handle = Self { node_id, blocklist, peers: Arc::new(peers), auth_key: Arc::new(auth_key), incoming: Arc::new(Mutex::new(VecDeque::new())), readers: Arc::new(Semaphore::new(MAX_PEER_READERS)), writers: Arc::new(Semaphore::new(MAX_PEER_WRITERS)) };
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let handle = Self {
+            node_id,
+            blocklist,
+            peers: Arc::new(peers),
+            auth_key: Arc::new(auth_key),
+            incoming: Arc::new(Mutex::new(VecDeque::new())),
+            readers: Arc::new(Semaphore::new(MAX_PEER_READERS)),
+            writers: Arc::new(Semaphore::new(MAX_PEER_WRITERS)),
+            shutdown_tx,
+        };
         let accept_handle = handle.clone();
+        let mut listener_shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
-            loop { match listener.accept().await { Ok((stream, _)) => {
-                    let h=accept_handle.clone();
-                    let Ok(permit) = h.readers.clone().try_acquire_owned() else { continue; };
-                    tokio::spawn(async move { h.read_stream(stream).await; drop(permit); });
-                }, Err(e) => { warn!(error=%e, "mesh listener stopped"); break; } } }
+            loop {
+                tokio::select! {
+                    changed = listener_shutdown.changed() => {
+                        if changed.is_err() || *listener_shutdown.borrow_and_update() {
+                            break;
+                        }
+                    }
+                    accepted = listener.accept() => match accepted {
+                        Ok((stream, _)) => {
+                            let h = accept_handle.clone();
+                            let Ok(permit) = h.readers.clone().try_acquire_owned() else { continue; };
+                            tokio::spawn(async move {
+                                h.read_stream(stream).await;
+                                drop(permit);
+                            });
+                        }
+                        Err(error) => {
+                            warn!(error = %error, "mesh listener stopped");
+                            break;
+                        }
+                    }
+                }
+            }
         });
         let sync_handle = handle.clone();
-        tokio::spawn(async move { let mut tick=tokio::time::interval(Duration::from_millis(ANTI_ENTROPY_MS)); loop { tick.tick().await; sync_handle.broadcast_sync().await; } });
+        let mut sync_shutdown = shutdown_rx;
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_millis(ANTI_ENTROPY_MS));
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => sync_handle.broadcast_sync().await,
+                    changed = sync_shutdown.changed() => {
+                        if changed.is_err() || *sync_shutdown.borrow_and_update() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
         Ok(handle)
     }
+    /// Signal all mesh-owned background tasks to stop. Reader tasks also select
+    /// on this signal; outbound sends are bounded by their deadline.
+    pub fn shutdown(&self) {
+        self.shutdown_tx.send_replace(true);
+    }
+
     /// Send to configured peers with a strict cap on concurrent outbound tasks.
     /// The permit is acquired before spawning, so there is no unbounded waiter/task queue.
     pub async fn broadcast(&self, body: MeshMessage) {
@@ -56,12 +104,21 @@ impl MeshHandle {
             let message = body.clone();
             tokio::spawn(async move {
                 let _permit = permit;
-                match with_timeout(MAX_PEER_WRITE_TIMEOUT, handle.send_to(peer, message)).await {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-                        warn!(peer = %peer, "mesh outbound send timed out");
+                let mut shutdown = handle.shutdown_tx.subscribe();
+                if *shutdown.borrow() {
+                    return;
+                }
+                tokio::select! {
+                    result = with_timeout(MAX_PEER_WRITE_TIMEOUT, handle.send_to(peer, message)) => {
+                        match result {
+                            Ok(()) => {}
+                            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                                warn!(peer = %peer, "mesh outbound send timed out");
+                            }
+                            Err(error) => debug!(peer = %peer, error = %error, "mesh send failed"),
+                        }
                     }
-                    Err(error) => debug!(peer = %peer, error = %error, "mesh send failed"),
+                    _ = shutdown.changed() => {}
                 }
             });
         }
@@ -74,7 +131,22 @@ impl MeshHandle {
         }
     }
     async fn send_to(&self, peer: SocketAddr, body: MeshMessage) -> std::io::Result<()> { let ts_ms=now_ms(); let payload=serde_json::to_vec(&(ts_ms,self.node_id,&body)).map_err(std::io::Error::other)?; let mac=sign(&self.auth_key,&payload)?; let frame=serde_json::to_vec(&Envelope{ts_ms,node_id:self.node_id,body,mac}).map_err(std::io::Error::other)?; if frame.len()>MAX_FRAME { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"mesh frame too large")); } let mut stream=TcpStream::connect(peer).await?; stream.write_all(&frame).await?; stream.write_all(b"\n").await?; Ok(()) }
-    async fn read_stream(&self, mut stream: TcpStream) { let mut line=match read_bounded_frame_with_timeout(&mut stream, MAX_FRAME_READ_TIMEOUT).await { Ok(Some(frame))=>frame, Ok(None)|Err(_)=>return }; while line.last().is_some_and(|b| *b==b'\n'||*b==b'\r') { line.pop(); } let env:Envelope=match serde_json::from_slice(&line){Ok(v)=>v,Err(_)=>return}; let payload=match serde_json::to_vec(&(env.ts_ms,env.node_id,&env.body)){Ok(v)=>v,Err(_)=>return}; if now_ms().abs_diff(env.ts_ms)>MAX_CLOCK_SKEW_MS || !verify(&self.auth_key,&payload,&env.mac){ warn!(node_id=env.node_id,"mesh frame rejected: authentication or timestamp invalid"); return; }
+    async fn read_stream(&self, mut stream: TcpStream) {
+        let mut shutdown = self.shutdown_tx.subscribe();
+        if *shutdown.borrow() {
+            return;
+        }
+        let frame_result = tokio::select! {
+            result = read_bounded_frame_with_timeout(&mut stream, MAX_FRAME_READ_TIMEOUT) => result,
+            _ = shutdown.changed() => return,
+        };
+        let mut line = match frame_result {
+            Ok(Some(frame)) => frame,
+            Ok(None) | Err(_) => return,
+        };
+        while line.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+            line.pop();
+        } let env:Envelope=match serde_json::from_slice(&line){Ok(v)=>v,Err(_)=>return}; let payload=match serde_json::to_vec(&(env.ts_ms,env.node_id,&env.body)){Ok(v)=>v,Err(_)=>return}; if now_ms().abs_diff(env.ts_ms)>MAX_CLOCK_SKEW_MS || !verify(&self.auth_key,&payload,&env.mac){ warn!(node_id=env.node_id,"mesh frame rejected: authentication or timestamp invalid"); return; }
         if env.node_id==self.node_id{return;}
         if !valid_message(&env.body, now_ms()) {
             warn!(node_id = env.node_id, "mesh frame rejected: message fields outside accepted bounds");
@@ -209,6 +281,44 @@ mod frame_tests {
                 .await
                 .unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        });
+    }
+
+    #[test]
+    fn shutdown_releases_mesh_listener() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async {
+            let probe = TcpListener::bind("127.0.0.1:0").await.expect("probe listener");
+            let address = probe.local_addr().expect("probe address");
+            drop(probe);
+
+            let handle = MeshHandle::bind(
+                1,
+                Arc::new(AworsetBlocklist::new(1)),
+                address,
+                Vec::new(),
+                vec![7; 32],
+            )
+            .await
+            .expect("mesh listener");
+            handle.shutdown();
+
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    match TcpListener::bind(address).await {
+                        Ok(listener) => {
+                            drop(listener);
+                            break;
+                        }
+                        Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+                    }
+                }
+            })
+            .await
+            .expect("mesh listener should release its socket after shutdown");
         });
     }
 
