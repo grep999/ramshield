@@ -1083,62 +1083,84 @@ mod tpacket_tests {
     #[test]
     fn property_packet_mac_snaplen_edges() {
         let desc = std::mem::size_of::<TpacketBlockDesc>();
+        let hdr = std::mem::size_of::<Tpacket3Hdr>();
         let block_size = 256usize;
         let ring_len = block_size * 2;
         let blk_len = block_size;
         let off = desc;
+        let min_mac = hdr;
 
-        // Empty packet is fine if the header itself is valid.
+        // The packet data must begin after the complete TPACKET3 header.
         assert!(
-            checked_tpacket_packet_offsets(0, block_size, ring_len, blk_len, off, 0, 0).is_some()
-        );
-
-        // Packet that ends exactly at blk_len.
-        let max_payload = blk_len - off;
-        assert!(
-            checked_tpacket_packet_offsets(0, block_size, ring_len, blk_len, off, 0, max_payload)
-                .is_some()
+            checked_tpacket_packet_offsets(
+                0, block_size, ring_len, blk_len, off, min_mac - 1, 0
+            )
+            .is_none()
         );
         assert!(
             checked_tpacket_packet_offsets(
-                0,
-                block_size,
-                ring_len,
-                blk_len,
-                off,
-                0,
-                max_payload + 1
+                0, block_size, ring_len, blk_len, off, min_mac, 0
+            )
+            .is_some()
+        );
+
+        // Packet that ends exactly at blk_len.
+        let max_payload = blk_len - off - min_mac;
+        assert!(
+            checked_tpacket_packet_offsets(
+                0, block_size, ring_len, blk_len, off, min_mac, max_payload
+            )
+            .is_some()
+        );
+        assert!(
+            checked_tpacket_packet_offsets(
+                0, block_size, ring_len, blk_len, off, min_mac, max_payload + 1
             )
             .is_none()
         );
 
-        // mac + snaplen overflow.
+        // mac + snaplen overflow and impossible packet offsets are rejected.
         assert!(
-            checked_tpacket_packet_offsets(0, block_size, ring_len, blk_len, off, usize::MAX, 1)
-                .is_none()
+            checked_tpacket_packet_offsets(
+                0, block_size, ring_len, blk_len, off, usize::MAX, 1
+            )
+            .is_none()
         );
         assert!(
-            checked_tpacket_packet_offsets(0, block_size, ring_len, blk_len, off, 1, usize::MAX)
-                .is_none()
+            checked_tpacket_packet_offsets(
+                0, block_size, ring_len, blk_len, off, min_mac, usize::MAX
+            )
+            .is_none()
         );
 
         // Second block: packet may not cross into unmapped tail.
         assert!(
-            checked_tpacket_packet_offsets(1, block_size, ring_len, blk_len, off, 0, max_payload)
-                .is_some()
+            checked_tpacket_packet_offsets(
+                1, block_size, ring_len, blk_len, off, min_mac, max_payload
+            )
+            .is_some()
         );
         assert!(
             checked_tpacket_packet_offsets(
-                1,
-                block_size,
-                ring_len - 1,
-                blk_len,
-                off,
-                0,
-                max_payload
+                1, block_size, ring_len - 1, blk_len, off, min_mac, max_payload
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn rejects_unbounded_or_impossible_packet_counts() {
+        let desc = std::mem::size_of::<TpacketBlockDesc>();
+        let hdr = std::mem::size_of::<Tpacket3Hdr>();
+        let block_size = 4096usize;
+
+        assert!(valid_tpacket_packet_count(0, desc, desc, block_size));
+        assert!(valid_tpacket_packet_count(1, desc, desc + hdr, block_size));
+        assert!(!valid_tpacket_packet_count(1, desc, desc + hdr - 1, block_size));
+        assert!(!valid_tpacket_packet_count(u32::MAX, desc, block_size, block_size));
+        assert!(!valid_tpacket_packet_count(1, desc - 1, block_size, block_size));
+        assert!(!valid_tpacket_packet_count(1, block_size + 1, block_size, block_size));
+        assert!(!valid_tpacket_packet_count(1, desc, block_size + 1, block_size));
     }
 
     /// Descriptor chain must advance, stay aligned, and remain inside the block.
@@ -1167,12 +1189,20 @@ mod tpacket_tests {
             }
         }
 
+        // Unaligned offsets are rejected rather than rounded into a different
+        // descriptor location.
+        assert!(checked_next_tpacket_offset(off, hdr + 1, false, blk_len, block_size).is_err());
+
         // Aligned step that lands a full header inside the block.
         let step = hdr.div_ceil(TPACKET_ALIGNMENT) * TPACKET_ALIGNMENT;
         assert!(step >= hdr);
         let next_off = checked_next_tpacket_offset(off, step, false, blk_len, block_size)
             .expect("aligned step");
         assert_eq!(next_off, Some(off + step));
+        assert!(
+            checked_next_tpacket_offset(off, step, true, blk_len, block_size).is_err(),
+            "the final descriptor must terminate with a zero next offset"
+        );
 
         // Step that would put the next header past blk_len.
         let too_far = blk_len - off - hdr + 1;
