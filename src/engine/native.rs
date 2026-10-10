@@ -301,7 +301,6 @@ fn run_socket(
                 Some(value) if mac <= frame_size && snaplen <= frame_size => value,
                 _ => {
                     warn!(worker, block_idx, packet_idx, off, mac, snaplen, blk_len, "rejecting invalid TPACKET_V3 packet range");
-                    malformed = true;
                     break;
                 }
             };
@@ -316,7 +315,6 @@ fn run_socket(
                 Ok(None) => {}
                 Err(reason) => {
                     warn!(worker, block_idx, packet_idx, off, next, %reason, "rejecting invalid TPACKET_V3 descriptor chain");
-                    malformed = true;
                     break;
                 }
             }
