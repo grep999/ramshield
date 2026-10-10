@@ -2,6 +2,23 @@ use super::*;
 use serial_test::serial;
 
 #[test]
+fn pre_aggregation_map_size_has_hard_ceiling() {
+    let mut cfg = Config::default();
+    cfg.detection.pre_aggs_max_size = 1_000_000;
+    cfg.validate().expect("documented ceiling must be accepted");
+
+    cfg.detection.pre_aggs_max_size = 1_000_001;
+    let err = cfg.validate().expect_err("size above ceiling must be rejected");
+    assert!(err.to_string().contains("pre_aggs_max_size"), "{err}");
+
+    cfg.detection.pre_aggs_max_size = usize::MAX;
+    let err = cfg
+        .validate()
+        .expect_err("effectively unbounded pre-aggregation must be rejected");
+    assert!(err.to_string().contains("pre_aggs_max_size"), "{err}");
+}
+
+#[test]
 fn wal_volatile_fallback_defaults_false() {
     assert!(!WalConfig::default().allow_volatile_fallback);
     let parsed: WalConfig = toml::from_str(
