@@ -156,18 +156,25 @@ impl AuthState {
     pub fn enabled(&self) -> bool {
         self.password_hash
             .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some()
+            .map(|guard| guard.is_some())
+            .unwrap_or(true) // Poisoned state must never disable authentication.
     }
 
     /// Hot-swap the password hash without restarting the dashboard.
     /// Callers must have already validated the new PHC string.
+    ///
+    /// A poisoned lock remains fail-closed until this explicit replacement.
+    /// The replacement is written while holding the recovered write guard,
+    /// then poison is cleared so readers can resume with the known-good value.
     pub fn set_password_hash(&self, new_hash: Option<String>) {
-        let mut guard = self
-            .password_hash
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
-        *guard = new_hash;
+        match self.password_hash.write() {
+            Ok(mut guard) => *guard = new_hash,
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                *guard = new_hash;
+                self.password_hash.clear_poison();
+            }
+        }
     }
 
     /// True when this IP is currently locked out. Entries for IPs whose
@@ -217,12 +224,9 @@ impl AuthState {
     /// inline on an async handler blocks the Tokio worker for every other
     /// request on that thread.
     fn verify_password(&self, password: &str) -> Option<String> {
-        let hash = self
-            .password_hash
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()?
-            .clone();
+        // A poisoned lock means the hash may have been left in an unknown
+        // state. Deny login until set_password_hash installs a known-good hash.
+        let hash = self.password_hash.read().ok()?.as_ref()?.clone();
         let parsed = argon2::PasswordHash::new(&hash).ok()?;
         // Constant-time verify inside argon2; cap work on garbage input.
         if password.len() > self.max_password_length {
@@ -607,6 +611,41 @@ mod tests {
         );
         assert!(a.enabled());
         assert!(login(&a, "anything").is_none());
+    }
+
+    #[test]
+    fn poisoned_auth_fails_closed_until_valid_hash_replacement() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let a = AuthState::new(
+            Some(hash_of("old-password")),
+            3600,
+            50,
+            1024,
+            vec![],
+            true,
+            Arc::new(ramshield_metrics::Metrics::new()),
+            4,
+        );
+
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = a.password_hash.write().unwrap();
+            panic!("simulate panic while mutating auth state");
+        }));
+
+        assert!(a.enabled(), "poisoned state must keep auth enabled");
+        assert!(
+            a.verify_password("old-password").is_none(),
+            "poisoned state must deny login"
+        );
+
+        a.set_password_hash(Some(hash_of("new-password")));
+        assert!(a.enabled());
+        assert!(a.verify_password("old-password").is_none());
+        assert!(
+            a.verify_password("new-password").is_some(),
+            "explicit replacement should clear poison and restore login"
+        );
     }
 
     #[test]
