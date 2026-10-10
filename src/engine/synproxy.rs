@@ -142,62 +142,43 @@ pub fn install(cfg: &SynproxyConfig, interface: &str) -> Result<(), String> {
     }
     apply_script.push_str(&script);
 
-    // B03: sysctl changes are a separate reversible phase. Record originals
-    // so a failed rule apply can restore administrator-managed settings.
-    let originals: Vec<(&'static str, String)> = [
-        "net.ipv4.tcp_syncookies",
-        "net.ipv4.tcp_timestamps",
-        "net.netfilter.nf_conntrack_tcp_loose",
-    ]
-    .iter()
-    .map(|k| (*k, read_sysctl(k)))
-    .collect();
-    let mut sysctl_applied: Vec<(&'static str, String)> = Vec::new();
-    let apply_err = (|| -> Result<(), String> {
-        for (k, v) in [
-            ("net.ipv4.tcp_syncookies", "1"),
-            ("net.ipv4.tcp_timestamps", "1"),
-            ("net.netfilter.nf_conntrack_tcp_loose", "0"),
-        ] {
-            run_sysctl(k, v)?;
-            sysctl_applied.push((
-                k,
-                originals.iter().find(|(ok, _)| *ok == k).unwrap().1.clone(),
-            ));
-        }
-        let mut child = Command::new("nft")
-            .args(["-f", "-"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("nft: {e}"))?;
-        child
-            .stdin
-            .take()
-            .ok_or("nft stdin unavailable")?
-            .write_all(apply_script.as_bytes())
-            .map_err(|e| format!("nft write: {e}"))?;
-        let out = child
-            .wait_with_output()
-            .map_err(|e| format!("nft wait: {e}"))?;
-        if !out.status.success() {
+    // Kernel tunables are managed by sysctl.d at boot. The daemon runs
+    // unprivileged and must never try to write /proc/sys at runtime.
+    for (key, expected) in [
+        ("net.ipv4.tcp_syncookies", "1"),
+        ("net.ipv4.tcp_timestamps", "1"),
+        ("net.netfilter.nf_conntrack_tcp_loose", "0"),
+    ] {
+        let actual = read_sysctl(key);
+        if actual != expected {
             return Err(format!(
-                "nft synproxy ruleset failed: {}",
-                String::from_utf8_lossy(&out.stderr)
+                "SYNPROXY requires {key}={expected}, found {actual:?}; install deploy/sysctl.d/99-ramshield-synproxy.conf and reload sysctl"
             ));
         }
-        Ok(())
-    })();
-    // Restore sysctls on failure; the old table (if any) is untouched because
-    // the nft transaction is all-or-nothing.
-    if let Err(e) = &apply_err {
-        for (k, v) in &sysctl_applied {
-            let _ = run_sysctl(k, v);
-        }
-        return Err(e.clone());
     }
-    apply_err?;
+
+    let mut child = Command::new("nft")
+        .args(["-f", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("nft: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or("nft stdin unavailable")?
+        .write_all(apply_script.as_bytes())
+        .map_err(|e| format!("nft write: {e}"))?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("nft wait: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "nft synproxy ruleset failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
     info!(iface=%interface, ports=?cfg.ports, "kernel SYNPROXY transport guard active");
     Ok(())
 }
@@ -223,21 +204,6 @@ pub fn uninstall() -> Result<(), String> {
 
 #[cfg(not(target_os = "linux"))]
 pub fn uninstall() -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn run_sysctl(key: &str, value: &str) -> Result<(), String> {
-    let out = Command::new("sysctl")
-        .args(["-w", &format!("{key}={value}")])
-        .output()
-        .map_err(|e| format!("sysctl {key}: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "sysctl {key} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
-    }
     Ok(())
 }
 
