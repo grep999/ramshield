@@ -266,4 +266,3 @@ mod tests {
         assert_eq!(parse_rx_bytes("-1"), None);
     }
 }
-
