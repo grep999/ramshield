@@ -135,3 +135,28 @@ A candidate is eligible only when all are true:
 
 
 Every pass records the base SHA, exact result SHA, one bounded selected change, changed paths, regression coverage, commands actually run with exit status, CI run/job links, remaining findings, and next action. Work only on `audit-branch`. Never merge, force-push, rebase, or alter `kiddo_fix`, PR #3, or PR #5 as part of this workflow.
+
+## 2026-10-10 remediation pass — audit-branch
+
+The following source-level fixes were applied directly to `audit-branch`:
+
+- **SHM probe parity:** C reader and Rust writer now both use a four-slot probe window. A coherent occupied C slot with a different key advances to the next probe instead of retrying the same slot 64 times.
+- **Test dispatch:** `suite.py load bench` now dispatches the `.sh` benchmark through Bash. `integration_suite.py` maps its named profiles to supported `suite.py` commands and no longer passes profile strings as arguments to individual scripts.
+- **Audit helper:** `audit-safety-commitment.py` uses the repository-relative workspace, no longer treats `#` as a dangerous token, and has its shebang at byte zero.
+- **Python import:** `random` is imported at module scope in `scripts/subnet_test.py`.
+- **SYNPROXY deployment:** added `deploy/sysctl.d/99-ramshield-synproxy.conf`; the systemd service restores `ProtectKernelTunables=true`; runtime SYNPROXY setup verifies required sysctl values and does not attempt privileged writes.
+- **Documentation:** removed the duplicate half of `crates/ramshield-analytics/README.md`, corrected the stale `ipnet` claim in `crates/ramshield-types/README.md`, and populated the previously empty `docs/LOCKDOWN_RUNBOOK.md`.
+- **Duplicate tree:** removed the nested `rs/` archive; root-level workspace sources remain.
+
+### Findings checked against current source
+
+- The invalid `Store::set_block_state` call is **not present** in the tracked enforcement source. The suggested `update_ip` replacement in the report would violate the documented `Store::update_ip` contract, which is for statistics-only mutation; enforcement must retain its block-state-authoritative write path.
+- Mesh fields/modules and boot-time mesh construction are already gated behind `feature = "mesh"`; the dependency is optional.
+- The enforcement task's `JoinHandle` is selected by the pipeline; unexpected termination returns a fatal pipeline error rather than leaving the daemon silently healthy.
+- The ExaBGP FIFO bridge already opens the FIFO with `O_RDWR`, preventing EOF on writer restart.
+- The proposed `concurrency_invariants.rs` file and its `mem::zeroed()` test are absent from the tracked tree.
+
+### Acceptance status
+
+These are applied source changes, **not a release sign-off**. The full Rust/C build, formatting, Clippy, zero-unwrap gate, and end-to-end suite must pass on one final immutable SHA before closure. Keep the remaining backlog items open until that evidence is attached.
+
