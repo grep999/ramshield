@@ -666,8 +666,10 @@ mod tpacket_tests {
     fn rejects_packet_range_past_block_and_mapped_ring() {
         // Header [48, 96) is valid, but packet [128, 129) crosses the block.
         assert!(checked_tpacket_packet_offsets(0, 128, 128, 128, 48, 80, 1).is_none());
-        // On the final block, packet [255, 257) crosses both block and mapping.
+        // On the final block, packet [255, 257) crosses the block boundary.
         assert!(checked_tpacket_packet_offsets(1, 128, 256, 128, 48, 79, 2).is_none());
+        // A truncated mapping must also reject a block that extends past it.
+        assert!(checked_tpacket_packet_offsets(1, 128, 255, 128, 48, 79, 1).is_none());
     }
 
     #[test]
