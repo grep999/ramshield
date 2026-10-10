@@ -4,6 +4,8 @@ use super::*;
 /// with the default so an accidental or hostile config cannot disable the
 /// memory-pressure flush by setting an effectively unbounded size.
 const MAX_PRE_AGGS_SIZE: usize = 1_000_000;
+/// Forecaster ticks at 1 Hz; cap the seasonal vector to one day of samples.
+const MAX_SEASONALITY_PERIOD: usize = 86_400;
 
 impl Config {
     /// Validate configuration with sensible bounds and error messages.
@@ -285,8 +287,12 @@ impl Config {
             {
                 anyhow::bail!("forecasting.hw_gamma must be finite and in range [0.0, 1.0]");
             }
-            if self.forecasting.seasonality_period == 0 {
-                anyhow::bail!("forecasting.seasonality_period must be > 0");
+            if self.forecasting.seasonality_period == 0
+                || self.forecasting.seasonality_period > MAX_SEASONALITY_PERIOD
+            {
+                anyhow::bail!(
+                    "forecasting.seasonality_period must be between 1 and {MAX_SEASONALITY_PERIOD}"
+                );
             }
             if !self.forecasting.anomaly_zscore.is_finite() || self.forecasting.anomaly_zscore < 1.0
             {
