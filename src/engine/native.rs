@@ -1168,7 +1168,7 @@ mod tpacket_tests {
         }
 
         // Aligned step that lands a full header inside the block.
-        let step = ((hdr + TPACKET_ALIGNMENT - 1) / TPACKET_ALIGNMENT) * TPACKET_ALIGNMENT;
+        let step = hdr.div_ceil(TPACKET_ALIGNMENT) * TPACKET_ALIGNMENT;
         assert!(step >= hdr);
         let next_off = checked_next_tpacket_offset(off, step, false, blk_len, block_size)
             .expect("aligned step");
