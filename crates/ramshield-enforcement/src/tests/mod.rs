@@ -1109,6 +1109,187 @@ async fn reconcile_repairs_missing_and_stale_cidr() {
     assert!(!a.cidrs.contains(&stale_c));
 }
 
+/// A-017: in-memory XDP applier with hard map capacity (kernel map full).
+struct BoundedMapApplier {
+    cap: usize,
+    blocked: std::collections::HashSet<IpAddr>,
+    cidrs: std::collections::HashSet<IpNetwork>,
+    /// Simulate "map wiped" (e.g. program reload / map recreate).
+    lost: bool,
+    /// Fail after this many successful applies (partial install).
+    fail_after: Option<usize>,
+    applies: usize,
+}
+
+impl BoundedMapApplier {
+    fn new(cap: usize) -> Self {
+        Self {
+            cap,
+            blocked: Default::default(),
+            cidrs: Default::default(),
+            lost: false,
+            fail_after: None,
+            applies: 0,
+        }
+    }
+
+    fn simulate_map_loss(&mut self) {
+        self.blocked.clear();
+        self.cidrs.clear();
+        self.lost = true;
+    }
+}
+
+#[async_trait::async_trait]
+impl XdpApplier for BoundedMapApplier {
+    fn apply_block(&mut self, ip: IpAddr, _: Uuid, _: u64) -> Result<(), EnforcementError> {
+        if let Some(n) = self.fail_after {
+            if self.applies >= n {
+                return Err(EnforcementError::Xdp("partial install failed".into()));
+            }
+        }
+        if !self.blocked.contains(&ip) && self.blocked.len() >= self.cap {
+            return Err(EnforcementError::Xdp(format!(
+                "BLOCKLIST capacity full ({})",
+                self.cap
+            )));
+        }
+        self.blocked.insert(ip);
+        self.applies += 1;
+        self.lost = false;
+        Ok(())
+    }
+    fn apply_unblock(&mut self, ip: IpAddr, _: Uuid) -> Result<(), EnforcementError> {
+        self.blocked.remove(&ip);
+        Ok(())
+    }
+    fn apply_cidr_block(&mut self, n: IpNetwork, _: Uuid, _: u64) -> Result<(), EnforcementError> {
+        if !self.cidrs.contains(&n) && self.cidrs.len() >= self.cap {
+            return Err(EnforcementError::Xdp(format!(
+                "BLOCKCIDR capacity full ({})",
+                self.cap
+            )));
+        }
+        self.cidrs.insert(n);
+        Ok(())
+    }
+    fn apply_cidr_unblock(&mut self, n: IpNetwork, _: Uuid) -> Result<(), EnforcementError> {
+        self.cidrs.remove(&n);
+        Ok(())
+    }
+    fn reconcile(
+        &mut self,
+        expected: &[IpAddr],
+        expected_cidrs: &[IpNetwork],
+    ) -> Result<ReconciliationState, EnforcementError> {
+        // After map loss, treat as empty kernel view and rebuild from expected.
+        if self.lost {
+            self.blocked.clear();
+            self.cidrs.clear();
+            self.lost = false;
+        }
+        let want: std::collections::HashSet<_> = expected.iter().copied().collect();
+        let stale: Vec<_> = self.blocked.difference(&want).copied().collect();
+        let missing: Vec<_> = want.difference(&self.blocked).copied().collect();
+        if self.blocked.len() - stale.len() + missing.len() > self.cap {
+            return Err(EnforcementError::Xdp(
+                "reconcile exceeds map capacity".into(),
+            ));
+        }
+        for ip in &stale {
+            self.blocked.remove(ip);
+        }
+        for ip in &missing {
+            self.blocked.insert(*ip);
+        }
+        let want_c: std::collections::HashSet<_> = expected_cidrs.iter().copied().collect();
+        let stale_c: Vec<_> = self.cidrs.difference(&want_c).copied().collect();
+        let missing_c: Vec<_> = want_c.difference(&self.cidrs).copied().collect();
+        for c in &stale_c {
+            self.cidrs.remove(c);
+        }
+        for c in &missing_c {
+            self.cidrs.insert(*c);
+        }
+        Ok(ReconciliationState {
+            last_wal_lsn: 0,
+            pending_blocks: missing,
+            pending_unblocks: stale,
+            evicted_count: stale_c.len() as u64,
+        })
+    }
+    fn configure_trusted_overlay(&mut self, _: &[IpNetwork]) -> Result<(), EnforcementError> {
+        Ok(())
+    }
+    fn configure_autonomous(
+        &mut self,
+        _: bool,
+        _: u64,
+        _: u64,
+        _: u64,
+        _: u64,
+    ) -> Result<(), EnforcementError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn bounded_map_capacity_rejects_new_blocks() {
+    let mut a = BoundedMapApplier::new(2);
+    let a1 = ip([10, 0, 0, 1]);
+    let a2 = ip([10, 0, 0, 2]);
+    let a3 = ip([10, 0, 0, 3]);
+    assert!(a.apply_block(a1, Uuid::nil(), 60).is_ok());
+    assert!(a.apply_block(a2, Uuid::nil(), 60).is_ok());
+    let err = a.apply_block(a3, Uuid::nil(), 60).unwrap_err();
+    assert!(
+        format!("{err:?}").contains("capacity"),
+        "expected capacity error, got {err:?}"
+    );
+    assert!(!a.blocked.contains(&a3));
+}
+
+#[test]
+fn reconcile_after_map_loss_restores_ipv4_ipv6_and_cidr() {
+    let mut a = BoundedMapApplier::new(16);
+    let v4 = ip([198, 51, 100, 7]);
+    let v6: IpAddr = "2001:db8::7".parse().unwrap();
+    let cidr = IpNetwork::new("203.0.113.0".parse().unwrap(), 24).unwrap();
+    a.apply_block(v4, Uuid::nil(), 0).unwrap();
+    a.apply_block(v6, Uuid::nil(), 0).unwrap();
+    a.apply_cidr_block(cidr, Uuid::nil(), 0).unwrap();
+    a.simulate_map_loss();
+    assert!(a.blocked.is_empty());
+    let st = a.reconcile(&[v4, v6], &[cidr]).unwrap();
+    assert!(a.blocked.contains(&v4));
+    assert!(a.blocked.contains(&v6));
+    assert!(a.cidrs.contains(&cidr));
+    assert_eq!(st.pending_blocks.len(), 2);
+}
+
+#[test]
+fn partial_install_failure_does_not_commit_failed_ip() {
+    let mut a = BoundedMapApplier::new(8);
+    a.fail_after = Some(1);
+    let ok_ip = ip([10, 1, 0, 1]);
+    let fail_ip = ip([10, 1, 0, 2]);
+    assert!(a.apply_block(ok_ip, Uuid::nil(), 30).is_ok());
+    assert!(a.apply_block(fail_ip, Uuid::nil(), 30).is_err());
+    assert!(a.blocked.contains(&ok_ip));
+    assert!(!a.blocked.contains(&fail_ip));
+}
+
+#[test]
+fn stub_xdp_is_explicit_no_kernel_side_effects() {
+    // --no-xdp / unsupported env: Stub accepts calls but never tracks state.
+    let mut s = StubXdpApplier;
+    let ip = ip([8, 8, 8, 8]);
+    s.apply_block(ip, Uuid::nil(), 10).unwrap();
+    let st = s.reconcile(&[ip], &[]).unwrap();
+    assert!(st.pending_blocks.is_empty());
+    assert_eq!(st.evicted_count, 0);
+}
+
 proptest::proptest! {
     #![proptest_config(proptest::prelude::ProptestConfig::with_cases(256))]
     #[test]

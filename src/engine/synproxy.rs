@@ -312,4 +312,51 @@ mod tests {
             "eth0drop_table_inet_filter"
         );
     }
+
+    #[test]
+    fn synproxy_non_linux_is_explicit() {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let err = super::install(&Default::default(), "eth0").unwrap_err();
+            assert!(
+                err.contains("Linux"),
+                "unsupported env must name Linux requirement: {err}"
+            );
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // Privilege/tooling absence: install without nft should fail closed
+            // with a clear message (do not claim success).
+            if !super::command_exists("nft") {
+                let cfg = ramshield_config::SynproxyConfig {
+                    enabled: true,
+                    ..Default::default()
+                };
+                let err = super::install(&cfg, "lo").unwrap_err();
+                assert!(
+                    err.to_lowercase().contains("nft") || err.to_lowercase().contains("synproxy"),
+                    "missing nft must be explicit: {err}"
+                );
+            }
+            // Shutdown cleanup: uninstall is best-effort when table missing.
+            assert!(super::uninstall().is_ok());
+        }
+    }
+
+    #[test]
+    fn install_rejects_hostile_interface_name() {
+        #[cfg(target_os = "linux")]
+        {
+            let cfg = ramshield_config::SynproxyConfig {
+                enabled: true,
+                ..Default::default()
+            };
+            // Even if nft exists, interface must pass identifier filter first.
+            let err = super::install(&cfg, "eth0; rm -rf /").unwrap_err();
+            assert!(
+                err.contains("unsupported") || err.contains("identifier"),
+                "{err}"
+            );
+        }
+    }
 }

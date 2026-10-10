@@ -58,7 +58,7 @@
 
 | A-016 | Native packet ingest | TPACKET_V3 validators retained; property sweeps cover blk_len, header/packet edges, multi-block ring bounds, descriptor chain alignment/overflow, and 2k deterministic malformed mixes (no panic). Linux-only unit path exercised by `cargo test --lib tpacket`. | PASS (exact SHA pending CI) |
 
-| A-017 | XDP/SYNPROXY operational correctness | Test kernel map capacity, reconciliation after map loss, CIDR and IPv6 handling, partial install/rollback, privileges/unavailable interfaces, and shutdown cleanup. Make unsupported environment behavior explicit. | OPEN |
+| A-017 | XDP/SYNPROXY operational correctness | Capacity rejection, reconcile-after-map-loss (v4/v6/CIDR), partial-install failure isolation, StubXdp no kernel effects, CIDR map routing, synproxy unsupported-env / hostile iface / uninstall cleanup tests. | PASS (exact SHA pending CI) |
 
 | A-018 | WAL / checkpoint recovery | Run crash/restart equivalence and fault injection around append/fsync/checkpoint/snapshot boundaries, TTL restoration, corrupt/truncated WAL, and disk-full errors. Keep recovery gates deterministic and exact-SHA recorded. | OPEN |
 

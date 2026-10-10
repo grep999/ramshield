@@ -668,6 +668,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cidr_routes_to_dedicated_map() {
+        let v4 = IpNetwork::new("10.0.0.0".parse().unwrap(), 8).unwrap();
+        let v6 = IpNetwork::new("2001:db8::".parse().unwrap(), 32).unwrap();
+        assert_eq!(super::cidr_map_for(v4), "BLOCKCIDR");
+        assert_eq!(super::cidr_map_for(v6), "BLOCKCIDR6");
+    }
+
     /// Task 5: reconcile must never sweep one family's keys against the
     /// other's expected set — pins the split itself (map IO stays thin).
     #[test]
