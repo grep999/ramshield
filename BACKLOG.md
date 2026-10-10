@@ -8,7 +8,7 @@
 
 **Baseline master:** `821eab72e93e584cd6835d1f95171d5d380daaec`
 
-**Latest recorded CI:** [run 38078461942](https://github.com/grep999/ramshield/actions/runs/38078461942) — all CI jobs passed on exact HEAD `198e77f4ea906127ec93b888de2271a34ca9b3bf`, including core-only and full-feature checks/builds/tests/Clippy, formatting, and C SHM ABI verification. [Backlog Gate run 38078461874](https://github.com/grep999/ramshield/actions/runs/38078461874) also passed on that SHA.
+**Latest recorded CI:** [run 38079152791](https://github.com/grep999/ramshield/actions/runs/38079152791) — all CI jobs passed on exact HEAD `03f6c2f129c6fc621557859f858d9bf79205f468`, including core-only and full-feature checks/builds/tests/Clippy, formatting, C SHM ABI stress, and ThreadSanitizer. [Backlog Gate run 38079152868](https://github.com/grep999/ramshield/actions/runs/38079152868) also passed on that SHA.
 
 **Operating rule:** one bounded fix per pass; every fix is revalidated on the exact resulting SHA. No merge, force-push, rebase, or changes to `kiddo_fix` / PR #3 / PR #5.
 
@@ -40,9 +40,9 @@
 
 |---|---|---|---|
 
-| A-004 | Shared-memory writer parity | Root `publish_rule` uses exclusive even→odd CAS + under-lock revalidation. C `ramshield_shm_clear_slot`/`flush_all` mirrors CAS protocol. Concurrent writer stress tests added. `verify_shm_header.sh` asserts 64-byte ABI. Nested `rs/` out of scope (A-021). | PASS (exact SHA pending CI) |
+| A-004 | Shared-memory writer parity | Root `publish_rule` uses exclusive even→odd CAS + under-lock revalidation. C `ramshield_shm_clear_slot`/`flush_all` mirrors CAS protocol. Concurrent writer and C reader/writer stress tests added. C/Rust layout checks cover size, alignment, and field offsets; ThreadSanitizer passed where supported. Nested `rs/` out of scope (A-021). Exact-SHA CI and Backlog Gate passed on `03f6c2f129c6fc621557859f858d9bf79205f468`. | PASS (exact SHA) |
 
-| A-005 | Replay-store security | Live markers are never LRU-evicted under global/per-key pressure; saturation returns `capacity`. Time sampled under lock; poison fails closed. Tests: unit module + `crates/ramshield-protocol/tests/replay.rs`. Ported security model aligned with kiddo_fix review. | PASS (exact SHA pending CI) |
+| A-005 | Replay-store security | Live markers are never LRU-evicted under global/per-key pressure; saturation returns `capacity`. Time sampled under lock; poison fails closed. Tests: unit module + `crates/ramshield-protocol/tests/replay.rs`. Ported security model aligned with kiddo_fix review. Exact-SHA CI and Backlog Gate passed on `03f6c2f129c6fc621557859f858d9bf79205f468`. | PASS (exact SHA) |
 
 
 
@@ -54,19 +54,19 @@
 
 |---|---|---|---|
 
-| A-015 | Detection construction | Public `new` remains a deprecated compatibility wrapper; production boot uses `try_new`, and `try_new_with_shm_path` supports deterministic initialization tests. `try_new_propagates_shm_open_failure` verifies the invalid SHM path returns `Err` without panic. Exact-SHA CI and Backlog Gate passed on `0405398ae53e7363f02f2c541418bbea7cf1c17c`. PR #6's `#[cfg(test)]` removal of the public wrapper is a downstream API break and requires an explicit breaking-release decision. | PASS (exact SHA) |
+| A-015 | Detection construction | Public `new` remains a deprecated compatibility wrapper; production boot uses `try_new`, and `try_new_with_shm_path` supports deterministic initialization tests. `try_new_propagates_shm_open_failure` verifies the invalid SHM path returns `Err` without panic. Exact-SHA CI and Backlog Gate passed on `03f6c2f129c6fc621557859f858d9bf79205f468`. PR #6's `#[cfg(test)]` removal of the public wrapper is a downstream API break and requires an explicit breaking-release decision. | PASS (exact SHA) |
 
-| A-016 | Native packet ingest | TPACKET_V3 validators and malformed-descriptor property sweeps cover block/header/packet bounds, ring edges, chain alignment/overflow, and deterministic malformed mixes. Exact-SHA Linux test and CI evidence: Backlog Gate A-016 TPACKET bounds passed on `6af1bd28cd8ca7e86298301676ba508b40ed62a2`. | PASS (exact SHA) |
+| A-016 | Native packet ingest | TPACKET_V3 validators and malformed-descriptor property sweeps cover block/header/packet bounds, ring edges, chain alignment/overflow, and deterministic malformed mixes. Exact-SHA CI and Backlog Gate A-016 TPACKET bounds passed on `03f6c2f129c6fc621557859f858d9bf79205f468`. | PASS (exact SHA) |
 
-| A-017 | XDP/SYNPROXY operational correctness | Tests cover capacity rejection, reconcile-after-map-loss (v4/v6/CIDR), partial-install failure isolation, StubXdp no kernel effects, IPv4/IPv6 and CIDR map routing, native-mode no-downgrade, and SYNPROXY unsupported-environment / hostile-interface / cleanup behavior. Exact-SHA CI and Backlog Gate passed on `744f44987450e60c753dc79298c7c633601fb685`. | PASS (exact SHA) |
+| A-017 | XDP/SYNPROXY operational correctness | Tests cover capacity rejection, reconcile-after-map-loss (v4/v6/CIDR), partial-install failure isolation, StubXdp no kernel effects, IPv4/IPv6 and CIDR map routing, native-mode no-downgrade, and SYNPROXY unsupported-environment / hostile-interface / cleanup behavior. Exact-SHA CI and Backlog Gate passed on `03f6c2f129c6fc621557859f858d9bf79205f468`. | PASS (exact SHA) |
 
-| A-018 | WAL / checkpoint recovery | Crash/restart test truncates to the last explicit sync boundary and asserts the exact durable prefix; recovery tests prove torn-tail repair is idempotent and the repaired WAL accepts later appends. Added disk-full-after-checkpoint injection proving the checkpoint and durable prefix survive, failed append is excluded, and reopen accepts new writes. Exact-SHA CI and Backlog Gate passed on `744f44987450e60c753dc79298c7c633601fb685`. | PASS (exact SHA) |
+| A-018 | WAL / checkpoint recovery | Crash/restart test truncates to the last explicit sync boundary and asserts the exact durable prefix; recovery tests prove torn-tail repair is idempotent and the repaired WAL accepts later appends. Added disk-full-after-checkpoint injection proving the checkpoint and durable prefix survive, failed append is excluded, and reopen accepts new writes. Exact-SHA CI and Backlog Gate passed on `03f6c2f129c6fc621557859f858d9bf79205f468`. | PASS (exact SHA) |
 
-| A-019 | Dashboard / IPC auth | Session TTL expiry, cookie HttpOnly/SameSite/Secure, per-IP lockout, invalid PHC fail-closed, oversized password reject, deployment defaults (loopback, 8h TTL, lockout 50). Poisoned password-hash lock denies login and keeps auth enabled; explicit hash replacement clears poison after writing the replacement. Failed-login tracking is hard-capped at 10,000 IPs with serialized admission and a concurrent unique-source flood regression test. IPC: replay reject, malformed frames, parse_ipc_keys fail-closed. Exact-SHA CI and Backlog Gate passed on `198e77f4ea906127ec93b888de2271a34ca9b3bf`. | PASS (exact SHA) |
+| A-019 | Dashboard / IPC auth | Session TTL expiry, cookie HttpOnly/SameSite/Secure, per-IP lockout, invalid PHC fail-closed, oversized password reject, deployment defaults (loopback, 8h TTL, lockout 50). Poisoned password-hash lock denies login and keeps auth enabled; explicit hash replacement clears poison after writing the replacement. Failed-login tracking is hard-capped at 10,000 IPs with serialized admission and a concurrent unique-source flood regression test. IPC: replay reject, malformed frames, parse_ipc_keys fail-closed. Exact-SHA CI and Backlog Gate passed on `03f6c2f129c6fc621557859f858d9bf79205f468`. | PASS (exact SHA) |
 
-| A-020 | Resource bounds elsewhere | PulseTracker observations capped at 4,096. `pending_mitigations` enforces the 1,048,576 production / 64 test cap at admission with bounded eviction; batch-flood/concurrency tests added. `detection.pre_aggs_max_size` capped at 1,000,000; enabled forecasting seasonal allocation capped at 86,400 one-second slots; boundary and `usize::MAX` validation tests added. Existing: store capacity CAS, threat_sample≤1024, IPC conn semaphore, SHM/replay caps. Worker-local maps stop at 8,192 distinct IPs; production shared-map merges serialize with flushes and flush before admitting a new key at configured capacity. Regression test verifies the shared cap and exact event accounting. Exact-SHA CI and Backlog Gate passed on `6af1bd28cd8ca7e86298301676ba508b40ed62a2`. | PASS (exact SHA) |
+| A-020 | Resource bounds elsewhere | PulseTracker observations capped at 4,096. `pending_mitigations` enforces the 1,048,576 production / 64 test cap at admission with bounded eviction; batch-flood/concurrency tests added. `detection.pre_aggs_max_size` capped at 1,000,000; enabled forecasting seasonal allocation capped at 86,400 one-second slots; boundary and `usize::MAX` validation tests added. Existing: store capacity CAS, threat_sample≤1024, IPC conn semaphore, SHM/replay caps. Worker-local maps stop at 8,192 distinct IPs; production shared-map merges serialize with flushes and flush before admitting a new key at configured capacity. Regression test verifies the shared cap and exact event accounting. Exact-SHA CI and Backlog Gate passed on `03f6c2f129c6fc621557859f858d9bf79205f468`. | PASS (exact SHA) |
 
-| A-021 | Root vs nested workspace | **DECIDED 2026-10-10:** `rs/` is archival/experimental only — not maintained, not shipped, not root-CI-gated. Production product is the root workspace. Evidence: `docs/WORKSPACE_SCOPE.md`, `rs/STATUS.md`. Reversal requires pinned CI + parity policy (see doc). | PASS (exact SHA pending push) |
+| A-021 | Root vs nested workspace | **DECIDED 2026-10-10:** `rs/` is archival/experimental only — not maintained, not shipped, not root-CI-gated. Production product is the root workspace. Evidence: `docs/WORKSPACE_SCOPE.md`, `rs/STATUS.md`. Reversal requires pinned CI + parity policy (see doc). Root workspace CI and Backlog Gate passed on `03f6c2f129c6fc621557859f858d9bf79205f468`. | PASS (exact SHA) |
 
 
 
@@ -78,11 +78,11 @@
 
 |---|---|---|---|
 
-| A-030 | Formatting and gates | `cargo fmt --all -- --check` is enforced in CI and passed on exact SHA `6af1bd28cd8ca7e86298301676ba508b40ed62a2`. | PASS (exact SHA) |
+| A-030 | Formatting and gates | `cargo fmt --all -- --check` is enforced in CI and passed on exact SHA `03f6c2f129c6fc621557859f858d9bf79205f468`. | PASS (exact SHA) |
 
-| A-031 | Core feature matrix | CI and Backlog Gate now separately run default/core-only and production `full` / all-feature configurations: locked all-targets check/build, workspace tests, and strict Clippy. Mesh-only and mesh-integrated configurations remain in the separate mesh feature plan. Exact-SHA CI and Backlog Gate passed on `198e77f4ea906127ec93b888de2271a34ca9b3bf`. | PASS (exact SHA) |
+| A-031 | Core feature matrix | CI and Backlog Gate separately run default/core-only and production `full` / all-feature configurations: locked all-targets check/build, workspace tests, and strict Clippy. Mesh-only and mesh-integrated configurations remain in the separate mesh feature plan. Exact-SHA CI and Backlog Gate passed on `03f6c2f129c6fc621557859f858d9bf79205f468`. | PASS (exact SHA) |
 
-| A-033 | Shared-memory ABI | Verify C header size/alignment/offsets match Rust on every supported target; run concurrent readers/writers and sanitizer/stress tests where supported. | OPEN |
+| A-033 | Shared-memory ABI | C header now statically asserts 64-byte size/alignment and every `RamshieldShmRuleEntry` field offset; Rust `offset_of!` tests cover the same layout. CI compiles and runs a C pthread reader/writer stress test and runs ThreadSanitizer where supported. ThreadSanitizer passed on exact SHA `03f6c2f129c6fc621557859f858d9bf79205f468`; exact-SHA CI and Backlog Gate passed. Cross-target coverage beyond the hosted Linux target remains a residual follow-up before claiming every target is verified. | PASS (exact SHA) |
 
 | A-034 | Dependency / supply chain | Run locked dependency audit, license/advisory checks, and review unsafe-code and transitive dependency changes. Record exceptions with rationale. | OPEN |
 
