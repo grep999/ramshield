@@ -78,7 +78,7 @@
 
 |---|---|---|---|
 
-| A-030 | Formatting and gates | `cargo fmt --all -- --check` is enforced in CI and passed on exact SHA `6af1bd28cd8ca7e862983016ba508b40ed62a2`. | PASS (exact SHA) |
+| A-030 | Formatting and gates | `cargo fmt --all -- --check` is enforced in CI and passed on exact SHA `6af1bd28cd8ca7e86298301676ba508b40ed62a2`. | PASS (exact SHA) |
 
 | A-031 | Core feature matrix | CI must exercise default/core-only and the production `full` configuration, all-targets check/build, unit/integration tests, and strict Clippy without feature-unification masking a broken core configuration. Mesh-only and mesh-integrated configurations are tracked in the separate mesh feature plan. | IN PROGRESS |
 
