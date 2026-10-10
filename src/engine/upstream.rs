@@ -65,12 +65,12 @@ pub async fn run(config: Arc<Config>, metrics: Arc<Metrics>, mut shutdown: tokio
                     if cfg.bgp_mode != "none" && !bgp_announced {
                         match bgp_announce(&cfg) { Ok(()) => { bgp_announced = true; info!(mode=%cfg.bgp_mode, "upstream BGP mitigation announced"); }, Err(e) => warn!(error=%e, "upstream BGP mitigation failed") }
                     }
-                    if let Some(url) = &cfg.webhook_url {
-                        if last_signal.elapsed() >= Duration::from_secs(cfg.cooldown_secs) {
-                            match post_webhook(url, &signal).await {
-                                Ok(()) => { last_signal = now; debug!("upstream mitigation webhook delivered"); }
-                                Err(e) => warn!(error=%e, "upstream mitigation webhook failed"),
-                            }
+                    if let Some(url) = &cfg.webhook_url
+                        && last_signal.elapsed() >= Duration::from_secs(cfg.cooldown_secs)
+                    {
+                        match post_webhook(url, &signal).await {
+                            Ok(()) => { last_signal = now; debug!("upstream mitigation webhook delivered"); }
+                            Err(e) => warn!(error=%e, "upstream mitigation webhook failed"),
                         }
                     }
                 }
@@ -86,7 +86,7 @@ fn read_rx_bytes(interface: &str) -> u64 {
     #[cfg(target_os = "linux")]
     {
         let path = format!("/sys/class/net/{interface}/statistics/rx_bytes");
-        return std::fs::read_to_string(path).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+        std::fs::read_to_string(path).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0)
     }
     #[cfg(not(target_os = "linux"))]
     {

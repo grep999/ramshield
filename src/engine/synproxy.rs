@@ -15,6 +15,7 @@ use std::io::Write;
 use tracing::info;
 
 #[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)] // Mirrors the explicit SYNPROXY ruleset inputs.
 fn render_ruleset(
     interface: &str,
     ports: &str,

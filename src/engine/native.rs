@@ -95,7 +95,7 @@ pub fn spawn(interface: String, max_events_per_sec: u64, trusted_overlay_cidrs: 
     {
         preflight_linux(&interface)?;
         let workers = std::thread::available_parallelism().map(|n| n.get().min(8)).unwrap_or(1);
-        return std::thread::Builder::new().name("rs-native-ingest-supervisor".into()).spawn(move || {
+        std::thread::Builder::new().name("rs-native-ingest-supervisor".into()).spawn(move || {
             let budget = Arc::new(AtomicU64::new(0));
                 let epoch = Arc::new(AtomicU64::new(0));
             let epoch_base = std::time::Instant::now();
@@ -115,7 +115,7 @@ pub fn spawn(interface: String, max_events_per_sec: u64, trusted_overlay_cidrs: 
                 }));
             }
             for handle in handles.into_iter().flatten() { let _ = handle.join(); }
-        });
+        })
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -154,6 +154,7 @@ fn preflight_linux(interface: &str) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)] // Worker-owned state is intentionally explicit.
 fn run_linux(
     interface: String,
     max_eps: u64,
@@ -194,6 +195,7 @@ fn run_linux(
 }
 
 #[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)] // Socket/ring resources stay explicit at this boundary.
 fn run_socket(
     fd: i32,
     interface: &str,

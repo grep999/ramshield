@@ -75,8 +75,6 @@ fn parse_request(request: &[u8], max_bytes: usize) -> Result<RequestParts<'_>, F
                     // chunked must be unique and final.
                     if chunked { return Err(Finding::HeaderSmuggling); }
                     chunked = true;
-                } else if chunked {
-                    return Err(Finding::HeaderSmuggling);
                 } else {
                     return Err(Finding::HeaderSmuggling);
                 }
@@ -88,7 +86,11 @@ fn parse_request(request: &[u8], max_bytes: usize) -> Result<RequestParts<'_>, F
     if transfer_chunked && content_length.is_some() { return Err(Finding::HeaderSmuggling); }
     let raw_body = &request[sep + 4..];
     let body = if transfer_chunked { decode_chunked(raw_body, max_bytes)? } else {
-        if let Some(len) = content_length { if len != raw_body.len() || len > max_bytes { return Err(Finding::Malformed); } }
+        if let Some(len) = content_length
+            && (len != raw_body.len() || len > max_bytes)
+        {
+            return Err(Finding::Malformed);
+        }
         raw_body.to_vec()
     };
     Ok(RequestParts { target, headers, body })
@@ -130,7 +132,7 @@ fn parse_decimal(v: &[u8]) -> Option<usize> {
     Some(n)
 }
 
-fn eq_ci(a: &[u8], b: &[u8]) -> bool { a.len() == b.len() && a.iter().zip(b).all(|(x,y)| x.to_ascii_lowercase() == y.to_ascii_lowercase()) }
+fn eq_ci(a: &[u8], b: &[u8]) -> bool { a.eq_ignore_ascii_case(b) }
 fn contains_ci(a: &[u8], needle: &[u8]) -> bool { a.windows(needle.len()).any(|w| eq_ci(w, needle)) }
 
 fn percent_decode(input: &[u8]) -> Vec<u8> {
@@ -146,14 +148,13 @@ fn percent_decode(input: &[u8]) -> Vec<u8> {
     let mut decoded = Vec::with_capacity(input.len());
     let mut index = 0;
     while index < input.len() {
-        if input[index] == b'%' && index + 2 < input.len() {
-            if let (Some(high), Some(low)) =
+        if input[index] == b'%' && index + 2 < input.len()
+            && let (Some(high), Some(low)) =
                 (hex_nibble(input[index + 1]), hex_nibble(input[index + 2]))
-            {
-                decoded.push((high << 4) | low);
-                index += 3;
-                continue;
-            }
+        {
+            decoded.push((high << 4) | low);
+            index += 3;
+            continue;
         }
         decoded.push(input[index]);
         index += 1;
