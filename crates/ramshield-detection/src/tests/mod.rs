@@ -1294,7 +1294,10 @@ fn pending_mitigations_hard_capped_under_flood() {
     use ramshield_types::BlockReason;
     let eng = engine();
     let now = 10_000_000_000u64;
-    // 200 > test PENDING_CAP (64); all timestamps are "fresh".
+
+    // Simulate one batch containing many more unique decisions than the
+    // test cap. The map must remain bounded after EVERY admission, not only
+    // after a later flush has a chance to clean it up.
     for i in 0..200u32 {
         let ip = IpAddr::from([
             10,
@@ -1302,14 +1305,43 @@ fn pending_mitigations_hard_capped_under_flood() {
             ((i >> 8) & 0xff) as u8,
             (i & 0xff) as u8,
         ]);
-        eng.admit_mitigation((ip, BlockReason::HighRps), 60, now);
+        eng.admit_mitigation((ip, BlockReason::HighRps), 60, now + u64::from(i));
+        assert!(
+            eng.pending_mitigations_len() <= PENDING_MITIGATION_CAP,
+            "admission {i} exceeded cap: {}",
+            eng.pending_mitigations_len()
+        );
     }
-    assert!(eng.pending_mitigations_len() > 64);
-    // Empty flush still runs the bound/prune at the end of flush_batch.
-    eng.flush_events(&[]);
+    assert_eq!(eng.pending_mitigations_len(), PENDING_MITIGATION_CAP);
+
+    // Exercise simultaneous normal/emergency-style admissions: no pair of
+    // callers may race through a len-check and overshoot the strict cap.
+    let workers: Vec<_> = (0..8u32)
+        .map(|worker| {
+            let eng = eng.clone();
+            std::thread::spawn(move || {
+                for i in 0..200u32 {
+                    let ip = IpAddr::from([
+                        11,
+                        worker as u8,
+                        ((i >> 8) & 0xff) as u8,
+                        (i & 0xff) as u8,
+                    ]);
+                    eng.admit_mitigation(
+                        (ip, BlockReason::HighRps),
+                        60,
+                        now + 1_000 + u64::from(worker * 200 + i),
+                    );
+                }
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().expect("admission worker");
+    }
     assert!(
-        eng.pending_mitigations_len() <= 64,
-        "expected hard cap 64 in tests, got {}",
+        eng.pending_mitigations_len() <= PENDING_MITIGATION_CAP,
+        "concurrent admissions exceeded cap: {}",
         eng.pending_mitigations_len()
     );
 }
