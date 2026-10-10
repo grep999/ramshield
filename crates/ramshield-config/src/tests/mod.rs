@@ -8,7 +8,9 @@ fn pre_aggregation_map_size_has_hard_ceiling() {
     cfg.validate().expect("documented ceiling must be accepted");
 
     cfg.detection.pre_aggs_max_size = 1_000_001;
-    let err = cfg.validate().expect_err("size above ceiling must be rejected");
+    let err = cfg
+        .validate()
+        .expect_err("size above ceiling must be rejected");
     assert!(err.to_string().contains("pre_aggs_max_size"), "{err}");
 
     cfg.detection.pre_aggs_max_size = usize::MAX;
@@ -23,7 +25,8 @@ fn forecasting_seasonality_has_hard_allocation_ceiling() {
     let mut cfg = Config::default();
     cfg.forecasting.enabled = true;
     cfg.forecasting.seasonality_period = 86_400;
-    cfg.validate().expect("one-day seasonal vector must be accepted");
+    cfg.validate()
+        .expect("one-day seasonal vector must be accepted");
 
     cfg.forecasting.seasonality_period = 86_401;
     let err = cfg
