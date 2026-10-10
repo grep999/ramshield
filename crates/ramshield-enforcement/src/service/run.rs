@@ -179,6 +179,10 @@ impl EnforcementService {
                 break;
             }
         }
+        #[cfg(feature = "mesh")]
+        if let Some(handle) = &self.mesh_handle {
+            handle.shutdown();
+        }
         info!("Enforcement service stopped");
         Ok(())
     }
