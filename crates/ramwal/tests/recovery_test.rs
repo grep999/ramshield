@@ -1585,7 +1585,9 @@ fn crash_restart_preserves_checkpoint_and_durable_prefix() {
 
     // Deterministic crash boundary: discard any bytes past the last sync.
     // This models power loss of the unsynced tail, independent of OS buffering.
-    let on_disk = std::fs::metadata(seg_path(&d, 1)).map(|m| m.len()).unwrap_or(0);
+    let on_disk = std::fs::metadata(seg_path(&d, 1))
+        .map(|m| m.len())
+        .unwrap_or(0);
     assert!(
         on_disk >= durable_file_len,
         "segment must at least contain the durable prefix"
@@ -1611,7 +1613,9 @@ fn crash_restart_preserves_checkpoint_and_durable_prefix() {
         "recovery must be exactly the synced prefix; got {payloads:?}"
     );
     assert!(
-        !payloads.iter().any(|p| p == b"volatile-c" || p == b"volatile-d"),
+        !payloads
+            .iter()
+            .any(|p| p == b"volatile-c" || p == b"volatile-d"),
         "unsynced tail must not survive the crash boundary: {payloads:?}"
     );
 
