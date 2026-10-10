@@ -111,6 +111,14 @@ impl ReplayStore {
     }
 }
 
+impl Default for ReplayStore {
+    /// Small store (cap 10, ttl 1s) for tests. Real callers construct via
+    /// `new`/`with_per_key_cap` with configured values.
+    fn default() -> Self {
+        Self::new(10, Duration::from_secs(1))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,10 +165,3 @@ mod tests {
     }
 }
 
-impl Default for ReplayStore {
-    /// Small store (cap 10, ttl 1s) for tests. Real callers construct via
-    /// `new`/`with_per_key_cap` with configured values.
-    fn default() -> Self {
-        Self::new(10, Duration::from_secs(1))
-    }
-}
