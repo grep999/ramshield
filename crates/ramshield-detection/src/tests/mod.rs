@@ -1284,8 +1284,17 @@ fn try_new_propagates_shm_open_failure() {
             .as_nanos()
     ));
     fs::create_dir_all(&dir).expect("temp dir");
-    let err = DetectionEngine::try_new_with_shm_path(store, cfg, etx, metrics, shutdown, &dir);
-    assert!(err.is_err(), "opening a directory as SHM file must fail");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        DetectionEngine::try_new_with_shm_path(store, cfg, etx, metrics, shutdown, &dir)
+    }));
+    assert!(
+        result.is_ok(),
+        "fallible SHM initialization must return Err rather than panic"
+    );
+    assert!(
+        result.expect("panic checked above").is_err(),
+        "opening a directory as SHM file must return an error"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
