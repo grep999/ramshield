@@ -261,9 +261,24 @@ impl EnforcementService {
                         let ttl_ms = cmd.ttl_seconds.saturating_mul(1000);
                         let delta = mesh.record_ban(cmd.ip, ttl_ms, 2);
                         self.metrics.inc_mesh_record_ban();
-                        handle
+                        let report = handle
                             .broadcast(ramshield_mesh::MeshMessage::Block(delta))
                             .await;
+                        for peer in report.peers.iter().filter(|peer| {
+                            peer.outcome != ramshield_mesh::transport::PeerSendOutcome::Written
+                        }) {
+                            warn!(
+                                peer = %peer.peer,
+                                outcome = ?peer.outcome,
+                                "mesh block was committed locally but broadcast was not delivered"
+                            );
+                        }
+                        if report.task_failures > 0 {
+                            warn!(
+                                task_failures = report.task_failures,
+                                "mesh block broadcast tasks failed before reporting outcomes"
+                            );
+                        }
                     }
                 }
                 let result = EnforceResult {
@@ -346,9 +361,24 @@ impl EnforcementService {
                 if !pending_unban_deltas.is_empty() {
                     if let Some(handle) = &self.mesh_handle {
                         for delta in pending_unban_deltas {
-                            handle
+                            let report = handle
                                 .broadcast(ramshield_mesh::MeshMessage::Unblock(delta))
                                 .await;
+                            for peer in report.peers.iter().filter(|peer| {
+                                peer.outcome != ramshield_mesh::transport::PeerSendOutcome::Written
+                            }) {
+                                warn!(
+                                    peer = %peer.peer,
+                                    outcome = ?peer.outcome,
+                                    "mesh unblock was committed locally but broadcast was not delivered"
+                                );
+                            }
+                            if report.task_failures > 0 {
+                                warn!(
+                                    task_failures = report.task_failures,
+                                    "mesh unblock broadcast tasks failed before reporting outcomes"
+                                );
+                            }
                         }
                     }
                 }
