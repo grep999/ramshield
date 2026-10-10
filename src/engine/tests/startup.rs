@@ -18,7 +18,9 @@ async fn startup_runtime_failure_is_reported_to_waiter() {
     engine.fail_startup(std::io::Error::other("runtime initialization failed"));
 
     assert!(
-        engine.pipeline_failed.load(std::sync::atomic::Ordering::Acquire),
+        engine
+            .pipeline_failed
+            .load(std::sync::atomic::Ordering::Acquire),
         "startup failure must mark the pipeline failed"
     );
     let err = engine
