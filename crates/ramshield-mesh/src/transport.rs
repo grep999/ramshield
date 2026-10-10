@@ -13,6 +13,7 @@ const ANTI_ENTROPY_MS: u64 = 2_000;
 const MAX_SYNC_ENTRIES: usize = 4096;
 const MAX_INCOMING_QUEUE: usize = 8192;
 const MAX_PEER_READERS: usize = 256;
+const MAX_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MeshMessage { Block(ClusterBlockDelta), Unblock(ClusterUnblockDelta), Sync { blocks: Vec<ClusterBlockDelta>, unblocks: Vec<ClusterUnblockDelta> } }
@@ -41,7 +42,7 @@ impl MeshHandle {
     pub async fn drain(&self) -> Vec<MeshMessage> { let mut q=self.incoming.lock().await; q.drain(..).collect() }
     async fn broadcast_sync(&self) { let (blocks,unblocks)=self.blocklist.snapshot(MAX_SYNC_ENTRIES); if blocks.is_empty() && unblocks.is_empty() { return; } self.broadcast(MeshMessage::Sync{blocks,unblocks}).await; }
     async fn send_to(&self, peer: SocketAddr, body: MeshMessage) -> std::io::Result<()> { let ts_ms=now_ms(); let payload=serde_json::to_vec(&(ts_ms,self.node_id,&body)).map_err(std::io::Error::other)?; let mac=sign(&self.auth_key,&payload)?; let frame=serde_json::to_vec(&Envelope{ts_ms,node_id:self.node_id,body,mac}).map_err(std::io::Error::other)?; if frame.len()>MAX_FRAME { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,"mesh frame too large")); } let mut stream=TcpStream::connect(peer).await?; stream.write_all(&frame).await?; stream.write_all(b"\n").await?; Ok(()) }
-    async fn read_stream(&self, mut stream: TcpStream) { let mut line=match read_bounded_frame(&mut stream).await { Ok(Some(frame))=>frame, Ok(None)|Err(_)=>return }; while line.last().is_some_and(|b| *b==b'\n'||*b==b'\r') { line.pop(); } let env:Envelope=match serde_json::from_slice(&line){Ok(v)=>v,Err(_)=>return}; let payload=match serde_json::to_vec(&(env.ts_ms,env.node_id,&env.body)){Ok(v)=>v,Err(_)=>return}; if now_ms().abs_diff(env.ts_ms)>MAX_CLOCK_SKEW_MS || !verify(&self.auth_key,&payload,&env.mac){ warn!(node_id=env.node_id,"mesh frame rejected: authentication or timestamp invalid"); return; }
+    async fn read_stream(&self, mut stream: TcpStream) { let mut line=match read_bounded_frame_with_timeout(&mut stream, MAX_FRAME_READ_TIMEOUT).await { Ok(Some(frame))=>frame, Ok(None)|Err(_)=>return }; while line.last().is_some_and(|b| *b==b'\n'||*b==b'\r') { line.pop(); } let env:Envelope=match serde_json::from_slice(&line){Ok(v)=>v,Err(_)=>return}; let payload=match serde_json::to_vec(&(env.ts_ms,env.node_id,&env.body)){Ok(v)=>v,Err(_)=>return}; if now_ms().abs_diff(env.ts_ms)>MAX_CLOCK_SKEW_MS || !verify(&self.auth_key,&payload,&env.mac){ warn!(node_id=env.node_id,"mesh frame rejected: authentication or timestamp invalid"); return; }
         if env.node_id==self.node_id{return;} let mut q = self.incoming.lock().await;
         if q.len() >= MAX_INCOMING_QUEUE {
             // Prefer the newest authenticated state; anti-entropy will recover
@@ -64,6 +65,15 @@ fn push_frame_bytes(line: &mut Vec<u8>, bytes: &[u8]) -> std::io::Result<bool> {
     }
     line.extend_from_slice(bytes);
     Ok(false)
+}
+
+async fn read_bounded_frame_with_timeout<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    timeout: Duration,
+) -> std::io::Result<Option<Vec<u8>>> {
+    tokio::time::timeout(timeout, read_bounded_frame(reader))
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "mesh frame read timed out"))?
 }
 
 async fn read_bounded_frame<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<Option<Vec<u8>>> {
@@ -89,7 +99,17 @@ fn now_ms()->u64{SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default(
 
 #[cfg(test)]
 mod frame_tests {
-    use super::{push_frame_bytes, MAX_FRAME};
+    use super::{push_frame_bytes, read_bounded_frame_with_timeout, MAX_FRAME};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn incomplete_peer_frame_times_out() {
+        let (_writer, mut reader) = tokio::io::duplex(8);
+        let error = read_bounded_frame_with_timeout(&mut reader, Duration::from_millis(10))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    }
 
     #[test]
     fn accepts_frame_at_limit_with_delimiter() {
