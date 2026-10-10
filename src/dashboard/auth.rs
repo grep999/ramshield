@@ -156,8 +156,8 @@ impl AuthState {
     pub fn enabled(&self) -> bool {
         self.password_hash
             .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some()
+            .map(|g| g.is_some())
+            .unwrap_or(true) // poisoned → treat as enabled so middleware still requires auth
     }
 
     /// Hot-swap the password hash without restarting the dashboard.
@@ -217,12 +217,9 @@ impl AuthState {
     /// inline on an async handler blocks the Tokio worker for every other
     /// request on that thread.
     fn verify_password(&self, password: &str) -> Option<String> {
-        let hash = self
-            .password_hash
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()?
-            .clone();
+        // Poisoned auth state: fail closed (deny login) rather than serving
+        // a possibly corrupted password hash.
+        let hash = self.password_hash.read().ok()?.as_ref()?.clone();
         let parsed = argon2::PasswordHash::new(&hash).ok()?;
         // Constant-time verify inside argon2; cap work on garbage input.
         if password.len() > self.max_password_length {
