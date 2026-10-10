@@ -96,6 +96,14 @@ const STATUS_BUCKET: [u8; 600] = {
 /// duplicate the number elsewhere.
 pub const CHANNEL_CAPACITY: u64 = 64_000;
 
+// Bound distinct pending mitigation keys at admission time, not only after
+// a flush. The lock makes the check/evict/insert sequence atomic across the
+// normal, L7, and emergency emission paths.
+#[cfg(not(test))]
+pub(crate) const PENDING_MITIGATION_CAP: usize = 1_048_576;
+#[cfg(test)]
+pub(crate) const PENDING_MITIGATION_CAP: usize = 64;
+
 /// Item 3: worker-local buffers merge into shared pre_aggs at least this
 /// often even if neither time nor shared-size triggers fire — bounds the
 /// per-worker head-of-line to ~8k uniques (~600KB) during an
@@ -132,6 +140,9 @@ pub struct DetectionEngine {
     /// apply every flush window. Queue rejection removes the key so the
     /// next window retries instead of suppressing forever.
     pending_mitigations: DashMap<(IpAddr, BlockReason), u64, ahash::RandomState>,
+    /// Serializes capacity check/evict/insert so concurrent detector paths
+    /// cannot exceed PENDING_MITIGATION_CAP between a len() check and insert.
+    pending_mitigation_lock: std::sync::Mutex<()>,
 }
 
 /// Releases the single-flusher gate even on early return/panic.
@@ -234,6 +245,7 @@ impl DetectionEngine {
                 ahash::RandomState::new(),
                 32,
             ),
+            pending_mitigation_lock: std::sync::Mutex::new(()),
         })
     }
 
