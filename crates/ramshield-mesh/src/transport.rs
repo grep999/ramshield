@@ -13,6 +13,7 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{Mutex, Semaphore, watch},
+    task::JoinSet,
 };
 use tracing::{debug, warn};
 
@@ -37,6 +38,55 @@ pub enum MeshMessage {
         blocks: Vec<ClusterBlockDelta>,
         unblocks: Vec<ClusterUnblockDelta>,
     },
+}
+
+/// Result of attempting to write a mesh message to one configured peer.
+/// `Written` confirms the frame was written to the peer's TCP socket; it does
+/// not confirm that the peer authenticated, accepted, or applied the message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PeerSendOutcome {
+    Written,
+    TimedOut,
+    Cancelled,
+    Failed { message: String },
+}
+
+/// Per-peer outcome from a mesh broadcast.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerSendResult {
+    pub peer: SocketAddr,
+    pub outcome: PeerSendOutcome,
+}
+
+/// A broadcast is successful only for peers whose outcome is `Written`.
+/// Application success is reported separately by the receiving enforcement service.
+#[must_use = "inspect per-peer mesh delivery outcomes"]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BroadcastReport {
+    pub peers: Vec<PeerSendResult>,
+    /// Tasks that terminated unexpectedly before returning a peer outcome.
+    pub task_failures: usize,
+}
+
+impl BroadcastReport {
+    pub fn written_count(&self) -> usize {
+        self.peers
+            .iter()
+            .filter(|p| p.outcome == PeerSendOutcome::Written)
+            .count()
+    }
+
+    pub fn failed_count(&self) -> usize {
+        self.peers.len().saturating_sub(self.written_count()) + self.task_failures
+    }
+
+    pub fn all_written(&self) -> bool {
+        self.task_failures == 0
+            && self
+                .peers
+                .iter()
+                .all(|p| p.outcome == PeerSendOutcome::Written)
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Envelope {
@@ -128,39 +178,79 @@ impl MeshHandle {
         self.shutdown_tx.send_replace(true);
     }
 
-    /// Send to configured peers with a strict cap on concurrent outbound tasks.
-    /// The permit is acquired before spawning, so there is no unbounded waiter/task queue.
-    pub async fn broadcast(&self, body: MeshMessage) {
+    /// Send to configured peers and return one explicit outcome per peer.
+    ///
+    /// A `Written` result only confirms that the frame was written to the TCP
+    /// socket. It is not an acknowledgement of remote authentication or application.
+    /// Concurrency is bounded before each task is spawned.
+    pub async fn broadcast(&self, body: MeshMessage) -> BroadcastReport {
+        let mut tasks = JoinSet::new();
+        let mut report = BroadcastReport::default();
+
         for peer in self.peers.iter().copied() {
             let permit = match self.writers.clone().acquire_owned().await {
                 Ok(permit) => permit,
-                Err(_) => {
-                    warn!(peer = %peer, "mesh outbound semaphore closed; peer send skipped");
+                Err(error) => {
+                    report.peers.push(PeerSendResult {
+                        peer,
+                        outcome: PeerSendOutcome::Failed {
+                            message: format!("outbound semaphore unavailable: {error}"),
+                        },
+                    });
                     continue;
                 }
             };
             let handle = self.clone();
             let message = body.clone();
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 let _permit = permit;
                 let mut shutdown = handle.shutdown_tx.subscribe();
                 if *shutdown.borrow() {
-                    return;
+                    return (peer, PeerSendOutcome::Cancelled);
                 }
-                tokio::select! {
+                let outcome = tokio::select! {
                     result = with_timeout(MAX_PEER_WRITE_TIMEOUT, handle.send_to(peer, message)) => {
                         match result {
-                            Ok(()) => {}
+                            Ok(()) => PeerSendOutcome::Written,
                             Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-                                warn!(peer = %peer, "mesh outbound send timed out");
+                                PeerSendOutcome::TimedOut
                             }
-                            Err(error) => debug!(peer = %peer, error = %error, "mesh send failed"),
+                            Err(error) => PeerSendOutcome::Failed {
+                                message: error.to_string(),
+                            },
                         }
                     }
-                    _ = shutdown.changed() => {}
-                }
+                    _ = shutdown.changed() => PeerSendOutcome::Cancelled,
+                };
+                (peer, outcome)
             });
         }
+
+        while let Some(joined) = tasks.join_next().await {
+            match joined {
+                Ok((peer, outcome)) => {
+                    match &outcome {
+                        PeerSendOutcome::Written => {}
+                        PeerSendOutcome::TimedOut => {
+                            warn!(peer = %peer, "mesh outbound send timed out");
+                        }
+                        PeerSendOutcome::Cancelled => {
+                            debug!(peer = %peer, "mesh outbound send cancelled");
+                        }
+                        PeerSendOutcome::Failed { message } => {
+                            warn!(peer = %peer, error = %message, "mesh outbound send failed");
+                        }
+                    }
+                    report.peers.push(PeerSendResult { peer, outcome });
+                }
+                Err(error) => {
+                    report.task_failures += 1;
+                    warn!(error = %error, "mesh outbound task failed before reporting an outcome");
+                }
+            }
+        }
+
+        report
     }
     pub async fn drain(&self) -> Vec<MeshMessage> {
         let mut q = self.incoming.lock().await;
@@ -169,7 +259,14 @@ impl MeshHandle {
     async fn broadcast_sync(&self) {
         let (blocks, unblocks) = self.blocklist.snapshot(MAX_SYNC_ENTRIES);
         for message in chunk_sync(&blocks, &unblocks) {
-            self.broadcast(message).await;
+            let report = self.broadcast(message).await;
+            if !report.all_written() {
+                warn!(
+                    written = report.written_count(),
+                    failed = report.failed_count(),
+                    "mesh anti-entropy sync was not delivered to every configured peer"
+                );
+            }
         }
     }
     async fn send_to(&self, peer: SocketAddr, body: MeshMessage) -> std::io::Result<()> {
@@ -410,8 +507,8 @@ fn now_ms() -> u64 {
 mod frame_tests {
     use super::{
         Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES, MeshHandle, MeshMessage,
-        chunk_sync, push_frame_bytes, read_bounded_frame_with_timeout, valid_message,
-        validate_bind_args, with_timeout,
+        PeerSendOutcome, chunk_sync, push_frame_bytes, read_bounded_frame,
+        read_bounded_frame_with_timeout, valid_message, validate_bind_args, with_timeout,
     };
     use crate::aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
     use std::time::Duration;
@@ -419,7 +516,27 @@ mod frame_tests {
         net::{IpAddr, Ipv6Addr, SocketAddr},
         sync::Arc,
     };
+    use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn delimiter_free_oversized_frame_is_rejected_while_reading() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async {
+            let (mut writer, mut reader) = tokio::io::duplex(MAX_FRAME + 2);
+            writer
+                .write_all(&vec![b'x'; MAX_FRAME + 1])
+                .await
+                .expect("write oversized delimiter-free frame");
+            let error = read_bounded_frame(&mut reader)
+                .await
+                .expect_err("oversized frame must be rejected before a delimiter arrives");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        });
+    }
 
     #[test]
     fn incomplete_peer_frame_times_out() {
@@ -454,6 +571,48 @@ mod frame_tests {
         let invalid_peer = ["0.0.0.0:1234".parse().expect("unspecified peer")];
         let error = validate_bind_args(1, &invalid_peer, &valid_key).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn broadcast_reports_connection_failure_per_peer() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async {
+            let probe = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("probe listener");
+            let unavailable_peer = probe.local_addr().expect("probe address");
+            drop(probe);
+
+            let handle = MeshHandle::bind(
+                1,
+                Arc::new(AworsetBlocklist::new(1)),
+                "127.0.0.1:0".parse().expect("listen address"),
+                vec![unavailable_peer],
+                vec![7; 32],
+            )
+            .await
+            .expect("mesh listener");
+
+            let report = handle
+                .broadcast(MeshMessage::Sync {
+                    blocks: Vec::new(),
+                    unblocks: Vec::new(),
+                })
+                .await;
+
+            assert_eq!(report.peers.len(), 1);
+            assert_eq!(report.written_count(), 0);
+            assert_eq!(report.failed_count(), 1);
+            assert!(!report.all_written());
+            assert!(matches!(
+                &report.peers[0].outcome,
+                PeerSendOutcome::Failed { .. }
+            ));
+            handle.shutdown();
+        });
     }
 
     #[test]

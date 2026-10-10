@@ -41,7 +41,18 @@ impl EnforcementService {
             tokio::select! {
                 _ = tick.tick() => {
                     #[cfg(feature = "mesh")]
-                    self.apply_mesh_messages().await;
+                    {
+                        let report = self.apply_mesh_messages().await;
+                        if report.received > 0 {
+                            debug!(
+                                received = report.received,
+                                applied = report.applied,
+                                ignored = report.ignored,
+                                failed = report.failed,
+                                "mesh application batch outcome"
+                            );
+                        }
+                    }
                     self.expire_due().await;
                     let now_unix = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
