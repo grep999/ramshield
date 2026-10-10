@@ -142,15 +142,10 @@ impl EnforcementService {
             action: EnforceAction::Block,
             evidence_source: ramshield_types::EvidenceSource::FleetSignals,
         };
-        let enforce_result = self.enforce(cmd).await.and_then(|result| {
-            if result.xdp_applied {
-                Ok(result)
-            } else {
-                Err(EnforcementError::Xdp(result.error.unwrap_or_else(|| {
-                    "mesh block committed but XDP projection was not applied".into()
-                })))
-            }
-        });
+        let enforce_result = self
+            .enforce(cmd)
+            .await
+            .and_then(|result| require_xdp_projection(result, "block"));
         if enforce_result.is_ok() {
             self.mesh_applied_ips.insert(delta.ip);
         }
@@ -186,19 +181,27 @@ impl EnforcementService {
             action: EnforceAction::Unblock,
             evidence_source: ramshield_types::EvidenceSource::FleetSignals,
         };
-        let enforce_result = self.enforce(cmd).await.and_then(|result| {
-            if result.xdp_applied {
-                Ok(result)
-            } else {
-                Err(EnforcementError::Xdp(result.error.unwrap_or_else(|| {
-                    "mesh unblock committed but XDP projection was not applied".into()
-                })))
-            }
-        });
+        let enforce_result = self
+            .enforce(cmd)
+            .await
+            .and_then(|result| require_xdp_projection(result, "unblock"));
         if enforce_result.is_ok() {
             self.mesh_applied_ips.remove(&delta.ip);
         }
         enforce_result.map(|_| MeshApplyOutcome::Applied)
+    }
+}
+
+fn require_xdp_projection(
+    result: EnforceResult,
+    action: &'static str,
+) -> Result<EnforceResult, EnforcementError> {
+    if result.xdp_applied {
+        Ok(result)
+    } else {
+        Err(EnforcementError::Xdp(result.error.unwrap_or_else(|| {
+            format!("mesh {action} committed but XDP projection was not applied")
+        })))
     }
 }
 
@@ -213,10 +216,26 @@ fn should_skip_mesh_unblock(still_blocked: bool, locally_applied: bool) -> bool 
 #[cfg(test)]
 mod retry_tests {
     use super::{
-        MeshApplyOutcome, MeshApplyReport, should_skip_mesh_block, should_skip_mesh_unblock,
+        MeshApplyOutcome, MeshApplyReport, require_xdp_projection, should_skip_mesh_block,
+        should_skip_mesh_unblock,
     };
-    use crate::EnforcementError;
+    use crate::{EnforceResult, EnforcementError};
     use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn failed_xdp_projection_is_not_reported_as_applied() {
+        let result = EnforceResult {
+            decision_id: uuid::Uuid::nil(),
+            committed: true,
+            applied: true,
+            wal_lsn: None,
+            xdp_applied: false,
+            error: None,
+        };
+
+        let error = require_xdp_projection(result, "block").unwrap_err();
+        assert!(matches!(error, EnforcementError::Xdp(_)));
+    }
 
     #[test]
     fn application_report_distinguishes_applied_ignored_and_failed() {
