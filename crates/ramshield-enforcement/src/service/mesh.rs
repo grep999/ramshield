@@ -146,11 +146,9 @@ impl EnforcementService {
             if result.xdp_applied {
                 Ok(result)
             } else {
-                Err(EnforcementError::Xdp(
-                    result.error.unwrap_or_else(|| {
-                        "mesh block committed but XDP projection was not applied".into()
-                    }),
-                ))
+                Err(EnforcementError::Xdp(result.error.unwrap_or_else(|| {
+                    "mesh block committed but XDP projection was not applied".into()
+                })))
             }
         });
         if enforce_result.is_ok() {
@@ -192,11 +190,9 @@ impl EnforcementService {
             if result.xdp_applied {
                 Ok(result)
             } else {
-                Err(EnforcementError::Xdp(
-                    result.error.unwrap_or_else(|| {
-                        "mesh unblock committed but XDP projection was not applied".into()
-                    }),
-                ))
+                Err(EnforcementError::Xdp(result.error.unwrap_or_else(|| {
+                    "mesh unblock committed but XDP projection was not applied".into()
+                })))
             }
         });
         if enforce_result.is_ok() {
