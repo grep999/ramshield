@@ -31,7 +31,14 @@ fn parse_request(request: &[u8], max_bytes: usize) -> Result<RequestParts<'_>, F
     let target = parts.next().ok_or(Finding::Malformed)?;
     let version = parts.next().ok_or(Finding::Malformed)?;
     if parts.next().is_some() || method.len() > 16 || target.len() > MAX_TARGET_BYTES || (version != b"HTTP/1.1" && version != b"HTTP/1.0") { return Err(Finding::Malformed); }
-    if !method.iter().all(|b| b.is_ascii_alphabetic()) || target.iter().any(|b| *b     let header_lines = &lines[1..];
+    if !method.iter().all(|b| b.is_ascii_alphabetic()) || target.iter().any(|b| *b == 0 || *b == b'\r' || *b == b'\n') { return Err(Finding::Malformed); }
+
+    let headers_start = request_line.len() + 2;
+    let headers = if headers_start <= sep { &request[headers_start..sep] } else { &[] };
+    let mut content_length: Option<usize> = None;
+    let mut transfer_chunked = false;
+    let mut header_count = 0usize;
+    let header_lines = &lines[1..];
     for (index, raw) in header_lines.iter().enumerate() {
         let raw = *raw;
         let line = match raw.strip_suffix(b"\r") {
@@ -41,12 +48,6 @@ fn parse_request(request: &[u8], max_bytes: usize) -> Result<RequestParts<'_>, F
             None if index + 1 == header_lines.len() => raw,
             None => return Err(Finding::Malformed),
         };
-s = if headers_start <= sep { &request[headers_start..sep] } else { &[] };
-    let mut content_length: Option<usize> = None;
-    let mut transfer_chunked = false;
-    let mut header_count = 0usize;
-    for raw in lines {
-        let line = raw.strip_suffix(b"\r").ok_or(Finding::Malformed)?;
         if line.is_empty() { continue; }
         header_count += 1;
         if header_count > MAX_HEADERS { return Err(Finding::Oversized); }
@@ -162,7 +163,7 @@ mod tests {
     #[test] fn detects_xss_in_body() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 25\r\n\r\n<script>alert(1)</script>", 65536), Some(Finding::Xss)); }
     #[test] fn detects_traversal() { assert_eq!(inspect(b"GET /../../etc/passwd HTTP/1.1\r\n\r\n", 65536), Some(Finding::PathTraversal)); }
     #[test] fn rejects_oversize() { assert_eq!(inspect(b"GET / HTTP/1.1\r\n\r\n", 4), Some(Finding::Oversized)); }
-    #[test] fn rejects_lf_only_between_headers() { assert_eq!(inspect(b"GET / HTTP/1.1\\r\\nHost: example\\nX-Test: value\\r\\n\\r\\n", 65536), Some(Finding::Malformed)); }
+    #[test] fn rejects_lf_only_between_headers() { assert_eq!(inspect(b"GET / HTTP/1.1\r\nHost: example\nX-Test: value\r\n\r\n", 65536), Some(Finding::Malformed)); }
     #[test] fn rejects_bad_length() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 9\r\n\r\nabc", 65536), Some(Finding::Malformed)); }
     #[test] fn rejects_conflicting_content_lengths() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabc", 65536), Some(Finding::HeaderSmuggling)); }
     #[test] fn rejects_content_length_and_chunked_together() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n", 65536), Some(Finding::HeaderSmuggling)); }
