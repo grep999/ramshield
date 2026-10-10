@@ -1321,12 +1321,8 @@ fn pending_mitigations_hard_capped_under_flood() {
             let eng = eng.clone();
             std::thread::spawn(move || {
                 for i in 0..200u32 {
-                    let ip = IpAddr::from([
-                        11,
-                        worker as u8,
-                        ((i >> 8) & 0xff) as u8,
-                        (i & 0xff) as u8,
-                    ]);
+                    let ip =
+                        IpAddr::from([11, worker as u8, ((i >> 8) & 0xff) as u8, (i & 0xff) as u8]);
                     eng.admit_mitigation(
                         (ip, BlockReason::HighRps),
                         60,
