@@ -49,12 +49,19 @@ typedef struct __attribute__((aligned(64))) {
     uint8_t          _padding[20];  /* offset 44..64 */
 } RamshieldShmRuleEntry;
 
-_Static_assert(offsetof(RamshieldShmRuleEntry, challenge_seed_lo) % 8 == 0,
-               "challenge_seed_lo must be naturally aligned to 8 bytes");
-_Static_assert(offsetof(RamshieldShmRuleEntry, challenge_seed_hi) % 8 == 0,
-               "challenge_seed_hi must be naturally aligned to 8 bytes");
+_Static_assert(_Alignof(RamshieldShmRuleEntry) == 64,
+               "RamshieldShmRuleEntry ABI alignment must remain 64 bytes");
 _Static_assert(sizeof(RamshieldShmRuleEntry) == 64,
                "RamshieldShmRuleEntry ABI must remain exactly 64 bytes");
+_Static_assert(offsetof(RamshieldShmRuleEntry, seq) == 0, "seq offset changed");
+_Static_assert(offsetof(RamshieldShmRuleEntry, client_hash) == 8, "client_hash offset changed");
+_Static_assert(offsetof(RamshieldShmRuleEntry, expires_at_ms) == 16, "expires_at_ms offset changed");
+_Static_assert(offsetof(RamshieldShmRuleEntry, challenge_seed_lo) == 24, "challenge_seed_lo offset changed");
+_Static_assert(offsetof(RamshieldShmRuleEntry, challenge_seed_hi) == 32, "challenge_seed_hi offset changed");
+_Static_assert(offsetof(RamshieldShmRuleEntry, max_rps) == 40, "max_rps offset changed");
+_Static_assert(offsetof(RamshieldShmRuleEntry, tier) == 42, "tier offset changed");
+_Static_assert(offsetof(RamshieldShmRuleEntry, flags) == 43, "flags offset changed");
+_Static_assert(offsetof(RamshieldShmRuleEntry, _padding) == 44, "padding offset changed");
 
 typedef struct {
     uint64_t client_hash;

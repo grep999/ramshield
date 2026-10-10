@@ -121,5 +121,5 @@ jobs:
         run: cargo test -p ramshield-mesh --locked
       - name: Test all features (including mesh integration)
         run: cargo test --workspace --locked --all-features
-      - name: Verify C SHM ABI
-        run: scripts/verify_shm_header.sh
+      - name: Verify C SHM ABI and reader/writer stress
+        run: RAMSHIELD_SHM_TSAN=1 scripts/verify_shm_header.sh
