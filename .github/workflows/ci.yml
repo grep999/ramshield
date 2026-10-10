@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, develop, master]
+    branches: [main, develop, master, audit-branch]
   pull_request:
-    branches: [main, develop, master]
+    branches: [main, develop, master, audit-branch]
 
 jobs:
   clippy:
