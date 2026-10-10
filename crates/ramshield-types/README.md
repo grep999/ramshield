@@ -165,7 +165,7 @@ Controls how `Wal::append()` syncs to disk. `NoSync` for benchmarking, `Fdatasyn
 
 ## Dependencies
 
-**Reads from:** `uuid`, `ipnet` (for CIDR validation).
+**Dependencies:** `uuid`. IP addresses use Rust's standard-library `std::net` types; CIDR prefixes are represented by the crate's own `IpNetwork` type. This crate does not depend on `ipnet`.
 
 **Written by:** nothing — this crate has no logic, only types.
 
