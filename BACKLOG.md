@@ -8,7 +8,7 @@
 
 **Baseline master:** `821eab72e93e584cd6835d1f95171d5d380daaec`
 
-**Latest recorded CI:** [run 38077411614](https://github.com/grep999/ramshield/actions/runs/38077411614) — all CI jobs passed on exact HEAD `744f44987450e60c753dc79298c7c633601fb685`, including formatting, check, build, tests, and strict Clippy. [Backlog Gate run 38077411644](https://github.com/grep999/ramshield/actions/runs/38077411644) also passed on that SHA.
+**Latest recorded CI:** [run 38078190216](https://github.com/grep999/ramshield/actions/runs/38078190216) — all CI jobs passed on exact HEAD `32c0aa0501f86efed98a5925c8a3f6a9fb536307`, including formatting, check, build, tests, and strict Clippy. [Backlog Gate run 38078190283](https://github.com/grep999/ramshield/actions/runs/38078190283) also passed on that SHA.
 
 **Operating rule:** one bounded fix per pass; every fix is revalidated on the exact resulting SHA. No merge, force-push, rebase, or changes to `kiddo_fix` / PR #3 / PR #5.
 
@@ -62,7 +62,7 @@
 
 | A-018 | WAL / checkpoint recovery | Crash/restart test truncates to the last explicit sync boundary and asserts the exact durable prefix; recovery tests prove torn-tail repair is idempotent and the repaired WAL accepts later appends. Added disk-full-after-checkpoint injection proving the checkpoint and durable prefix survive, failed append is excluded, and reopen accepts new writes. Exact-SHA CI and Backlog Gate passed on `744f44987450e60c753dc79298c7c633601fb685`. | PASS (exact SHA) |
 
-| A-019 | Dashboard / IPC auth | Session TTL expiry, cookie HttpOnly/SameSite/Secure, per-IP lockout, invalid PHC fail-closed, oversized password reject, deployment defaults (loopback, 8h TTL, lockout 50). Poisoned password-hash lock now denies login and keeps auth enabled; explicit hash replacement clears poison after writing the replacement. Regression test added. IPC: replay reject, malformed frames, parse_ipc_keys fail-closed. | IN PROGRESS |
+| A-019 | Dashboard / IPC auth | Session TTL expiry, cookie HttpOnly/SameSite/Secure, per-IP lockout, invalid PHC fail-closed, oversized password reject, deployment defaults (loopback, 8h TTL, lockout 50). Poisoned password-hash lock denies login and keeps auth enabled; explicit hash replacement clears poison after writing the replacement. Failed-login tracking is hard-capped at 10,000 IPs with serialized admission and a concurrent unique-source flood regression test. IPC: replay reject, malformed frames, parse_ipc_keys fail-closed. Exact-SHA CI and Backlog Gate passed on `32c0aa0501f86efed98a5925c8a3f6a9fb536307`. | PASS (exact SHA) |
 
 | A-020 | Resource bounds elsewhere | PulseTracker observations capped at 4,096. `pending_mitigations` enforces the 1,048,576 production / 64 test cap at admission with bounded eviction; batch-flood/concurrency tests added. `detection.pre_aggs_max_size` capped at 1,000,000; enabled forecasting seasonal allocation capped at 86,400 one-second slots; boundary and `usize::MAX` validation tests added. Existing: store capacity CAS, threat_sample≤1024, IPC conn semaphore, SHM/replay caps. Worker-local maps stop at 8,192 distinct IPs; production shared-map merges serialize with flushes and flush before admitting a new key at configured capacity. Regression test verifies the shared cap and exact event accounting. Exact-SHA CI and Backlog Gate passed on `6af1bd28cd8ca7e86298301676ba508b40ed62a2`. | PASS (exact SHA) |
 

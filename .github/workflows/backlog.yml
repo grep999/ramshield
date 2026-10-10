@@ -173,13 +173,21 @@ jobs:
           tar --zstd -xf /tmp/bpf-linker.tar.zst -C /tmp
           sudo mv /tmp/bpf-linker /usr/local/bin/
           bpf-linker --version
-      - name: Check (locked, all-targets, all-features)
+      - name: Check core-only (default features, locked, all-targets)
+        run: cargo check --workspace --locked --all-targets
+      - name: Check all-features (locked, all-targets)
         run: cargo check --workspace --locked --all-targets --all-features
-      - name: Build (locked, all-targets, all-features)
+      - name: Build core-only (default features, locked, all-targets)
+        run: cargo build --workspace --locked --all-targets
+      - name: Build all-features (locked, all-targets)
         run: cargo build --workspace --locked --all-targets --all-features
+      - name: Test core-only workspace
+        run: cargo test --workspace --locked
       - name: Test workspace (features full)
         run: cargo test --workspace --locked --features full
-      - name: Clippy strict
+      - name: Clippy core-only strict
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
+      - name: Clippy full strict
         run: cargo clippy --workspace --locked --all-targets --features full -- -D warnings
 
   diff-check:

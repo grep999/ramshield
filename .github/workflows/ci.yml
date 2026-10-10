@@ -38,7 +38,10 @@ jobs:
           tar --zstd -xf /tmp/bpf-linker.tar.zst -C /tmp
           sudo mv /tmp/bpf-linker /usr/local/bin/
           bpf-linker --version
-      - run: cargo clippy --workspace --locked --features full --all-targets -- -D warnings
+      - name: Clippy core-only
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
+      - name: Clippy full
+        run: cargo clippy --workspace --locked --features full --all-targets -- -D warnings
 
   check:
     name: Check
@@ -58,7 +61,10 @@ jobs:
           tar --zstd -xf /tmp/bpf-linker.tar.zst -C /tmp
           sudo mv /tmp/bpf-linker /usr/local/bin/
           bpf-linker --version
-      - run: cargo check --all-targets --all-features --locked
+      - name: Check core-only
+        run: cargo check --workspace --locked --all-targets
+      - name: Check all features
+        run: cargo check --workspace --locked --all-targets --all-features
 
   build:
     name: Build
@@ -78,7 +84,10 @@ jobs:
           tar --zstd -xf /tmp/bpf-linker.tar.zst -C /tmp
           sudo mv /tmp/bpf-linker /usr/local/bin/
           bpf-linker --version
-      - run: cargo build --all-targets --all-features --locked
+      - name: Build core-only
+        run: cargo build --workspace --locked --all-targets
+      - name: Build all features
+        run: cargo build --workspace --locked --all-targets --all-features
 
   test:
     name: Test
@@ -98,11 +107,16 @@ jobs:
           tar --zstd -xf /tmp/bpf-linker.tar.zst -C /tmp
           sudo mv /tmp/bpf-linker /usr/local/bin/
           bpf-linker --version
+      # Keep default/core-only and production full configurations separate:
+      # feature unification must not hide a broken core build.
+      - name: Test core-only workspace
+        run: cargo test --workspace --locked
       # --all-targets also executes [[bench]] harness=false binaries.
       # benches/hot_paths.rs is a 100k-iter workload, not a test; it hung
       # CI run 35391325896 for >10 min on bench_batch_aggregate.
       # Match review_pipeline.sh: unit/integration tests only.
-      - run: cargo test --workspace --locked --features full
+      - name: Test full workspace
+        run: cargo test --workspace --locked --features full
       - name: Test mesh crate independently
         run: cargo test -p ramshield-mesh --locked
       - name: Test all features (including mesh integration)
