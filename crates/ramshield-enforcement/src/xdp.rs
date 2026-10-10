@@ -177,7 +177,10 @@ fn bpf_elem_attr(fd: std::os::fd::RawFd, key: u64, value_or_next: u64, flags: u6
 ///
 /// # Safety
 /// `fd` must be a valid BPF map file descriptor whose key size equals
-/// `size_of::<K>()`.
+/// `size_of::<K>()`. Every byte pattern the kernel can return for a key
+/// must be a valid initialized representation of `K`, because successful
+/// syscalls write raw map-key bytes into `MaybeUninit<K>` before
+/// `assume_init` is called.
 unsafe fn raw_get_next_key<K: Copy>(
     fd: std::os::fd::RawFd,
     prev: Option<&K>,
