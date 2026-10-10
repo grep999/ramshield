@@ -9,6 +9,15 @@ use std::time::Duration;
 const MAX_IPC_RESPONSE_BYTES: usize = 1024 * 1024;
 const IPC_IO_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Decode a CLI HMAC key using the same minimum size enforced by server config.
+fn decode_hmac_key(hex_key: &str) -> Result<Vec<u8>> {
+    let key = hex::decode(hex_key.trim()).map_err(|e| anyhow::anyhow!("bad key hex: {e}"))?;
+    if key.len() < 16 {
+        anyhow::bail!("IPC HMAC key must be at least 16 bytes (32 hex characters)");
+    }
+    Ok(key)
+}
+
 /// Read exactly one newline-terminated IPC response with a hard size limit.
 /// A timeout is configured on the socket by the caller, so a peer cannot hold
 /// the CLI indefinitely while sending an incomplete frame.
@@ -50,9 +59,13 @@ struct Cli {
     #[arg(short, long, default_value = "127.0.0.1:7890")]
     addr: String,
     /// Shared HMAC key (hex). Read from RAMSHIELD_IPC_KEY when servers
-    /// require auth. Omitted = unsigned frames (open servers).
+    /// require auth. Must be at least 16 bytes (32 hex characters).
+    /// Omitted = unsigned frames (open servers).
     #[arg(long)]
     key: Option<String>,
+    /// Key identifier matching an entry in the server's ipc.auth_keys.
+    #[arg(long, default_value = "k1")]
+    key_id: String,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -116,8 +129,11 @@ fn main() -> Result<()> {
             .context("system clock is before UNIX epoch")?
             .as_millis() as u64;
         let payload = serde_json::to_vec(&v)?;
-        let key = hex::decode(hexkey.trim()).map_err(|e| anyhow::anyhow!("bad key hex: {}", e))?;
-        let key_id = "k1"; // per config; for now static
+        let key = decode_hmac_key(hexkey)?;
+        let key_id = cli.key_id.trim();
+        if key_id.is_empty() {
+            anyhow::bail!("IPC key id must not be empty");
+        }
 
         let mut mac = Hmac::<Sha256>::new_from_slice(&key)
             .map_err(|e| anyhow::anyhow!("hmac init: {}", e))?;
@@ -132,7 +148,7 @@ fn main() -> Result<()> {
         obj.insert(
             "auth".into(),
             serde_json::json!({
-                "key_id": "k1", "ts_ms": ts_ms, "sig": sig
+                "key_id": key_id, "ts_ms": ts_ms, "sig": sig
             }),
         );
         v.to_string()
@@ -165,6 +181,18 @@ fn main() -> Result<()> {
 mod tests {
     use super::{MAX_IPC_RESPONSE_BYTES, read_response_line};
     use std::io::Cursor;
+
+    #[test]
+    fn hmac_key_matches_server_minimum_length() {
+        assert!(super::decode_hmac_key("00112233445566778899aabbccddeeff").is_ok());
+        let err = super::decode_hmac_key("0011223344556677").unwrap_err();
+        assert!(err.to_string().contains("at least 16 bytes"));
+    }
+
+    #[test]
+    fn hmac_key_rejects_invalid_hex() {
+        assert!(super::decode_hmac_key("zz112233445566778899aabbccddeeff").is_err());
+    }
 
     #[test]
     fn response_reader_accepts_a_single_newline_terminated_frame() {
