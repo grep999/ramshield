@@ -199,5 +199,5 @@ mod tests {
     #[test] fn rejects_bad_length() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 9\r\n\r\nabc", 65536), Some(Finding::Malformed)); }
     #[test] fn rejects_conflicting_content_lengths() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabc", 65536), Some(Finding::HeaderSmuggling)); }
     #[test] fn rejects_content_length_and_chunked_together() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n", 65536), Some(Finding::HeaderSmuggling)); }
-    #[test] fn parses_chunked_body() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n9\r\n<script>x</script>\r\n0\r\n\r\n", 65536), Some(Finding::Xss)); }
+    #[test] fn parses_chunked_body() { assert_eq!(inspect(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n12\r\n<script>x</script>\r\n0\r\n\r\n", 65536), Some(Finding::Xss)); }
 }
