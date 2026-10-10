@@ -469,14 +469,15 @@ fn run_socket(
             let mac = unsafe { (*hdr).tp_mac as usize };
             let next = unsafe { (*hdr).tp_next_offset as usize };
             let is_last = packet_idx + 1 == num;
-            let next_off =
-                match checked_next_tpacket_offset(off, next, is_last, blk_len, block_size) {
-                    Ok(value) => value,
-                    Err(reason) => {
-                        warn!(worker, block_idx, packet_idx, off, next, %reason, "rejecting invalid TPACKET_V3 descriptor chain");
-                        break;
-                    }
-                };
+            let next_off = match checked_next_tpacket_offset(
+                off, next, is_last, blk_len, block_size,
+            ) {
+                Ok(value) => value,
+                Err(reason) => {
+                    warn!(worker, block_idx, packet_idx, off, next, %reason, "rejecting invalid TPACKET_V3 descriptor chain");
+                    break;
+                }
+            };
             let (_header_abs, packet_off) = match checked_tpacket_packet_offsets(
                 block_idx, block_size, ring_len, blk_len, off, mac, snaplen,
             ) {
@@ -1168,43 +1169,55 @@ mod tpacket_tests {
 
         // The packet data must begin after the complete TPACKET3 header.
         assert!(
-            checked_tpacket_packet_offsets(
-                0, block_size, ring_len, blk_len, off, min_mac - 1, 0
-            )
-            .is_none()
+            checked_tpacket_packet_offsets(0, block_size, ring_len, blk_len, off, min_mac - 1, 0)
+                .is_none()
         );
         assert!(
-            checked_tpacket_packet_offsets(
-                0, block_size, ring_len, blk_len, off, min_mac, 0
-            )
-            .is_some()
+            checked_tpacket_packet_offsets(0, block_size, ring_len, blk_len, off, min_mac, 0)
+                .is_some()
         );
 
         // Packet that ends exactly at blk_len.
         let max_payload = blk_len - off - min_mac;
         assert!(
             checked_tpacket_packet_offsets(
-                0, block_size, ring_len, blk_len, off, min_mac, max_payload
+                0,
+                block_size,
+                ring_len,
+                blk_len,
+                off,
+                min_mac,
+                max_payload
             )
             .is_some()
         );
         assert!(
             checked_tpacket_packet_offsets(
-                0, block_size, ring_len, blk_len, off, min_mac, max_payload + 1
+                0,
+                block_size,
+                ring_len,
+                blk_len,
+                off,
+                min_mac,
+                max_payload + 1
             )
             .is_none()
         );
 
         // mac + snaplen overflow and impossible packet offsets are rejected.
         assert!(
-            checked_tpacket_packet_offsets(
-                0, block_size, ring_len, blk_len, off, usize::MAX, 1
-            )
-            .is_none()
+            checked_tpacket_packet_offsets(0, block_size, ring_len, blk_len, off, usize::MAX, 1)
+                .is_none()
         );
         assert!(
             checked_tpacket_packet_offsets(
-                0, block_size, ring_len, blk_len, off, min_mac, usize::MAX
+                0,
+                block_size,
+                ring_len,
+                blk_len,
+                off,
+                min_mac,
+                usize::MAX
             )
             .is_none()
         );
@@ -1212,13 +1225,25 @@ mod tpacket_tests {
         // Second block: packet may not cross into unmapped tail.
         assert!(
             checked_tpacket_packet_offsets(
-                1, block_size, ring_len, blk_len, off, min_mac, max_payload
+                1,
+                block_size,
+                ring_len,
+                blk_len,
+                off,
+                min_mac,
+                max_payload
             )
             .is_some()
         );
         assert!(
             checked_tpacket_packet_offsets(
-                1, block_size, ring_len - 1, blk_len, off, min_mac, max_payload
+                1,
+                block_size,
+                ring_len - 1,
+                blk_len,
+                off,
+                min_mac,
+                max_payload
             )
             .is_none()
         );
@@ -1232,11 +1257,36 @@ mod tpacket_tests {
 
         assert!(valid_tpacket_packet_count(0, desc, desc, block_size));
         assert!(valid_tpacket_packet_count(1, desc, desc + hdr, block_size));
-        assert!(!valid_tpacket_packet_count(1, desc, desc + hdr - 1, block_size));
-        assert!(!valid_tpacket_packet_count(u32::MAX, desc, block_size, block_size));
-        assert!(!valid_tpacket_packet_count(1, desc - 1, block_size, block_size));
-        assert!(!valid_tpacket_packet_count(1, block_size + 1, block_size, block_size));
-        assert!(!valid_tpacket_packet_count(1, desc, block_size + 1, block_size));
+        assert!(!valid_tpacket_packet_count(
+            1,
+            desc,
+            desc + hdr - 1,
+            block_size
+        ));
+        assert!(!valid_tpacket_packet_count(
+            u32::MAX,
+            desc,
+            block_size,
+            block_size
+        ));
+        assert!(!valid_tpacket_packet_count(
+            1,
+            desc - 1,
+            block_size,
+            block_size
+        ));
+        assert!(!valid_tpacket_packet_count(
+            1,
+            block_size + 1,
+            block_size,
+            block_size
+        ));
+        assert!(!valid_tpacket_packet_count(
+            1,
+            desc,
+            block_size + 1,
+            block_size
+        ));
     }
 
     /// Descriptor chain must advance, stay aligned, and remain inside the block.
