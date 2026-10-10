@@ -168,12 +168,12 @@ pub fn inspect(request: &[u8], max_bytes: usize) -> Option<Finding> {
     let decoded_target = percent_decode(p.target);
     let decoded_body = percent_decode(&p.body);
     let mut hay = Vec::with_capacity(decoded_target.len() + p.headers.len() + decoded_body.len());
-    hay.extend_from_slice(&decoded_target); hay.push(b'\\n'); hay.extend_from_slice(p.headers); hay.push(b'\\n'); hay.extend_from_slice(&decoded_body);
+    hay.extend_from_slice(&decoded_target); hay.push(b'\n'); hay.extend_from_slice(p.headers); hay.push(b'\n'); hay.extend_from_slice(&decoded_body);
     let lower = hay.iter().map(|b| b.to_ascii_lowercase()).collect::<Vec<_>>();
     // SSRF detection must not inspect Host: because localhost/loopback are
     // legitimate authority values for local health checks and loopback APIs.
     let mut ssrf_hay = Vec::with_capacity(decoded_target.len() + decoded_body.len());
-    ssrf_hay.extend_from_slice(&decoded_target); ssrf_hay.push(b'\\n'); ssrf_hay.extend_from_slice(&decoded_body);
+    ssrf_hay.extend_from_slice(&decoded_target); ssrf_hay.push(b'\n'); ssrf_hay.extend_from_slice(&decoded_body);
     let ssrf_lower = ssrf_hay.iter().map(|b| b.to_ascii_lowercase()).collect::<Vec<_>>();
     if lower.windows(3).any(|w| w == b"../") || lower.windows(6).any(|w| w == b"%2e%2e/") || lower.windows(9).any(|w| w == b"%2e%2e%2f") { return Some(Finding::PathTraversal); }
     if contains_ci(&lower, b"union select") || contains_ci(&lower, b" or 1=1") || contains_ci(&lower, b"' or '") || contains_ci(&lower, b"information_schema") || contains_ci(&lower, b"sleep(") { return Some(Finding::SqlInjection); }
