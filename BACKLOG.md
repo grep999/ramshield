@@ -8,7 +8,7 @@
 
 **Baseline master:** `821eab72e93e584cd6835d1f95171d5d380daaec`
 
-**Latest recorded CI:** [run 38075565723](https://github.com/grep999/ramshield/actions/runs/38075565723) — all CI jobs passed on exact HEAD `0405398ae53e7363f02f2c541418bbea7cf1c17c`, including formatting, check, build, tests, and strict Clippy. [Backlog Gate run 38075565713](https://github.com/grep999/ramshield/actions/runs/38075565713) also passed on that SHA.
+**Latest recorded CI:** [run 38077411614](https://github.com/grep999/ramshield/actions/runs/38077411614) — all CI jobs passed on exact HEAD `744f44987450e60c753dc79298c7c633601fb685`, including formatting, check, build, tests, and strict Clippy. [Backlog Gate run 38077411644](https://github.com/grep999/ramshield/actions/runs/38077411644) also passed on that SHA.
 
 **Operating rule:** one bounded fix per pass; every fix is revalidated on the exact resulting SHA. No merge, force-push, rebase, or changes to `kiddo_fix` / PR #3 / PR #5.
 
@@ -58,9 +58,9 @@
 
 | A-016 | Native packet ingest | TPACKET_V3 validators and malformed-descriptor property sweeps cover block/header/packet bounds, ring edges, chain alignment/overflow, and deterministic malformed mixes. Exact-SHA Linux test and CI evidence: Backlog Gate A-016 TPACKET bounds passed on `6af1bd28cd8ca7e86298301676ba508b40ed62a2`. | PASS (exact SHA) |
 
-| A-017 | XDP/SYNPROXY operational correctness | Tests cover capacity rejection, reconcile-after-map-loss (v4/v6/CIDR), partial-install failure isolation, StubXdp no kernel effects, CIDR map routing, and SYNPROXY unsupported-environment / hostile-interface / cleanup behavior. Exact-SHA CI evidence remains pending. | IN PROGRESS |
+| A-017 | XDP/SYNPROXY operational correctness | Tests cover capacity rejection, reconcile-after-map-loss (v4/v6/CIDR), partial-install failure isolation, StubXdp no kernel effects, IPv4/IPv6 and CIDR map routing, native-mode no-downgrade, and SYNPROXY unsupported-environment / hostile-interface / cleanup behavior. Exact-SHA CI and Backlog Gate passed on `744f44987450e60c753dc79298c7c633601fb685`. | PASS (exact SHA) |
 
-| A-018 | WAL / checkpoint recovery | Crash/restart tests use truncate-to-post-sync length as deterministic power-loss seam, assert exact durable prefix and absence of unsynced tail, and retain disk-full-after-checkpoint plus idempotent torn-tail repair coverage. Exact-SHA CI evidence remains pending. | IN PROGRESS |
+| A-018 | WAL / checkpoint recovery | Crash/restart test truncates to the last explicit sync boundary and asserts the exact durable prefix; recovery tests prove torn-tail repair is idempotent and the repaired WAL accepts later appends. Added disk-full-after-checkpoint injection proving the checkpoint and durable prefix survive, failed append is excluded, and reopen accepts new writes. Exact-SHA CI and Backlog Gate passed on `744f44987450e60c753dc79298c7c633601fb685`. | PASS (exact SHA) |
 
 | A-019 | Dashboard / IPC auth | Session TTL expiry, cookie HttpOnly/SameSite/Secure, per-IP lockout, invalid PHC fail-closed, oversized password reject, deployment defaults (loopback, 8h TTL, lockout 50). Poisoned password-hash lock now denies login and keeps auth enabled; explicit hash replacement clears poison after writing the replacement. Regression test added. IPC: replay reject, malformed frames, parse_ipc_keys fail-closed. | IN PROGRESS |
 
