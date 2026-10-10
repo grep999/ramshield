@@ -1288,3 +1288,28 @@ fn try_new_propagates_shm_open_failure() {
     assert!(err.is_err(), "opening a directory as SHM file must fail");
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn pending_mitigations_hard_capped_under_flood() {
+    use ramshield_types::BlockReason;
+    let eng = engine();
+    let now = 10_000_000_000u64;
+    // 200 > test PENDING_CAP (64); all timestamps are "fresh".
+    for i in 0..200u32 {
+        let ip = IpAddr::from([
+            10,
+            ((i >> 16) & 0xff) as u8,
+            ((i >> 8) & 0xff) as u8,
+            (i & 0xff) as u8,
+        ]);
+        eng.admit_mitigation((ip, BlockReason::HighRps), 60, now);
+    }
+    assert!(eng.pending_mitigations_len() > 64);
+    // Empty flush still runs the bound/prune at the end of flush_batch.
+    eng.flush_events(&[]);
+    assert!(
+        eng.pending_mitigations_len() <= 64,
+        "expected hard cap 64 in tests, got {}",
+        eng.pending_mitigations_len()
+    );
+}

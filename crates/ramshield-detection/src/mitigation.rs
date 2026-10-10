@@ -131,4 +131,9 @@ impl DetectionEngine {
             }
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn pending_mitigations_len(&self) -> usize {
+        self.pending_mitigations.len()
+    }
 }

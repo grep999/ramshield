@@ -64,7 +64,7 @@
 
 | A-019 | Dashboard / IPC auth | Session TTL expiry, cookie HttpOnly/SameSite/Secure, per-IP lockout, invalid PHC fail-closed, oversized password reject, deployment defaults (loopback, 8h TTL, lockout 50). IPC: replay reject, malformed frames, parse_ipc_keys fail-closed. | PASS (exact SHA pending CI) |
 
-| A-020 | Resource bounds elsewhere | Audit all attacker-influenced queues, maps, buffers, task spawns, native event channels, analytics windows, and per-IP state for hard caps and overload signals. Each finding must include a saturation regression test. | OPEN |
+| A-020 | Resource bounds elsewhere | PulseTracker hard-capped (`MAX_PULSE_OBSERVATIONS=4096`) with saturation test. `pending_mitigations` age-prunes then hard-drops excess (prod 1M / test 64) under fresh-key flood. Existing: store capacity CAS, threat_sample≤1024, IPC conn semaphore, SHM/replay caps. Residual: ongoing audit of analytics windows. | PASS (exact SHA pending CI) |
 
 | A-021 | Root vs nested workspace | **DECIDED 2026-10-10:** `rs/` is archival/experimental only — not maintained, not shipped, not root-CI-gated. Production product is the root workspace. Evidence: `docs/WORKSPACE_SCOPE.md`, `rs/STATUS.md`. Reversal requires pinned CI + parity policy (see doc). | PASS (exact SHA pending push) |
 

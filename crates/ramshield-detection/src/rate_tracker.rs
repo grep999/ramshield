@@ -285,6 +285,10 @@ pub const PULSE_ACTIVE_NS: u64 = 2_000_000_000; // 2 seconds active phase
 pub const PULSE_MIN_BURSTS: u8 = 2; // Minimum 2 bursts for detection
 pub const PULSE_REFIRE_TTL_NS: u64 = 15_000_000_000; // 15 seconds refire TTL
 pub const PULSE_REFIRE_COOLDOWN_NS: u64 = 1_000_000_000; // 1 second cooldown
+/// Hard ceiling on buffered observations inside the sliding window.
+/// Without this, an attacker can push millions of samples within 11s and
+/// grow the VecDeque unboundedly even though the time window is finite.
+pub const MAX_PULSE_OBSERVATIONS: usize = 4_096;
 
 /// PulseTracker state machine for T13 pulse-wave detection
 #[derive(Debug, Default)]
@@ -323,6 +327,10 @@ impl PulseTracker {
 
         // Remove expired observations (maintain 11s window)
         while self.is_window_expired(timestamp_ns) {
+            self.observations.pop_front();
+        }
+        // Hard cardinality cap: drop oldest if still over budget.
+        while self.observations.len() > MAX_PULSE_OBSERVATIONS {
             self.observations.pop_front();
         }
 
@@ -564,5 +572,21 @@ mod t13_pulse_tracker_tests {
             "tracker2 should detect after 2 bursts"
         );
         assert!(!tracker3.pulse_active(), "tracker3 still needs more bursts");
+    }
+
+    #[test]
+    fn pulse_observations_hard_capped() {
+        let mut tracker = PulseTracker::new();
+        let base = 1_000_000_000u64;
+        // Flood within the 11s window so time-based expiry does not help.
+        for i in 0..(MAX_PULSE_OBSERVATIONS as u64 + 500) {
+            tracker.observe(base + i * 1_000, 100);
+            assert!(
+                tracker.observations.len() <= MAX_PULSE_OBSERVATIONS,
+                "len={} at i={i}",
+                tracker.observations.len()
+            );
+        }
+        assert_eq!(tracker.observations.len(), MAX_PULSE_OBSERVATIONS);
     }
 }

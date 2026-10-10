@@ -312,9 +312,28 @@ impl DetectionEngine {
         // attacker-cardinality overflow — 1M+ distinct (ip, reason) pairs.
         // ponytail: coarse 1h age prune on overflow; per-entry expiry only
         // if this gate ever shows up in a flame graph.
-        if self.pending_mitigations.len() > 1_048_576 {
+        // Bound the gate under attacker cardinality. Age-prune first, then
+        // hard-drop excess keys so a flood of *recent* admissions cannot grow
+        // the map without limit (retain alone only removes old entries).
+        #[cfg(not(test))]
+        const PENDING_CAP: usize = 1_048_576;
+        #[cfg(test)]
+        const PENDING_CAP: usize = 64;
+        if self.pending_mitigations.len() > PENDING_CAP {
             self.pending_mitigations
                 .retain(|_, ts| now.saturating_sub(*ts) < 3_600_000_000_000);
+        }
+        if self.pending_mitigations.len() > PENDING_CAP {
+            let excess = self.pending_mitigations.len() - PENDING_CAP;
+            let drop_keys: Vec<_> = self
+                .pending_mitigations
+                .iter()
+                .take(excess)
+                .map(|e| *e.key())
+                .collect();
+            for k in drop_keys {
+                self.pending_mitigations.remove(&k);
+            }
         }
         for b in blocks {
             let key = (b.0, b.1);
