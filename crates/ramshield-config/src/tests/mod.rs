@@ -19,6 +19,26 @@ fn pre_aggregation_map_size_has_hard_ceiling() {
 }
 
 #[test]
+fn forecasting_seasonality_has_hard_allocation_ceiling() {
+    let mut cfg = Config::default();
+    cfg.forecasting.enabled = true;
+    cfg.forecasting.seasonality_period = 86_400;
+    cfg.validate().expect("one-day seasonal vector must be accepted");
+
+    cfg.forecasting.seasonality_period = 86_401;
+    let err = cfg
+        .validate()
+        .expect_err("seasonal vector above one day must be rejected");
+    assert!(err.to_string().contains("seasonality_period"), "{err}");
+
+    cfg.forecasting.seasonality_period = usize::MAX;
+    let err = cfg
+        .validate()
+        .expect_err("effectively unbounded seasonal vector must be rejected");
+    assert!(err.to_string().contains("seasonality_period"), "{err}");
+}
+
+#[test]
 fn wal_volatile_fallback_defaults_false() {
     assert!(!WalConfig::default().allow_volatile_fallback);
     let parsed: WalConfig = toml::from_str(
