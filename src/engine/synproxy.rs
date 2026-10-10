@@ -174,7 +174,24 @@ fn command_exists(name: &str) -> bool {
 
 #[cfg(target_os = "linux")]
 fn nft_quote(s: &str) -> String {
-    s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '.').collect()
+    let mut out = String::with_capacity(s.len());
+    let mut discard_next_space = false;
+    for ch in s.trim().chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.') {
+            out.push(ch);
+            discard_next_space = false;
+        } else if ch.is_ascii_whitespace() {
+            // Preserve ordinary word boundaries, but don't leave a separator
+            // behind when it follows a stripped command metacharacter.
+            if !discard_next_space && !out.is_empty() && !out.ends_with('_') {
+                out.push('_');
+            }
+            discard_next_space = false;
+        } else {
+            discard_next_space = true;
+        }
+    }
+    out
 }
 
 #[cfg(not(target_os = "linux"))]
