@@ -1264,6 +1264,68 @@ fn disk_full_append_maps_to_diskfull_error() {
     clean(&d);
 }
 
+/// A disk-full append after a durable checkpoint must not invalidate the
+/// published checkpoint or lose the durable prefix. Reopen repairs the
+/// writer state, excludes the failed append, and accepts subsequent writes.
+#[test]
+fn disk_full_after_checkpoint_preserves_checkpoint_and_durable_prefix() {
+    let d = test_dir();
+    let checkpoint_lsn = {
+        let wal = Wal::open(wal_cfg(&d)).unwrap();
+        let lsn = wal.append(b"durable-before-checkpoint").unwrap();
+        wal.sync().unwrap();
+        wal.checkpoint(lsn).unwrap();
+        assert_eq!(wal.ckpt_lsn(), lsn, "checkpoint must be published before fault");
+
+        wal.fail_next_diskfull();
+        assert!(
+            matches!(wal.append(b"failed-after-checkpoint"), Err(Error::DiskFull)),
+            "injected ENOSPC must surface after checkpoint"
+        );
+        assert!(wal.is_poisoned(), "write failure must poison this instance");
+        lsn
+    };
+
+    let recovered = Wal::open(wal_cfg(&d)).unwrap();
+    assert!(!recovered.is_poisoned(), "reopen must restore a healthy writer");
+    assert_eq!(
+        recovered.ckpt_lsn(),
+        checkpoint_lsn,
+        "disk-full recovery must preserve the published checkpoint"
+    );
+    let recovered_payloads: Vec<_> = recovered
+        .recovery_report()
+        .records
+        .iter()
+        .map(|record| record.payload.as_slice())
+        .collect();
+    assert!(
+        recovered_payloads.contains(&b"durable-before-checkpoint".as_slice()),
+        "durable pre-checkpoint record must survive"
+    );
+    assert!(
+        !recovered_payloads.contains(&b"failed-after-checkpoint".as_slice()),
+        "failed append must not appear after recovery"
+    );
+
+    let next_lsn = recovered.append(b"after-recovery").unwrap();
+    recovered.sync().unwrap();
+    assert!(next_lsn > checkpoint_lsn, "recovered writer must continue LSN order");
+    drop(recovered);
+
+    let reopened = Wal::open(wal_cfg(&d)).unwrap();
+    let final_payloads: Vec<_> = reopened
+        .recovery_report()
+        .records
+        .iter()
+        .map(|record| record.payload.as_slice())
+        .collect();
+    assert!(final_payloads.contains(&b"durable-before-checkpoint".as_slice()));
+    assert!(final_payloads.contains(&b"after-recovery".as_slice()));
+    assert!(!final_payloads.contains(&b"failed-after-checkpoint".as_slice()));
+    clean(&d);
+}
+
 /// A directory fsync failure after rotation leaves a segment whose existence
 /// is not guaranteed on disk; the WAL must surface the error and poison.
 #[test]
