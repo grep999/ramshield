@@ -441,7 +441,7 @@ fn process_packet(packet: &[u8], max_eps: u64, trusted_overlay_cidrs: &[IpNetwor
         return;
     }
     let admitted = budget
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
             let next = n.checked_add(1)?;
             if next <= max_eps { Some(next) } else { None }
         })
