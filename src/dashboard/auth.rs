@@ -219,9 +219,12 @@ impl AuthState {
             return;
         }
 
+        let victim = self.failures.iter().next().map(|entry| *entry.key());
         if self.failures.len() >= MAX_TRACKED_FAILURE_IPS
-            && let Some(victim) = self.failures.iter().next().map(|entry| *entry.key())
+            && let Some(victim) = victim
         {
+            // Drop the DashMap iterator/ref before removing the key; otherwise
+            // a shard read guard can be held while remove waits for that shard.
             self.failures.remove(&victim);
         }
         self.failures.insert(
