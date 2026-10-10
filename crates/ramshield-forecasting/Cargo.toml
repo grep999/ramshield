@@ -2,6 +2,7 @@
 name = "ramshield-forecasting"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 ramshield-types = { path = "../ramshield-types" }
