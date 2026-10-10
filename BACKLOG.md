@@ -8,7 +8,7 @@
 
 **Baseline master:** `821eab72e93e584cd6835d1f95171d5d380daaec`
 
-**Latest recorded CI:** [run 38079664720](https://github.com/grep999/ramshield/actions/runs/38079664720) — all CI jobs passed on exact HEAD `a9a3bf16c47680108993b75bf81b4b7e59bb31f8`, including core-only and full-feature checks/builds/tests/Clippy, formatting, C SHM ABI stress, ThreadSanitizer, and AArch64 ABI cross-checks. [Backlog Gate run 38079664718](https://github.com/grep999/ramshield/actions/runs/38079664718) also passed on that SHA.
+**Latest recorded CI:** [run 38080562418](https://github.com/grep999/ramshield/actions/runs/38080562418) — all CI jobs passed on exact HEAD `862ea51f5251d974de6d9f21f375c796282bddf0`, including core/full/all-feature tests, build/check, strict Clippy, formatting, and dependency audit. [Backlog Gate run 38080562412](https://github.com/grep999/ramshield/actions/runs/38080562412) also passed on that SHA, including core matrix and SHM ABI/TSAN/AArch64 checks.
 
 **Operating rule:** one bounded fix per pass; every fix is revalidated on the exact resulting SHA. No merge, force-push, rebase, or changes to `kiddo_fix` / PR #3 / PR #5.
 
@@ -84,7 +84,7 @@
 
 | A-033 | Shared-memory ABI | C header statically asserts 64-byte size/alignment and every `RamshieldShmRuleEntry` field offset; Rust layout is asserted at compile time and runtime. CI runs C pthread reader/writer stress, ThreadSanitizer, and AArch64 Rust/C cross-compilation checks. All passed on exact SHA `a9a3bf16c47680108993b75bf81b4b7e59bb31f8`. | PASS (exact SHA) |
 
-| A-034 | Dependency / supply chain | Run locked dependency audit, license/advisory checks, and review unsafe-code and transitive dependency changes. Record exceptions with rationale. | OPEN |
+| A-034 | Dependency / supply chain | CI runs `cargo audit --no-yanked` and `cargo deny check`; both passed on exact SHA `862ea51f5251d974de6d9f21f375c796282bddf0`. Workspace crates now declare MIT licenses; local path dependencies carry explicit package-version constraints; cargo-deny uses current v2 advisory policy and denies advisories, yanked crates, wildcard dependencies, and unknown sources. Reviewed production unsafe boundaries in TPACKET ring parsing, SHM mmap access, and XDP/BPF syscall helpers; `raw_get_next_key` now documents the requirement that kernel-written key bytes form a valid `K`. Remaining cargo-deny duplicate-version warnings are intentionally visible: `thiserror` v1 is used by `ramshield-types` while root/enforcement use v2; `getrandom`, `r-efi`, `rand_core`, and `syn` duplicates are transitive graph splits and are not force-unified without compatibility review. No advisory, license, or source-policy errors remain. | PASS (exact SHA) |
 
 | A-035 | Public API / error semantics | Audit panics, swallowed errors, ambiguous return values, unchecked conversions, and inaccurate comments across crate boundaries. Prioritize production call paths and public APIs. | OPEN |
 
