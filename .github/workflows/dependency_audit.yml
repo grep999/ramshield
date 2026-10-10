@@ -1,19 +1,24 @@
 name: Dependency Audit
 on:
   push:
-    branches: [main, develop, master]
+    branches: [main, develop, master, audit-branch]
   pull_request:
-    branches: [main, develop, master]
+    branches: [main, develop, master, audit-branch]
   schedule: [{cron: '17 3 * * *'}]
   workflow_dispatch:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@v1
         with: {toolchain: nightly-2026-08-29}
       - uses: taiki-e/install-action@v2
         with: {tool: cargo-audit}
-      - run: cargo audit --no-yanked
+      - name: Audit advisories and yanked crates
+        run: cargo audit --no-yanked
+      - uses: taiki-e/install-action@v2
+        with: {tool: cargo-deny}
+      - name: Check dependency advisories, licenses, bans, and sources
+        run: cargo deny check
