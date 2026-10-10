@@ -133,15 +133,47 @@ fn parse_decimal(v: &[u8]) -> Option<usize> {
 fn eq_ci(a: &[u8], b: &[u8]) -> bool { a.len() == b.len() && a.iter().zip(b).all(|(x,y)| x.to_ascii_lowercase() == y.to_ascii_lowercase()) }
 fn contains_ci(a: &[u8], needle: &[u8]) -> bool { a.windows(needle.len()).any(|w| eq_ci(w, needle)) }
 
+fn percent_decode(input: &[u8]) -> Vec<u8> {
+    fn hex_nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let mut decoded = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] == b'%' && index + 2 < input.len() {
+            if let (Some(high), Some(low)) =
+                (hex_nibble(input[index + 1]), hex_nibble(input[index + 2]))
+            {
+                decoded.push((high << 4) | low);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(input[index]);
+        index += 1;
+    }
+    decoded
+}
+
 pub fn inspect(request: &[u8], max_bytes: usize) -> Option<Finding> {
     let p = match parse_request(request, max_bytes.min(256 * 1024)) { Ok(p) => p, Err(f) => return Some(f) };
-    let mut hay = Vec::with_capacity(p.target.len() + p.headers.len() + p.body.len());
-    hay.extend_from_slice(p.target); hay.push(b'\n'); hay.extend_from_slice(p.headers); hay.push(b'\n'); hay.extend_from_slice(&p.body);
+    // Decode valid percent triplets before signatures so encoded payloads
+    // cannot bypass inspection. Input and decoded output remain size-bounded.
+    let decoded_target = percent_decode(p.target);
+    let decoded_body = percent_decode(&p.body);
+    let mut hay = Vec::with_capacity(decoded_target.len() + p.headers.len() + decoded_body.len());
+    hay.extend_from_slice(&decoded_target); hay.push(b'\\n'); hay.extend_from_slice(p.headers); hay.push(b'\\n'); hay.extend_from_slice(&decoded_body);
     let lower = hay.iter().map(|b| b.to_ascii_lowercase()).collect::<Vec<_>>();
     // SSRF detection must not inspect Host: because localhost/loopback are
     // legitimate authority values for local health checks and loopback APIs.
-    let mut ssrf_hay = Vec::with_capacity(p.target.len() + p.body.len());
-    ssrf_hay.extend_from_slice(p.target); ssrf_hay.push(b'\n'); ssrf_hay.extend_from_slice(&p.body);
+    let mut ssrf_hay = Vec::with_capacity(decoded_target.len() + decoded_body.len());
+    ssrf_hay.extend_from_slice(&decoded_target); ssrf_hay.push(b'\\n'); ssrf_hay.extend_from_slice(&decoded_body);
     let ssrf_lower = ssrf_hay.iter().map(|b| b.to_ascii_lowercase()).collect::<Vec<_>>();
     if lower.windows(3).any(|w| w == b"../") || lower.windows(6).any(|w| w == b"%2e%2e/") || lower.windows(9).any(|w| w == b"%2e%2e%2f") { return Some(Finding::PathTraversal); }
     if contains_ci(&lower, b"union select") || contains_ci(&lower, b" or 1=1") || contains_ci(&lower, b"' or '") || contains_ci(&lower, b"information_schema") || contains_ci(&lower, b"sleep(") { return Some(Finding::SqlInjection); }
