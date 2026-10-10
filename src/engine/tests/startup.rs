@@ -7,6 +7,27 @@ use crate::metrics::Metrics;
 use crate::storage::Store;
 use std::sync::Arc;
 
+#[tokio::test]
+async fn startup_runtime_failure_is_reported_to_waiter() {
+    let engine = Engine::new(
+        Config::default(),
+        Arc::new(Store::new(16)),
+        Arc::new(Metrics::new()),
+    );
+
+    engine.fail_startup(std::io::Error::other("runtime initialization failed"));
+
+    assert!(
+        engine.pipeline_failed.load(std::sync::atomic::Ordering::Acquire),
+        "startup failure must mark the pipeline failed"
+    );
+    let err = engine
+        .wait_startup()
+        .await
+        .expect_err("startup waiter must receive the runtime initialization failure");
+    assert!(err.to_string().contains("runtime initialization failed"));
+}
+
 #[test]
 fn engine_constructs_with_default_config() {
     let _engine = Engine::new(
