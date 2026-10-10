@@ -140,11 +140,13 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     } else {
         Box::new(StubXdpApplier)
     };
+    #[cfg(feature = "mesh")]
     let mesh_blocklist = if cfg_snapshot.mesh.enabled {
         Some(Arc::new(AworsetBlocklist::new(cfg_snapshot.mesh.node_id)))
     } else {
         None
     };
+    #[cfg(feature = "mesh")]
     let mesh_handle = if cfg_snapshot.mesh.enabled {
         let listen = cfg_snapshot.mesh.listen_addr.parse().map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("invalid mesh.listen_addr: {e}"))
@@ -167,6 +169,13 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     } else {
         None
     };
+    #[cfg(not(feature = "mesh"))]
+    if cfg_snapshot.mesh.enabled {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "mesh.enabled=true but this binary was built without the mesh feature",
+        ));
+    }
 
     let mut enforcement = EnforcementService::new(
         store.clone(),
@@ -174,9 +183,11 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
         xdp_box,
         enforcement_shutdown.clone(),
     );
+    #[cfg(feature = "mesh")]
     if let Some(mesh) = mesh_blocklist {
         enforcement = enforcement.with_mesh_blocklist(mesh);
     }
+    #[cfg(feature = "mesh")]
     if let Some(handle) = mesh_handle {
         enforcement = enforcement.with_mesh_handle(handle);
     }

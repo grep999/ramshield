@@ -5,4 +5,5 @@ mod enforce;
 mod expiry;
 mod run;
 
+#[cfg(feature = "mesh")]
 mod mesh;

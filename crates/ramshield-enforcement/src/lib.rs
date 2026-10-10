@@ -98,9 +98,13 @@ pub struct EnforcementService {
     /// P2: Cluster blocklist CRDT — companion to `blocked_ips` local mirror.
     /// Local blocks are authoritative; this CRDT absorbs peer deltas and
     /// merges them on the next enforcement tick. None = single-node.
+    #[cfg(feature = "mesh")]
     mesh_blocklist: Option<Arc<ramshield_mesh::aworset::AworsetBlocklist>>,
+    #[cfg(feature = "mesh")]
     mesh_handle: Option<ramshield_mesh::MeshHandle>,
+    #[cfg(feature = "mesh")]
     mesh_applied_ips: HashSet<IpAddr>,
+    #[cfg(feature = "mesh")]
     mesh_operator_suppressions: HashSet<IpAddr>,
     /// Checkpoint coordination: barrier + absolute-deadline mirror. None =
     /// engine never attached one (standalone use, tests).
@@ -129,9 +133,13 @@ impl EnforcementService {
             epoch: Instant::now(),
             shutdown,
             last_wal_lsn: None,
+            #[cfg(feature = "mesh")]
             mesh_blocklist: None,
+            #[cfg(feature = "mesh")]
             mesh_handle: None,
+            #[cfg(feature = "mesh")]
             mesh_applied_ips: HashSet::new(),
+            #[cfg(feature = "mesh")]
             mesh_operator_suppressions: HashSet::new(),
             checkpoint_shared: None,
         }
@@ -144,6 +152,7 @@ impl EnforcementService {
     }
 
     /// Enable cluster CRDT companion (fleet gossip mesh).
+    #[cfg(feature = "mesh")]
     pub fn with_mesh_blocklist(
         mut self,
         mesh_blocklist: Arc<ramshield_mesh::aworset::AworsetBlocklist>,
@@ -153,6 +162,7 @@ impl EnforcementService {
     }
 
     /// Attach the authenticated mesh transport.
+    #[cfg(feature = "mesh")]
     pub fn with_mesh_handle(mut self, mesh_handle: ramshield_mesh::MeshHandle) -> Self {
         self.mesh_handle = Some(mesh_handle);
         self

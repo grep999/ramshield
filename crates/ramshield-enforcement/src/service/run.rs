@@ -40,6 +40,7 @@ impl EnforcementService {
         loop {
             tokio::select! {
                 _ = tick.tick() => {
+                    #[cfg(feature = "mesh")]
                     self.apply_mesh_messages().await;
                     self.expire_due().await;
                     let now_unix = SystemTime::now()
@@ -153,6 +154,7 @@ impl EnforcementService {
                     // mesh_record_ban_count — that atomic is a cumulative
                     // counter owned by detection (record_ban). Overwriting it
                     // with len() every tick made the counter meaningless.
+                    #[cfg(feature = "mesh")]
                     if let Some(mesh) = &self.mesh_blocklist {
                         self.metrics.mesh_hlc_ticks.store(
                             mesh.hlc_ticks(),

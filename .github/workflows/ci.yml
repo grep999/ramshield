@@ -90,5 +90,9 @@ jobs:
       # CI run 35391325896 for >10 min on bench_batch_aggregate.
       # Match review_pipeline.sh: unit/integration tests only.
       - run: cargo test --workspace --locked --features full
+      - name: Test mesh crate independently
+        run: cargo test -p ramshield-mesh --locked
+      - name: Test all features (including mesh integration)
+        run: cargo test --workspace --locked --all-features
       - name: Verify C SHM ABI
         run: scripts/verify_shm_header.sh

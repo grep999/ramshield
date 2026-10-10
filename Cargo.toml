@@ -54,6 +54,7 @@ harness = false
 default = []
 full = ["tokio/full", "tracing-subscriber/env-filter", "tracing-subscriber/fmt", "tower-http/cors", "clap/derive", "xdp"]
 xdp = ["dep:aya", "dep:ramshield-xdp", "ramshield-enforcement/xdp"]
+mesh = ["dep:ramshield-mesh", "ramshield-enforcement/mesh"]
 
 [dependencies]
 tokio             = { version = "1", features = ["full"] }
@@ -99,7 +100,7 @@ ramshield-forecasting = { path = "crates/ramshield-forecasting", version = "0.1.
 ramshield-protocol = { path = "crates/ramshield-protocol", version = "0.1.0" }
 ramshield-cgnat = { path = "crates/ramshield-cgnat", version = "0.1.0" }
 ramshield-analytics = { path = "crates/ramshield-analytics", version = "0.1.0" }
-ramshield-mesh = { path = "crates/ramshield-mesh", version = "0.2.0" }
+ramshield-mesh = { path = "crates/ramshield-mesh", version = "0.2.0", optional = true }
 
 [dev-dependencies]
 serial_test = "3"

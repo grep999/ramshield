@@ -8,7 +8,7 @@ ahash = "0.8"
 ramshield-metrics = { path = "../ramshield-metrics" }
 ramshield-types = { path = "../ramshield-types" }
 ramshield-storage = { path = "../ramshield-storage" }
-ramshield-mesh = { path = "../ramshield-mesh" }
+ramshield-mesh = { path = "../ramshield-mesh", optional = true }
 ramshield-xdp = { path = "../ramshield-xdp", default-features = false, features = ["elf"], optional = true }
 aya = { version = "0.14", optional = true }
 tokio = { version = "1", features = ["full"] }
@@ -24,6 +24,7 @@ proptest = "1"
 serial_test = "3"
 
 [features]
+mesh = ["dep:ramshield-mesh"]
 xdp = ["dep:aya", "dep:ramshield-xdp", "dep:libc"]
 
 [lints]

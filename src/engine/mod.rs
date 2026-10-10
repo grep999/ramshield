@@ -33,7 +33,8 @@ use ramshield_storage::{
     wal::Wal,
 };
 use ramshield_types::EnforceCommand;
-use ramshield_mesh::{MeshHandle}; use ramshield_mesh::aworset::AworsetBlocklist;
+#[cfg(feature = "mesh")]
+use ramshield_mesh::{aworset::AworsetBlocklist, MeshHandle};
 
 pub struct Engine {
     pub config: Arc<arc_swap::ArcSwap<Config>>,
