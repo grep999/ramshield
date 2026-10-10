@@ -19,7 +19,7 @@ cc -std=c11 -Wall -Wextra -Werror -pthread -I. \
 # reserve its shadow address space. Unsupported compiler/runtime is reported
 # as SKIP; actual sanitizer findings remain fatal.
 if [[ "${RAMSHIELD_SHM_TSAN:-0}" == "1" ]]; then
-  if cc -std=c11 -Wall -Wextra -Werror -pthread -fsanitize=thread -g -O1 -I. \
+  if cc -std=c11 -Wall -Wextra -Werror -Wno-error=tsan -pthread -fsanitize=thread -g -O1 -I. \
       scripts/shm_abi_stress.c -o "$TMP/shm-abi-stress-tsan" 2>"$TMP/tsan-compile.log"; then
     set +e
     TSAN_OPTIONS=halt_on_error=1 "$TMP/shm-abi-stress-tsan" >"$TMP/tsan-run.log" 2>&1
