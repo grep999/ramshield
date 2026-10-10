@@ -327,7 +327,7 @@ pub struct IpcServerStats {
     pub max_connections: u64,
     pub dropped_events: u64,
     /// Bounded channel capacity for connection-event ingest. Equal to the
-    /// cap set on the crossbeam channel in DetectionEngine::new (64k).
+    /// cap set on the crossbeam channel in DetectionEngine::try_new (64k).
     /// Dashboard can compute utilization = accepted / channel_capacity.
     pub channel_capacity: u64,
 }

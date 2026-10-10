@@ -9,7 +9,9 @@ fn engine() -> Arc<DetectionEngine> {
     let metrics = Arc::new(Metrics::new());
     let (etx, _erx) = mpsc::channel(64);
     let shutdown = Arc::new(AtomicBool::new(false));
-    Arc::new(DetectionEngine::new(store, cfg, etx, metrics, shutdown))
+    Arc::new(
+        DetectionEngine::try_new(store, cfg, etx, metrics, shutdown).expect("detection try_new"),
+    )
 }
 
 /// Documented architecture contract, admission item: re-emitting a block
@@ -119,13 +121,16 @@ fn emergency_burst_fires_once_before_flush() {
     let store = Arc::new(Store::new(16));
     let metrics = Arc::new(Metrics::new());
     let (etx, mut erx) = mpsc::channel(64);
-    let eng = Arc::new(DetectionEngine::new(
-        store,
-        cfg,
-        etx,
-        metrics.clone(),
-        Arc::new(AtomicBool::new(false)),
-    ));
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            store,
+            cfg,
+            etx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
 
     let ip: IpAddr = "9.9.9.9".parse().unwrap();
     let ev = |n: u64| ConnectionEvent {
@@ -204,13 +209,16 @@ fn concurrent_flush_never_loses_events() {
     let store = Arc::new(Store::new(16));
     let metrics = Arc::new(Metrics::new());
     let (etx, _erx) = mpsc::channel(64);
-    let eng = Arc::new(DetectionEngine::new(
-        store,
-        cfg,
-        etx,
-        metrics.clone(),
-        Arc::new(AtomicBool::new(false)),
-    ));
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            store,
+            cfg,
+            etx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
 
     const SENDERS: u64 = 8;
     const PER_SENDER: u64 = 5_000;
@@ -280,13 +288,14 @@ fn bloom_saturated_at_one_tenth_fill() {
     cfg.detection.bloom_bits = 1_000_000;
     let metrics = Arc::new(Metrics::new());
     let (etx, _erx) = mpsc::channel(64);
-    let eng = DetectionEngine::new(
+    let eng = DetectionEngine::try_new(
         Arc::new(Store::new(16)),
         cfg.into_handle(),
         etx,
         metrics.clone(),
         Arc::new(AtomicBool::new(false)),
-    );
+    )
+    .expect("detection try_new");
     metrics.set_bloom_bits(1_000_000);
     // b/20 = 50k promotions → 10% (2n/b). Guard fires at that line.
     metrics.record_bloom_inserts(49_999);
@@ -315,13 +324,16 @@ fn bloom_caches_promoted_ips_not_just_blocked() {
     let cfg = cfg.into_handle();
     let metrics = Arc::new(Metrics::new());
     let (etx, _erx) = mpsc::channel(64);
-    let eng = Arc::new(DetectionEngine::new(
-        Arc::new(Store::new(16)),
-        cfg,
-        etx,
-        metrics.clone(),
-        Arc::new(AtomicBool::new(false)),
-    ));
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            Arc::new(Store::new(16)),
+            cfg,
+            etx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
 
     let ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 77));
     let events: Vec<_> = (0..12).map(|i| ev_at(ip, i)).collect();
@@ -356,13 +368,16 @@ fn bloom_capacity_published_at_construction() {
     cfg.detection.bloom_bits = 1_234_567;
     let metrics = Arc::new(Metrics::new());
     let (etx, _erx) = mpsc::channel(64);
-    let _eng = Arc::new(DetectionEngine::new(
-        Arc::new(Store::new(16)),
-        cfg.into_handle(),
-        etx,
-        metrics.clone(),
-        Arc::new(AtomicBool::new(false)),
-    ));
+    let _eng = Arc::new(
+        DetectionEngine::try_new(
+            Arc::new(Store::new(16)),
+            cfg.into_handle(),
+            etx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
     assert_eq!(
         metrics.bloom_bits.load(Ordering::Relaxed),
         1_234_567,
@@ -466,13 +481,10 @@ fn v6_subnet_swarm_blocks_via_index_cardinality() {
     let store = Arc::new(Store::new(16));
     let metrics = Arc::new(Metrics::new());
     let (etx, mut erx) = mpsc::channel(64);
-    let eng = Arc::new(DetectionEngine::new(
-        store,
-        cfg,
-        etx,
-        metrics,
-        Arc::new(AtomicBool::new(false)),
-    ));
+    let eng = Arc::new(
+        DetectionEngine::try_new(store, cfg, etx, metrics, Arc::new(AtomicBool::new(false)))
+            .expect("detection try_new"),
+    );
     // 65 distinct hosts in 2001:db8:abcd::/64, 800 events each =
     // 65 uniq / 52,000 events — crosses the deterministic classifier
     // gate (hosts > 64 && rate > 50_000) → one CIDR block decision.
@@ -529,13 +541,16 @@ fn v6_cooled_subnet_does_not_block_stale_members() {
     let store = Arc::new(Store::new(16));
     let metrics = Arc::new(Metrics::new());
     let (etx, mut erx) = mpsc::channel(64);
-    let eng = Arc::new(DetectionEngine::new(
-        store.clone(),
-        cfg,
-        etx,
-        metrics,
-        Arc::new(AtomicBool::new(false)),
-    ));
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            store.clone(),
+            cfg,
+            etx,
+            metrics,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
     let v6 = |o: u16| {
         IpAddr::V6(std::net::Ipv6Addr::new(
             0x2001, 0xdb8, 0xbeef, 0, 0, 0, 0, o,
@@ -612,13 +627,16 @@ fn subnet_rate_accumulates_across_scans_until_block() {
     let store = Arc::new(Store::new(16));
     let metrics = Arc::new(Metrics::new());
     let (etx, mut erx) = mpsc::channel(64);
-    let eng = Arc::new(DetectionEngine::new(
-        store.clone(),
-        cfg,
-        etx,
-        metrics.clone(),
-        Arc::new(AtomicBool::new(false)),
-    ));
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            store.clone(),
+            cfg,
+            etx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
 
     let any: IpAddr = "192.0.2.9".parse().unwrap();
     let net = crate::IpNetwork::of_ip(any);
@@ -667,13 +685,16 @@ fn enforcement_drop_is_counted_not_silent() {
     let metrics = Arc::new(Metrics::new());
     let (etx, erx) = mpsc::channel(64);
     drop(erx); // permanently saturated: every try_send is a hard drop
-    let eng = Arc::new(DetectionEngine::new(
-        Arc::new(Store::new(16)),
-        cfg,
-        etx,
-        metrics.clone(),
-        Arc::new(AtomicBool::new(false)),
-    ));
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            Arc::new(Store::new(16)),
+            cfg,
+            etx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
 
     // CGNAT_TIER_BLOCK needs hosts > 64 AND rate > 50_000: 65 x 800.
     let t = now_ns();
@@ -816,7 +837,9 @@ fn subnet_decision_is_one_block_not_one_per_member() {
     let metrics = Arc::new(Metrics::new());
     let (etx, mut erx) = mpsc::channel(64);
     let shutdown = Arc::new(AtomicBool::new(false));
-    let eng = Arc::new(DetectionEngine::new(store, cfg, etx, metrics, shutdown));
+    let eng = Arc::new(
+        DetectionEngine::try_new(store, cfg, etx, metrics, shutdown).expect("detection try_new"),
+    );
     // CGNAT_TIER_BLOCK needs hosts > 64 AND rate > 50_000, so the
     // enforcement command is actually emitted: 65 hosts x 800 = 52_000.
     let t = now_ns();
@@ -996,13 +1019,10 @@ fn flush_records_per_flush_promoted_count() {
     let mut cfg = cfg;
     cfg.detection.promote_min_events = 2;
     cfg.detection.subnet_window_threshold = 1;
-    let eng = Arc::new(DetectionEngine::new(
-        store.clone(),
-        cfg.into_handle(),
-        etx,
-        metrics,
-        shutdown,
-    ));
+    let eng = Arc::new(
+        DetectionEngine::try_new(store.clone(), cfg.into_handle(), etx, metrics, shutdown)
+            .expect("detection try_new"),
+    );
     // 3 distinct /24s, each with a hot IP, in a SINGLE flush.
     let events: Vec<_> = (0..3u8)
         .flat_map(|n| {
@@ -1038,13 +1058,16 @@ fn capacity_exceeded_is_tracked_and_not_promoted() {
     let store = Arc::new(Store::new(16));
     let metrics = Arc::new(Metrics::new());
     let (etx, _erx) = mpsc::channel(64);
-    let eng = Arc::new(DetectionEngine::new(
-        store.clone(),
-        cfg,
-        etx,
-        metrics.clone(),
-        Arc::new(AtomicBool::new(false)),
-    ));
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            store.clone(),
+            cfg,
+            etx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
     // Budget künstlich erschöpfen: ram_bytes weit über jedes Limit heben.
     store.set_ram_bytes_for_testing(usize::MAX / 2);
     let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 42, 0, 7));
@@ -1084,13 +1107,16 @@ fn relative_gate_uses_prior_baseline_and_requires_streak() {
     let store = Arc::new(Store::new(16));
     let metrics = Arc::new(Metrics::new());
     let (etx, mut erx) = mpsc::channel(64);
-    let eng = Arc::new(DetectionEngine::new(
-        store.clone(),
-        handle,
-        etx,
-        metrics,
-        Arc::new(AtomicBool::new(false)),
-    ));
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            store.clone(),
+            handle,
+            etx,
+            metrics,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
     let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 55, 3, 3));
 
     // Warm baseline at ~12 rps without crossing any absolute detector.
@@ -1183,13 +1209,16 @@ fn relative_gate_resets_streak_on_non_breach() {
     let store = Arc::new(Store::new(16));
     let metrics = Arc::new(Metrics::new());
     let (etx, mut erx) = mpsc::channel(64);
-    let eng = Arc::new(DetectionEngine::new(
-        store.clone(),
-        handle,
-        etx,
-        metrics,
-        Arc::new(AtomicBool::new(false)),
-    ));
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            store.clone(),
+            handle,
+            etx,
+            metrics,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
     let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 55, 4, 4));
 
     for round in 0..6u64 {
@@ -1235,4 +1264,27 @@ fn relative_gate_resets_streak_on_non_breach() {
         n += 1;
     }
     assert_eq!(n, 0);
+}
+
+#[test]
+fn try_new_propagates_shm_open_failure() {
+    use std::fs;
+    let store = Arc::new(Store::new(16));
+    let metrics = Arc::new(Metrics::new());
+    let (etx, _erx) = mpsc::channel(8);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let cfg = Config::default().into_handle();
+    // Open path that cannot be a writable SHM file: an existing directory.
+    let dir = std::env::temp_dir().join(format!(
+        "ramshield-det-shm-fail-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).expect("temp dir");
+    let err = DetectionEngine::try_new_with_shm_path(store, cfg, etx, metrics, shutdown, &dir);
+    assert!(err.is_err(), "opening a directory as SHM file must fail");
+    let _ = fs::remove_dir_all(dir);
 }

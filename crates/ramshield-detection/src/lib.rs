@@ -144,7 +144,13 @@ impl Drop for FlushGuard<'_> {
 
 impl DetectionEngine {
     /// Compatibility constructor for tests and legacy callers.
-    /// Production boot uses `try_new` so SHM failures reach the boot error path.
+    ///
+    /// Prefer [`Self::try_new`]: this panics if SHM initialization fails and
+    /// must not be used on production boot paths.
+    #[deprecated(
+        since = "0.6.0",
+        note = "use DetectionEngine::try_new; new() panics on SHM init failure"
+    )]
     pub fn new(
         store: Arc<Store>,
         config: ConfigHandle,
@@ -158,12 +164,36 @@ impl DetectionEngine {
         }
     }
 
+    /// Fallible constructor used by production boot and tests.
+    ///
+    /// SHM open failures surface as `Err` so callers can fail closed without a panic.
     pub fn try_new(
         store: Arc<Store>,
         config: ConfigHandle,
         enforcement_tx: mpsc::Sender<EnforceCommand>,
         metrics: Arc<Metrics>,
         shutdown: Arc<AtomicBool>,
+    ) -> std::io::Result<Self> {
+        Self::try_new_with_shm_path(
+            store,
+            config,
+            enforcement_tx,
+            metrics,
+            shutdown,
+            &ramshield_cgnat::ShmTableManager::default_path(),
+        )
+    }
+
+    /// Like [`Self::try_new`] but opens the SHM table at `shm_path`.
+    ///
+    /// Used by tests to prove initialization failures propagate as `Err`.
+    pub fn try_new_with_shm_path(
+        store: Arc<Store>,
+        config: ConfigHandle,
+        enforcement_tx: mpsc::Sender<EnforceCommand>,
+        metrics: Arc<Metrics>,
+        shutdown: Arc<AtomicBool>,
+        shm_path: &std::path::Path,
     ) -> std::io::Result<Self> {
         let bloom_bits = config.load().detection.bloom_bits;
         // Patch A: publish capacity up front so bloom_fp_ppm has a
@@ -176,9 +206,7 @@ impl DetectionEngine {
         // ponytail: hardcoded; lift to Config.detection.batch_channel_capacity
         // when traffic profiles diverge.
         let (tx, rx) = bounded::<ConnectionEvent>(CHANNEL_CAPACITY as usize);
-        let shm_table = Arc::new(ramshield_cgnat::ShmTableManager::open_or_create(
-            &ramshield_cgnat::ShmTableManager::default_path(),
-        )?);
+        let shm_table = Arc::new(ramshield_cgnat::ShmTableManager::open_or_create(shm_path)?);
         // pre_aggs writers = batch workers (≤ cores), so 64 shards removes
         // every realistic cross-thread collision. The old derivation
         // (bloom_bits/1024) sized the shard array off an UNRELATED

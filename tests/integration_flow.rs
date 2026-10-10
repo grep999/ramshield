@@ -16,13 +16,16 @@ async fn detection_tracks_ip_through_engine_pipeline() {
     let metrics = Arc::new(ramshield_metrics::Metrics::new());
 
     let (enforcement_tx, _enforcement_rx) = tokio::sync::mpsc::channel(4096);
-    let detection = Arc::new(ramshield_detection::DetectionEngine::new(
-        store.clone(),
-        cfg,
-        enforcement_tx,
-        metrics.clone(),
-        Arc::new(AtomicBool::new(false)),
-    ));
+    let detection = Arc::new(
+        ramshield_detection::DetectionEngine::try_new(
+            store.clone(),
+            cfg,
+            enforcement_tx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
     detection.clone().spawn_workers(2);
     let _event_tx = detection.event_sender();
     let target = std::net::IpAddr::from([10, 1, 2, 3]);

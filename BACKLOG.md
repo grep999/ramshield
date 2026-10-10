@@ -54,7 +54,7 @@
 
 |---|---|---|---|
 
-| A-015 | Detection construction | Remove or deprecate the public `DetectionEngine::new` panic wrapper in favor of fallible `try_new`; update callers/tests and prove initialization failures reach controlled error handling. | OPEN |
+| A-015 | Detection construction | Public `new` is `#[deprecated]` and panics only for legacy tests; production uses `try_new` / `try_new_with_shm_path`. Callers updated; unit test proves SHM open failure returns `Err` without panic. | PASS (exact SHA pending CI) |
 
 | A-016 | Native packet ingest | Retain TPACKET_V3 range validation; add property/fuzz tests for malformed block lengths, packet offsets, descriptor chains, integer overflow, and mapped-ring edges. Exercise the Linux-only path in CI on a supported kernel where feasible. | OPEN |
 

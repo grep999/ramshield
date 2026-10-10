@@ -45,13 +45,10 @@ fn make_engine() -> (Arc<DetectionEngine>, Arc<Store>) {
     cfg.detection.subnet_window_threshold = 1;
     cfg.detection.subnet_batch_threshold = 50;
     cfg.detection.subnet_batch_min_events = 100;
-    let eng = Arc::new(DetectionEngine::new(
-        store.clone(),
-        cfg.into_handle(),
-        etx,
-        metrics,
-        shutdown,
-    ));
+    let eng = Arc::new(
+        DetectionEngine::try_new(store.clone(), cfg.into_handle(), etx, metrics, shutdown)
+            .expect("detection try_new"),
+    );
     (eng, store)
 }
 
