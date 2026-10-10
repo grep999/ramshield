@@ -1,7 +1,7 @@
 # Workspace scope decision (A-021)
 
-**Decision date:** 2026-10-10  
-**Branch:** `audit-branch`  
+**Decision date:** 2026-10-10
+**Branch:** `audit-branch`
 **Status:** **RESOLVED — nested `rs/` is not a maintained or shipped product tree.**
 
 ## Decision
