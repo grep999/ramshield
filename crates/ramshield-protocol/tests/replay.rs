@@ -95,19 +95,24 @@ fn replay_store_per_key_isolation() {
     );
 }
 
-/// GREEN: store never exceeds its configured capacity (LRU evicts oldest).
+/// GREEN: store never exceeds capacity; live markers are not evicted under pressure.
 #[test]
-fn replay_store_lru_bounded() {
+fn replay_store_capacity_rejects_without_evicting_live() {
     let cap = 8;
     let store = ReplayStore::new(cap, Duration::from_secs(60));
-    for i in 0u8..(cap as u8 * 4) {
+    for i in 0u8..cap as u8 {
         let n = format!("n{}", i);
-        store.check_and_record("k1", n.as_bytes()).unwrap();
+        assert!(
+            store.check_and_record("k1", n.as_bytes()).is_ok(),
+            "first {cap} inserts must succeed"
+        );
     }
+    // Further inserts must fail closed without dropping live markers.
     assert!(
-        store.len() <= cap,
-        "store len {} exceeded cap {}",
-        store.len(),
-        cap
+        store.check_and_record("k1", b"overflow").is_err(),
+        "saturated store must reject new nonces"
     );
+    assert_eq!(store.len(), cap);
+    // Original markers remain replay-protected.
+    assert!(store.check_and_record("k1", b"n0").is_err());
 }

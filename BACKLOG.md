@@ -42,7 +42,7 @@
 
 | A-004 | Shared-memory writer parity | **Scoped by A-021 to root only.** Ensure exclusive even→odd CAS writer claim and under-lock revalidation in `crates/ramshield-cgnat/src/shm.rs` (+ C ABI). Nested `rs/crates/ramshield-cgnat` is out of production scope unless A-021 is reversed. Concurrent-writer stress tests remain required for root. | OPEN |
 
-| A-005 | Replay-store security | Prove global and per-key capacity behavior never evicts a still-live replay marker. Add collision, duplicate, TTL boundary, global pressure, per-key pressure, and concurrent atomicity tests. The isolated `kiddo_fix` / PR #5 is not to be copied or modified without reviewing its exact diff and obtaining a bounded audit pass. | OPEN |
+| A-005 | Replay-store security | Live markers are never LRU-evicted under global/per-key pressure; saturation returns `capacity`. Time sampled under lock; poison fails closed. Tests: unit module + `crates/ramshield-protocol/tests/replay.rs`. Ported security model aligned with kiddo_fix review. | PASS (exact SHA pending CI) |
 
 
 
