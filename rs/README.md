@@ -1,3 +1,5 @@
+> **A-021:** Nested tree is **not** maintained or shipped. See [STATUS.md](STATUS.md) and [docs/WORKSPACE_SCOPE.md](../docs/WORKSPACE_SCOPE.md).
+
 # RamShield — self-hosted Linux ingress defense in Rust
 Detects and blocks abusive traffic at the kernel (XDP/eBPF) level.
 For self-hosted/sovereign infra operators who can't afford enterprise DDoS mitigation.

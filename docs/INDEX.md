@@ -56,3 +56,5 @@ Never infer kernel qualification from a userspace unit test.
 - [Defense Model](DEFENSE_MODEL.md) — autonomous packet guard, L7 boundary, upstream escalation, management-plane and mesh model.
 
 - [Security Gateway](SECURITY_GATEWAY.md) — autonomous observation, kernel defense, WAF boundary, and upstream BGP escalation.
+
+- [Workspace scope (A-021)](WORKSPACE_SCOPE.md) — root product vs nested `rs/`
