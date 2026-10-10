@@ -233,8 +233,10 @@ mod retry_tests {
             error: None,
         };
 
-        let error = require_xdp_projection(result, "block").unwrap_err();
-        assert!(matches!(error, EnforcementError::Xdp(_)));
+        assert!(matches!(
+            require_xdp_projection(result, "block"),
+            Err(EnforcementError::Xdp(_))
+        ));
     }
 
     #[test]
