@@ -8,7 +8,7 @@
 
 **Baseline master:** `821eab72e93e584cd6835d1f95171d5d380daaec`
 
-**Latest recorded CI:** [run 38079152791](https://github.com/grep999/ramshield/actions/runs/38079152791) — all CI jobs passed on exact HEAD `03f6c2f129c6fc621557859f858d9bf79205f468`, including core-only and full-feature checks/builds/tests/Clippy, formatting, C SHM ABI stress, and ThreadSanitizer. [Backlog Gate run 38079152868](https://github.com/grep999/ramshield/actions/runs/38079152868) also passed on that SHA.
+**Latest recorded CI:** [run 38079442837](https://github.com/grep999/ramshield/actions/runs/38079442837) — all CI jobs passed on exact HEAD `1751878f7f2a218be3288b33a6c0591f8a67493f`, including core-only and full-feature checks/builds/tests/Clippy, formatting, and C SHM ABI stress/ThreadSanitizer. [Backlog Gate run 38079442800](https://github.com/grep999/ramshield/actions/runs/38079442800) also passed on that SHA.
 
 **Operating rule:** one bounded fix per pass; every fix is revalidated on the exact resulting SHA. No merge, force-push, rebase, or changes to `kiddo_fix` / PR #3 / PR #5.
 
@@ -82,7 +82,7 @@
 
 | A-031 | Core feature matrix | CI and Backlog Gate separately run default/core-only and production `full` / all-feature configurations: locked all-targets check/build, workspace tests, and strict Clippy. Mesh-only and mesh-integrated configurations remain in the separate mesh feature plan. Exact-SHA CI and Backlog Gate passed on `03f6c2f129c6fc621557859f858d9bf79205f468`. | PASS (exact SHA) |
 
-| A-033 | Shared-memory ABI | C header now statically asserts 64-byte size/alignment and every `RamshieldShmRuleEntry` field offset; Rust `offset_of!` tests cover the same layout. CI compiles and runs a C pthread reader/writer stress test and runs ThreadSanitizer where supported. ThreadSanitizer passed on exact SHA `03f6c2f129c6fc621557859f858d9bf79205f468`; exact-SHA CI and Backlog Gate passed. Cross-target coverage beyond the hosted Linux target remains a residual follow-up before claiming every target is verified. | PASS (exact SHA) |
+| A-033 | Shared-memory ABI | C header statically asserts 64-byte size/alignment and every `RamshieldShmRuleEntry` field offset; Rust layout is also asserted at compile time. CI runs a C pthread reader/writer stress test and ThreadSanitizer where supported. Native Linux stress/TSAN passed on `1751878f7f2a218be3288b33a6c0591f8a67493f`. AArch64 Rust/C cross-compilation checks are now added; keep this task IN PROGRESS until those checks pass on one exact SHA. | IN PROGRESS |
 
 | A-034 | Dependency / supply chain | Run locked dependency audit, license/advisory checks, and review unsafe-code and transitive dependency changes. Record exceptions with rationale. | OPEN |
 

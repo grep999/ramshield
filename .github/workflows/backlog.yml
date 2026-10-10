@@ -193,11 +193,21 @@ jobs:
   shm_abi:
     name: A-033 SHM ABI + reader/writer stress
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-08-29
+          targets: aarch64-unknown-linux-gnu
+      - name: Install AArch64 C cross-compiler
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Verify C layout, concurrent readers/writers, and TSAN when supported
         run: RAMSHIELD_SHM_TSAN=1 scripts/verify_shm_header.sh
+      - name: Cross-check Rust SHM ABI on AArch64
+        run: cargo check -p ramshield-cgnat --target aarch64-unknown-linux-gnu --locked
+      - name: Cross-check C SHM ABI on AArch64
+        run: aarch64-linux-gnu-gcc -std=c11 -Wall -Wextra -Werror -pthread -I. -c scripts/shm_abi_stress.c -o /tmp/shm-abi-aarch64.o
 
   diff-check:
     name: Diff whitespace gate

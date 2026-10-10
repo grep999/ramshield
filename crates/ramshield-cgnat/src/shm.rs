@@ -44,6 +44,23 @@ pub struct ShmRuleEntry {
     pub _padding: [u8; 20],       // Exact 64-byte slot alignment
 }
 
+// Compile-time ABI assertions also run when this crate is cross-compiled. This
+// catches architecture-dependent atomic alignment/offset changes before a
+// target binary can be produced.
+const _: () = {
+    assert!(std::mem::size_of::<ShmRuleEntry>() == 64);
+    assert!(std::mem::align_of::<ShmRuleEntry>() == 64);
+    assert!(std::mem::offset_of!(ShmRuleEntry, seq) == 0);
+    assert!(std::mem::offset_of!(ShmRuleEntry, client_hash) == 8);
+    assert!(std::mem::offset_of!(ShmRuleEntry, expires_at_ms) == 16);
+    assert!(std::mem::offset_of!(ShmRuleEntry, challenge_seed_lo) == 24);
+    assert!(std::mem::offset_of!(ShmRuleEntry, challenge_seed_hi) == 32);
+    assert!(std::mem::offset_of!(ShmRuleEntry, max_rps) == 40);
+    assert!(std::mem::offset_of!(ShmRuleEntry, tier) == 42);
+    assert!(std::mem::offset_of!(ShmRuleEntry, flags) == 43);
+    assert!(std::mem::offset_of!(ShmRuleEntry, _padding) == 44);
+};
+
 #[cfg(test)]
 mod abi_asserts {
     use super::*;
