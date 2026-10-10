@@ -218,9 +218,7 @@ async fn main() -> Result<()> {
 }
 
 fn command_succeeded(command: &mut std::process::Command) -> bool {
-    command
-        .output()
-        .is_ok_and(|output| output.status.success())
+    command.output().is_ok_and(|output| output.status.success())
 }
 
 /// Check host readiness non-interactively. Exit 0 if all gates pass.
