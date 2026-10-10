@@ -54,13 +54,13 @@
 
 |---|---|---|---|
 
-| A-015 | Detection construction | Public `new` is `#[deprecated]` and panics only for legacy tests; production uses `try_new` / `try_new_with_shm_path`. Callers updated; unit test proves SHM open failure returns `Err` without panic. | PASS (exact SHA pending CI) |
+| A-015 | Detection construction | Public `new` remains a deprecated compatibility wrapper; production callers use `try_new` / `try_new_with_shm_path`. Unit test proves SHM open failure returns `Err` without panic. PR #6's `#[cfg(test)]` removal of the public wrapper is a downstream API break and needs an explicit breaking-release decision. | IN PROGRESS |
 
-| A-016 | Native packet ingest | TPACKET_V3 validators retained; property sweeps cover blk_len, header/packet edges, multi-block ring bounds, descriptor chain alignment/overflow, and 2k deterministic malformed mixes (no panic). Linux-only unit path exercised by `cargo test --lib tpacket`. | PASS (exact SHA pending CI) |
+| A-016 | Native packet ingest | TPACKET_V3 validators and malformed-descriptor property sweeps cover block/header/packet bounds, ring edges, chain alignment/overflow, and deterministic malformed mixes. Exact-SHA Linux test and CI evidence must be recorded before closure. | IN PROGRESS |
 
-| A-017 | XDP/SYNPROXY operational correctness | Capacity rejection, reconcile-after-map-loss (v4/v6/CIDR), partial-install failure isolation, StubXdp no kernel effects, CIDR map routing, synproxy unsupported-env / hostile iface / uninstall cleanup tests. | PASS (exact SHA pending CI) |
+| A-017 | XDP/SYNPROXY operational correctness | Tests cover capacity rejection, reconcile-after-map-loss (v4/v6/CIDR), partial-install failure isolation, StubXdp no kernel effects, CIDR map routing, and SYNPROXY unsupported-environment / hostile-interface / cleanup behavior. Exact-SHA CI evidence remains pending. | IN PROGRESS |
 
-| A-018 | WAL / checkpoint recovery | Crash/restart uses truncate-to-post-sync length as deterministic power-loss seam; asserts exact durable prefix and **absence** of unsynced tail. Disk-full after checkpoint + idempotent torn-tail repair retained. | PASS (exact SHA pending CI) |
+| A-018 | WAL / checkpoint recovery | Crash/restart tests use truncate-to-post-sync length as deterministic power-loss seam, assert exact durable prefix and absence of unsynced tail, and retain disk-full-after-checkpoint plus idempotent torn-tail repair coverage. Exact-SHA CI evidence remains pending. | IN PROGRESS |
 
 | A-019 | Dashboard / IPC auth | Session TTL expiry, cookie HttpOnly/SameSite/Secure, per-IP lockout, invalid PHC fail-closed, oversized password reject, deployment defaults (loopback, 8h TTL, lockout 50). Poisoned password-hash lock now denies login and keeps auth enabled; explicit hash replacement clears poison after writing the replacement. Regression test added. IPC: replay reject, malformed frames, parse_ipc_keys fail-closed. | IN PROGRESS |
 
