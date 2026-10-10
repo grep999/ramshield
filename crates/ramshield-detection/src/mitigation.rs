@@ -91,24 +91,25 @@ impl DetectionEngine {
             return false;
         }
 
-        // If saturated, first discard entries older than one hour. If the
-        // table is still full, evict the oldest admission to make room. This
-        // preserves a strict bound while allowing fresh mitigations through;
-        // eviction may permit a duplicate, but never suppresses all new keys.
-        if !self.pending_mitigations.contains_key(&key)
-            && self.pending_mitigations.len() >= PENDING_MITIGATION_CAP
-        {
-            self.pending_mitigations
-                .retain(|_, ts| now.saturating_sub(*ts) < 3_600_000_000_000);
-            if self.pending_mitigations.len() >= PENDING_MITIGATION_CAP {
-                let oldest = self
+        // Strictly bound memory without a full-map sweep on every new key.
+        // At saturation, evict one existing admission before inserting. This
+        // is O(1) with respect to map cardinality (DashMap's iterator starts at
+        // a shard), unlike retain()+min_by_key(), which makes each flood key
+        // trigger one or two O(capacity) scans. Eviction can allow an earlier
+        // duplicate mitigation, but enforcement remains authoritative and
+        // queue admission still bounds delivery.
+        if !self.pending_mitigations.contains_key(&key) {
+            while self.pending_mitigations.len() >= PENDING_MITIGATION_CAP {
+                let victim = self
                     .pending_mitigations
                     .iter()
-                    .map(|entry| (*entry.key(), *entry.value()))
-                    .min_by_key(|(_, timestamp)| *timestamp)
-                    .map(|(oldest_key, _)| oldest_key);
-                if let Some(oldest_key) = oldest {
-                    self.pending_mitigations.remove(&oldest_key);
+                    .next()
+                    .map(|entry| *entry.key());
+                match victim {
+                    Some(victim) => {
+                        self.pending_mitigations.remove(&victim);
+                    }
+                    None => break,
                 }
             }
         }
