@@ -5,11 +5,11 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-ramshield-config = { path = "../ramshield-config" }
-ramshield-storage = { path = "../ramshield-storage" }
-ramshield-types = { path = "../ramshield-types" }
-ramshield-metrics = { path = "../ramshield-metrics" }
-ramshield-cgnat = { path = "../ramshield-cgnat" }
+ramshield-config = { path = "../ramshield-config", version = "0.1.0" }
+ramshield-storage = { path = "../ramshield-storage", version = "0.1.0" }
+ramshield-types = { path = "../ramshield-types", version = "0.1.0" }
+ramshield-metrics = { path = "../ramshield-metrics", version = "0.1.0" }
+ramshield-cgnat = { path = "../ramshield-cgnat", version = "0.1.0" }
 ahash = "0.8"
 dashmap = "6"
 uuid = { version = "1", features = ["v4"] }

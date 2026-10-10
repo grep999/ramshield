@@ -5,7 +5,7 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-ramshield-types = { path = "../ramshield-types" }
+ramshield-types = { path = "../ramshield-types", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 arc-swap = "1"

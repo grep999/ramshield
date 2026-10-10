@@ -5,10 +5,10 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-ramshield-types = { path = "../ramshield-types" }
-ramshield-storage = { path = "../ramshield-storage" }
-ramshield-metrics = { path = "../ramshield-metrics" }
-ramshield-config = { path = "../ramshield-config" }
+ramshield-types = { path = "../ramshield-types", version = "0.1.0" }
+ramshield-storage = { path = "../ramshield-storage", version = "0.1.0" }
+ramshield-metrics = { path = "../ramshield-metrics", version = "0.1.0" }
+ramshield-config = { path = "../ramshield-config", version = "0.1.0" }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
