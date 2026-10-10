@@ -219,10 +219,10 @@ impl AuthState {
             return;
         }
 
-        if self.failures.len() >= MAX_TRACKED_FAILURE_IPS {
-            if let Some(victim) = self.failures.iter().next().map(|entry| *entry.key()) {
-                self.failures.remove(&victim);
-            }
+        if self.failures.len() >= MAX_TRACKED_FAILURE_IPS
+            && let Some(victim) = self.failures.iter().next().map(|entry| *entry.key())
+        {
+            self.failures.remove(&victim);
         }
         self.failures.insert(
             ip,
