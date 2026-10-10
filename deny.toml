@@ -1,7 +1,7 @@
 [advisories]
-vulnerability = "deny"
+# cargo-deny 0.20 uses the v2 policy: all advisories are denied by default.
+version = 2
 yanked = "deny"
-notice = "warn"
 ignore = []
 [licenses]
 confidence-threshold = 0.93
