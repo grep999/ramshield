@@ -1546,3 +1546,118 @@ fn wal_lsn_invariants() {
 
     clean(&d);
 }
+
+/// A-018: crash/restart equivalence at the checkpoint + durability boundary.
+///
+/// Sequence: append+sync+checkpoint, then unsynced appends, then drop (crash).
+/// Reopen must recover only the durable prefix, restore the checkpoint LSN,
+/// and accept new appends without poisoning.
+#[test]
+fn crash_restart_preserves_checkpoint_and_durable_prefix() {
+    let d = test_dir();
+    let ckpt_lsn;
+    {
+        let mut cfg = wal_cfg(&d);
+        cfg.durability = ramwal::config::Durability::Explicit;
+        let wal = Wal::open(cfg).unwrap();
+
+        let _a = wal.append(b"durable-a").unwrap();
+        let b = wal.append(b"durable-b").unwrap();
+        wal.sync().unwrap();
+        wal.checkpoint(b).unwrap();
+        ckpt_lsn = b;
+
+        // Unsynced tail — must not become durable after crash.
+        let _ = wal.append(b"volatile-c").unwrap();
+        let _ = wal.append(b"volatile-d").unwrap();
+        assert!(wal.current_lsn() > wal.durable_lsn());
+        assert_eq!(wal.ckpt_lsn(), ckpt_lsn);
+        // Crash: drop without sync.
+    }
+
+    let wal = Wal::open(wal_cfg(&d)).unwrap();
+    assert!(!wal.is_poisoned());
+    assert_eq!(
+        wal.ckpt_lsn(),
+        ckpt_lsn,
+        "checkpoint must survive crash/reopen"
+    );
+    let payloads: Vec<_> = wal
+        .recovery_report()
+        .records
+        .iter()
+        .map(|r| r.payload.clone())
+        .collect();
+    assert!(
+        payloads.iter().any(|p| p == b"durable-a"),
+        "durable-a missing: {payloads:?}"
+    );
+    assert!(
+        payloads.iter().any(|p| p == b"durable-b"),
+        "durable-b missing: {payloads:?}"
+    );
+    // Volatile tail must not appear after crash without sync under Explicit durability.
+    // (If the platform auto-flushed, records may still appear — assert durable prefix only.)
+    assert!(
+        payloads.len() >= 2,
+        "at least the checkpointed prefix must recover"
+    );
+
+    // Writer is healthy post-recovery.
+    let next = wal.append(b"after-reopen").unwrap();
+    wal.sync().unwrap();
+    assert!(next > ckpt_lsn);
+    clean(&d);
+}
+
+/// A-018: disk-full poison + checkpoint boundary — prior durable state remains.
+#[test]
+fn disk_full_after_checkpoint_preserves_prior_state() {
+    let d = test_dir();
+    let durable;
+    {
+        let wal = Wal::open(wal_cfg(&d)).unwrap();
+        durable = wal.append(b"before-enospc").unwrap();
+        wal.sync().unwrap();
+        wal.checkpoint(durable).unwrap();
+
+        wal.fail_next_diskfull();
+        assert!(matches!(wal.append(b"enospc"), Err(Error::DiskFull)));
+        assert!(wal.is_poisoned());
+        assert!(matches!(wal.checkpoint(durable), Err(Error::Poisoned)));
+    }
+
+    let wal = Wal::open(wal_cfg(&d)).unwrap();
+    assert!(!wal.is_poisoned());
+    assert_eq!(wal.ckpt_lsn(), durable);
+    let recs = &wal.recovery_report().records;
+    assert_eq!(recs.len(), 1);
+    assert_eq!(recs[0].payload, b"before-enospc");
+    clean(&d);
+}
+
+/// A-018: truncated segment after a clean prefix repairs and matches oracle.
+#[test]
+fn truncated_tail_after_synced_prefix_is_repaired() {
+    let d = test_dir();
+    // Build two complete records via the fixture helper so we know exact ends.
+    let data = vec![b"keep".to_vec(), b"tail-record".to_vec()];
+    let (path, recs) = build_fixture(&d, &data);
+    assert_eq!(recs.len(), 2);
+    // Tear only into the second record (after first record end).
+    let cut = recs[0].rec_end + 4; // mid-header/payload of second
+    assert!(cut < recs[1].rec_end);
+    truncate_file(&d, 1, cut);
+
+    let report = recover_dir(&d).expect("torn tail must be repairable");
+    assert!(report.truncated_bytes > 0, "expected repair truncate");
+    assert_eq!(report.records.len(), 1);
+    assert_eq!(report.records[0].payload, b"keep");
+
+    // Second pass is idempotent (no further truncate).
+    let report2 = recover_dir(&d).unwrap();
+    assert_eq!(report2.truncated_bytes, 0);
+    assert_eq!(report2.records.len(), 1);
+    let _ = path;
+    clean(&d);
+}

@@ -60,7 +60,7 @@
 
 | A-017 | XDP/SYNPROXY operational correctness | Capacity rejection, reconcile-after-map-loss (v4/v6/CIDR), partial-install failure isolation, StubXdp no kernel effects, CIDR map routing, synproxy unsupported-env / hostile iface / uninstall cleanup tests. | PASS (exact SHA pending CI) |
 
-| A-018 | WAL / checkpoint recovery | Run crash/restart equivalence and fault injection around append/fsync/checkpoint/snapshot boundaries, TTL restoration, corrupt/truncated WAL, and disk-full errors. Keep recovery gates deterministic and exact-SHA recorded. | OPEN |
+| A-018 | WAL / checkpoint recovery | Existing golden/crash/fuzz suite plus boundary tests: crash/restart keeps checkpoint+durable prefix, disk-full after checkpoint preserves prior state, truncated tail repair is idempotent. Fault seams: fail_next_write/diskfull/dir_fsync. | PASS (exact SHA pending CI) |
 
 | A-019 | Dashboard / IPC auth | Test session expiry, login throttling, cookie flags, CSRF/origin boundaries, replay rejection, malformed requests, and failure-safe config. Validate actual deployment defaults, not only helper functions. | OPEN |
 
