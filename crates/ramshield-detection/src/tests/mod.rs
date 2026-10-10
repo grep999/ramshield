@@ -115,14 +115,8 @@ fn local_merge_enforces_shared_pre_aggregation_capacity() {
     let store = Arc::new(Store::new(16));
     let metrics = Arc::new(Metrics::new());
     let (etx, _erx) = mpsc::channel(64);
-    let eng = DetectionEngine::try_new(
-        store,
-        cfg,
-        etx,
-        metrics,
-        Arc::new(AtomicBool::new(false)),
-    )
-    .expect("detection try_new");
+    let eng = DetectionEngine::try_new(store, cfg, etx, metrics, Arc::new(AtomicBool::new(false)))
+        .expect("detection try_new");
 
     let mut local: HashMap<IpAddr, IpAgg> = HashMap::new();
     for octet in 1..=5 {
@@ -144,7 +138,11 @@ fn local_merge_enforces_shared_pre_aggregation_capacity() {
         "shared map exceeded configured capacity: {}",
         eng.pre_aggs.len()
     );
-    let pending: u64 = eng.pre_aggs.iter().map(|entry| entry.value().count as u64).sum();
+    let pending: u64 = eng
+        .pre_aggs
+        .iter()
+        .map(|entry| entry.value().count as u64)
+        .sum();
     let ingested = eng.metrics.events_ingested.load(Ordering::Relaxed);
     assert_eq!(
         ingested + pending,
