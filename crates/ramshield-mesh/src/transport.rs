@@ -102,13 +102,19 @@ mod frame_tests {
     use super::{push_frame_bytes, read_bounded_frame_with_timeout, MAX_FRAME};
     use std::time::Duration;
 
-    #[tokio::test]
-    async fn incomplete_peer_frame_times_out() {
-        let (_writer, mut reader) = tokio::io::duplex(8);
-        let error = read_bounded_frame_with_timeout(&mut reader, Duration::from_millis(10))
-            .await
-            .unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    #[test]
+    fn incomplete_peer_frame_times_out() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async {
+            let (_writer, mut reader) = tokio::io::duplex(8);
+            let error = read_bounded_frame_with_timeout(&mut reader, Duration::from_millis(10))
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        });
     }
 
     #[test]
