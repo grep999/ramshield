@@ -93,9 +93,9 @@ impl DetectionEngine {
 
         // Strictly bound memory without a full-map sweep on every new key.
         // At saturation, evict one existing admission before inserting. This
-        // is O(1) with respect to map cardinality (DashMap's iterator starts at
-        // a shard), unlike retain()+min_by_key(), which makes each flood key
-        // trigger one or two O(capacity) scans. Eviction can allow an earlier
+        // uses a shard iterator and avoids deliberate full-map scans,
+        // unlike retain()+min_by_key(), which makes each flood key trigger one
+        // or two O(capacity) scans. Eviction can allow an earlier
         // duplicate mitigation, but enforcement remains authoritative and
         // queue admission still bounds delivery.
         if !self.pending_mitigations.contains_key(&key) {
