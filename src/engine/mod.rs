@@ -111,6 +111,7 @@ impl Engine {
                     Ok(rt) => rt,
                     Err(e) => {
                         tracing::error!("engine rt: {}", e);
+                        self.fail_startup(e);
                         return;
                     }
                 };
@@ -125,16 +126,25 @@ impl Engine {
                             self.pipeline_failed.store(true, Ordering::Release);
                         }
                     }
-                    // Send startup result so main can await readiness/failure.
-                    // oneshot::send is sync (no future to await); take() makes it exactly-once.
-                    let mut tx_guard = self.startup_tx.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some(tx) = tx_guard.take() {
-                        // oneshot::send is sync — stores the value immediately.
-                        // Receiver::await picks it up in wait_startup.
-                        tx.send(result).ok();
-                    }
+                    self.signal_startup(result);
                 });
             })
+    }
+
+    /// Deliver startup completion exactly once to the caller awaiting startup.
+    /// A dropped receiver is harmless during shutdown.
+    fn signal_startup(&self, result: std::io::Result<()>) {
+        let mut tx_guard = self.startup_tx.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(tx) = tx_guard.take() {
+            let _ = tx.send(result);
+        }
+    }
+
+    /// Record a startup failure and make it observable to health checks and
+    /// the caller awaiting startup.
+    fn fail_startup(&self, error: std::io::Error) {
+        self.pipeline_failed.store(true, Ordering::Release);
+        self.signal_startup(Err(error));
     }
 
     pub fn shutdown(&self) {
