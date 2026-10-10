@@ -191,4 +191,3 @@ Adjust package/feature commands only after confirming the actual Cargo feature g
 
 
 Every audit/fixer/reviewer handoff includes: base SHA, exact head SHA, one selected action, changed paths, regression test, commands actually run with results, workflow/job URLs and status, unresolved risks, and the next responsible stage. No merge until the exact SHA has passing required gates and independent approval.
-

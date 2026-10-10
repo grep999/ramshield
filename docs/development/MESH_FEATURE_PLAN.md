@@ -181,4 +181,3 @@ Mesh can be declared production-ready only when all of the following hold on the
 
 
 Use bounded changes with regression tests. Record the base SHA, resulting SHA, changed paths, commands and exit statuses, workflow links, unresolved risks, and next step for each pass. Work only on `audit-branch`; do not merge, force-push, rebase, or modify `kiddo_fix`, PR #3, or PR #5 as part of this work.
-
