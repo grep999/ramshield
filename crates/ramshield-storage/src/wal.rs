@@ -393,6 +393,92 @@ mod tests {
     }
 
     #[test]
+    fn wal_recovery_keeps_exact_synced_prefix_after_power_loss() {
+        let dir = tempfile::tempdir().unwrap();
+        let wal = Wal::open(
+            dir.path().to_str().unwrap(),
+            false,
+            Durability::Flush,
+            64 * 1024 * 1024,
+            0,
+        )
+        .unwrap();
+
+        for i in 1..=2u64 {
+            wal.append(&WalEntry::BlockIp {
+                ip: format!("10.0.0.{i}"),
+                reason: "durable-prefix".into(),
+                ttl_secs: None,
+                ts_ns: i,
+            })
+            .unwrap();
+        }
+        wal.sync().unwrap();
+
+        let segment = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("segment-") && name.ends_with(".rwl"))
+            })
+            .expect("WAL active segment must exist");
+        let synced_len = std::fs::metadata(&segment).unwrap().len();
+
+        // This append is deliberately not synced. Truncating the segment to
+        // the previously synced byte length models loss of the volatile tail
+        // after power loss, independent of the host page cache.
+        wal.append(&WalEntry::BlockIp {
+            ip: "10.0.0.3".into(),
+            reason: "unsynced-tail".into(),
+            ttl_secs: None,
+            ts_ns: 3,
+        })
+        .unwrap();
+        assert!(
+            std::fs::metadata(&segment).unwrap().len() > synced_len,
+            "unsynced append should extend the segment"
+        );
+        drop(wal);
+
+        let segment_file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&segment)
+            .unwrap();
+        segment_file.set_len(synced_len).unwrap();
+        segment_file.sync_all().unwrap();
+
+        let recovered = Wal::open(
+            dir.path().to_str().unwrap(),
+            false,
+            Durability::Flush,
+            64 * 1024 * 1024,
+            0,
+        )
+        .unwrap();
+        let entries = recovered.replay_from(0).unwrap();
+        let blocks: Vec<_> = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                WalEntry::BlockIp { ip, reason, .. } => Some((ip.as_str(), reason.as_str())),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            blocks,
+            vec![
+                ("10.0.0.1", "durable-prefix"),
+                ("10.0.0.2", "durable-prefix"),
+            ],
+            "recovery must retain the synced prefix and exclude the unsynced tail"
+        );
+        drop(recovered);
+    }
+
+    #[test]
     fn wal_replay_from_min_lsn_sees_records_appended_after_open() {
         let dir = format!(
             "/tmp/rs_test_rfl_{}",
