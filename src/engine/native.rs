@@ -273,38 +273,67 @@ fn run_socket(
         std::sync::atomic::fence(Ordering::Acquire);
         let num = unsafe { (*block_ptr).hdr.num_pkts };
         let first = unsafe { (*block_ptr).hdr.offset_to_first_pkt as usize };
-        // B02: Validate first packet offset against blk_len and block boundaries.
+        // Validate kernel-provided lengths before using packet offsets.
         let blk_len = unsafe { (*block_ptr).hdr.blk_len } as usize;
-        if first >= blk_len || first + std::mem::size_of::<Tpacket3Hdr>() > blk_len {
-            // Corrupted descriptor; skip this block.
+        if !valid_tpacket_block_len(blk_len, block_size) {
+            warn!(worker, block_idx, blk_len, block_size, "rejecting invalid TPACKET_V3 block length");
             std::sync::atomic::fence(Ordering::Release);
             unsafe { std::ptr::write_volatile(std::ptr::addr_of_mut!((*block_ptr).hdr.block_status), TP_STATUS_KERNEL); }
             block_idx = (block_idx + 1) % block_nr;
             continue;
         }
+        let num = unsafe { (*block_ptr).hdr.num_pkts };
+        let first = unsafe { (*block_ptr).hdr.offset_to_first_pkt as usize };
         let mut off = first;
-        for _ in 0..num {
-            if off + std::mem::size_of::<Tpacket3Hdr>() > blk_len { break; }
-            let hdr = unsafe { (map as *mut u8).add(block_idx * block_size + off) as *const Tpacket3Hdr };
-            // B02: Validate header fields against blk_len before any use.
+        let mut malformed = false;
+        for packet_idx in 0..num {
+            let header_abs = match checked_tpacket_header_offset(
+                block_idx, block_size, ring_len, blk_len, off,
+            ) {
+                Some(value) => value,
+                None => {
+                    warn!(worker, block_idx, packet_idx, off, blk_len, "rejecting invalid TPACKET_V3 packet-header offset");
+                    malformed = true;
+                    break;
+                }
+            };
+            // SAFETY: checked_tpacket_header_offset proves the complete header
+            // lies in both the declared block and mapped ring before this read.
+            let hdr = unsafe { (map as *const u8).add(header_abs) as *const Tpacket3Hdr };
             let snaplen = unsafe { (*hdr).tp_snaplen as usize };
             let mac = unsafe { (*hdr).tp_mac as usize };
-            let packet_off = block_idx * block_size + off + mac;
-            // B02: absolute ring bound guards overflow in packet_off itself;
-            // the block bound alone can pass if off+mac wrapped. saturating_add
-            // keeps the check panic-free on overflow instead of wrapping.
-            let packet_end = packet_off.saturating_add(snaplen);
-            if mac <= frame_size
-                && snaplen <= frame_size
-                && packet_end <= (block_idx + 1) * block_size
-                && packet_end <= ring_len
-            {
-                let packet = unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
-                process_packet(packet, max_eps, trusted_overlay_cidrs, tx, budget, epoch, epoch_base);
-            }
+            let (header_abs, packet_off) = match checked_tpacket_packet_offsets(
+                block_idx, block_size, ring_len, blk_len, off, mac, snaplen,
+            ) {
+                Some(value) if mac <= frame_size && snaplen <= frame_size => value,
+                _ => {
+                    warn!(worker, block_idx, packet_idx, off, mac, snaplen, blk_len, "rejecting invalid TPACKET_V3 packet range");
+                    malformed = true;
+                    break;
+                }
+            };
+            // Revalidate the header as part of the combined range check above;
+            // keep the binding explicit to make the pre-dereference invariant clear.
+            let _validated_header_abs = header_abs;
+            // SAFETY: checked_tpacket_packet_offsets proves [packet_off,
+            // packet_off + snaplen) lies in the current block and mapped ring.
+            let packet = unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
+            process_packet(packet, max_eps, trusted_overlay_cidrs, tx, budget, epoch, epoch_base);
+
             let next = unsafe { (*hdr).tp_next_offset as usize };
-            if next == 0 { break; }
-            off = off.saturating_add(align16(next));
+            match checked_next_tpacket_offset(off, next, packet_idx + 1 == num, blk_len, block_size) {
+                Ok(Some(next_off)) => off = next_off,
+                Ok(None) => {}
+                Err(reason) => {
+                    warn!(worker, block_idx, packet_idx, off, next, %reason, "rejecting invalid TPACKET_V3 descriptor chain");
+                    malformed = true;
+                    break;
+                }
+            }
+        }
+        if malformed {
+            // The malformed descriptor is observable in logs and the block is
+            // recycled so a corrupt block cannot stall the capture ring.
         }
         std::sync::atomic::fence(Ordering::Release);
         unsafe { std::ptr::write_volatile(std::ptr::addr_of_mut!((*block_ptr).hdr.block_status), TP_STATUS_KERNEL); }
@@ -312,6 +341,89 @@ fn run_socket(
     }
     unsafe { libc::munmap(map, ring_len) };
     Ok(())
+}
+
+
+#[cfg(target_os = "linux")]
+fn valid_tpacket_block_len(blk_len: usize, block_size: usize) -> bool {
+    blk_len >= std::mem::size_of::<TpacketBlockDesc>() && blk_len <= block_size
+}
+
+#[cfg(target_os = "linux")]
+fn checked_range_end(start: usize, len: usize, limit: usize) -> Option<usize> {
+    let end = start.checked_add(len)?;
+    (end <= limit).then_some(end)
+}
+
+#[cfg(target_os = "linux")]
+fn checked_tpacket_header_offset(
+    block_idx: usize,
+    block_size: usize,
+    ring_len: usize,
+    blk_len: usize,
+    off: usize,
+) -> Option<usize> {
+    let header_size = std::mem::size_of::<Tpacket3Hdr>();
+    if !valid_tpacket_block_len(blk_len, block_size)
+        || off < std::mem::size_of::<TpacketBlockDesc>()
+    {
+        return None;
+    }
+    checked_range_end(off, header_size, blk_len)?;
+    checked_range_end(off, header_size, block_size)?;
+    let block_base = block_idx.checked_mul(block_size)?;
+    let block_end = checked_range_end(block_base, block_size, ring_len)?;
+    let header_abs = block_base.checked_add(off)?;
+    let header_end = checked_range_end(header_abs, header_size, ring_len)?;
+    (header_abs < block_end && header_end <= block_end).then_some(header_abs)
+}
+
+#[cfg(target_os = "linux")]
+fn checked_tpacket_packet_offsets(
+    block_idx: usize,
+    block_size: usize,
+    ring_len: usize,
+    blk_len: usize,
+    off: usize,
+    mac: usize,
+    snaplen: usize,
+) -> Option<(usize, usize)> {
+    let header_abs = checked_tpacket_header_offset(block_idx, block_size, ring_len, blk_len, off)?;
+    let packet_rel = off.checked_add(mac)?;
+    let packet_rel_end = checked_range_end(packet_rel, snaplen, blk_len)?;
+    checked_range_end(packet_rel, snaplen, block_size)?;
+    let block_base = block_idx.checked_mul(block_size)?;
+    let block_end = checked_range_end(block_base, block_size, ring_len)?;
+    let packet_abs = block_base.checked_add(packet_rel)?;
+    let packet_abs_end = checked_range_end(packet_abs, snaplen, ring_len)?;
+    (packet_abs >= block_base && packet_abs_end <= block_end && packet_rel_end <= blk_len)
+        .then_some((header_abs, packet_abs))
+}
+
+#[cfg(target_os = "linux")]
+fn checked_next_tpacket_offset(
+    off: usize,
+    next: usize,
+    is_last: bool,
+    blk_len: usize,
+    block_size: usize,
+) -> Result<Option<usize>, &'static str> {
+    if next == 0 {
+        return if is_last { Ok(None) } else { Err("zero tp_next_offset before final packet") };
+    }
+    let aligned = next
+        .checked_add(TPACKET_ALIGNMENT - 1)
+        .ok_or("tp_next_offset alignment overflow")?
+        & !(TPACKET_ALIGNMENT - 1);
+    if aligned < std::mem::size_of::<Tpacket3Hdr>() {
+        return Err("tp_next_offset does not advance past the current header");
+    }
+    let next_off = off.checked_add(aligned).ok_or("tp_next_offset addition overflow")?;
+    checked_range_end(next_off, std::mem::size_of::<Tpacket3Hdr>(), blk_len)
+        .ok_or("next packet header exceeds declared block")?;
+    checked_range_end(next_off, std::mem::size_of::<Tpacket3Hdr>(), block_size)
+        .ok_or("next packet header exceeds block size")?;
+    Ok(Some(next_off))
 }
 
 #[cfg(target_os = "linux")]
@@ -531,10 +643,63 @@ fn network_contains(network: &IpNetwork, ip: std::net::IpAddr) -> bool {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tpacket_tests {
+    use super::*;
+
     #[test]
-    fn tpacket_constants_are_sane() { #[cfg(target_os="linux")] { assert_eq!(super::TPACKET_V3, 2); assert_eq!(super::PACKET_RX_RING, 5); } }
+    fn tpacket_constants_are_sane() {
+        assert_eq!(TPACKET_V3, 2);
+        assert_eq!(PACKET_RX_RING, 5);
+    }
+
+    #[test]
+    fn rejects_block_length_outside_actual_block() {
+        let desc = std::mem::size_of::<TpacketBlockDesc>();
+        assert!(!valid_tpacket_block_len(desc - 1, 128));
+        assert!(!valid_tpacket_block_len(129, 128));
+        assert!(valid_tpacket_block_len(128, 128));
+    }
+
+    #[test]
+    fn rejects_header_at_or_beyond_block_end() {
+        let desc = std::mem::size_of::<TpacketBlockDesc>();
+        let hdr = std::mem::size_of::<Tpacket3Hdr>();
+        assert!(checked_tpacket_header_offset(0, 128, 128, 128, 128).is_none());
+        assert!(checked_tpacket_header_offset(0, 128, 128, 128, 128 - hdr + 1).is_none());
+        assert!(checked_tpacket_header_offset(0, 128, 128, 128, desc).is_some());
+    }
+
+    #[test]
+    fn checked_range_rejects_offset_overflow() {
+        assert!(checked_range_end(usize::MAX - 1, 8, usize::MAX).is_none());
+        assert!(checked_next_tpacket_offset(usize::MAX - 8, 32, false, usize::MAX, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn rejects_packet_range_past_block_and_mapped_ring() {
+        // Header [48, 96) is valid, but packet [128, 129) crosses the block.
+        assert!(checked_tpacket_packet_offsets(0, 128, 128, 128, 48, 80, 1).is_none());
+        // On the final block, packet [255, 257) crosses both block and mapping.
+        assert!(checked_tpacket_packet_offsets(1, 128, 256, 128, 48, 79, 2).is_none());
+    }
+
+    #[test]
+    fn accepts_packet_ending_at_last_legal_byte() {
+        // Header [48, 96), packet [127, 128): the final byte is in bounds.
+        assert_eq!(
+            checked_tpacket_packet_offsets(0, 128, 128, 128, 48, 79, 1),
+            Some((48, 127))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_descriptor_chain_progress() {
+        assert!(checked_next_tpacket_offset(48, 0, false, 128, 128).is_err());
+        assert!(checked_next_tpacket_offset(48, 1, false, 128, 128).is_err());
+        assert_eq!(checked_next_tpacket_offset(48, 0, true, 128, 128), Ok(None));
+        assert_eq!(checked_next_tpacket_offset(48, 48, false, 128, 128), Ok(Some(96)));
+    }
 }
 
 
