@@ -1556,6 +1556,7 @@ fn wal_lsn_invariants() {
 fn crash_restart_preserves_checkpoint_and_durable_prefix() {
     let d = test_dir();
     let ckpt_lsn;
+    let durable_file_len;
     {
         let mut cfg = wal_cfg(&d);
         cfg.durability = ramwal::config::Durability::Explicit;
@@ -1567,13 +1568,29 @@ fn crash_restart_preserves_checkpoint_and_durable_prefix() {
         wal.checkpoint(b).unwrap();
         ckpt_lsn = b;
 
+        // Byte length of the segment after the durable barrier. A real power-loss
+        // after this point can lose any later buffered appends; we inject that
+        // by truncating back to this length after the process "crashes".
+        durable_file_len = std::fs::metadata(seg_path(&d, 1))
+            .expect("segment after sync")
+            .len();
+
         // Unsynced tail — must not become durable after crash.
         let _ = wal.append(b"volatile-c").unwrap();
         let _ = wal.append(b"volatile-d").unwrap();
         assert!(wal.current_lsn() > wal.durable_lsn());
         assert_eq!(wal.ckpt_lsn(), ckpt_lsn);
-        // Crash: drop without sync.
+        // Crash: drop without sync (OS may still flush buffers on close).
     }
+
+    // Deterministic crash boundary: discard any bytes past the last sync.
+    // This models power loss of the unsynced tail, independent of OS buffering.
+    let on_disk = std::fs::metadata(seg_path(&d, 1)).map(|m| m.len()).unwrap_or(0);
+    assert!(
+        on_disk >= durable_file_len,
+        "segment must at least contain the durable prefix"
+    );
+    truncate_file(&d, 1, durable_file_len);
 
     let wal = Wal::open(wal_cfg(&d)).unwrap();
     assert!(!wal.is_poisoned());
@@ -1588,19 +1605,14 @@ fn crash_restart_preserves_checkpoint_and_durable_prefix() {
         .iter()
         .map(|r| r.payload.clone())
         .collect();
-    assert!(
-        payloads.iter().any(|p| p == b"durable-a"),
-        "durable-a missing: {payloads:?}"
+    assert_eq!(
+        payloads,
+        vec![b"durable-a".to_vec(), b"durable-b".to_vec()],
+        "recovery must be exactly the synced prefix; got {payloads:?}"
     );
     assert!(
-        payloads.iter().any(|p| p == b"durable-b"),
-        "durable-b missing: {payloads:?}"
-    );
-    // Volatile tail must not appear after crash without sync under Explicit durability.
-    // (If the platform auto-flushed, records may still appear — assert durable prefix only.)
-    assert!(
-        payloads.len() >= 2,
-        "at least the checkpointed prefix must recover"
+        !payloads.iter().any(|p| p == b"volatile-c" || p == b"volatile-d"),
+        "unsynced tail must not survive the crash boundary: {payloads:?}"
     );
 
     // Writer is healthy post-recovery.
