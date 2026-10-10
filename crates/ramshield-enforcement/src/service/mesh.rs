@@ -17,17 +17,45 @@ impl EnforcementService {
         for message in messages {
             match message {
                 MeshMessage::Block(delta) => {
-                    let _ = self.apply_mesh_block(delta, now_ms).await;
+                    if let Err(error) = self.apply_mesh_block(delta.clone(), now_ms).await {
+                        tracing::warn!(
+                            peer_node_id = delta.dot.node_id,
+                            ip = %delta.ip,
+                            error = %error,
+                            "mesh block received but local enforcement application failed; anti-entropy must retry"
+                        );
+                    }
                 }
                 MeshMessage::Unblock(delta) => {
-                    let _ = self.apply_mesh_unblock(delta, now_ms).await;
+                    if let Err(error) = self.apply_mesh_unblock(delta.clone(), now_ms).await {
+                        tracing::warn!(
+                            peer_node_id = delta.dot.node_id,
+                            ip = %delta.ip,
+                            error = %error,
+                            "mesh unblock received but local enforcement application failed; anti-entropy must retry"
+                        );
+                    }
                 }
                 MeshMessage::Sync { blocks, unblocks } => {
                     for delta in blocks {
-                        let _ = self.apply_mesh_block(delta, now_ms).await;
+                        if let Err(error) = self.apply_mesh_block(delta.clone(), now_ms).await {
+                            tracing::warn!(
+                                peer_node_id = delta.dot.node_id,
+                                ip = %delta.ip,
+                                error = %error,
+                                "mesh sync block received but local enforcement application failed; anti-entropy must retry"
+                            );
+                        }
                     }
                     for delta in unblocks {
-                        let _ = self.apply_mesh_unblock(delta, now_ms).await;
+                        if let Err(error) = self.apply_mesh_unblock(delta.clone(), now_ms).await {
+                            tracing::warn!(
+                                peer_node_id = delta.dot.node_id,
+                                ip = %delta.ip,
+                                error = %error,
+                                "mesh sync unblock received but local enforcement application failed; anti-entropy must retry"
+                            );
+                        }
                     }
                 }
             }
