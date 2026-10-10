@@ -18,6 +18,12 @@ fn decode_hmac_key(hex_key: &str) -> Result<Vec<u8>> {
     Ok(key)
 }
 
+/// IPC responses are a JSON protocol contract. Invalid JSON is a failed command,
+/// not a successful string response that can hide a server/protocol failure.
+fn parse_response_value(response: &str) -> Result<serde_json::Value> {
+    serde_json::from_str(response).context("IPC response is not valid JSON")
+}
+
 /// Read exactly one newline-terminated IPC response with a hard size limit.
 /// A timeout is configured on the socket by the caller, so a peer cannot hold
 /// the CLI indefinitely while sending an incomplete frame.
@@ -167,8 +173,7 @@ fn main() -> Result<()> {
     writeln!(stream, "{}", json)?;
 
     let resp = read_response_line(&mut BufReader::new(&stream))?;
-    let v: serde_json::Value =
-        serde_json::from_str(&resp).unwrap_or(serde_json::Value::String(resp.trim().into()));
+    let v = parse_response_value(&resp)?;
     if compact {
         println!("{}", serde_json::to_string(&v)?);
     } else {
@@ -181,6 +186,18 @@ fn main() -> Result<()> {
 mod tests {
     use super::{MAX_IPC_RESPONSE_BYTES, read_response_line};
     use std::io::Cursor;
+
+    #[test]
+    fn response_parser_accepts_valid_json() {
+        let value = super::parse_response_value("{\"ok\":true}\n").unwrap();
+        assert_eq!(value["ok"], true);
+    }
+
+    #[test]
+    fn response_parser_rejects_invalid_json() {
+        let err = super::parse_response_value("not-json\n").unwrap_err();
+        assert!(err.to_string().contains("IPC response is not valid JSON"));
+    }
 
     #[test]
     fn hmac_key_matches_server_minimum_length() {
