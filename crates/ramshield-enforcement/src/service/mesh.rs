@@ -103,7 +103,7 @@ impl EnforcementService {
         &mut self,
         delta: ramshield_mesh::aworset::ClusterBlockDelta,
         now_ms: u64,
-    ) -> Result<(), EnforcementError> {
+    ) -> Result<MeshApplyOutcome, EnforcementError> {
         if delta.expires_at_ms <= now_ms {
             return Ok(MeshApplyOutcome::Ignored);
         }
@@ -127,7 +127,7 @@ impl EnforcementService {
             remaining_ms.saturating_add(999) / 1000
         };
         if delta.expires_at_ms != u64::MAX && ttl == 0 {
-            return Ok(());
+            return Ok(MeshApplyOutcome::Ignored);
         }
         let cmd = EnforceCommand {
             decision_id: Uuid::new_v4(),
@@ -153,7 +153,7 @@ impl EnforcementService {
         &mut self,
         delta: ramshield_mesh::aworset::ClusterUnblockDelta,
         now_ms: u64,
-    ) -> Result<(), EnforcementError> {
+    ) -> Result<MeshApplyOutcome, EnforcementError> {
         let Some(mesh) = &self.mesh_blocklist else {
             return Ok(MeshApplyOutcome::Ignored);
         };
