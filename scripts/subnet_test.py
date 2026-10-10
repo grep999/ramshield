@@ -8,6 +8,7 @@ import json
 import time
 import threading
 import urllib.request
+import random
 
 IPC_HOST = "127.0.0.1"
 IPC_PORT = 7890
@@ -112,7 +113,6 @@ print(f"Duration: {DURATION}s across {NUM_THREADS} threads")
 print(f"Target subnets: ~{BATCH_SIZE * (DURATION / FRAME_DELAY) * NUM_THREADS:,.0f}")
 print(f"=" * 70)
 
-import random  # need to import here for build_frame
 stats = {'frames': 0, 'elapsed': 0, 'reconnects': 0}
 threads = []
 frames_per_thread = int(DURATION / FRAME_DELAY) // NUM_THREADS
