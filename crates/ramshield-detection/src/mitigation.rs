@@ -170,6 +170,12 @@ impl DetectionEngine {
 
     #[cfg(test)]
     pub(crate) fn pending_mitigations_len(&self) -> usize {
+        // Read under the same admission lock as insert/evict so concurrent
+        // tests observe a stable count rather than DashMap's mid-mutation view.
+        let _guard = self
+            .pending_mitigation_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.pending_mitigations.len()
     }
 }
