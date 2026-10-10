@@ -573,7 +573,10 @@ fn valid_tpacket_packet_count(
         return first <= blk_len;
     }
     let header_size = std::mem::size_of::<Tpacket3Hdr>();
-    if first < std::mem::size_of::<TpacketBlockDesc>() || first > blk_len {
+    if first < std::mem::size_of::<TpacketBlockDesc>()
+        || first > blk_len
+        || first % TPACKET_ALIGNMENT != 0
+    {
         return false;
     }
     (num_pkts as usize) <= (blk_len - first) / header_size
@@ -596,6 +599,7 @@ fn checked_tpacket_header_offset(
     let header_size = std::mem::size_of::<Tpacket3Hdr>();
     if !valid_tpacket_block_len(blk_len, block_size)
         || off < std::mem::size_of::<TpacketBlockDesc>()
+        || off % TPACKET_ALIGNMENT != 0
     {
         return None;
     }
@@ -1127,6 +1131,9 @@ mod tpacket_tests {
         }
         // First legal header offset.
         assert!(checked_tpacket_header_offset(0, block_size, ring_len, blk_len, desc).is_some());
+        assert!(
+            checked_tpacket_header_offset(0, block_size, ring_len, blk_len, desc + 1).is_none()
+        );
 
         // Header that would end past blk_len / block_size.
         let last_ok = blk_len - hdr;
@@ -1272,6 +1279,12 @@ mod tpacket_tests {
         assert!(!valid_tpacket_packet_count(
             1,
             desc - 1,
+            block_size,
+            block_size
+        ));
+        assert!(!valid_tpacket_packet_count(
+            1,
+            desc + 1,
             block_size,
             block_size
         ));
