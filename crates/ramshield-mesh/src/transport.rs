@@ -493,7 +493,8 @@ fn now_ms() -> u64 {
 mod frame_tests {
     use super::{
         Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES, MeshHandle, MeshMessage,
-        chunk_sync, push_frame_bytes, read_bounded_frame, read_bounded_frame_with_timeout,
+        PeerSendOutcome, chunk_sync, push_frame_bytes, read_bounded_frame,
+        read_bounded_frame_with_timeout,
         valid_message, validate_bind_args, with_timeout,
     };
     use crate::aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
@@ -557,6 +558,48 @@ mod frame_tests {
         let invalid_peer = ["0.0.0.0:1234".parse().expect("unspecified peer")];
         let error = validate_bind_args(1, &invalid_peer, &valid_key).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn broadcast_reports_connection_failure_per_peer() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async {
+            let probe = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("probe listener");
+            let unavailable_peer = probe.local_addr().expect("probe address");
+            drop(probe);
+
+            let handle = MeshHandle::bind(
+                1,
+                Arc::new(AworsetBlocklist::new(1)),
+                "127.0.0.1:0".parse().expect("listen address"),
+                vec![unavailable_peer],
+                vec![7; 32],
+            )
+            .await
+            .expect("mesh listener");
+
+            let report = handle
+                .broadcast(MeshMessage::Sync {
+                    blocks: Vec::new(),
+                    unblocks: Vec::new(),
+                })
+                .await;
+
+            assert_eq!(report.peers.len(), 1);
+            assert_eq!(report.written_count(), 0);
+            assert_eq!(report.failed_count(), 1);
+            assert!(!report.all_written());
+            assert!(matches!(
+                report.peers[0].outcome,
+                PeerSendOutcome::Failed { .. }
+            ));
+            handle.shutdown();
+        });
     }
 
     #[test]
