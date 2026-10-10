@@ -264,9 +264,10 @@ fn now_ms()->u64{SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default(
 
 #[cfg(test)]
 mod frame_tests {
-    use super::{chunk_sync, push_frame_bytes, read_bounded_frame_with_timeout, valid_message, with_timeout, Envelope, MeshMessage, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES};
-    use crate::aworset::{ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
-    use std::net::{IpAddr, Ipv6Addr};
+    use super::{chunk_sync, push_frame_bytes, read_bounded_frame_with_timeout, valid_message, with_timeout, Envelope, MeshHandle, MeshMessage, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES};
+    use crate::aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
+    use std::{net::{IpAddr, Ipv6Addr}, sync::Arc};
+    use tokio::net::TcpListener;
     use std::time::Duration;
 
     #[test]
