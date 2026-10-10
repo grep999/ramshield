@@ -190,6 +190,7 @@ mod frame_tests {
             .map(|ip| ClusterBlockDelta {
                 ip: IpAddr::V6(Ipv6Addr::from(ip)),
                 dot: ClusterDot { node_id: 7, counter: ip as u32 },
+                created_at_ms: u64::MAX,
                 expires_at_ms: u64::MAX,
                 tier: 3,
             })
@@ -223,6 +224,7 @@ mod frame_tests {
             .map(|_| ClusterBlockDelta {
                 ip: IpAddr::V6(Ipv6Addr::from(u128::MAX)),
                 dot: ClusterDot { node_id: u32::MAX, counter: u32::MAX },
+                created_at_ms: u64::MAX,
                 expires_at_ms: u64::MAX,
                 tier: u8::MAX,
             })
