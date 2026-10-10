@@ -1,11 +1,12 @@
-# RamShield Audit Backlog
+# RamShield Production-Essential Audit Backlog
 
 **Target branch:** `audit-branch`  
 **Baseline HEAD:** `70cd373f3c543ea796dd684197535956b49d6b0c`  
 **Baseline master:** `821eab72e93e584cd6835d1f95171d5d380daaec`  
-**Baseline CI:** [run 38039599076](https://github.com/grep999/ramshield/actions/runs/38039599076) — Check, Build, Clippy, Test all passed on the baseline SHA.  
+**Latest recorded CI:** [run 38041528476](https://github.com/grep999/ramshield/actions/runs/38041528476) — Check, Build, Test, and Clippy passed on HEAD `808f97b8032230146c0012fb928059a0f77e229a`. Formatting is not covered by this workflow and remains unverified.  
 **Operating rule:** one bounded fix per pass; every fix is revalidated on the exact resulting SHA. No merge, force-push, rebase, or changes to `kiddo_fix` / PR #3 / PR #5.  
-**Meaning of 100/100:** every P0/P1 is closed with regression evidence, P2s are closed or explicitly justified as non-applicable, all acceptance gates pass on one SHA, and an independent reviewer approves that SHA. A green build alone is not 100/100.
+**Scope:** this backlog tracks only production-essential fixes for the core RamShield product. Mesh feature design and in-development mesh implementation work live in [`docs/development/MESH_FEATURE_PLAN.md`](docs/development/MESH_FEATURE_PLAN.md) and are not core release blockers while mesh remains optional and disabled. Any mesh code enabled in a deployment must still meet its own acceptance gate before production use.  
+**Meaning of 100/100:** every applicable production-essential P0/P1 is closed with regression evidence, P2s are closed or explicitly justified as non-applicable, all core acceptance gates pass on one SHA, and an independent reviewer approves that SHA. A green build alone is not 100/100.
 
 ## Priority definitions
 
@@ -18,22 +19,13 @@
 
 | ID | Area | Required work / acceptance evidence | Status |
 |---|---|---|---|
-| A-001 | Mesh anti-entropy | Prove sync snapshots fit the wire frame and converge when the cluster has more state than one frame / `MAX_SYNC_ENTRIES`. Add deterministic chunking/pagination and tests for >1 frame, repeated sync, tombstones, and eventual convergence. Current `snapshot(4096)` may serialize beyond `MAX_FRAME`; `send_to` rejects oversize frames. | IN PROGRESS — chunking and max-frame regression committed; fair pagination beyond 4096 remains open. |
-| A-002 | Mesh CRDT semantics | Property/table tests for add/remove/re-add, concurrent nodes, stale/delayed deltas, duplicate/reordered messages, expiry, tombstone GC, and restart. Verify unban cannot be undone by delayed pre-unban state and a later ban remains possible. Correct algorithm defects, not just tests. | IN PROGRESS — separate creation time from expiry to prevent HLC poisoning; tombstone-GC convergence remains a P0. |
-| A-003 | Mesh input trust | Validate authenticated envelope schema and bounds after deserialization: node IDs, counter behavior, IP/tier/expiry values, sync vector lengths, key minimum length, timestamp skew, self-origin, and replay behavior. Add malformed/authentication/replay tests. | IN PROGRESS — future creation times, origin IDs, sync entry count, bind key length, node ID, and peer limits are validated; replay and remaining schema cases remain open. |
 | A-004 | Shared-memory writer parity | Port the exclusive even→odd CAS writer claim and under-lock revalidation from `crates/ramshield-cgnat/src/shm.rs` to `rs/crates/ramshield-cgnat/src/shm.rs`, or formally retire the duplicate. Add concurrent-writer stress tests and Rust/C ABI validation against the same layout. The nested copy currently uses `fetch_add` to claim a seqlock writer. | OPEN |
 | A-005 | Replay-store security | Prove global and per-key capacity behavior never evicts a still-live replay marker. Add collision, duplicate, TTL boundary, global pressure, per-key pressure, and concurrent atomicity tests. The isolated `kiddo_fix` / PR #5 is not to be copied or modified without reviewing its exact diff and obtaining a bounded audit pass. | OPEN |
-| A-006 | Enforcement / mesh convergence | Exercise real service integration for remote block/unblock, manual local unblock, CIDR-vs-IP separation, XDP/store failures, expiry, and shutdown. Ensure failed enforcement is observable and state is retried/reconciled rather than silently lost. | IN PROGRESS — duplicate block/unblock retry predicates now preserve retry after failed projection; end-to-end fault-injection coverage remains open. |
 
 ## P1 — boundedness, failure handling, and operational correctness
 
 | ID | Area | Required work / acceptance evidence | Status |
 |---|---|---|---|
-| A-010 | Mesh outbound resource limits | Bound concurrent peer sends and apply connect/write deadlines; verify a dead/slow peer cannot create unbounded Tokio tasks or hold resources indefinitely. Test concurrency ceiling, timeout release, and behavior when the bound is saturated. | IN PROGRESS — 64 concurrent send permits, 3-second send deadline, and stalled-send test committed; saturation behavior still needs stress coverage. |
-| A-011 | Mesh task lifecycle | Retain/own cancellation handles for listener, anti-entropy, and outbound work; define graceful shutdown and join/cancel behavior. Test shutdown with idle, partial-frame, and blocked outbound peers. | IN PROGRESS — watch cancellation is wired through listener, readers, anti-entropy, outbound sends, and service exit; task joining and full failure-path coverage remain open. |
-| A-012 | Mesh queue overload | Replace undocumented drop-oldest behavior for authenticated Block/Unblock deltas with an explicit loss/recovery policy. Add queue saturation tests proving eventual state convergence and observable overload. | IN PROGRESS — queue cap reduced to 2048 and sync payloads capped at 128 entries; drop-oldest semantics and explicit overload signaling remain open. |
-| A-013 | Mesh snapshot fairness | Ensure anti-entropy eventually visits all live entries and tombstones, rather than relying on an arbitrary first `limit` from concurrent maps. Test state larger than a page and verify every page is eventually transmitted. | OPEN |
-| A-014 | Mesh integration boundary | Keep mesh optional and independently buildable; prove feature-off configuration fails clearly, feature-off core tests remain mesh-free, feature-on startup errors propagate, and shutdown does not leak background tasks. Current feature boundary exists; full lifecycle proof remains open. | IN PROGRESS — feature-off/core, independent mesh, and all-features integration gates are green at the prior exact SHA; current-head gate is being finalized. |
 | A-015 | Detection construction | Remove or deprecate the public `DetectionEngine::new` panic wrapper in favor of fallible `try_new`; update callers/tests and prove initialization failures reach controlled error handling. | OPEN |
 | A-016 | Native packet ingest | Retain TPACKET_V3 range validation; add property/fuzz tests for malformed block lengths, packet offsets, descriptor chains, integer overflow, and mapped-ring edges. Exercise the Linux-only path in CI on a supported kernel where feasible. | OPEN |
 | A-017 | XDP/SYNPROXY operational correctness | Test kernel map capacity, reconciliation after map loss, CIDR and IPv6 handling, partial install/rollback, privileges/unavailable interfaces, and shutdown cleanup. Make unsupported environment behavior explicit. | OPEN |
@@ -47,37 +39,18 @@
 | ID | Area | Required work / acceptance evidence | Status |
 |---|---|---|---|
 | A-030 | Formatting and gates | Add `cargo fmt --all -- --check` to CI and run it on the candidate SHA. Current green CI does not include this gate. | OPEN |
-| A-031 | Feature matrix | CI must exercise default/core-only, `full`, `mesh`, `full,mesh`, all-targets, unit/integration tests, and strict Clippy without feature-unification masking a broken configuration. | IN PROGRESS |
-| A-032 | Mesh protocol tests | Cover exact max frame, one byte over, delimiter split across reads, clean EOF, partial EOF, malformed JSON, invalid HMAC, timestamp skew, self-origin, replay, bounded queue, and authenticated sync. Some frame-size/timeout tests already exist; remaining cases are open. | IN PROGRESS — timeout, oversize, chunk-size, future timestamp, sync-count, bind-config, and listener shutdown regressions added; malformed/HMAC/replay/EOF and overload cases remain. |
+| A-031 | Core feature matrix | CI must exercise default/core-only and the production `full` configuration, all-targets check/build, unit/integration tests, and strict Clippy without feature-unification masking a broken core configuration. Mesh-only and mesh-integrated configurations are tracked in the separate mesh feature plan. | IN PROGRESS |
 | A-033 | Shared-memory ABI | Verify C header size/alignment/offsets match Rust on every supported target; run concurrent readers/writers and sanitizer/stress tests where supported. | OPEN |
 | A-034 | Dependency / supply chain | Run locked dependency audit, license/advisory checks, and review unsafe-code and transitive dependency changes. Record exceptions with rationale. | OPEN |
 | A-035 | Public API / error semantics | Audit panics, swallowed errors, ambiguous return values, unchecked conversions, and inaccurate comments across crate boundaries. Prioritize production call paths and public APIs. | OPEN |
-| A-036 | Docs and claims | Replace stale code-health notes; document the mesh threat model, key provisioning/rotation, clock assumptions, network exposure, failure/overload semantics, and exact supported feature commands. Add README files for analytics, CGNAT, and mesh; verify enforcement/detection docs against code. | OPEN |
-| A-037 | Benchmarks and regression budgets | Establish reproducible baselines for detection, enforcement, WAL, native ingest, mesh merge/gossip and memory under load. Set only evidence-based regression thresholds. | OPEN |
+| A-036 | Core docs and claims | Replace stale code-health notes; document supported core deployment commands and operational assumptions. Add/update README files for analytics and CGNAT; verify enforcement and detection documentation against code. Mesh threat model, deployment, and module docs are tracked in the separate mesh feature plan. | OPEN |
+| A-037 | Core benchmarks and regression budgets | Establish reproducible baselines for detection, enforcement, WAL, native ingest, and memory under load. Set only evidence-based regression thresholds. Mesh merge/gossip performance is tracked in the separate mesh feature plan. | OPEN |
 | A-038 | Final independent audit | Two independent source-only reviewers assess the same exact candidate SHA and current diff against master; each records findings, severity, evidence, and APPROVE/BLOCK. Fix all P0/P1; resolve or justify P2s. | OPEN |
 | A-039 | Final acceptance report | Attach exact SHA, compare-to-master, workflow URLs/job conclusions, fmt result, test counts, known limitations, module scores with evidence, and a prioritized residual-risk statement. No blanket 100/100 without this evidence. | OPEN |
 
-## Current mesh implementation notes (2026-10-10)
+## Separate in-development feature
 
-Latest mesh work is intentionally partial and is not an APPROVE/100 score:
-- [Outbound concurrency/deadline](https://github.com/grep999/ramshield/commit/74610c3731b95b6f846f692bc20d82416d62de3b)
-- [Bounded anti-entropy chunks](https://github.com/grep999/ramshield/commit/237017711b76eeb76caaedd6dd60ec7767835e26)
-- [Creation-time/HLC correction](https://github.com/grep999/ramshield/commit/f449ff752a44570855c91681d98ad5d1074e896c)
-- [Inbound timestamp/queue validation](https://github.com/grep999/ramshield/commit/eb3acdf0267b9be12cf455b985cdfae3ab0e900c)
-- [Background-task cancellation](https://github.com/grep999/ramshield/commit/0e7995471c06b229c32619e4ce836c198c568acd)
-- [Enforcement retry after failed projection](https://github.com/grep999/ramshield/commit/a4c479378c1c5ea382769d0028a2ad83daeeab85)
-- [Direct bind argument validation](https://github.com/grep999/ramshield/commit/c823903a14815fa0ebbe3bbd197042a98f7cc91d)
-
-The changes above are separate bounded commits. CI caught the missing Tokio `macros` feature required for `select!`; it was added at [b239280](https://github.com/grep999/ramshield/commit/b23928055e1e9651d8b4a428d33da7f84da66556). The subsequent exact-head workflow is [run 38041403603](https://github.com/grep999/ramshield/actions/runs/38041403603); Check, Build, Clippy, workspace tests, independent mesh tests, and all-features tests report success at job level. The workflow's final state is rechecked in the handoff.
-
-## Mesh execution order
-
-1. **M1 / A-010:** cap outbound concurrency and bound connect/write time. Small isolated transport change plus tests.
-2. **M2 / A-001 + A-013:** make anti-entropy paginated/chunked and fair across all entries/tombstones; enforce encoded-frame limits before send.
-3. **M3 / A-002:** add deterministic CRDT convergence/property tests and correct any counter/tombstone/expiry defects they expose.
-4. **M4 / A-003 + A-012:** authenticate and validate all inbound state; define queue overload semantics and replay behavior.
-5. **M5 / A-011 + A-014:** explicit lifecycle, bounded shutdown, service-level block/unblock integration tests.
-6. Re-run mesh-only tests, core-only tests, full-feature integration, all-targets check/build, strict Clippy, rustfmt, and independent review on one exact SHA.
+Mesh is intentionally excluded from this production-essential remediation backlog. Track its feature requirements, open correctness work, development sequence, and mesh-specific acceptance criteria in [`docs/development/MESH_FEATURE_PLAN.md`](docs/development/MESH_FEATURE_PLAN.md). Do not use incomplete mesh feature work to inflate or block the core remediation score while mesh remains optional and disabled; do not enable mesh in production before its own acceptance gate passes.
 
 ## 100/100 acceptance gate
 
@@ -85,9 +58,9 @@ A candidate is eligible only when all are true:
 
 - Every P0 and P1 is `PASS` with a regression test or evidence-based `NOT APPLICABLE` decision.
 - All P2 tasks are closed or have a reviewer-approved rationale.
-- Core-only, mesh-only, full-feature, and all-targets checks/tests pass on the same SHA.
+- Core-only and production full-feature checks/tests, all-targets check/build, and applicable ABI/recovery gates pass on the same SHA. Mesh-specific gates are owned by the separate mesh feature plan.
 - `cargo fmt --all -- --check`, strict Clippy, and `git diff --check origin/master...HEAD` pass on that SHA.
-- Security/recovery tests include malformed input, overload, concurrency, crash/restart, and failure injection where relevant.
+- Core security/recovery tests include malformed input, overload, concurrency, crash/restart, and failure injection where relevant.
 - Two independent reviewers approve the exact same SHA; no unresolved P0/P1 finding remains.
 - The final report links all run logs and states remaining environmental/coverage limits.
 
