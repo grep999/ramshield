@@ -173,9 +173,7 @@ impl Config {
                 let peer_key = hex::decode(self.mesh.peer_auth_keys[index].trim())
                     .map_err(|_| anyhow::anyhow!("mesh.peer_auth_keys[{index}] must be hex"))?;
                 if peer_key.len() < 16 {
-                    anyhow::bail!(
-                        "mesh.peer_auth_keys[{index}] must decode to at least 16 bytes"
-                    );
+                    anyhow::bail!("mesh.peer_auth_keys[{index}] must decode to at least 16 bytes");
                 }
                 if !auth_keys.insert(peer_key) {
                     anyhow::bail!("mesh local and peer authentication keys must all be unique");
@@ -453,7 +451,6 @@ impl Config {
         w
     }
 }
-
 
 #[cfg(test)]
 mod mesh_peer_identity_tests {
