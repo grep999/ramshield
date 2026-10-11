@@ -449,3 +449,51 @@ impl Config {
         w
     }
 }
+
+
+#[cfg(test)]
+mod mesh_peer_identity_tests {
+    use super::*;
+
+    fn configured_mesh() -> Config {
+        let mut config = Config::default();
+        config.mesh.enabled = true;
+        config.mesh.node_id = 1;
+        config.mesh.listen_addr = "127.0.0.1:7900".into();
+        config.mesh.peers = vec!["127.0.0.1:7901".into()];
+        config.mesh.peer_node_ids = vec![2];
+        config.mesh.peer_auth_keys = vec!["22".repeat(32)];
+        config.mesh.auth_key = "11".repeat(32);
+        config
+    }
+
+    #[test]
+    fn mesh_accepts_distinct_local_and_peer_keys() {
+        configured_mesh()
+            .validate()
+            .expect("distinct per-node keys should validate");
+    }
+
+    #[test]
+    fn mesh_rejects_peer_without_matching_identity_or_key() {
+        let mut config = configured_mesh();
+        config.mesh.peer_node_ids.clear();
+        assert!(
+            config
+                .validate()
+                .expect_err("missing peer identity must fail")
+                .to_string()
+                .contains("peer_node_ids")
+        );
+
+        let mut config = configured_mesh();
+        config.mesh.peer_auth_keys[0] = config.mesh.auth_key.clone();
+        assert!(
+            config
+                .validate()
+                .expect_err("shared key must fail")
+                .to_string()
+                .contains("keys must all be unique")
+        );
+    }
+}
