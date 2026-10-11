@@ -344,11 +344,13 @@ impl MeshHandle {
             Err(_) => return,
         };
         let Some(peer_key) = self.trusted_keys.get(&env.node_id) else {
-            warn!(node_id = env.node_id, "mesh frame rejected: node ID is not configured");
+            warn!(
+                node_id = env.node_id,
+                "mesh frame rejected: node ID is not configured"
+            );
             return;
         };
-        if now_ms().abs_diff(env.ts_ms) > MAX_CLOCK_SKEW_MS
-            || !verify(peer_key, &payload, &env.mac)
+        if now_ms().abs_diff(env.ts_ms) > MAX_CLOCK_SKEW_MS || !verify(peer_key, &payload, &env.mac)
         {
             warn!(
                 node_id = env.node_id,
@@ -383,7 +385,9 @@ fn validate_bind_args(node_id: u32, peers: &[MeshPeer], auth_key: &[u8]) -> std:
         return Err(invalid("mesh node_id must be non-zero"));
     }
     if auth_key.len() < 16 {
-        return Err(invalid("local mesh authentication key must be at least 16 bytes"));
+        return Err(invalid(
+            "local mesh authentication key must be at least 16 bytes",
+        ));
     }
     if peers.len() > MAX_CONFIGURED_PEERS {
         return Err(invalid("mesh peer list exceeds 256 peers"));
@@ -400,7 +404,9 @@ fn validate_bind_args(node_id: u32, peers: &[MeshPeer], auth_key: &[u8]) -> std:
             return Err(invalid("each mesh peer key must be at least 16 bytes"));
         }
         if !seen_keys.insert(peer.auth_key.clone()) {
-            return Err(invalid("mesh local and peer authentication keys must be unique"));
+            return Err(invalid(
+                "mesh local and peer authentication keys must be unique",
+            ));
         }
         if peer.address.port() == 0 || peer.address.ip().is_unspecified() {
             return Err(invalid(
