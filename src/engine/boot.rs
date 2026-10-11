@@ -184,26 +184,15 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
                     format!("invalid mesh peer {peer_address}: {e}"),
                 )
             })?;
-            let peer_node_id = *cfg_snapshot
-                .mesh
-                .peer_node_ids
-                .get(index)
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "mesh peer node ID missing",
-                    )
-                })?;
-            let peer_key_hex = cfg_snapshot
-                .mesh
-                .peer_auth_keys
-                .get(index)
-                .ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "mesh peer key missing",
-                    )
-                })?;
+            let peer_node_id = *cfg_snapshot.mesh.peer_node_ids.get(index).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "mesh peer node ID missing",
+                )
+            })?;
+            let peer_key_hex = cfg_snapshot.mesh.peer_auth_keys.get(index).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "mesh peer key missing")
+            })?;
             let peer_key = hex::decode(peer_key_hex.trim()).map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
