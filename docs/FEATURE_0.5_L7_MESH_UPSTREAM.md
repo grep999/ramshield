@@ -90,10 +90,12 @@ enabled = true
 node_id = 1
 listen_addr = "10.0.0.11:7900"
 peers = ["10.0.0.12:7900", "10.0.0.13:7900"]
-auth_key = "<hex shared secret>"
+peer_node_ids = [2, 3]
+peer_auth_keys = ["<node-2-hex-key>", "<node-3-hex-key>"]
+auth_key = "<node-1-hex-key>"
 ```
 
-The shared key must be configured when mesh is enabled.
+Each node has its own HMAC key. `auth_key` is this node's signing key; `peer_auth_keys` are the trusted keys for the corresponding `peers` and `peer_node_ids` entries. All keys must be distinct and at least 16 decoded bytes. Configure the same node ID/key mapping on every peer. Do not reuse a cluster-wide shared secret: a node key must not authenticate a different node ID. The example values are placeholders, not usable credentials.
 
 ## 3. Uplink saturation / upstream escalation
 
