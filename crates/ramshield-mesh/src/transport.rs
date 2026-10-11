@@ -571,7 +571,7 @@ mod frame_tests {
     use crate::aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
     use std::time::Duration;
     use std::{
-        net::{IpAddr, Ipv6Addr, SocketAddr},
+        net::{IpAddr, Ipv6Addr},
         sync::Arc,
     };
     use tokio::io::AsyncWriteExt;
