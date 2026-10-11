@@ -186,6 +186,15 @@ jobs:
           toolchain: nightly-2026-08-29
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Install CI-matched bpf-linker for all-feature regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/bpf-linker.tar.zst \
+            https://github.com/aya-rs/bpf-linker/releases/download/v0.11.1/bpf-linker-x86_64-unknown-linux-musl.tar.zst
+          tar --zstd -xf /tmp/bpf-linker.tar.zst -C /tmp
+          sudo mv /tmp/bpf-linker /usr/local/bin/
+          bpf-linker --version
       - name: Final production-candidate mesh regression
         run: cargo test --locked -p ramshield-mesh
       - name: Final production-candidate combined feature regression
