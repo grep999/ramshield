@@ -15,7 +15,7 @@ This matrix records executable acceptance evidence for the optional mesh feature
 
 ## Stage C — anti-entropy completeness (release-blocking)
 - [x] Stable-state regression test visits all 5,000 active entries over repeated 1,024-item snapshots.
-- [ ] More than 4,096 mixed active entries and tombstones; prove every item is visited.
+- [x] More than 4,096 mixed active entries and tombstones: repeated snapshots visit all 2,500 of each kind in stable-state regression coverage.
 - [ ] Pagination progress under concurrent mutation is fair and deterministic.
 - [ ] Multi-chunk state converges after packet loss, duplication, reordering, and reconnect.
 - [ ] Sync repair remains effective after incoming queue overflow.
