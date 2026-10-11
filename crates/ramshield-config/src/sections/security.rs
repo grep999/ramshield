@@ -153,9 +153,16 @@ pub struct MeshConfig {
     pub node_id: u32,
     #[serde(default = "default_mesh_listen_addr")]
     pub listen_addr: String,
+    /// Peer socket addresses, in the same order as peer_node_ids and peer_auth_keys.
     #[serde(default)]
     pub peers: Vec<String>,
-    /// Hex-encoded shared secret. Empty disables authenticated mesh transport.
+    /// Expected node ID for each peer address; IDs must be unique and non-zero.
+    #[serde(default)]
+    pub peer_node_ids: Vec<u32>,
+    /// Hex-encoded HMAC key for each peer, parallel to peers/peer_node_ids.
+    #[serde(default)]
+    pub peer_auth_keys: Vec<String>,
+    /// Hex-encoded local node HMAC key. Must differ from every peer key.
     #[serde(default)]
     pub auth_key: String,
 }
@@ -166,6 +173,8 @@ impl Default for MeshConfig {
             node_id: default_mesh_node_id(),
             listen_addr: default_mesh_listen_addr(),
             peers: Vec::new(),
+            peer_node_ids: Vec::new(),
+            peer_auth_keys: Vec::new(),
             auth_key: String::new(),
         }
     }
