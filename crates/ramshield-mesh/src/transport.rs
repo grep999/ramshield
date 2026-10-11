@@ -511,7 +511,7 @@ mod frame_tests {
     use super::{
         Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES, MeshHandle, MeshMessage, MeshPeer,
         PeerSendOutcome, chunk_sync, now_ms, push_frame_bytes, read_bounded_frame,
-        read_bounded_frame_with_timeout, valid_message, validate_bind_args, with_timeout,
+        read_bounded_frame_with_timeout, sign, valid_message, validate_bind_args, with_timeout,
     };
     use crate::aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
     use std::time::Duration;
@@ -520,7 +520,7 @@ mod frame_tests {
         sync::Arc,
     };
     use tokio::io::AsyncWriteExt;
-    use tokio::net::TcpListener;
+    use tokio::net::{TcpListener, TcpStream};
 
     #[test]
     fn delimiter_free_oversized_frame_is_rejected_while_reading() {
@@ -584,6 +584,70 @@ mod frame_tests {
         )];
         let error = validate_bind_args(1, &invalid_peer, &valid_key).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn a_peer_key_cannot_impersonate_an_unconfigured_node_id() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async {
+            let probe = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("probe listener");
+            let address = probe.local_addr().expect("probe address");
+            drop(probe);
+
+            let trusted_key = vec![1u8; 32];
+            let local_key = vec![2u8; 32];
+            let handle = MeshHandle::bind(
+                2,
+                Arc::new(AworsetBlocklist::new(2)),
+                address,
+                vec![MeshPeer::new(
+                    1,
+                    "127.0.0.1:1".parse().expect("peer address"),
+                    trusted_key.clone(),
+                )],
+                local_key,
+            )
+            .await
+            .expect("bind receiver");
+
+            let now = now_ms();
+            let body = MeshMessage::Block(ClusterBlockDelta {
+                ip: IpAddr::V6(Ipv6Addr::LOCALHOST),
+                dot: ClusterDot {
+                    node_id: 1,
+                    incarnation: uuid::Uuid::new_v4(),
+                    counter: 1,
+                },
+                created_at_ms: now,
+                expires_at_ms: now.saturating_add(60_000),
+                tier: 1,
+            });
+            // The payload is validly signed with node 1's key, but claims node 3.
+            let payload = serde_json::to_vec(&(now, 3u32, &body)).expect("encode payload");
+            let envelope = Envelope {
+                ts_ms: now,
+                node_id: 3,
+                body,
+                mac: sign(&trusted_key, &payload).expect("sign forged identity"),
+            };
+            let mut stream = TcpStream::connect(address).await.expect("connect peer");
+            stream
+                .write_all(format!("{}\n", serde_json::to_string(&envelope).unwrap()).as_bytes())
+                .await
+                .expect("write signed frame");
+            drop(stream);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert!(
+                handle.drain().await.is_empty(),
+                "a key trusted for node 1 must not authenticate node 3"
+            );
+            handle.shutdown();
+        });
     }
 
     #[test]
