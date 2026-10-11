@@ -170,27 +170,44 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
                 format!("invalid mesh.listen_addr: {e}"),
             )
         })?;
-        let mut peers = Vec::with_capacity(cfg_snapshot.mesh.peers.len());
-        for peer in &cfg_snapshot.mesh.peers {
-            peers.push(peer.parse().map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("invalid mesh peer {peer}: {e}"),
-                )
-            })?);
-        }
-        let key = hex::decode(cfg_snapshot.mesh.auth_key.trim()).map_err(|e| {
+        let local_key = hex::decode(cfg_snapshot.mesh.auth_key.trim()).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("invalid mesh.auth_key: {e}"),
             )
         })?;
+        let mut peers = Vec::with_capacity(cfg_snapshot.mesh.peers.len());
+        for (index, peer_address) in cfg_snapshot.mesh.peers.iter().enumerate() {
+            let address = peer_address.parse().map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("invalid mesh peer {peer_address}: {e}"),
+                )
+            })?;
+            let peer_node_id = *cfg_snapshot.mesh.peer_node_ids.get(index).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "mesh peer node ID missing")
+            })?;
+            let peer_key_hex = cfg_snapshot.mesh.peer_auth_keys.get(index).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "mesh peer key missing")
+            })?;
+            let peer_key = hex::decode(peer_key_hex.trim()).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("invalid mesh peer key at index {index}: {e}"),
+                )
+            })?;
+            peers.push(ramshield_mesh::transport::MeshPeer::new(
+                peer_node_id,
+                address,
+                peer_key,
+            ));
+        }
         let blocklist = mesh_blocklist
             .as_ref()
             .cloned()
             .ok_or_else(|| std::io::Error::other("mesh enabled without a blocklist"))?;
         Some(
-            MeshHandle::bind(cfg_snapshot.mesh.node_id, blocklist, listen, peers, key)
+            MeshHandle::bind(cfg_snapshot.mesh.node_id, blocklist, listen, peers, local_key)
                 .await
                 .map_err(|e| std::io::Error::other(format!("mesh bind failed: {e}")))?,
         )
