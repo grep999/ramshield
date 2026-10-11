@@ -1,0 +1,216 @@
+name: Mesh Environment Promotion
+
+# This workflow qualifies the optional mesh feature through three GitHub
+# environments. It does not enable mesh in production or deploy a standalone
+# service: ramshield-mesh is a library feature compiled into RamShield.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - audit-branch
+      - 'mesh/**'
+      - ops/mesh-environment-promotion
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/ramshield-mesh/**'
+      - 'crates/ramshield-enforcement/**'
+      - 'src/**'
+      - '.github/workflows/mesh-promotion.yml'
+  pull_request:
+    branches: [audit-branch]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/ramshield-mesh/**'
+      - 'crates/ramshield-enforcement/**'
+      - 'src/**'
+      - '.github/workflows/mesh-promotion.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: mesh-promotion-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  TOOLCHAIN: nightly-2026-08-29
+
+jobs:
+  dev:
+    name: DEV — mesh unit and boundary tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: dev
+    outputs:
+      candidate_sha: ${{ steps.meta.outputs.candidate_sha }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-08-29
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Record candidate identity
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          test "$SHA" = "$GITHUB_SHA"
+          echo "candidate_sha=$SHA" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$SHA" > candidate.sha
+          {
+            echo "## DEV qualification"
+            echo "- Candidate SHA: $SHA"
+            echo "- Rust: $(rustc --version)"
+            echo "- Environment: dev"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Formatting gate
+        run: cargo fmt --all -- --check
+      - name: Test mesh crate independently
+        run: cargo test --locked -p ramshield-mesh
+      - name: Test mesh crate with all test targets
+        run: cargo test --locked -p ramshield-mesh --all-targets
+      - name: Upload immutable candidate identity
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesh-candidate-${{ github.sha }}
+          path: candidate.sha
+          if-no-files-found: error
+          retention-days: 14
+
+  preprod:
+    name: PREPROD — feature-off and mesh-integrated matrix
+    needs: [dev]
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    environment:
+      name: preprod
+    steps:
+      - name: Checkout the exact DEV candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.dev.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Verify promoted candidate identity
+        uses: actions/download-artifact@v4
+        with:
+          name: mesh-candidate-${{ github.sha }}
+      - name: Reject SHA drift
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat candidate.sha)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-08-29
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install CI-matched bpf-linker for XDP/all-feature builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/bpf-linker.tar.zst \
+            https://github.com/aya-rs/bpf-linker/releases/download/v0.11.1/bpf-linker-x86_64-unknown-linux-musl.tar.zst
+          tar --zstd -xf /tmp/bpf-linker.tar.zst -C /tmp
+          sudo mv /tmp/bpf-linker /usr/local/bin/
+          bpf-linker --version
+      - name: Feature-off core regression gate
+        run: cargo test --workspace --locked
+      - name: Mesh feature integration gate
+        run: cargo test --workspace --locked --features mesh
+      - name: Production full feature gate
+        run: cargo test --workspace --locked --features full
+      - name: Combined all-feature gate
+        run: cargo test --workspace --locked --all-features
+      - name: Strict core-only Clippy
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
+      - name: Strict all-feature Clippy
+        run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
+      - name: Formatting recheck
+        run: cargo fmt --all -- --check
+      - name: Preprod qualification summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## PREPROD qualification"
+            echo "- Candidate SHA: $GITHUB_SHA"
+            echo "- Result: ${{ job.status }}"
+            echo "- All checks must pass before the prod job can start."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  prod:
+    name: PROD — approved release qualification
+    needs: [dev, preprod]
+    if: ${{ needs.dev.result == 'success' && needs.preprod.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Configure required reviewers and prevent self-review in GitHub Settings.
+    # GitHub Environment approval is the manual promotion barrier.
+    environment:
+      name: prod
+    steps:
+      - name: Checkout the exact qualified candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.dev.outputs.candidate_sha }}
+          persist-credentials: false
+      - name: Verify candidate identity from DEV
+        uses: actions/download-artifact@v4
+        with:
+          name: mesh-candidate-${{ github.sha }}
+      - name: Verify candidate identity and git cleanliness
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat candidate.sha)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-08-29
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Final production-candidate mesh regression
+        run: cargo test --locked -p ramshield-mesh
+      - name: Final production-candidate combined feature regression
+        run: cargo test --workspace --locked --all-features
+      - name: Write promotion receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p promotion-receipt
+          {
+            echo "RamShield mesh qualification receipt"
+            echo "Candidate SHA: $GITHUB_SHA"
+            echo "Source ref: $GITHUB_REF"
+            echo "Workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "DEV: success"
+            echo "PREPROD: success"
+            echo "PROD final regression: success"
+            echo "Production mesh enablement: NOT performed"
+            echo "Reason: this workflow qualifies source; it does not deploy or enable the optional feature."
+          } > promotion-receipt/receipt.txt
+          cat promotion-receipt/receipt.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish qualification receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesh-prod-qualification-${{ github.sha }}
+          path: promotion-receipt/receipt.txt
+          if-no-files-found: error
+          retention-days: 90
