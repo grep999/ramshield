@@ -31,6 +31,19 @@ async fn free_addr() -> SocketAddr {
     address
 }
 
+async fn free_addrs() -> (SocketAddr, SocketAddr) {
+    let first = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("reserve first loopback port");
+    let second = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("reserve second loopback port");
+    let first_address = first.local_addr().expect("read first address");
+    let second_address = second.local_addr().expect("read second address");
+    drop((first, second));
+    (first_address, second_address)
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -54,8 +67,7 @@ async fn wait_for_one(handle: &MeshHandle) -> Vec<MeshMessage> {
 
 #[tokio::test]
 async fn authenticated_block_crosses_real_tcp_transport() {
-    let receiver_addr = free_addr().await;
-    let sender_addr = free_addr().await;
+    let (receiver_addr, sender_addr) = free_addrs().await;
     let receiver = MeshHandle::bind(
         2,
         Arc::new(AworsetBlocklist::new(2)),
