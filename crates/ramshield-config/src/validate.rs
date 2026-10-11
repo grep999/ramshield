@@ -152,6 +152,31 @@ impl Config {
             if key.len() < 16 {
                 anyhow::bail!("mesh.auth_key must decode to at least 16 bytes");
             }
+            if self.mesh.peer_node_ids.len() != self.mesh.peers.len() {
+                anyhow::bail!("mesh.peer_node_ids must have one entry per mesh.peers address");
+            }
+            if self.mesh.peer_auth_keys.len() != self.mesh.peers.len() {
+                anyhow::bail!("mesh.peer_auth_keys must have one key per mesh.peers address");
+            }
+            let mut peer_ids = std::collections::HashSet::new();
+            let mut auth_keys = std::collections::HashSet::new();
+            auth_keys.insert(key);
+            for (index, peer_id) in self.mesh.peer_node_ids.iter().enumerate() {
+                if *peer_id == 0 || *peer_id == self.mesh.node_id {
+                    anyhow::bail!("mesh.peer_node_ids[{index}] must be non-zero and not equal mesh.node_id");
+                }
+                if !peer_ids.insert(*peer_id) {
+                    anyhow::bail!("mesh.peer_node_ids must be unique");
+                }
+                let peer_key = hex::decode(self.mesh.peer_auth_keys[index].trim())
+                    .map_err(|_| anyhow::anyhow!("mesh.peer_auth_keys[{index}] must be hex"))?;
+                if peer_key.len() < 16 {
+                    anyhow::bail!("mesh.peer_auth_keys[{index}] must decode to at least 16 bytes");
+                }
+                if !auth_keys.insert(peer_key) {
+                    anyhow::bail!("mesh local and peer authentication keys must all be unique");
+                }
+            }
         }
 
         if self.xdp.trusted_overlay_cidrs.len() > 256 {
