@@ -145,7 +145,7 @@ fn default_synproxy_new_connection_total_burst() -> u32 {
     4000
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MeshConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -177,6 +177,26 @@ impl Default for MeshConfig {
             peer_auth_keys: Vec::new(),
             auth_key: String::new(),
         }
+    }
+}
+
+impl fmt::Debug for MeshConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let peer_keys = format!("[REDACTED: {} keys]", self.peer_auth_keys.len());
+        let local_key = if self.auth_key.is_empty() {
+            "[EMPTY]"
+        } else {
+            "[REDACTED]"
+        };
+        f.debug_struct("MeshConfig")
+            .field("enabled", &self.enabled)
+            .field("node_id", &self.node_id)
+            .field("listen_addr", &self.listen_addr)
+            .field("peers", &self.peers)
+            .field("peer_node_ids", &self.peer_node_ids)
+            .field("peer_auth_keys", &peer_keys)
+            .field("auth_key", &local_key)
+            .finish()
     }
 }
 fn default_mesh_node_id() -> u32 {
