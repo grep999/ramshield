@@ -483,7 +483,8 @@ mod tests {
         let mesh = AworsetBlocklist::new(7);
         for n in 0..EACH {
             let block_ip = IpAddr::V6(std::net::Ipv6Addr::from(n as u128));
-            mesh.entries.insert((block_ip, 7), (n as u32 + 1, 0, u64::MAX));
+            mesh.entries
+                .insert((block_ip, 7), (n as u32 + 1, 0, u64::MAX));
 
             let tombstone_ip = IpAddr::V6(std::net::Ipv6Addr::from((n + 10_000) as u128));
             mesh.tombstones.insert((tombstone_ip, 7), n as u32 + 1);
