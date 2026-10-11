@@ -477,6 +477,31 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_rotates_through_mixed_blocks_and_tombstones() {
+        const EACH: usize = 2_500;
+        const PAGE: usize = 1_024;
+        let mesh = AworsetBlocklist::new(7);
+        for n in 0..EACH {
+            let block_ip = IpAddr::V6(std::net::Ipv6Addr::from(n as u128));
+            mesh.entries.insert((block_ip, 7), (n as u32 + 1, 0, u64::MAX));
+
+            let tombstone_ip = IpAddr::V6(std::net::Ipv6Addr::from((n + 10_000) as u128));
+            mesh.tombstones.insert((tombstone_ip, 7), n as u32 + 1);
+        }
+
+        let mut observed_blocks = std::collections::HashSet::new();
+        let mut observed_tombstones = std::collections::HashSet::new();
+        for _ in 0..(EACH * 2).div_ceil(PAGE) {
+            let (blocks, unblocks) = mesh.snapshot(PAGE);
+            assert!(blocks.len() + unblocks.len() <= PAGE);
+            observed_blocks.extend(blocks.into_iter().map(|delta| delta.ip));
+            observed_tombstones.extend(unblocks.into_iter().map(|delta| delta.ip));
+        }
+        assert_eq!(observed_blocks.len(), EACH);
+        assert_eq!(observed_tombstones.len(), EACH);
+    }
+
+    #[test]
     fn snapshot_carries_active_dot_and_tombstone() {
         let mesh = AworsetBlocklist::new(7);
         let ip = IpAddr::from([192, 0, 2, 7]);
