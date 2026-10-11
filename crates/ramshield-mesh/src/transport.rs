@@ -509,8 +509,8 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod frame_tests {
     use super::{
-        Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES, MeshHandle, MeshMessage, MeshPeer,
-        PeerSendOutcome, chunk_sync, now_ms, push_frame_bytes, read_bounded_frame,
+        Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES, MeshHandle,
+        MeshMessage, MeshPeer, PeerSendOutcome, chunk_sync, now_ms, push_frame_bytes, read_bounded_frame,
         read_bounded_frame_with_timeout, sign, valid_message, validate_bind_args, with_timeout,
     };
     use crate::aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
