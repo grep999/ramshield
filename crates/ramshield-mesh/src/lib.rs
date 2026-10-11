@@ -2,4 +2,4 @@
 pub mod aworset;
 pub mod hlc;
 pub mod transport;
-pub use transport::{MeshHandle, MeshMessage};
+pub use transport::{MeshHandle, MeshMessage, MeshPeer};
