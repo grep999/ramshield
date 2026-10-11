@@ -9,6 +9,7 @@
 use super::hlc::Hlc;
 use dashmap::DashMap;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub type Dot = u64;
@@ -119,6 +120,7 @@ pub struct AworsetBlocklist {
     pub(crate) entries: DashMap<(IpAddr, u32), (u32, u64, u64)>,
     pub(crate) tombstones: DashMap<(IpAddr, u32), u32>,
     tombstone_times: DashMap<(IpAddr, u32), u64>,
+    snapshot_cursor: AtomicUsize,
 }
 
 impl AworsetBlocklist {
@@ -129,6 +131,7 @@ impl AworsetBlocklist {
             entries: DashMap::new(),
             tombstones: DashMap::new(),
             tombstone_times: DashMap::new(),
+            snapshot_cursor: AtomicUsize::new(0),
         }
     }
 
@@ -285,34 +288,69 @@ impl AworsetBlocklist {
         }
         changed
     }
-    /// Bounded anti-entropy snapshot used by the authenticated transport.
+    /// Return a bounded, rotating anti-entropy page.
+    ///
+    /// Items are sorted before paging so a stable state has deterministic order.
+    /// The cursor advances between calls, preventing a fixed map prefix from
+    /// starving keys beyond the per-sync budget. Concurrent state changes can
+    /// cause duplicates or temporary skips; repeated rotations repair those
+    /// changes, while delivery acknowledgement is a separate concern.
     pub fn snapshot(&self, limit: usize) -> (Vec<ClusterBlockDelta>, Vec<ClusterUnblockDelta>) {
-        let mut blocks = Vec::new();
-        for e in self.entries.iter().take(limit) {
-            blocks.push(ClusterBlockDelta {
-                ip: e.key().0,
-                dot: ClusterDot {
-                    node_id: e.key().1,
-                    counter: e.value().0,
-                },
-                created_at_ms: e.value().1,
-                expires_at_ms: e.value().2,
-                tier: 1,
-            });
+        enum SnapshotItem {
+            Block(ClusterBlockDelta),
+            Unblock(ClusterUnblockDelta),
         }
-        let mut unblocks = Vec::new();
-        for e in self
-            .tombstones
-            .iter()
-            .take(limit.saturating_sub(blocks.len()))
-        {
-            unblocks.push(ClusterUnblockDelta {
-                ip: e.key().0,
-                dot: ClusterDot {
-                    node_id: e.key().1,
-                    counter: *e.value(),
-                },
-            });
+
+        if limit == 0 {
+            return (Vec::new(), Vec::new());
+        }
+
+        let mut items: Vec<((IpAddr, u32, u8), SnapshotItem)> =
+            Vec::with_capacity(self.entries.len() + self.tombstones.len());
+        for entry in self.entries.iter() {
+            let key = *entry.key();
+            items.push((
+                (key.0, key.1, 0),
+                SnapshotItem::Block(ClusterBlockDelta {
+                    ip: key.0,
+                    dot: ClusterDot {
+                        node_id: key.1,
+                        counter: entry.value().0,
+                    },
+                    created_at_ms: entry.value().1,
+                    expires_at_ms: entry.value().2,
+                    tier: 1,
+                }),
+            ));
+        }
+        for tombstone in self.tombstones.iter() {
+            let key = *tombstone.key();
+            items.push((
+                (key.0, key.1, 1),
+                SnapshotItem::Unblock(ClusterUnblockDelta {
+                    ip: key.0,
+                    dot: ClusterDot {
+                        node_id: key.1,
+                        counter: *tombstone.value(),
+                    },
+                }),
+            ));
+        }
+        items.sort_unstable_by_key(|(key, _)| *key);
+
+        let total = items.len();
+        if total == 0 {
+            return (Vec::new(), Vec::new());
+        }
+        let start = self.snapshot_cursor.fetch_add(limit, Ordering::Relaxed) % total;
+        let count = limit.min(total);
+        let mut blocks = Vec::with_capacity(count);
+        let mut unblocks = Vec::with_capacity(count);
+        for offset in 0..count {
+            match &items[(start + offset) % total].1 {
+                SnapshotItem::Block(block) => blocks.push(block.clone()),
+                SnapshotItem::Unblock(unblock) => unblocks.push(unblock.clone()),
+            }
         }
         (blocks, unblocks)
     }
@@ -415,6 +453,29 @@ mod tests {
             "pre-unblock ban must not resurrect"
         );
     }
+    #[test]
+    fn snapshot_rotates_through_more_entries_than_one_sync_budget() {
+        const TOTAL: usize = 5_000;
+        const PAGE: usize = 1_024;
+        let mesh = AworsetBlocklist::new(7);
+        for n in 0..TOTAL {
+            let ip = IpAddr::V6(std::net::Ipv6Addr::from(n as u128));
+            mesh.record_ban(ip, 60_000, 1);
+        }
+
+        let mut observed = std::collections::HashSet::new();
+        for _ in 0..TOTAL.div_ceil(PAGE) {
+            let (blocks, unblocks) = mesh.snapshot(PAGE);
+            assert!(blocks.len() + unblocks.len() <= PAGE);
+            observed.extend(blocks.into_iter().map(|delta| delta.ip));
+        }
+        assert_eq!(
+            observed.len(),
+            TOTAL,
+            "repeated snapshots must not starve entries beyond the first page"
+        );
+    }
+
     #[test]
     fn snapshot_carries_active_dot_and_tombstone() {
         let mesh = AworsetBlocklist::new(7);
