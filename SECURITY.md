@@ -82,3 +82,6 @@ Prefer:
 ## Fuzzing
 
 The repository includes property-based tests for the configuration and IPC protocol parsers. Continuous OSS-Fuzz integration is not currently enabled.
+## Mesh peer authentication
+
+When mesh is enabled, configure a unique local HMAC key in `mesh.auth_key` and a distinct key for every configured peer in `mesh.peer_auth_keys`, aligned by index with `mesh.peers` and `mesh.peer_node_ids`. All keys must be at least 16 decoded bytes and must not be reused across node identities. A frame's claimed node ID selects the one trusted peer key allowed to authenticate it; unknown IDs and mismatched keys are rejected. Do not deploy the former cluster-wide shared-key arrangement: any holder of a shared key could forge another node's identity. Rotate peer keys in a coordinated rollout; old and new peers must agree on the trusted key mapping. Mesh remains optional and must not be enabled in production until its remaining convergence, lifecycle, and bounded-state gates pass.
