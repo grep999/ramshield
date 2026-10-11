@@ -113,7 +113,9 @@ impl Config {
                 .filter(|v| !v.is_empty())
                 .map(|value| value.parse::<u32>())
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| anyhow::anyhow!("invalid RAMSHIELD_MESH__PEER_NODE_IDS: {error}"))?;
+                .map_err(|error| {
+                    anyhow::anyhow!("invalid RAMSHIELD_MESH__PEER_NODE_IDS: {error}")
+                })?;
         }
         if let Ok(v) = std::env::var("RAMSHIELD_MESH__PEER_AUTH_KEYS") {
             self.mesh.peer_auth_keys = v
