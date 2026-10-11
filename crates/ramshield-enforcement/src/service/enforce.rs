@@ -359,26 +359,26 @@ impl EnforcementService {
                 drop(_ckpt_guard);
                 #[cfg(feature = "mesh")]
                 if !pending_unban_deltas.is_empty() && let Some(handle) = &self.mesh_handle {
-                        for delta in pending_unban_deltas {
-                            let report = handle
-                                .broadcast(ramshield_mesh::MeshMessage::Unblock(delta))
-                                .await;
-                            for peer in report.peers.iter().filter(|peer| {
-                                peer.outcome != ramshield_mesh::transport::PeerSendOutcome::Written
-                            }) {
-                                warn!(
-                                    peer = %peer.peer,
-                                    outcome = ?peer.outcome,
-                                    "mesh unblock was committed locally but broadcast was not delivered"
-                                );
-                            }
-                            if report.task_failures > 0 {
-                                warn!(
-                                    task_failures = report.task_failures,
-                                    "mesh unblock broadcast tasks failed before reporting outcomes"
-                                );
-                            }
+                    for delta in pending_unban_deltas {
+                        let report = handle
+                            .broadcast(ramshield_mesh::MeshMessage::Unblock(delta))
+                            .await;
+                        for peer in report.peers.iter().filter(|peer| {
+                            peer.outcome != ramshield_mesh::transport::PeerSendOutcome::Written
+                        }) {
+                            warn!(
+                                peer = %peer.peer,
+                                outcome = ?peer.outcome,
+                                "mesh unblock was committed locally but broadcast was not delivered"
+                            );
                         }
+                        if report.task_failures > 0 {
+                            warn!(
+                                task_failures = report.task_failures,
+                                "mesh unblock broadcast tasks failed before reporting outcomes"
+                            );
+                        }
+                    }
                 }
                 let xdp_applied = match cmd.cidr {
                     Some(network) => self.xdp.apply_cidr_unblock(network, cmd.decision_id),
