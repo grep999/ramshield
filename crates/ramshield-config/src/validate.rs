@@ -475,6 +475,15 @@ mod mesh_peer_identity_tests {
     }
 
     #[test]
+    fn mesh_debug_redacts_local_and_peer_keys() {
+        let config = configured_mesh();
+        let rendered = format!("{:?}", config.mesh);
+        assert!(!rendered.contains(&config.mesh.auth_key));
+        assert!(!rendered.contains(&config.mesh.peer_auth_keys[0]));
+        assert!(rendered.contains("[REDACTED"));
+    }
+
+    #[test]
     fn mesh_rejects_peer_without_matching_identity_or_key() {
         let mut config = configured_mesh();
         config.mesh.peer_node_ids.clear();
