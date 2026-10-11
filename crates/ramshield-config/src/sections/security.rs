@@ -1,4 +1,5 @@
 use crate::*;
+use std::fmt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutonomousConfig {
