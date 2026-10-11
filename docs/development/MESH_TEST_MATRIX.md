@@ -39,7 +39,9 @@
 - [ ] Replay of a previously valid envelope; duplicate semantics are explicit.
 - [x] Nil/missing incarnation is rejected for block, unblock, and sync deltas.
 - [ ] Self-origin, unknown node ID, counter extremes, invalid tier, invalid expiry, and timestamp boundaries.
-- [ ] Same-key node impersonation and key rotation are either prevented or documented as accepted trust assumptions.
+- [x] Unknown/unconfigured node IDs and mismatched peer keys are rejected by transport tests.
+- [ ] Asymmetric per-origin signatures prevent a compromised configured peer from forging another node's CRDT dots; per-peer HMAC keys alone do not provide this guarantee.
+- [ ] Key rotation is exercised across a coordinated rollout.
 - [ ] Frame exactly at limit, one byte over, delimiter split across reads, clean EOF, partial EOF, CRLF, and multiple frames on one connection.
 - [ ] Reader/peer caps and malformed-frame floods remain bounded.
 
