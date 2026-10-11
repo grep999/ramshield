@@ -6,7 +6,7 @@
 
 use ramshield_mesh::{
     aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterDot},
-    transport::{MeshHandle, MeshMessage},
+    transport::{MeshHandle, MeshMessage, MeshPeer},
 };
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -19,7 +19,8 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-const TEST_KEY: &[u8] = b"mesh-test-key-at-least-16-bytes";
+const NODE_1_KEY: &[u8] = b"mesh-node-one-auth-key-at-least-32-bytes";
+const NODE_2_KEY: &[u8] = b"mesh-node-two-auth-key-at-least-32-bytes";
 
 async fn free_addr() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -54,12 +55,13 @@ async fn wait_for_one(handle: &MeshHandle) -> Vec<MeshMessage> {
 #[tokio::test]
 async fn authenticated_block_crosses_real_tcp_transport() {
     let receiver_addr = free_addr().await;
+    let sender_addr = free_addr().await;
     let receiver = MeshHandle::bind(
         2,
         Arc::new(AworsetBlocklist::new(2)),
         receiver_addr,
-        Vec::new(),
-        TEST_KEY.to_vec(),
+        vec![MeshPeer::new(1, sender_addr, NODE_1_KEY.to_vec())],
+        NODE_2_KEY.to_vec(),
     )
     .await
     .expect("bind receiver");
@@ -67,9 +69,9 @@ async fn authenticated_block_crosses_real_tcp_transport() {
     let sender = MeshHandle::bind(
         1,
         Arc::new(AworsetBlocklist::new(1)),
-        free_addr().await,
-        vec![receiver_addr],
-        TEST_KEY.to_vec(),
+        sender_addr,
+        vec![MeshPeer::new(2, receiver_addr, NODE_2_KEY.to_vec())],
+        NODE_1_KEY.to_vec(),
     )
     .await
     .expect("bind sender");
@@ -109,8 +111,8 @@ async fn invalid_hmac_frame_never_enters_receive_queue() {
         2,
         Arc::new(AworsetBlocklist::new(2)),
         receiver_addr,
-        Vec::new(),
-        TEST_KEY.to_vec(),
+        vec![MeshPeer::new(1, free_addr().await, NODE_1_KEY.to_vec())],
+        NODE_2_KEY.to_vec(),
     )
     .await
     .expect("bind receiver");
