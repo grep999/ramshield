@@ -3,7 +3,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, HashSet, VecDeque},
     future::Future,
     net::SocketAddr,
     sync::Arc,
@@ -95,12 +95,33 @@ struct Envelope {
     body: MeshMessage,
     mac: String,
 }
+/// A configured peer identity. Each configured peer has a distinct HMAC key.
+#[derive(Clone)]
+pub struct MeshPeer {
+    pub node_id: u32,
+    pub address: SocketAddr,
+    pub auth_key: Vec<u8>,
+}
+
+impl MeshPeer {
+    pub fn new(node_id: u32, address: SocketAddr, auth_key: Vec<u8>) -> Self {
+        Self {
+            node_id,
+            address,
+            auth_key,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct MeshHandle {
     node_id: u32,
     blocklist: Arc<AworsetBlocklist>,
-    peers: Arc<Vec<SocketAddr>>,
+    peers: Arc<Vec<MeshPeer>>,
+    /// This node's own signing key.
     auth_key: Arc<Vec<u8>>,
+    /// Keys authorized to authenticate incoming node IDs.
+    trusted_keys: Arc<HashMap<u32, Vec<u8>>>,
     incoming: Arc<Mutex<VecDeque<MeshMessage>>>,
     readers: Arc<Semaphore>,
     writers: Arc<Semaphore>,
@@ -112,17 +133,22 @@ impl MeshHandle {
         node_id: u32,
         blocklist: Arc<AworsetBlocklist>,
         listen: SocketAddr,
-        peers: Vec<SocketAddr>,
+        peers: Vec<MeshPeer>,
         auth_key: Vec<u8>,
     ) -> std::io::Result<Self> {
         validate_bind_args(node_id, &peers, &auth_key)?;
         let listener = TcpListener::bind(listen).await?;
+        let trusted_keys = peers
+            .iter()
+            .map(|peer| (peer.node_id, peer.auth_key.clone()))
+            .collect::<HashMap<_, _>>();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let handle = Self {
             node_id,
             blocklist,
             peers: Arc::new(peers),
             auth_key: Arc::new(auth_key),
+            trusted_keys: Arc::new(trusted_keys),
             incoming: Arc::new(Mutex::new(VecDeque::new())),
             readers: Arc::new(Semaphore::new(MAX_PEER_READERS)),
             writers: Arc::new(Semaphore::new(MAX_PEER_WRITERS)),
@@ -187,7 +213,8 @@ impl MeshHandle {
         let mut tasks = JoinSet::new();
         let mut report = BroadcastReport::default();
 
-        for peer in self.peers.iter().copied() {
+        for peer in self.peers.iter() {
+            let peer = peer.address;
             let permit = match self.writers.clone().acquire_owned().await {
                 Ok(permit) => permit,
                 Err(error) => {
@@ -316,8 +343,12 @@ impl MeshHandle {
             Ok(v) => v,
             Err(_) => return,
         };
+        let Some(peer_key) = self.trusted_keys.get(&env.node_id) else {
+            warn!(node_id = env.node_id, "mesh frame rejected: node ID is not configured");
+            return;
+        };
         if now_ms().abs_diff(env.ts_ms) > MAX_CLOCK_SKEW_MS
-            || !verify(&self.auth_key, &payload, &env.mac)
+            || !verify(peer_key, &payload, &env.mac)
         {
             warn!(
                 node_id = env.node_id,
@@ -346,24 +377,42 @@ impl MeshHandle {
     }
 }
 /// Validate the public library boundary as well as the higher-level config.
-fn validate_bind_args(node_id: u32, peers: &[SocketAddr], auth_key: &[u8]) -> std::io::Result<()> {
+fn validate_bind_args(node_id: u32, peers: &[MeshPeer], auth_key: &[u8]) -> std::io::Result<()> {
     let invalid = |message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message);
     if node_id == 0 {
         return Err(invalid("mesh node_id must be non-zero"));
     }
     if auth_key.len() < 16 {
-        return Err(invalid("mesh authentication key must be at least 16 bytes"));
+        return Err(invalid("local mesh authentication key must be at least 16 bytes"));
     }
     if peers.len() > MAX_CONFIGURED_PEERS {
         return Err(invalid("mesh peer list exceeds 256 peers"));
     }
-    if peers
-        .iter()
-        .any(|peer| peer.port() == 0 || peer.ip().is_unspecified())
-    {
-        return Err(invalid(
-            "mesh peers must have a concrete IP address and non-zero port",
-        ));
+    let mut seen_ids = HashSet::with_capacity(peers.len());
+    let mut seen_addresses = HashSet::with_capacity(peers.len());
+    let mut seen_keys = HashSet::with_capacity(peers.len() + 1);
+    seen_keys.insert(auth_key.to_vec());
+    for peer in peers {
+        if peer.node_id == 0 || peer.node_id == node_id {
+            return Err(invalid("mesh peer node IDs must be non-zero and not self"));
+        }
+        if peer.auth_key.len() < 16 {
+            return Err(invalid("each mesh peer key must be at least 16 bytes"));
+        }
+        if !seen_keys.insert(peer.auth_key.clone()) {
+            return Err(invalid("mesh local and peer authentication keys must be unique"));
+        }
+        if peer.address.port() == 0 || peer.address.ip().is_unspecified() {
+            return Err(invalid(
+                "mesh peers must have a concrete IP address and non-zero port",
+            ));
+        }
+        if !seen_ids.insert(peer.node_id) {
+            return Err(invalid("mesh peer node IDs must be unique"));
+        }
+        if !seen_addresses.insert(peer.address) {
+            return Err(invalid("mesh peer addresses must be unique"));
+        }
     }
     Ok(())
 }
