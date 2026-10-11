@@ -106,6 +106,23 @@ impl Config {
                 .map(ToOwned::to_owned)
                 .collect();
         }
+        if let Ok(v) = std::env::var("RAMSHIELD_MESH__PEER_NODE_IDS") {
+            self.mesh.peer_node_ids = v
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(|value| value.parse::<u32>())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| anyhow::anyhow!("invalid RAMSHIELD_MESH__PEER_NODE_IDS: {error}"))?;
+        }
+        if let Ok(v) = std::env::var("RAMSHIELD_MESH__PEER_AUTH_KEYS") {
+            self.mesh.peer_auth_keys = v
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToOwned::to_owned)
+                .collect();
+        }
         if let Ok(v) = std::env::var("RAMSHIELD_MESH__AUTH_KEY") {
             self.mesh.auth_key = v;
         }
