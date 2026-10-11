@@ -509,7 +509,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod frame_tests {
     use super::{
-        Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES, MeshHandle, MeshMessage,
+        Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES, MeshHandle, MeshMessage, MeshPeer,
         PeerSendOutcome, chunk_sync, now_ms, push_frame_bytes, read_bounded_frame,
         read_bounded_frame_with_timeout, valid_message, validate_bind_args, with_timeout,
     };
@@ -565,13 +565,23 @@ mod frame_tests {
         let error = validate_bind_args(1, &[], &[7u8; 15]).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 
-        let peers: Vec<SocketAddr> = (0..=MAX_CONFIGURED_PEERS)
-            .map(|_| "127.0.0.1:1234".parse().expect("peer address"))
+        let peers: Vec<MeshPeer> = (0..=MAX_CONFIGURED_PEERS)
+            .map(|_| {
+                MeshPeer::new(
+                    2,
+                    "127.0.0.1:1234".parse().expect("peer address"),
+                    vec![8; 32],
+                )
+            })
             .collect();
         let error = validate_bind_args(1, &peers, &valid_key).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 
-        let invalid_peer = ["0.0.0.0:1234".parse().expect("unspecified peer")];
+        let invalid_peer = [MeshPeer::new(
+            2,
+            "0.0.0.0:1234".parse().expect("unspecified peer"),
+            vec![8; 32],
+        )];
         let error = validate_bind_args(1, &invalid_peer, &valid_key).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
@@ -593,7 +603,7 @@ mod frame_tests {
                 1,
                 Arc::new(AworsetBlocklist::new(1)),
                 "127.0.0.1:0".parse().expect("listen address"),
-                vec![unavailable_peer],
+                vec![MeshPeer::new(2, unavailable_peer, vec![8; 32])],
                 vec![7; 32],
             )
             .await
