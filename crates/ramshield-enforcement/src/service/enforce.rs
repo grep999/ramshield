@@ -1,5 +1,72 @@
 use crate::*;
 
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) enum PendingMeshMutation {
+    Block {
+        ip: IpAddr,
+        node_id: u32,
+        incarnation: Uuid,
+        counter: u64,
+        created_at_ms: u64,
+        expires_at_ms: Option<u64>,
+        tier: u8,
+    },
+    Unblock {
+        ip: IpAddr,
+        node_id: u32,
+        incarnation: Uuid,
+        counter: u64,
+    },
+}
+
+#[allow(dead_code)]
+impl PendingMeshMutation {
+    pub(crate) fn to_wal_entry(&self, ts_ns: u64) -> WalEntry {
+        match self {
+            Self::Block {
+                ip,
+                node_id,
+                incarnation,
+                counter,
+                created_at_ms,
+                expires_at_ms,
+                tier,
+            } => WalEntry::MeshMutation {
+                schema_version: 1,
+                origin_node_id: *node_id,
+                origin_incarnation: incarnation.to_string(),
+                origin_counter: *counter,
+                ip: ip.to_string(),
+                action: ramshield_storage::wal::MeshMutationAction::Block,
+                created_at_ms: *created_at_ms,
+                expires_at_ms: *expires_at_ms,
+                tier: *tier,
+                signature: None,
+                ts_ns,
+            },
+            Self::Unblock {
+                ip,
+                node_id,
+                incarnation,
+                counter,
+            } => WalEntry::MeshMutation {
+                schema_version: 1,
+                origin_node_id: *node_id,
+                origin_incarnation: incarnation.to_string(),
+                origin_counter: *counter,
+                ip: ip.to_string(),
+                action: ramshield_storage::wal::MeshMutationAction::Unblock,
+                created_at_ms: ts_ns / 1_000_000,
+                expires_at_ms: None,
+                tier: 0,
+                signature: None,
+                ts_ns,
+            },
+        }
+    }
+}
+
 impl EnforcementService {
     pub(crate) fn remember_result(&mut self, result: &EnforceResult) {
         if self
@@ -23,6 +90,25 @@ impl EnforcementService {
         &mut self,
         cmd: EnforceCommand,
     ) -> Result<EnforceResult, EnforcementError> {
+        self.enforce_inner(cmd, None).await
+    }
+
+    #[cfg(feature = "mesh")]
+    pub(crate) async fn enforce_mesh_mutation(
+        &mut self,
+        cmd: EnforceCommand,
+        mutation: PendingMeshMutation,
+    ) -> Result<EnforceResult, EnforcementError> {
+        self.enforce_inner(cmd, Some(mutation)).await
+    }
+
+    async fn enforce_inner(
+        &mut self,
+        cmd: EnforceCommand,
+        incoming_mesh_mutation: Option<PendingMeshMutation>,
+    ) -> Result<EnforceResult, EnforcementError> {
+        #[cfg(not(feature = "mesh"))]
+        let _ = &incoming_mesh_mutation;
         // Idempotent replay: return what actually happened the first time —
         // a fabricated `xdp_applied: true` would hide a dataplane failure
         // from every retry consumer.
@@ -53,46 +139,196 @@ impl EnforcementService {
             .as_ref()
             .map(|s| s.barrier.lock().unwrap_or_else(|e| e.into_inner()));
 
-        // Step 1: commit intent to WAL (durable) — before any state change.
-        let wal_lsn = if let Some(ref wal) = self.wal {
-            let now_ns = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0);
-            let entry = match cmd.action {
-                EnforceAction::Block => match cmd.cidr {
-                    Some(cidr) => WalEntry::BlockCidr {
-                        cidr,
-                        reason: cmd.reason.clone(),
-                        ttl_secs: (cmd.ttl_seconds > 0).then_some(cmd.ttl_seconds),
-                        ts_ns: now_ns,
-                    },
-                    None => WalEntry::BlockIp {
-                        ip: cmd.ip.to_string(),
-                        reason: cmd.reason.clone(),
-                        ttl_secs: (cmd.ttl_seconds > 0).then_some(cmd.ttl_seconds),
-                        ts_ns: now_ns,
-                    },
-                },
-                EnforceAction::Unblock => match cmd.cidr {
-                    Some(cidr) => WalEntry::UnblockCidr {
-                        cidr,
-                        ts_ns: now_ns,
-                    },
-                    None => WalEntry::UnblockIp {
-                        ip: cmd.ip.to_string(),
-                        ts_ns: now_ns,
-                    },
-                },
-            };
-            let lsn = wal
-                .append(&entry)
-                .map_err(|e| EnforcementError::Wal(e.to_string()))?;
-            self.last_wal_lsn = Some(lsn);
-            Some(lsn)
+        // Reserve the exact CRDT mutation before writing the WAL, but do not
+        // publish it to in-memory mesh state until the event is persisted.
+        #[cfg(feature = "mesh")]
+        let prepared_mesh_block = if matches!(&cmd.action, EnforceAction::Block)
+            && cmd.cidr.is_none()
+            && cmd.source != "mesh"
+        {
+            self.mesh_blocklist
+                .as_ref()
+                .map(|mesh| mesh.prepare_ban(cmd.ip, cmd.ttl_seconds.saturating_mul(1000), 2))
         } else {
             None
         };
+        #[cfg(feature = "mesh")]
+        let prepared_mesh_unblocks = if matches!(&cmd.action, EnforceAction::Unblock)
+            && cmd.cidr.is_none()
+            && cmd.source != "mesh"
+        {
+            self.mesh_blocklist
+                .as_ref()
+                .map(|mesh| mesh.prepare_unban(cmd.ip))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let now_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        #[cfg(feature = "mesh")]
+        let mesh_wal_entries: Vec<WalEntry> = if let Some(mutation) =
+            incoming_mesh_mutation.as_ref()
+        {
+            vec![mutation.to_wal_entry(now_ns)]
+        } else if cmd.source != "mesh" && cmd.cidr.is_none() {
+            if let Some(delta) = prepared_mesh_block.as_ref() {
+                vec![WalEntry::MeshMutation {
+                    schema_version: 1,
+                    origin_node_id: delta.dot.node_id,
+                    origin_incarnation: delta.dot.incarnation.to_string(),
+                    origin_counter: delta.dot.counter,
+                    ip: delta.ip.to_string(),
+                    action: ramshield_storage::wal::MeshMutationAction::Block,
+                    created_at_ms: delta.created_at_ms,
+                    expires_at_ms: (delta.expires_at_ms != u64::MAX).then_some(delta.expires_at_ms),
+                    tier: delta.tier,
+                    signature: None,
+                    ts_ns: now_ns,
+                }]
+            } else if !prepared_mesh_unblocks.is_empty() {
+                prepared_mesh_unblocks
+                    .iter()
+                    .map(|delta| WalEntry::MeshMutation {
+                        schema_version: 1,
+                        origin_node_id: delta.dot.node_id,
+                        origin_incarnation: delta.dot.incarnation.to_string(),
+                        origin_counter: delta.dot.counter,
+                        ip: delta.ip.to_string(),
+                        action: ramshield_storage::wal::MeshMutationAction::Unblock,
+                        created_at_ms: now_ns / 1_000_000,
+                        expires_at_ms: None,
+                        tier: 0,
+                        signature: None,
+                        ts_ns: now_ns,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        #[cfg(not(feature = "mesh"))]
+        let mesh_wal_entries: Vec<WalEntry> = Vec::new();
+
+        // Step 1: commit intent to WAL (durable) — before any state change.
+        // Mesh mutations carry their original CRDT dot. Persist all tombstones
+        // for an unblock as one ordered batch before applying any of them.
+        let wal_lsn = if let Some(ref wal) = self.wal {
+            if !mesh_wal_entries.is_empty() {
+                let mut last_lsn = None;
+                for entry in &mesh_wal_entries {
+                    let lsn = wal
+                        .append(entry)
+                        .map_err(|e| EnforcementError::Wal(e.to_string()))?;
+                    last_lsn = Some(lsn);
+                }
+                wal.sync()
+                    .map_err(|e| EnforcementError::Wal(e.to_string()))?;
+                let lsn = last_lsn.expect("non-empty mesh WAL batch has a last LSN");
+                self.last_wal_lsn = Some(lsn);
+                Some(lsn)
+            } else if cmd.source == "mesh" {
+                // Incoming mesh events are durably appended by apply_mesh_* before
+                // their CRDT merge. Do not write a second, provenance-free record.
+                None
+            } else {
+                let entry = match cmd.action {
+                    EnforceAction::Block => match cmd.cidr {
+                        Some(cidr) => WalEntry::BlockCidr {
+                            cidr,
+                            reason: cmd.reason.clone(),
+                            ttl_secs: (cmd.ttl_seconds > 0).then_some(cmd.ttl_seconds),
+                            ts_ns: now_ns,
+                        },
+                        None => WalEntry::BlockIp {
+                            ip: cmd.ip.to_string(),
+                            reason: cmd.reason.clone(),
+                            ttl_secs: (cmd.ttl_seconds > 0).then_some(cmd.ttl_seconds),
+                            ts_ns: now_ns,
+                        },
+                    },
+                    EnforceAction::Unblock => match cmd.cidr {
+                        Some(cidr) => WalEntry::UnblockCidr {
+                            cidr,
+                            ts_ns: now_ns,
+                        },
+                        None => WalEntry::UnblockIp {
+                            ip: cmd.ip.to_string(),
+                            ts_ns: now_ns,
+                        },
+                    },
+                };
+                let lsn = wal
+                    .append(&entry)
+                    .map_err(|e| EnforcementError::Wal(e.to_string()))?;
+                self.last_wal_lsn = Some(lsn);
+                Some(lsn)
+            }
+        } else {
+            None
+        };
+
+        // Once the event is durable, publish the exact same operation into
+        // the CRDT before touching projections. If a later store/XDP operation
+        // fails, WAL and mesh still agree and reconciliation can repair the projection.
+        #[cfg(feature = "mesh")]
+        if let Some(mesh) = &self.mesh_blocklist {
+            if let Some(mutation) = incoming_mesh_mutation.as_ref() {
+                match mutation {
+                    PendingMeshMutation::Block {
+                        ip,
+                        node_id,
+                        incarnation,
+                        counter,
+                        created_at_ms,
+                        expires_at_ms,
+                        tier,
+                    } => {
+                        mesh.merge_delta(&ramshield_mesh::aworset::ClusterBlockDelta {
+                            ip: *ip,
+                            dot: ramshield_mesh::aworset::ClusterDot {
+                                node_id: *node_id,
+                                incarnation: *incarnation,
+                                counter: *counter,
+                            },
+                            created_at_ms: *created_at_ms,
+                            expires_at_ms: expires_at_ms.unwrap_or(u64::MAX),
+                            tier: *tier,
+                        });
+                    }
+                    PendingMeshMutation::Unblock {
+                        ip,
+                        node_id,
+                        incarnation,
+                        counter,
+                    } => {
+                        mesh.merge_unblock_delta(&ramshield_mesh::aworset::ClusterUnblockDelta {
+                            ip: *ip,
+                            dot: ramshield_mesh::aworset::ClusterDot {
+                                node_id: *node_id,
+                                incarnation: *incarnation,
+                                counter: *counter,
+                            },
+                        });
+                    }
+                }
+            }
+            if let Some(delta) = prepared_mesh_block.as_ref() {
+                mesh.merge_delta(delta);
+            }
+            for delta in &prepared_mesh_unblocks {
+                mesh.merge_unblock_delta(delta);
+            }
+        }
+
+        #[cfg(feature = "mesh")]
+        if !mesh_wal_entries.is_empty() {
+            self.mesh_projection_pending.insert(cmd.ip);
+        }
 
         // Step 2: storage mutation.
         let now_ns = SystemTime::now()
@@ -215,6 +451,16 @@ impl EnforcementService {
                     }
                 }
 
+                #[cfg(feature = "mesh")]
+                if prepared_mesh_block.is_some() {
+                    // The userspace Store projection succeeded; a later XDP
+                    // failure must not make a peer tombstone look unapplied.
+                    self.mesh_applied_ips.insert(cmd.ip);
+                }
+                #[cfg(feature = "mesh")]
+                if !mesh_wal_entries.is_empty() {
+                    self.mesh_projection_pending.remove(&cmd.ip);
+                }
                 drop(_ckpt_guard);
                 // Step 3: dataplane (barrier released — XDP stays outside).
                 let is_cidr = cmd.cidr.is_some();
@@ -257,27 +503,30 @@ impl EnforcementService {
                 #[cfg(feature = "mesh")]
                 if cmd.cidr.is_none() && cmd.source != "mesh" {
                     self.mesh_operator_suppressions.remove(&cmd.ip);
-                    if let (Some(mesh), Some(handle)) = (&self.mesh_blocklist, &self.mesh_handle) {
-                        let ttl_ms = cmd.ttl_seconds.saturating_mul(1000);
-                        let delta = mesh.record_ban(cmd.ip, ttl_ms, 2);
+                    if let Some(mesh) = &self.mesh_blocklist {
+                        let delta = prepared_mesh_block.clone().unwrap_or_else(|| {
+                            mesh.record_ban(cmd.ip, cmd.ttl_seconds.saturating_mul(1000), 2)
+                        });
                         self.metrics.inc_mesh_record_ban();
-                        let report = handle
-                            .broadcast(ramshield_mesh::MeshMessage::Block(delta))
-                            .await;
-                        for peer in report.peers.iter().filter(|peer| {
-                            peer.outcome != ramshield_mesh::transport::PeerSendOutcome::Written
-                        }) {
-                            warn!(
-                                peer = %peer.peer,
-                                outcome = ?peer.outcome,
-                                "mesh block was committed locally but broadcast was not delivered"
-                            );
-                        }
-                        if report.task_failures > 0 {
-                            warn!(
-                                task_failures = report.task_failures,
-                                "mesh block broadcast tasks failed before reporting outcomes"
-                            );
+                        if let Some(handle) = &self.mesh_handle {
+                            let report = handle
+                                .broadcast(ramshield_mesh::MeshMessage::Block(delta))
+                                .await;
+                            for peer in report.peers.iter().filter(|peer| {
+                                peer.outcome != ramshield_mesh::transport::PeerSendOutcome::Written
+                            }) {
+                                warn!(
+                                    peer = %peer.peer,
+                                    outcome = ?peer.outcome,
+                                    "mesh block was committed locally but broadcast was not delivered"
+                                );
+                            }
+                            if report.task_failures > 0 {
+                                warn!(
+                                    task_failures = report.task_failures,
+                                    "mesh block broadcast tasks failed before reporting outcomes"
+                                );
+                            }
                         }
                     }
                 }
@@ -337,12 +586,15 @@ impl EnforcementService {
                     // live unblock activity. A CIDR unblock is NOT an IP unban.
                     #[cfg(feature = "mesh")]
                     {
-                        if let Some(mesh) = &self.mesh_blocklist {
-                            let deltas = mesh.record_unban(cmd.ip);
-                            self.metrics.inc_mesh_record_unban();
+                        if self.mesh_blocklist.is_some() {
                             if cmd.source != "mesh" {
-                                pending_unban_deltas = deltas;
+                                // These exact tombstones were included in the WAL batch
+                                // above and already committed to the CRDT after durability.
+                                pending_unban_deltas = prepared_mesh_unblocks.clone();
                             }
+                            // Incoming mesh tombstones were already merged and must
+                            // not be re-originated or rebroadcast here.
+                            self.metrics.inc_mesh_record_unban();
                         }
                         if cmd.source != "mesh" {
                             self.mesh_operator_suppressions.insert(cmd.ip);
@@ -356,6 +608,10 @@ impl EnforcementService {
                     }
                 }
                 // Barrier protects WAL+store only; mesh IO and XDP stay outside.
+                #[cfg(feature = "mesh")]
+                if !mesh_wal_entries.is_empty() {
+                    self.mesh_projection_pending.remove(&cmd.ip);
+                }
                 drop(_ckpt_guard);
                 #[cfg(feature = "mesh")]
                 if !pending_unban_deltas.is_empty() {

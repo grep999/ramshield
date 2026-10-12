@@ -1,34 +1,56 @@
-use crate::aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterUnblockDelta};
+use crate::aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterUnblockDelta, StateCursor};
+use crate::condition_sync::{ConditionSyncPlanner, SyncCondition, SyncPolicy};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     future::Future,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{Mutex, Semaphore, watch},
+    sync::{Mutex, Semaphore, oneshot, watch},
     task::JoinSet,
+    time::MissedTickBehavior,
 };
 use tracing::{debug, warn};
 
 type HmacSha256 = Hmac<Sha256>;
 const MAX_FRAME: usize = 64 * 1024;
 const MAX_CLOCK_SKEW_MS: u64 = 30_000;
-const ANTI_ENTROPY_MS: u64 = 2_000;
 const MAX_SYNC_ENTRIES: usize = 4096;
-const MAX_SYNC_FRAME_ENTRIES: usize = 128;
+const MAX_SYNC_FRAME_ENTRIES: usize = 16;
 const MAX_INCOMING_QUEUE: usize = 2048;
 const MAX_PEER_READERS: usize = 256;
 const MAX_CONFIGURED_PEERS: usize = 256;
 const MAX_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PEER_WRITERS: usize = 64;
 const MAX_PEER_WRITE_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_APPLICATION_ACK_WAIT: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MeshMutationKind {
+    Block,
+    Unblock,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReplicatedMeshMutation {
+    /// LSN in the sending node's WAL, not the origin node's CRDT counter.
+    pub source_lsn: u64,
+    pub origin_node_id: u32,
+    pub origin_incarnation: String,
+    pub origin_counter: u64,
+    pub ip: IpAddr,
+    pub action: MeshMutationKind,
+    pub created_at_ms: u64,
+    pub expires_at_ms: Option<u64>,
+    pub tier: u8,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MeshMessage {
@@ -38,11 +60,17 @@ pub enum MeshMessage {
         blocks: Vec<ClusterBlockDelta>,
         unblocks: Vec<ClusterUnblockDelta>,
     },
+    WalBatch {
+        source_node_id: u32,
+        start_lsn: u64,
+        end_lsn: u64,
+        mutations: Vec<ReplicatedMeshMutation>,
+    },
 }
 
-/// Result of attempting to write a mesh message to one configured peer.
-/// `Written` confirms the frame was written to the peer's TCP socket; it does
-/// not confirm that the peer authenticated, accepted, or applied the message.
+/// Result of attempting to deliver a mesh message to one configured peer.
+/// `Written` means the receiver returned an authenticated application ACK after
+/// durable acceptance (or intentional stale/policy rejection), not just TCP write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerSendOutcome {
     Written,
@@ -59,7 +87,7 @@ pub struct PeerSendResult {
 }
 
 /// A broadcast is successful only for peers whose outcome is `Written`.
-/// Application success is reported separately by the receiving enforcement service.
+/// This requires the receiver's authenticated application acknowledgement.
 #[must_use = "inspect per-peer mesh delivery outcomes"]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BroadcastReport {
@@ -95,16 +123,76 @@ struct Envelope {
     body: MeshMessage,
     mac: String,
 }
+struct PeerSyncState {
+    planner: ConditionSyncPlanner,
+    cursor: Option<StateCursor>,
+    delivery_failed: bool,
+    /// Invalidates an in-flight page when retention recovery requests a full
+    /// snapshot, preventing an older completion from overwriting cursor=None.
+    generation: u64,
+    /// Sender WAL boundary captured when the recovery attempt starts.
+    recovery_boundary_lsn: Option<u64>,
+    /// Completed local snapshot rotation, awaiting consumption by enforcement.
+    completed_recovery: Option<(u64, u64)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AckResponse {
+    accepted: bool,
+    ack_lsn: Option<u64>,
+}
+
+struct IncomingFrame {
+    message: MeshMessage,
+    ack: oneshot::Sender<AckResponse>,
+}
+
+pub struct ReceivedMeshMessage {
+    pub message: MeshMessage,
+    ack: Option<oneshot::Sender<AckResponse>>,
+}
+
+impl ReceivedMeshMessage {
+    /// Complete the receive-side application handshake. True means the
+    /// mutation was durably accepted (or intentionally ignored as stale/policy
+    /// suppressed); false asks the sender to retry the page.
+    pub fn acknowledge(self, accepted: bool) {
+        self.acknowledge_with_lsn(accepted, None);
+    }
+
+    /// Acknowledge a WAL batch through the sender's local LSN. The LSN is
+    /// meaningful only to the sender and is never compared with receiver LSNs.
+    pub fn acknowledge_with_lsn(mut self, accepted: bool, ack_lsn: Option<u64>) {
+        if let Some(ack) = self.ack.take() {
+            let _ = ack.send(AckResponse {
+                accepted,
+                ack_lsn: if accepted { ack_lsn } else { None },
+            });
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AckEnvelope {
+    ts_ms: u64,
+    node_id: u32,
+    accepted: bool,
+    ack_lsn: Option<u64>,
+    mac: String,
+}
+
 #[derive(Clone)]
 pub struct MeshHandle {
     node_id: u32,
     blocklist: Arc<AworsetBlocklist>,
     peers: Arc<Vec<SocketAddr>>,
     auth_key: Arc<Vec<u8>>,
-    incoming: Arc<Mutex<VecDeque<MeshMessage>>>,
+    incoming: Arc<Mutex<VecDeque<IncomingFrame>>>,
     readers: Arc<Semaphore>,
     writers: Arc<Semaphore>,
     shutdown_tx: watch::Sender<bool>,
+    sync_states: Arc<Mutex<HashMap<SocketAddr, PeerSyncState>>>,
+    sync_epoch: Instant,
 }
 
 impl MeshHandle {
@@ -116,6 +204,27 @@ impl MeshHandle {
         auth_key: Vec<u8>,
     ) -> std::io::Result<Self> {
         validate_bind_args(node_id, &peers, &auth_key)?;
+        let sync_states = peers
+            .iter()
+            .copied()
+            .map(|peer| {
+                ConditionSyncPlanner::new(SyncPolicy::default())
+                    .map(|planner| {
+                        (
+                            peer,
+                            PeerSyncState {
+                                planner,
+                                cursor: None,
+                                delivery_failed: false,
+                                generation: 0,
+                                recovery_boundary_lsn: None,
+                                completed_recovery: None,
+                            },
+                        )
+                    })
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))
+            })
+            .collect::<std::io::Result<HashMap<_, _>>>()?;
         let listener = TcpListener::bind(listen).await?;
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let handle = Self {
@@ -127,6 +236,8 @@ impl MeshHandle {
             readers: Arc::new(Semaphore::new(MAX_PEER_READERS)),
             writers: Arc::new(Semaphore::new(MAX_PEER_WRITERS)),
             shutdown_tx,
+            sync_states: Arc::new(Mutex::new(sync_states)),
+            sync_epoch: Instant::now(),
         };
         let accept_handle = handle.clone();
         let mut listener_shutdown = shutdown_rx.clone();
@@ -158,7 +269,8 @@ impl MeshHandle {
         let sync_handle = handle.clone();
         let mut sync_shutdown = shutdown_rx;
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_millis(ANTI_ENTROPY_MS));
+            let mut tick = tokio::time::interval(Duration::from_millis(25));
+            tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
                     _ = tick.tick() => sync_handle.broadcast_sync().await,
@@ -178,12 +290,72 @@ impl MeshHandle {
         self.shutdown_tx.send_replace(true);
     }
 
+    /// Local node identity carried by authenticated WAL batches.
+    pub fn node_id(&self) -> u32 {
+        self.node_id
+    }
+
+    /// Configured replication targets.
+    pub fn peers(&self) -> Vec<SocketAddr> {
+        self.peers.as_ref().clone()
+    }
+
+    /// Request a full CRDT anti-entropy rotation for a peer after its WAL
+    /// history fell behind retention. The boundary is fixed for the lifetime
+    /// of the attempt; repeated tick calls must not restart an in-flight repair.
+    pub async fn request_full_sync(&self, peer: SocketAddr, boundary_lsn: u64) {
+        let now = self.sync_epoch.elapsed();
+        if let Some(state) = self.sync_states.lock().await.get_mut(&peer)
+            && state.recovery_boundary_lsn.is_none()
+            && state.completed_recovery.is_none()
+        {
+            state.generation = state.generation.wrapping_add(1);
+            state.cursor = None;
+            state.recovery_boundary_lsn = Some(boundary_lsn);
+            state.planner.condition(SyncCondition::LocalMutation, now);
+        }
+    }
+
+    /// Consume a completed full-state rotation. Completion is published only
+    /// after every frame in every page of the current generation was accepted.
+    pub async fn take_completed_recovery(&self, peer: SocketAddr) -> Option<(u64, u64)> {
+        self.sync_states
+            .lock()
+            .await
+            .get_mut(&peer)
+            .and_then(|state| state.completed_recovery.take())
+    }
+
+    /// Send a WAL batch and return the sender-local LSN durably acknowledged
+    /// by the receiver.
+    pub async fn send_wal_batch(
+        &self,
+        peer: SocketAddr,
+        body: MeshMessage,
+    ) -> std::io::Result<Option<u64>> {
+        let _permit = self
+            .writers
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        tokio::time::timeout(MAX_PEER_WRITE_TIMEOUT, self.send_to_ack(peer, body))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "mesh WAL batch acknowledgement timed out",
+                )
+            })?
+    }
+
     /// Send to configured peers and return one explicit outcome per peer.
     ///
-    /// A `Written` result only confirms that the frame was written to the TCP
-    /// socket. It is not an acknowledgement of remote authentication or application.
-    /// Concurrency is bounded before each task is spawned.
+    /// A `Written` result now means the peer returned an authenticated
+    /// application ACK after processing the frame. Concurrency is bounded
+    /// before each task is spawned.
     pub async fn broadcast(&self, body: MeshMessage) -> BroadcastReport {
+        self.mark_all_sync(SyncCondition::LocalMutation).await;
         let mut tasks = JoinSet::new();
         let mut report = BroadcastReport::default();
 
@@ -230,14 +402,22 @@ impl MeshHandle {
             match joined {
                 Ok((peer, outcome)) => {
                     match &outcome {
-                        PeerSendOutcome::Written => {}
+                        PeerSendOutcome::Written => {
+                            self.note_peer_success(peer).await;
+                        }
                         PeerSendOutcome::TimedOut => {
+                            self.condition_peer(peer, SyncCondition::DeliveryFailed)
+                                .await;
                             warn!(peer = %peer, "mesh outbound send timed out");
                         }
                         PeerSendOutcome::Cancelled => {
+                            self.condition_peer(peer, SyncCondition::DeliveryFailed)
+                                .await;
                             debug!(peer = %peer, "mesh outbound send cancelled");
                         }
                         PeerSendOutcome::Failed { message } => {
+                            self.condition_peer(peer, SyncCondition::DeliveryFailed)
+                                .await;
                             warn!(peer = %peer, error = %message, "mesh outbound send failed");
                         }
                     }
@@ -252,24 +432,211 @@ impl MeshHandle {
 
         report
     }
+    /// Legacy drain API. Dropping each acknowledgement responder causes the
+    /// sender to retry; production application code should use drain_with_ack.
     pub async fn drain(&self) -> Vec<MeshMessage> {
         let mut q = self.incoming.lock().await;
-        q.drain(..).collect()
+        q.drain(..).map(|frame| frame.message).collect()
     }
+
+    /// Drain incoming frames while retaining their acknowledgement handles.
+    /// A frame is not considered delivered until the caller acknowledges after
+    /// durable application.
+    pub async fn drain_with_ack(&self) -> Vec<ReceivedMeshMessage> {
+        let mut q = self.incoming.lock().await;
+        q.drain(..)
+            .map(|frame| ReceivedMeshMessage {
+                message: frame.message,
+                ack: Some(frame.ack),
+            })
+            .collect()
+    }
+
+    /// Call after drained remote messages have actually been merged into the
+    /// local CRDT. Draining alone is not treated as application success.
+    pub async fn notify_remote_state_applied(&self) {
+        self.mark_all_sync(SyncCondition::RemoteStateApplied).await;
+    }
+
+    async fn mark_all_sync(&self, condition: SyncCondition) {
+        let now = self.sync_epoch.elapsed();
+        let mut states = self.sync_states.lock().await;
+        for state in states.values_mut() {
+            state.planner.condition(condition, now);
+        }
+    }
+
+    async fn condition_peer(&self, peer: SocketAddr, condition: SyncCondition) {
+        let now = self.sync_epoch.elapsed();
+        if let Some(state) = self.sync_states.lock().await.get_mut(&peer) {
+            if condition == SyncCondition::DeliveryFailed {
+                state.delivery_failed = true;
+            }
+            state.planner.condition(condition, now);
+        }
+    }
+
+    async fn note_peer_success(&self, peer: SocketAddr) {
+        let now = self.sync_epoch.elapsed();
+        let mut states = self.sync_states.lock().await;
+        match states.get_mut(&peer) {
+            Some(state) if state.delivery_failed => {
+                state.delivery_failed = false;
+                state.planner.condition(SyncCondition::PeerReconnected, now);
+            }
+            _ => {}
+        }
+    }
+
     async fn broadcast_sync(&self) {
-        let (blocks, unblocks) = self.blocklist.snapshot(MAX_SYNC_ENTRIES);
-        for message in chunk_sync(&blocks, &unblocks) {
-            let report = self.broadcast(message).await;
-            if !report.all_written() {
-                warn!(
-                    written = report.written_count(),
-                    failed = report.failed_count(),
-                    "mesh anti-entropy sync was not delivered to every configured peer"
-                );
+        let now = self.sync_epoch.elapsed();
+        let due_peers: Vec<(SocketAddr, Option<StateCursor>, u64)> = {
+            let mut states = self.sync_states.lock().await;
+            states
+                .iter_mut()
+                .filter_map(|(peer, state)| {
+                    state
+                        .planner
+                        .take_due(now)
+                        .map(|_| (*peer, state.cursor.clone(), state.generation))
+                })
+                .collect()
+        };
+        if due_peers.is_empty() {
+            return;
+        }
+
+        // One bounded page task per due peer. The shared writer semaphore caps
+        // active network work; a slow peer cannot serialize all other peers.
+        let mut tasks = JoinSet::new();
+        for (peer, cursor, generation) in due_peers.iter().cloned() {
+            let handle = self.clone();
+            tasks.spawn(async move {
+                let (next_cursor, success) = handle.send_sync_page(peer, cursor).await;
+                (peer, next_cursor, success, generation)
+            });
+        }
+
+        let mut completed = Vec::with_capacity(due_peers.len());
+        while let Some(joined) = tasks.join_next().await {
+            match joined {
+                Ok((peer, next_cursor, success, generation)) => {
+                    completed.push(peer);
+                    let completed_at = self.sync_epoch.elapsed();
+                    let mut states = self.sync_states.lock().await;
+                    if let Some(state) = states.get_mut(&peer) {
+                        if state.generation == generation {
+                            state.planner.complete(completed_at, success);
+                            state.delivery_failed = !success;
+                            if success {
+                                state.cursor = next_cursor;
+                                if state.cursor.is_some() {
+                                    state
+                                        .planner
+                                        .condition(SyncCondition::LocalMutation, completed_at);
+                                } else if let Some(boundary_lsn) =
+                                    state.recovery_boundary_lsn.take()
+                                {
+                                    // This generation completed a full rotation. The enforcement
+                                    // actor advances its WAL cursor to the captured boundary, not
+                                    // to the WAL's newer current end.
+                                    state.completed_recovery = Some((generation, boundary_lsn));
+                                }
+                            }
+                        } else {
+                            // A full sync was requested while this older page
+                            // was in flight. Release the planner but preserve
+                            // the reset cursor and schedule the full rotation.
+                            state.planner.complete(completed_at, true);
+                            state.delivery_failed = false;
+                            state.cursor = None;
+                            state
+                                .planner
+                                .condition(SyncCondition::LocalMutation, completed_at);
+                        }
+                    }
+                }
+                Err(error) => {
+                    warn!(error = %error, "condition-driven mesh sync task failed");
+                }
+            }
+        }
+
+        // A panicked/cancelled task must not leave its planner permanently
+        // in-flight. Treat missing task outcomes as failed delivery.
+        let completed_at = self.sync_epoch.elapsed();
+        let mut states = self.sync_states.lock().await;
+        for (peer, _, generation) in due_peers {
+            if completed.contains(&peer) {
+                continue;
+            }
+            if let Some(state) = states.get_mut(&peer) {
+                if state.generation == generation {
+                    state.planner.complete(completed_at, false);
+                    state.delivery_failed = true;
+                } else {
+                    state.planner.complete(completed_at, true);
+                    state.delivery_failed = false;
+                    state.cursor = None;
+                    state
+                        .planner
+                        .condition(SyncCondition::LocalMutation, completed_at);
+                }
             }
         }
     }
+
+    async fn send_sync_page(
+        &self,
+        peer: SocketAddr,
+        cursor: Option<StateCursor>,
+    ) -> (Option<StateCursor>, bool) {
+        let page = self
+            .blocklist
+            .snapshot_page(cursor.as_ref(), MAX_SYNC_ENTRIES);
+        let messages = chunk_sync(&page.blocks, &page.unblocks);
+        if messages.is_empty() {
+            return (None, true);
+        }
+
+        let mut shutdown = self.shutdown_tx.subscribe();
+        if *shutdown.borrow() {
+            return (cursor, false);
+        }
+        let permit = tokio::select! {
+            permit = self.writers.clone().acquire_owned() => match permit {
+                Ok(permit) => permit,
+                Err(_) => return (cursor, false),
+            },
+            _ = shutdown.changed() => return (cursor, false),
+        };
+
+        for message in messages {
+            let send_result = tokio::select! {
+                result = with_timeout(MAX_PEER_WRITE_TIMEOUT, self.send_to(peer, message)) => result,
+                changed = shutdown.changed() => {
+                    let _ = changed;
+                    Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "mesh shutdown"))
+                }
+            };
+            if let Err(error) = send_result {
+                warn!(peer = %peer, error = %error, "condition-driven mesh sync page failed");
+                drop(permit);
+                return (cursor, false);
+            }
+        }
+        drop(permit);
+        (page.next_cursor, true)
+    }
     async fn send_to(&self, peer: SocketAddr, body: MeshMessage) -> std::io::Result<()> {
+        self.send_to_ack(peer, body).await.map(|_| ())
+    }
+
+    async fn send_to_ack(
+        &self,
+        peer: SocketAddr,
+        body: MeshMessage,
+    ) -> std::io::Result<Option<u64>> {
         let ts_ms = now_ms();
         let payload =
             serde_json::to_vec(&(ts_ms, self.node_id, &body)).map_err(std::io::Error::other)?;
@@ -290,7 +657,36 @@ impl MeshHandle {
         let mut stream = TcpStream::connect(peer).await?;
         stream.write_all(&frame).await?;
         stream.write_all(b"\n").await?;
-        Ok(())
+
+        let ack_frame = read_bounded_frame_with_timeout(&mut stream, MAX_PEER_WRITE_TIMEOUT)
+            .await?
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "peer closed connection before application ACK",
+                )
+            })?;
+        let ack_line = ack_frame.strip_suffix(b"\n").unwrap_or(&ack_frame);
+        let ack_line = ack_line.strip_suffix(b"\r").unwrap_or(ack_line);
+        let ack: AckEnvelope = serde_json::from_slice(ack_line).map_err(std::io::Error::other)?;
+        let ack_payload = serde_json::to_vec(&(ack.ts_ms, ack.node_id, ack.accepted, ack.ack_lsn))
+            .map_err(std::io::Error::other)?;
+        if ack.node_id == self.node_id
+            || now_ms().abs_diff(ack.ts_ms) > MAX_CLOCK_SKEW_MS
+            || !verify(&self.auth_key, &ack_payload, &ack.mac)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "peer application ACK authentication failed",
+            ));
+        }
+        if !ack.accepted {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "peer did not durably accept mesh frame; retry required",
+            ));
+        }
+        Ok(ack.ack_lsn)
     }
     async fn read_stream(&self, mut stream: TcpStream) {
         let mut shutdown = self.shutdown_tx.subscribe();
@@ -328,6 +724,16 @@ impl MeshHandle {
         if env.node_id == self.node_id {
             return;
         }
+        if matches!(
+            &env.body,
+            MeshMessage::WalBatch { source_node_id, .. } if *source_node_id != env.node_id
+        ) {
+            warn!(
+                node_id = env.node_id,
+                "mesh WAL batch source identity does not match authenticated envelope"
+            );
+            return;
+        }
         if !valid_message(&env.body, now_ms()) {
             warn!(
                 node_id = env.node_id,
@@ -335,14 +741,62 @@ impl MeshHandle {
             );
             return;
         }
+        let (ack_tx, ack_rx) = oneshot::channel();
         let mut q = self.incoming.lock().await;
-        if q.len() >= MAX_INCOMING_QUEUE {
-            // Prefer the newest authenticated state; anti-entropy will recover
-            // an older delta if it was displaced. Never allow mesh traffic to
-            // consume unbounded memory under a peer flood.
+        let overflow = q.len() >= MAX_INCOMING_QUEUE;
+        if overflow {
+            // Dropping the displaced frame's sender explicitly rejects it; its
+            // peer will retry instead of advancing a cursor over a lost event.
             q.pop_front();
         }
-        q.push_back(env.body);
+        q.push_back(IncomingFrame {
+            message: env.body,
+            ack: ack_tx,
+        });
+        drop(q);
+        if overflow {
+            self.mark_all_sync(SyncCondition::QueueOverflow).await;
+        }
+
+        let ack_response = tokio::select! {
+            result = tokio::time::timeout(MAX_APPLICATION_ACK_WAIT, ack_rx) => {
+                result.ok().and_then(Result::ok).unwrap_or(AckResponse {
+                    accepted: false,
+                    ack_lsn: None,
+                })
+            }
+            changed = shutdown.changed() => {
+                let _ = changed;
+                return;
+            }
+        };
+        let ts_ms = now_ms();
+        let ack_payload = match serde_json::to_vec(&(
+            ts_ms,
+            self.node_id,
+            ack_response.accepted,
+            ack_response.ack_lsn,
+        )) {
+            Ok(payload) => payload,
+            Err(_) => return,
+        };
+        let mac = match sign(&self.auth_key, &ack_payload) {
+            Ok(mac) => mac,
+            Err(_) => return,
+        };
+        let ack_frame = match serde_json::to_vec(&AckEnvelope {
+            ts_ms,
+            node_id: self.node_id,
+            accepted: ack_response.accepted,
+            ack_lsn: ack_response.ack_lsn,
+            mac,
+        }) {
+            Ok(frame) => frame,
+            Err(_) => return,
+        };
+        if stream.write_all(&ack_frame).await.is_ok() {
+            let _ = stream.write_all(b"\n").await;
+        }
     }
 }
 /// Validate the public library boundary as well as the higher-level config.
@@ -389,6 +843,36 @@ fn valid_message(message: &MeshMessage, now_ms: u64) -> bool {
                 && unblocks
                     .iter()
                     .all(|delta| delta.dot.node_id != 0 && !delta.dot.incarnation.is_nil())
+        }
+        MeshMessage::WalBatch {
+            source_node_id,
+            start_lsn,
+            end_lsn,
+            mutations,
+        } => {
+            *source_node_id != 0
+                && *start_lsn > 0
+                && *end_lsn >= *start_lsn
+                && mutations.len() <= MAX_SYNC_FRAME_ENTRIES
+                && mutations
+                    .windows(2)
+                    .all(|pair| pair[0].source_lsn < pair[1].source_lsn)
+                && mutations.iter().all(|mutation| {
+                    mutation.source_lsn >= *start_lsn
+                        && mutation.source_lsn <= *end_lsn
+                        && mutation.origin_node_id != 0
+                        && mutation.origin_counter > 0
+                        && uuid::Uuid::parse_str(&mutation.origin_incarnation)
+                            .is_ok_and(|id| !id.is_nil())
+                        && !mutation.ip.is_unspecified()
+                        && mutation.created_at_ms <= now_ms.saturating_add(MAX_CLOCK_SKEW_MS)
+                        && match mutation.action {
+                            MeshMutationKind::Block => mutation
+                                .expires_at_ms
+                                .is_none_or(|expiry| expiry >= mutation.created_at_ms),
+                            MeshMutationKind::Unblock => mutation.expires_at_ms.is_none(),
+                        }
+                })
         }
     }
 }
@@ -510,8 +994,9 @@ fn now_ms() -> u64 {
 mod frame_tests {
     use super::{
         Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES, MeshHandle, MeshMessage,
-        PeerSendOutcome, chunk_sync, now_ms, push_frame_bytes, read_bounded_frame,
-        read_bounded_frame_with_timeout, valid_message, validate_bind_args, with_timeout,
+        MeshMutationKind, PeerSendOutcome, ReplicatedMeshMutation, chunk_sync, now_ms,
+        push_frame_bytes, read_bounded_frame, read_bounded_frame_with_timeout, valid_message,
+        validate_bind_args, with_timeout,
     };
     use crate::aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
     use std::time::Duration;
@@ -521,6 +1006,202 @@ mod frame_tests {
     };
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn two_peer_condition_sync_converges_after_remote_merge() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async {
+            let probe_a = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("reserve node A address");
+            let addr_a = probe_a.local_addr().expect("node A address");
+            drop(probe_a);
+            let probe_b = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("reserve node B address");
+            let addr_b = probe_b.local_addr().expect("node B address");
+            drop(probe_b);
+
+            let blocklist_a = Arc::new(AworsetBlocklist::new(1));
+            let blocklist_b = Arc::new(AworsetBlocklist::new(2));
+            let a = MeshHandle::bind(1, blocklist_a.clone(), addr_a, vec![addr_b], vec![7; 32])
+                .await
+                .expect("bind node A");
+            let b = MeshHandle::bind(2, blocklist_b.clone(), addr_b, vec![addr_a], vec![7; 32])
+                .await
+                .expect("bind node B");
+
+            let ip_a = IpAddr::V6(Ipv6Addr::from(0xabcdu128));
+            let delta_a = blocklist_a.record_ban(ip_a, 60_000, 1);
+            let sender = {
+                let a = a.clone();
+                tokio::spawn(async move { a.broadcast(MeshMessage::Block(delta_a)).await })
+            };
+
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    for received in b.drain_with_ack().await {
+                        match received.message.clone() {
+                            MeshMessage::Block(delta) => {
+                                blocklist_b.merge_delta(&delta);
+                            }
+                            MeshMessage::Unblock(delta) => {
+                                blocklist_b.merge_unblock_delta(&delta);
+                            }
+                            MeshMessage::Sync { blocks, unblocks } => {
+                                for delta in blocks {
+                                    blocklist_b.merge_delta(&delta);
+                                }
+                                for delta in unblocks {
+                                    blocklist_b.merge_unblock_delta(&delta);
+                                }
+                            }
+                            MeshMessage::WalBatch { .. } => {}
+                        }
+                        received.acknowledge(true);
+                    }
+                    if blocklist_b.is_blocked(&ip_a, now_ms()) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("node B should apply node A's state");
+            let report = sender.await.expect("sender task");
+            assert!(
+                report.all_written(),
+                "node A should receive an application ACK"
+            );
+
+            let ip_b = IpAddr::V6(Ipv6Addr::from(0xdef01234u128));
+            blocklist_b.record_ban(ip_b, 60_000, 2);
+            // The transport must be notified only after the service merges
+            // incoming CRDT messages. This condition should schedule repair.
+            b.notify_remote_state_applied().await;
+
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    for received in a.drain_with_ack().await {
+                        match received.message.clone() {
+                            MeshMessage::Block(delta) => {
+                                blocklist_a.merge_delta(&delta);
+                            }
+                            MeshMessage::Unblock(delta) => {
+                                blocklist_a.merge_unblock_delta(&delta);
+                            }
+                            MeshMessage::Sync { blocks, unblocks } => {
+                                for delta in blocks {
+                                    blocklist_a.merge_delta(&delta);
+                                }
+                                for delta in unblocks {
+                                    blocklist_a.merge_unblock_delta(&delta);
+                                }
+                            }
+                            MeshMessage::WalBatch { .. } => {}
+                        }
+                        received.acknowledge(true);
+                    }
+                    if blocklist_a.is_blocked(&ip_b, now_ms()) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("condition-driven repair should converge node A with node B");
+
+            let incarnation = uuid::Uuid::new_v4();
+            let wal_batch = MeshMessage::WalBatch {
+                source_node_id: 1,
+                start_lsn: 10,
+                end_lsn: 11,
+                mutations: vec![ReplicatedMeshMutation {
+                    source_lsn: 11,
+                    origin_node_id: 1,
+                    origin_incarnation: incarnation.to_string(),
+                    origin_counter: 1,
+                    ip: IpAddr::V6(Ipv6Addr::from(0xfeed1234u128)),
+                    action: MeshMutationKind::Block,
+                    created_at_ms: now_ms(),
+                    expires_at_ms: None,
+                    tier: 2,
+                }],
+            };
+            let sender = {
+                let a = a.clone();
+                tokio::spawn(async move { a.send_wal_batch(addr_b, wal_batch).await })
+            };
+            let mut wal_ack_seen = false;
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    for received in b.drain_with_ack().await {
+                        match received.message.clone() {
+                            MeshMessage::WalBatch { end_lsn, .. } => {
+                                received.acknowledge_with_lsn(true, Some(end_lsn));
+                                wal_ack_seen = true;
+                            }
+                            _ => received.acknowledge(true),
+                        }
+                    }
+                    if wal_ack_seen {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("receiver should acknowledge the WAL page boundary");
+            assert_eq!(
+                sender.await.expect("WAL sender task").expect("WAL ACK"),
+                Some(11)
+            );
+
+            let rejected = MeshMessage::WalBatch {
+                source_node_id: 1,
+                start_lsn: 12,
+                end_lsn: 12,
+                mutations: Vec::new(),
+            };
+            let rejected_sender = {
+                let a = a.clone();
+                tokio::spawn(async move { a.send_wal_batch(addr_b, rejected).await })
+            };
+            let mut rejection_seen = false;
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    for received in b.drain_with_ack().await {
+                        match received.message.clone() {
+                            MeshMessage::WalBatch { .. } => {
+                                received.acknowledge(false);
+                                rejection_seen = true;
+                            }
+                            _ => received.acknowledge(true),
+                        }
+                    }
+                    if rejection_seen {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("receiver should reject the WAL page");
+            assert!(
+                rejected_sender
+                    .await
+                    .expect("rejected WAL sender task")
+                    .is_err(),
+                "a negative application ACK must not advance the WAL cursor"
+            );
+
+            a.shutdown();
+            b.shutdown();
+        });
+    }
 
     #[test]
     fn delimiter_free_oversized_frame_is_rejected_while_reading() {
@@ -833,5 +1514,101 @@ mod frame_tests {
         let error = push_frame_bytes(&mut frame, b"x\n").unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert_eq!(frame.len(), MAX_FRAME);
+    }
+
+    #[test]
+    fn full_sync_recovery_completes_at_captured_boundary_after_page_acks() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async {
+            let probe = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("reserve receiver address");
+            let receiver_addr = probe.local_addr().expect("receiver address");
+            drop(probe);
+
+            let sender_state = Arc::new(AworsetBlocklist::new(1));
+            let receiver_state = Arc::new(AworsetBlocklist::new(2));
+            let ip = IpAddr::V6(Ipv6Addr::from(0xfeedbeefu128));
+            sender_state.record_ban(ip, 60_000, 2);
+
+            let sender = MeshHandle::bind(
+                1,
+                sender_state,
+                "127.0.0.1:0".parse().expect("sender listen address"),
+                vec![receiver_addr],
+                vec![7; 32],
+            )
+            .await
+            .expect("bind sender");
+            let receiver = MeshHandle::bind(
+                2,
+                receiver_state.clone(),
+                receiver_addr,
+                Vec::new(),
+                vec![7; 32],
+            )
+            .await
+            .expect("bind receiver");
+
+            sender.request_full_sync(receiver_addr, 17).await;
+            // Repeated ticks must not replace the captured boundary with a
+            // newer WAL end while the same repair attempt is in flight.
+            sender.request_full_sync(receiver_addr, 99).await;
+            assert!(
+                sender
+                    .take_completed_recovery(receiver_addr)
+                    .await
+                    .is_none()
+            );
+
+            let (generation, boundary_lsn) = tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    for received in receiver.drain_with_ack().await {
+                        match received.message.clone() {
+                            MeshMessage::Block(delta) => {
+                                receiver_state.merge_delta(&delta);
+                            }
+                            MeshMessage::Unblock(delta) => {
+                                receiver_state.merge_unblock_delta(&delta);
+                            }
+                            MeshMessage::Sync { blocks, unblocks } => {
+                                for delta in blocks {
+                                    receiver_state.merge_delta(&delta);
+                                }
+                                for delta in unblocks {
+                                    receiver_state.merge_unblock_delta(&delta);
+                                }
+                            }
+                            MeshMessage::WalBatch { .. } => {}
+                        }
+                        received.acknowledge(true);
+                    }
+                    if let Some(completed) = sender.take_completed_recovery(receiver_addr).await {
+                        break completed;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("full recovery rotation should complete after acknowledged pages");
+
+            assert!(
+                generation > 0,
+                "recovery must invalidate any older page task"
+            );
+            assert_eq!(
+                boundary_lsn, 17,
+                "recovery must retain its captured boundary"
+            );
+            assert!(
+                receiver_state.is_blocked(&ip, now_ms()),
+                "receiver must have applied the transferred CRDT state"
+            );
+            sender.shutdown();
+            receiver.shutdown();
+        });
     }
 }

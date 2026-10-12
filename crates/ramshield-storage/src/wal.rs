@@ -14,6 +14,15 @@ use ramwal::{
     Compression, Config, Durability as RamWalDurability, Error as RamWalError, Lsn, Wal as RamWal,
 };
 
+/// Semantic action carried by a replicated CRDT mutation.
+/// Kept in storage so WAL records preserve origin identity without making the
+/// storage crate depend on the mesh crate.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum MeshMutationAction {
+    Block,
+    Unblock,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum WalEntry {
     BlockIp {
@@ -44,6 +53,21 @@ pub enum WalEntry {
     },
     Delete {
         key: String,
+        ts_ns: u64,
+    },
+    /// Versioned source-of-truth event for a CRDT mutation. The origin dot survives forwarding and replay; local WAL LSN is only a local cursor.
+    MeshMutation {
+        schema_version: u16,
+        origin_node_id: u32,
+        origin_incarnation: String,
+        origin_counter: u64,
+        ip: String,
+        action: MeshMutationAction,
+        created_at_ms: u64,
+        expires_at_ms: Option<u64>,
+        tier: u8,
+        /// Optional detached signature; verification policy is enforced by the mesh layer.
+        signature: Option<String>,
         ts_ns: u64,
     },
     Checkpoint {
@@ -242,6 +266,65 @@ impl Wal {
         let dir = self.guard.cfg.dir.clone();
         let report = ramwal::recovery::recover_dir(&dir).map_err(map_error)?;
         decode_records(report.records.iter().filter(|r| r.lsn.get() > min_lsn))
+    }
+
+    /// Replay one bounded page after an exclusive LSN. The continuation is
+    /// the final local LSN in the returned records, including non-mesh records,
+    /// so callers can advance without confusing local positions across nodes.
+    pub fn replay_with_lsn_page(
+        &self,
+        min_lsn_exclusive: u64,
+        limit: usize,
+    ) -> Result<(Vec<(u64, WalEntry)>, bool)> {
+        if limit == 0 {
+            return Err(RsError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "WAL replay page limit must be non-zero",
+            )));
+        }
+        let dir = self.guard.cfg.dir.clone();
+        let report = ramwal::recovery::recover_dir(&dir).map_err(map_error)?;
+        let mut selected: Vec<_> = report
+            .records
+            .iter()
+            .filter(|record| record.lsn.get() > min_lsn_exclusive)
+            .take(limit.saturating_add(1))
+            .collect();
+        let has_more = selected.len() > limit;
+        if has_more {
+            selected.pop();
+        }
+        let entries = selected
+            .into_iter()
+            .map(|record| {
+                serde_json::from_slice::<WalEntry>(&record.payload)
+                    .map(|entry| (record.lsn.get(), entry))
+                    .map_err(|error| RsError::Serde(error.to_string()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok((entries, has_more))
+    }
+
+    /// Replay records after an exclusive LSN, preserving each record's durable
+    /// position for replication cursors. The returned LSN belongs to this WAL
+    /// only; it must never be compared with another node's LSN.
+    ///
+    /// This rescans the directory so appends made after this handle was opened
+    /// are visible. Callers must establish a checkpoint/bootstrap path when
+    /// requested history has been removed by retention.
+    pub fn replay_with_lsn_from(&self, min_lsn_exclusive: u64) -> Result<Vec<(u64, WalEntry)>> {
+        let dir = self.guard.cfg.dir.clone();
+        let report = ramwal::recovery::recover_dir(&dir).map_err(map_error)?;
+        report
+            .records
+            .iter()
+            .filter(|record| record.lsn.get() > min_lsn_exclusive)
+            .map(|record| {
+                serde_json::from_slice::<WalEntry>(&record.payload)
+                    .map(|entry| (record.lsn.get(), entry))
+                    .map_err(|error| RsError::Serde(error.to_string()))
+            })
+            .collect()
     }
 
     /// Begin a checkpoint by reading the current WAL boundary. The caller is
@@ -524,6 +607,74 @@ mod tests {
         assert!(matches!(&tail[1], WalEntry::BlockIp { ip, .. } if ip == "10.0.0.4"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mesh_mutation_wal_entry_roundtrips_origin_and_expiry() {
+        let entry = WalEntry::MeshMutation {
+            schema_version: 1,
+            origin_node_id: 17,
+            origin_incarnation: "9dff7b8e-9a2d-4bb3-8b9e-fd37b4d9d6a1".into(),
+            origin_counter: 42,
+            ip: "192.0.2.17".into(),
+            action: MeshMutationAction::Block,
+            created_at_ms: 1_800_000_000_000,
+            expires_at_ms: Some(1_800_000_060_000),
+            tier: 3,
+            signature: None,
+            ts_ns: 1_800_000_000_000_000_000,
+        };
+        let encoded = serde_json::to_vec(&entry).unwrap();
+        let decoded: WalEntry = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, entry);
+    }
+
+    #[test]
+    fn wal_replay_with_lsn_preserves_replication_positions() {
+        let dir = tempfile::tempdir().unwrap();
+        let wal = Wal::open(
+            dir.path().to_str().unwrap(),
+            false,
+            Durability::Fsync,
+            64 * 1024 * 1024,
+            0,
+        )
+        .unwrap();
+
+        let first = wal
+            .append(&WalEntry::BlockIp {
+                ip: "192.0.2.1".into(),
+                reason: "replication-test".into(),
+                ttl_secs: None,
+                ts_ns: 1,
+            })
+            .unwrap();
+        let second = wal
+            .append(&WalEntry::UnblockIp {
+                ip: "192.0.2.1".into(),
+                ts_ns: 2,
+            })
+            .unwrap();
+        wal.sync().unwrap();
+
+        let all = wal.replay_with_lsn_from(0).unwrap();
+        assert_eq!(
+            all.iter().map(|(lsn, _)| *lsn).collect::<Vec<_>>(),
+            vec![first, second]
+        );
+        let tail = wal.replay_with_lsn_from(first).unwrap();
+        assert_eq!(tail.len(), 1);
+        assert_eq!(tail[0].0, second);
+        assert!(matches!(tail[0].1, WalEntry::UnblockIp { .. }));
+
+        let (page, has_more) = wal.replay_with_lsn_page(0, 1).unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].0, first);
+        assert!(has_more);
+        let (page, has_more) = wal.replay_with_lsn_page(first, 1).unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].0, second);
+        assert!(!has_more);
     }
 
     #[test]

@@ -38,6 +38,11 @@ pub struct CheckpointSnapshot {
     pub ts_ns: u64,
     pub blocked_ips: Vec<IpBlockSnapshot>,
     pub active_cidrs: Vec<CidrSnapshot>,
+    /// Complete mesh provenance, including tombstones. Older snapshots decode
+    /// as None and require retained WAL history for safe mesh recovery.
+    #[cfg(feature = "mesh")]
+    #[serde(default)]
+    pub mesh_state: Option<ramshield_mesh::aworset::AworsetSnapshot>,
 }
 
 /// Build snapshot path from WAL base dir and LSN.
@@ -145,7 +150,21 @@ pub fn build_snapshot(store: &Store, state: &CheckpointState, lsn: u64) -> Check
         ts_ns: now_ns,
         blocked_ips,
         active_cidrs,
+        #[cfg(feature = "mesh")]
+        mesh_state: None,
     }
+}
+
+#[cfg(feature = "mesh")]
+pub fn build_snapshot_with_mesh(
+    store: &Store,
+    state: &CheckpointState,
+    lsn: u64,
+    mesh_state: ramshield_mesh::aworset::AworsetSnapshot,
+) -> CheckpointSnapshot {
+    let mut snapshot = build_snapshot(store, state, lsn);
+    snapshot.mesh_state = Some(mesh_state);
+    snapshot
 }
 
 /// Expired-snapshot-block policy for `restore_from_snapshot`.
@@ -378,6 +397,34 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "mesh")]
+    #[test]
+    fn checkpoint_roundtrip_preserves_mesh_dots_and_tombstones() {
+        let mesh = ramshield_mesh::aworset::AworsetBlocklist::new(7);
+        let ip = IpAddr::from([192, 0, 2, 101]);
+        let first = mesh.record_ban(ip, 60_000, 1);
+        let peer = ramshield_mesh::aworset::AworsetBlocklist::new(8);
+        let concurrent = peer.record_ban(ip, 60_000, 2);
+        mesh.merge_delta(&concurrent);
+        mesh.merge_unblock_delta(&ramshield_mesh::aworset::ClusterUnblockDelta {
+            ip,
+            dot: first.dot,
+        });
+        let mesh_state = mesh.export_snapshot();
+
+        let store = Store::new(16);
+        let snapshot =
+            build_snapshot_with_mesh(&store, &CheckpointState::default(), 99, mesh_state.clone());
+        let encoded = serde_json::to_vec(&snapshot).unwrap();
+        let decoded: CheckpointSnapshot = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded.mesh_state, Some(mesh_state.clone()));
+
+        let restored = ramshield_mesh::aworset::AworsetBlocklist::new(9);
+        restored.restore_snapshot(decoded.mesh_state.as_ref().unwrap());
+        assert_eq!(restored.export_snapshot(), mesh_state);
+        assert!(restored.is_blocked(&ip, now_unix_ns() / 1_000_000));
+    }
+
     #[test]
     fn expired_snapshot_blocks_are_dropped() {
         let store = Store::new(16);
@@ -393,6 +440,8 @@ mod tests {
                 expires_at_ns: Some(past + 2_000_000_000), // expired 8s ago
             }],
             active_cidrs: vec![],
+            #[cfg(feature = "mesh")]
+            mesh_state: None,
         };
         let restored = restore_from_snapshot(&store, &snap);
         assert!(store.get(&ip).is_none(), "expired block must not resurrect");

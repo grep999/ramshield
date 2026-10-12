@@ -18,6 +18,8 @@ use boot::boot_pipeline;
 use crate::config::Config;
 use crate::detection::DetectionEngine;
 use crate::enforcement::{EnforcementService, StubXdpApplier, XdpApplier};
+#[cfg(feature = "mesh")]
+use crate::engine::checkpoint::build_snapshot_with_mesh;
 use crate::engine::checkpoint::{
     SnapshotRestore, build_snapshot, load_snapshot, restore_from_snapshot, snapshot_path,
     write_snapshot,

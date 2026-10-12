@@ -78,7 +78,9 @@ These commits are progress, not a feature acceptance decision. The latest record
 
 - [x] **M-010: Bound chunk size and wire frames.** Initial chunking and maximum-frame regression coverage committed.
 
-- [ ] **M-011: Fair pagination beyond 4,096 entries.** Ensure every live entry and tombstone is eventually visited, rather than repeatedly sampling an arbitrary prefix of concurrent maps.
+- [ ] **M-011: Fair pagination beyond 4,096 entries.** A caller-owned `snapshot_page(cursor, limit)` API and per-peer transport cursors now exist on the isolated prototype branch. Still require exact-SHA tests for mutation during paging, tombstones, peer fairness, and eventual full rotation before acceptance.
+
+- [ ] **M-014: Condition-driven anti-entropy prototype.** The isolated prototype now wires per-peer planners into `MeshHandle`, with coalesced local-mutation triggers, delivery-failure/reconnect recovery, queue-overflow repair, explicit `notify_remote_state_applied()` hook, 30-second periodic fallback, and bounded concurrent page sends. See [`CONDITION_DRIVEN_SYNC_PROTOTYPE.md`](CONDITION_DRIVEN_SYNC_PROTOTYPE.md). Exact-SHA CI, service callback wiring, packet-loss/restart/large-state tests, and independent review remain open.
 
 - [ ] **M-012: End-to-end convergence under large state.** Test multiple pages/chunks, repeated sync, loss/reconnect, tombstones, state exceeding a page and the configured maximum, and eventual convergence.
 
