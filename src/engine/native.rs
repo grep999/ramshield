@@ -1299,6 +1299,59 @@ mod tests {
         assert!(!overlay);
     }
 
+    /// Manual synthetic baseline for the native packet-to-event path. This
+    /// avoids AF_PACKET privileges and measures parsing, admission, event
+    /// construction, and queue insertion; it does not measure kernel capture
+    /// or TPACKET ring traversal.
+    #[test]
+    #[ignore = "manual performance baseline; run with --ignored --nocapture"]
+    fn native_packet_to_event_baseline() {
+        const SAMPLES: usize = 5;
+        const PACKETS_PER_SAMPLE: usize = 100_000;
+
+        let mut samples = Vec::with_capacity(SAMPLES);
+        for _ in 0..SAMPLES {
+            let mut ip = vec![0u8; 40];
+            ip[0] = 0x45;
+            ip[2..4].copy_from_slice(&(40u16).to_be_bytes());
+            ip[9] = 6;
+            ip[12..16].copy_from_slice(&[198, 51, 100, 7]);
+            ip[16..20].copy_from_slice(&[192, 0, 2, 10]);
+            ip[20..22].copy_from_slice(&(40000u16).to_be_bytes());
+            ip[22..24].copy_from_slice(&(443u16).to_be_bytes());
+            ip[32] = 0x50;
+            ip[33] = 0x02;
+            let frame = eth(0x0800, &ip);
+            let (tx, rx) = crossbeam_channel::bounded(PACKETS_PER_SAMPLE);
+            let budget = Arc::new(AtomicU64::new(0));
+            let epoch = Arc::new(AtomicU64::new(0));
+            let epoch_base = std::time::Instant::now();
+
+            let start = std::time::Instant::now();
+            for _ in 0..PACKETS_PER_SAMPLE {
+                process_packet(
+                    &frame,
+                    PACKETS_PER_SAMPLE as u64,
+                    &[],
+                    &tx,
+                    &budget,
+                    &epoch,
+                    epoch_base,
+                );
+            }
+            let elapsed = start.elapsed();
+            assert_eq!(rx.len(), PACKETS_PER_SAMPLE);
+            samples.push(elapsed.as_nanos() as f64 / PACKETS_PER_SAMPLE as f64);
+        }
+
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "native_packet_to_event: median {:.1} ns/packet ({:.0} packets/s), samples={samples:?}",
+            samples[SAMPLES / 2],
+            1_000_000_000.0 / samples[SAMPLES / 2]
+        );
+    }
+
     #[test]
     fn rejects_ipv4_fragment_as_transport_identity() {
         let mut ip = vec![0u8; 20];
