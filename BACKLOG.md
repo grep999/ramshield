@@ -216,7 +216,7 @@ Next action: qualify A-036 on its exact candidate SHA, then continue with A-037 
 
 | ID | Area | Required work / acceptance evidence | Status |
 |---|---|---|---|
-| I-020 | Dashboard quarantine search | Confirm whether `#tableSearch` has an input listener in `src/dashboard/static/index.html`. If absent, connect it to the existing filter function and test filtering by IP, CIDR and module. | OPEN — verify current implementation |
+| I-020 | Dashboard quarantine search | `#tableSearch` is wired to `filterTable()`; add regression guard and run it in CI. | IN PROGRESS — PR #33; exact-SHA CI/review pending |
 | I-021 | Container build-cache behavior | Inspect `Containerfile` and prove the layer-cache invalidation problem before patching. Keep dependency/build layers cached while ensuring real source changes rebuild the binary; validate with two controlled builds or CI evidence. | OPEN — verify current implementation |
 | I-022 | Systemd portability | Search systemd unit templates (including backlog dispatcher) for developer-specific absolute paths. Replace with package-relative or configurable paths and verify service working-directory/user behavior. | OPEN — verify current implementation |
 | I-023 | Remove stale repository artifacts | Check whether `src/engine/boot.rs.orig` and root `fix.patch` still exist and whether any references require them. Delete only if present and unneeded; ensure clean build/tests and no packaging references. | OPEN — verify current tree |
