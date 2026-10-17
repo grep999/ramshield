@@ -10,6 +10,14 @@
 #define RAMSHIELD_SHM_PROBE_LIMIT 4
 #define RAMSHIELD_FLAG_SHARED_INFRA 0x01
 
+typedef enum {
+    RAMSHIELD_SHM_READ_MISS = 0,
+    RAMSHIELD_SHM_READ_FOUND = 1,
+    /* The bounded seqlock retry budget was exhausted; this is not a miss. */
+    RAMSHIELD_SHM_READ_CONTENDED = 2,
+    RAMSHIELD_SHM_READ_INVALID_INPUT = 3
+} RamshieldShmReadResult;
+
 static inline uint64_t
 ramshield_subnet_key(uint32_t network, uint8_t prefix_len)
 {
@@ -82,11 +90,11 @@ typedef struct {
  * never retain a pointer into the mmap: a writer may begin immediately after
  * this function returns.
  */
-static inline bool
-ramshield_shm_read(const RamshieldShmRuleEntry *table,
-                   uint64_t hash,
-                   uint64_t now_ms,
-                   RamshieldShmRuleSnapshot *out)
+static inline RamshieldShmReadResult
+ramshield_shm_read_result(const RamshieldShmRuleEntry *table,
+                          uint64_t hash,
+                          uint64_t now_ms,
+                          RamshieldShmRuleSnapshot *out)
 {
     uint32_t primary = (uint32_t)(hash & (RAMSHIELD_SHM_TABLE_CAPACITY - 1));
 
@@ -94,6 +102,7 @@ ramshield_shm_read(const RamshieldShmRuleEntry *table,
         const RamshieldShmRuleEntry *entry =
             &table[(primary + probe) & (RAMSHIELD_SHM_TABLE_CAPACITY - 1)];
 
+        bool coherent = false;
         for (unsigned attempt = 0; attempt < 64; ++attempt) {
             uint32_t before = atomic_load_explicit(&entry->seq, memory_order_acquire);
             if (before & 1u) continue;
@@ -112,6 +121,7 @@ ramshield_shm_read(const RamshieldShmRuleEntry *table,
             uint32_t after = atomic_load_explicit(&entry->seq, memory_order_acquire);
             if (before != after || (after & 1u)) continue;
 
+            coherent = true;
             if (client_hash == hash && expires_at_ms > now_ms) {
                 out->client_hash = client_hash;
                 out->expires_at_ms = expires_at_ms;
@@ -122,19 +132,48 @@ ramshield_shm_read(const RamshieldShmRuleEntry *table,
                     out->challenge_seed[i]     = (uint8_t)(challenge_seed_lo >> (8 * i));
                 for (unsigned i = 0; i < 8; ++i)
                     out->challenge_seed[8 + i] = (uint8_t)(challenge_seed_hi >> (8 * i));
-                return true;
+                return RAMSHIELD_SHM_READ_FOUND;
             }
 
             // Empty terminates the probe: writers never place a rule beyond
             // the first empty candidate. Expired entries are skipped because
             // an older rule may have expired while a later live collision
             // remains in the bounded probe window.
-            if (client_hash == 0) break;
+            if (client_hash == 0) return RAMSHIELD_SHM_READ_MISS;
             /* Coherent occupied slot with another key: advance probe now. */
             break;
         }
+        if (!coherent) {
+            /* Never skip a contended slot and report a later empty slot as a miss. */
+            return RAMSHIELD_SHM_READ_CONTENDED;
+        }
     }
-    return false;
+    return RAMSHIELD_SHM_READ_MISS;
+}
+
+/* Compatibility wrapper for callers that only need a boolean answer.
+ * Call ramshield_shm_read_result when contention must be distinguished from a miss. */
+static inline bool
+ramshield_shm_read(const RamshieldShmRuleEntry *table,
+                   uint64_t hash,
+                   uint64_t now_ms,
+                   RamshieldShmRuleSnapshot *out)
+{
+    return ramshield_shm_read_result(table, hash, now_ms, out) == RAMSHIELD_SHM_READ_FOUND;
+}
+
+static inline RamshieldShmReadResult
+ramshield_shm_read_ipv4_result(const RamshieldShmRuleEntry *table,
+                               uint32_t client_ip,
+                               uint8_t prefix_len,
+                               uint64_t now_ms,
+                               RamshieldShmRuleSnapshot *out)
+{
+    if (prefix_len > 32) {
+        return RAMSHIELD_SHM_READ_INVALID_INPUT;
+    }
+    return ramshield_shm_read_result(
+        table, ramshield_ipv4_subnet_key(client_ip, prefix_len), now_ms, out);
 }
 
 static inline bool
@@ -144,6 +183,9 @@ ramshield_shm_read_ipv4(const RamshieldShmRuleEntry *table,
                         uint64_t now_ms,
                         RamshieldShmRuleSnapshot *out)
 {
+    if (prefix_len > 32) {
+        return false;
+    }
     return ramshield_shm_read(
         table,
         ramshield_ipv4_subnet_key(client_ip, prefix_len),
