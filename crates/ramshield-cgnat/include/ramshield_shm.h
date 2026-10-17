@@ -14,7 +14,8 @@ typedef enum {
     RAMSHIELD_SHM_READ_MISS = 0,
     RAMSHIELD_SHM_READ_FOUND = 1,
     /* The bounded seqlock retry budget was exhausted; this is not a miss. */
-    RAMSHIELD_SHM_READ_CONTENDED = 2
+    RAMSHIELD_SHM_READ_CONTENDED = 2,
+    RAMSHIELD_SHM_READ_INVALID_INPUT = 3
 } RamshieldShmReadResult;
 
 static inline uint64_t
@@ -169,7 +170,7 @@ ramshield_shm_read_ipv4_result(const RamshieldShmRuleEntry *table,
                                RamshieldShmRuleSnapshot *out)
 {
     if (prefix_len > 32) {
-        return RAMSHIELD_SHM_READ_MISS;
+        return RAMSHIELD_SHM_READ_INVALID_INPUT;
     }
     return ramshield_shm_read_result(
         table, ramshield_ipv4_subnet_key(client_ip, prefix_len), now_ms, out);
