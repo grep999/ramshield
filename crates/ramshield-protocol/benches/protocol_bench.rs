@@ -1,50 +1,52 @@
 /// A-037 Core benchmarks and regression budgets for ramshield-protocol.
 /// Establishes reproducible baselines for protocol operations under load.
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use std::hint::black_box;
+use criterion::{Criterion, criterion_group, criterion_main};
+use ramshield_protocol::{Message, Request, ReplayStore, sign};
+use std::time::Duration;
 
-/// Benchmark IPC message serialization - measures message encoding throughput
-fn bench_ipc_serialize(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ipc_serialize");
-    for _ in 0..10000 {
-        let _ = ramshield_protocol::ipc::serialize_message(&ramshield_types::IpcMessage::new(
-            ramshield_types::IpcCommand::BlockIp {
-                ip: "10.0.0.1".into(),
-                reason: "test".into(),
-                ttl_secs: Some(3600),
-            },
-        ));
-    }
+/// Benchmark Message serialization - measures encoding throughput
+fn bench_message_serialize(c: &mut Criterion) {
+    let mut group = c.benchmark_group("message_serialize");
+    let msg = Message::request(Request::BlockIp {
+        ip: "10.0.0.1".into(),
+        reason: "test".into(),
+        ttl_secs: Some(3600),
+    });
+    group.bench_function("serialize", |b| {
+        b.iter(|| {
+            let _ = serde_json::to_vec(&msg);
+        });
+    });
     group.finish();
 }
 
-/// Benchmark HMAC authentication - measures signature verification throughput
-fn bench_hmac_verify(c: &mut Criterion) {
-    let mut group = c.benchmark_group("hmac_verify");
-    for _ in 0..10000 {
-        let _ = ramshield_protocol::auth::verify_hmac(
-            b"test-key-16-bytes",
-            b"test-message",
-            b"expected-signature",
-        );
-    }
+/// Benchmark HMAC sign - measures signature throughput
+fn bench_hmac_sign(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hmac_sign");
+    group.bench_function("sign", |b| {
+        b.iter(|| {
+            let _ = sign(b"test-key-16-bytes", "k1", 42, b"test-message");
+        });
+    });
     group.finish();
 }
 
-/// Benchmark replay detection - measures replay window check throughput
-fn bench_replay_check(c: &mut Criterion) {
-    let mut group = c.benchmark_group("replay_check");
-    for _ in 0..10000 {
-        let _ =
-            ramshield_protocol::replay::check_replay(&ramshield_types::ReplayWindow::new(1000), 42);
-    }
+/// Benchmark replay store check - measures admission throughput
+fn bench_replay_store(c: &mut Criterion) {
+    let mut group = c.benchmark_group("replay_store");
+    let store = ReplayStore::new(1000, Duration::from_secs(60));
+    group.bench_function("check_and_record", |b| {
+        b.iter(|| {
+            let _ = store.check_and_record("k1", &[0u8; 32]);
+        });
+    });
     group.finish();
 }
 
 criterion_group!(
     protocol_benches,
-    bench_ipc_serialize,
-    bench_hmac_verify,
-    bench_replay_check
+    bench_message_serialize,
+    bench_hmac_sign,
+    bench_replay_store
 );
 criterion_main!(protocol_benches);
