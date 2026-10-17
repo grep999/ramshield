@@ -143,6 +143,8 @@ jobs:
         run: cargo test --workspace --locked --all-features
       - name: Verify C SHM ABI and reader/writer stress
         run: RAMSHIELD_SHM_TSAN=1 scripts/verify_shm_header.sh
+      - name: Verify dashboard quarantine search wiring
+        run: bash scripts/test_dashboard_search.sh
 
   workflow-lint:
     name: Workflow syntax and expression lint
