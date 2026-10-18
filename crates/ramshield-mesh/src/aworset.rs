@@ -1130,3 +1130,63 @@ mod tests {
         assert_eq!(tombstones[0].dot, ban.dot);
     }
 }
+    #[test]
+    fn tombstone_gc_prevents_resurrection_after_acknowledgment() {
+        use std::net::Ipv4Addr;
+        let node1 = AworsetBlocklist::new(1);
+        let node2 = AworsetBlocklist::new(2);
+
+        let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        let ban_delta = node2.record_ban(ip, 60_000, 1);
+        assert!(node1.merge_delta(&ban_delta));
+
+        let unblock_deltas = node1.record_unban(ip);
+        assert_eq!(unblock_deltas.len(), 1);
+        assert!(node2.merge_unblock_delta(&unblock_deltas[0]));
+
+        assert_eq!(node1.tombstones.len(), 1);
+        node1.gc_tombstones();
+        assert_eq!(node1.tombstones.len(), 1);
+        node1.peer_acknowledged(2, 1);
+        node1.gc_tombstones();
+        assert_eq!(node1.tombstones.len(), 1);
+        node1.peer_acknowledged(2, 2);
+        node1.gc_tombstones();
+        assert_eq!(node1.tombstones.len(), 0);
+    }
+
+    #[test]
+    fn peer_acknowledgment_updates_epoch() {
+        let node = AworsetBlocklist::new(1);
+        assert_eq!(node.peer_acks.len(), 0);
+        node.peer_acknowledged(2, 100);
+        assert_eq!(node.peer_acks.len(), 1);
+        let peer_epoch = node.peer_acks.get(&2).unwrap();
+        assert_eq!(peer_epoch.epoch, 1);
+        assert_eq!(peer_epoch.last_acknowledged_lsn, 100);
+        node.peer_acknowledged(2, 200);
+        let peer_epoch = node.peer_acks.get(&2).unwrap();
+        assert_eq!(peer_epoch.epoch, 2);
+        assert_eq!(peer_epoch.last_acknowledged_lsn, 200);
+        node.peer_acknowledged(2, 200);
+        let peer_epoch = node.peer_acks.get(&2).unwrap();
+        assert_eq!(peer_epoch.epoch, 2);
+        assert_eq!(peer_epoch.last_acknowledged_lsn, 200);
+    }
+
+    #[test]
+    fn gc_tombstones_respects_causal_safety() {
+        use std::net::Ipv4Addr;
+        let node = AworsetBlocklist::new(1);
+        let ip1 = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        let ip2 = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
+        let _ban1 = node.record_ban(ip1, 60_000, 1);
+        let unblock1 = node.record_unban(ip1);
+        assert_eq!(unblock1.len(), 1);
+        let _ban2 = node.record_ban(ip2, 60_000, 1);
+        let unblock2 = node.record_unban(ip2);
+        assert_eq!(unblock2.len(), 1);
+        assert_eq!(node.tombstones.len(), 2);
+        node.gc_tombstones();
+        assert_eq!(node.tombstones.len(), 2);
+    }
