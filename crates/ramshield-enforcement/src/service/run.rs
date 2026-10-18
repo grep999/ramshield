@@ -43,6 +43,8 @@ impl EnforcementService {
                     #[cfg(feature = "mesh")]
                     {
                         let report = self.apply_mesh_messages().await;
+                        self.reconcile_mesh_projection().await;
+                        self.replicate_mesh_wal().await;
                         if report.received > 0 {
                             debug!(
                                 received = report.received,

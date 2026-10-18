@@ -25,6 +25,11 @@ criterion = "0.5"
 proptest = "1"
 serial_test = "3"
 
+[[bench]]
+name = "enforcement_bench"
+harness = false
+required-features = ["xdp"]
+
 [features]
 mesh = ["dep:ramshield-mesh"]
 xdp = ["dep:aya", "dep:ramshield-xdp", "dep:libc"]

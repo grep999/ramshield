@@ -21,10 +21,12 @@ use ramshield_types::{
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::net::IpAddr;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+#[cfg(feature = "mesh")]
+use std::net::SocketAddr;
+use std::sync::Arc;
+#[cfg(feature = "mesh")]
+use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
@@ -43,6 +45,8 @@ mod replay;
 mod service;
 
 pub use applier::{ReconciliationState, StubXdpApplier, XdpApplier, XdpDropEvent};
+#[cfg(feature = "mesh")]
+pub use replay::replay_wal_into_store_seeded_with_mesh;
 pub use replay::{
     replay_wal_cidrs, replay_wal_cidrs_from, replay_wal_cidrs_seeded, replay_wal_into_store,
     replay_wal_into_store_seeded,
@@ -106,6 +110,15 @@ pub struct EnforcementService {
     mesh_applied_ips: HashSet<IpAddr>,
     #[cfg(feature = "mesh")]
     mesh_operator_suppressions: HashSet<IpAddr>,
+    /// Per-peer cursor into this node's own WAL. Resetting to zero on restart
+    /// intentionally causes replay; origin-dot dedup makes that idempotent.
+    #[cfg(feature = "mesh")]
+    mesh_wal_cursors: Arc<StdMutex<HashMap<SocketAddr, u64>>>,
+    #[cfg(feature = "mesh")]
+    mesh_wal_inflight: Arc<StdMutex<HashSet<SocketAddr>>>,
+    /// IPs whose durable mesh state still needs Store projection repair.
+    #[cfg(feature = "mesh")]
+    mesh_projection_pending: HashSet<IpAddr>,
     /// Checkpoint coordination: barrier + absolute-deadline mirror. None =
     /// engine never attached one (standalone use, tests).
     checkpoint_shared: Option<Arc<CheckpointShared>>,
@@ -141,6 +154,12 @@ impl EnforcementService {
             mesh_applied_ips: HashSet::new(),
             #[cfg(feature = "mesh")]
             mesh_operator_suppressions: HashSet::new(),
+            #[cfg(feature = "mesh")]
+            mesh_wal_cursors: Arc::new(StdMutex::new(HashMap::new())),
+            #[cfg(feature = "mesh")]
+            mesh_wal_inflight: Arc::new(StdMutex::new(HashSet::new())),
+            #[cfg(feature = "mesh")]
+            mesh_projection_pending: HashSet::new(),
             checkpoint_shared: None,
         }
     }
@@ -159,6 +178,29 @@ impl EnforcementService {
     ) -> Self {
         self.mesh_blocklist = Some(mesh_blocklist);
         self
+    }
+
+    /// Reconcile the in-memory marker set after WAL recovery. The Store remains
+    /// the local enforcement projection; only active CRDT IPs that are actually
+    /// blocked in Store are marked applied.
+    #[cfg(feature = "mesh")]
+    pub fn refresh_mesh_applied_ips(&mut self) {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let Some(mesh) = self.mesh_blocklist.as_ref() else {
+            return;
+        };
+        for ip in mesh.active_ips(now_ms) {
+            if matches!(
+                self.store.get(&ip),
+                Some(Value::IpRecord(record))
+                    if matches!(record.block_state, BlockState::Blocked { .. })
+            ) {
+                self.mesh_applied_ips.insert(ip);
+            }
+        }
     }
 
     /// Attach the authenticated mesh transport.

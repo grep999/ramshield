@@ -42,8 +42,10 @@ max_connection_bytes = 1_048_576
 read_timeout_ms = 5000
 write_timeout_ms = 5000
 connection_idle_timeout_ms = 30_000
-auth_keys = []  # REQUIRED: populate from a secret or local overlay
-require_auth = true
+# This fixture binds IPC to loopback only and is used exclusively by CI stress.
+# Do not copy this auth setting into production configurations.
+auth_keys = []
+require_auth = false
 
 [dashboard]
 enabled = true

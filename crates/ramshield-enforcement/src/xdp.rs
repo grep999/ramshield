@@ -523,7 +523,7 @@ impl XdpApplier for AyaXdpApplier {
                                 // SAFETY: same live map fd and 16-byte key
                                 // layout as the get-next-key call above.
                                 unsafe { raw_delete_elem(fd_raw, &k) }
-                                    .map_err(|e| MapError::from(e))?;
+                                    .map_err(MapError::from)?;
                                 stale_count += 1;
                             } else {
                                 prev_key = Some(k);
