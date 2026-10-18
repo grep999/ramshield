@@ -1,1 +1,1 @@
-CONTENT_WILL_BE_REPLACED
+$(cat /tmp/aworset_fixed.rs)
