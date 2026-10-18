@@ -9,13 +9,79 @@
 use super::hlc::Hlc;
 use dashmap::DashMap;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{
+    RwLock,
+    atomic::{AtomicU64, Ordering},
+};
 use uuid::Uuid;
+
+/// Epoch tracking for peer acknowledgment safety
+#[derive(Debug, Clone)]
+pub struct PeerEpoch {
+    pub peer_node_id: u32,
+    pub incarnation: Uuid,
+    pub epoch: u64,
+    pub last_acknowledged_lsn: u64,
+    pub tombstone_expiry_epoch: u64,
+}
+
+impl Default for PeerEpoch {
+    fn default() -> Self {
+        Self {
+            peer_node_id: 0,
+            incarnation: Uuid::nil(),
+            epoch: 0,
+            last_acknowledged_lsn: 0,
+            tombstone_expiry_epoch: u64::MAX,
+        }
+    }
+}
 
 pub type Dot = u64;
 pub(crate) type BlockKey = (IpAddr, u32, Uuid);
 pub(crate) type BlockState = (u64, u64, u64, u8);
-type SnapshotKey = (IpAddr, u32, Uuid, u8);
+/// Full CRDT checkpoint payload. Both active origin dots and tombstone
+/// watermarks are required to prevent resurrection after WAL retention.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AworsetSnapshot {
+    pub blocks: Vec<ClusterBlockDelta>,
+    pub unblocks: Vec<ClusterUnblockDelta>,
+}
+
+impl AworsetSnapshot {
+    /// Reject malformed checkpoint state rather than silently dropping dots
+    /// or accepting impossible origin identities during recovery.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let mut block_keys = std::collections::HashSet::new();
+        for delta in &self.blocks {
+            if delta.ip.is_unspecified()
+                || delta.dot.node_id == 0
+                || delta.dot.counter == 0
+                || delta.dot.incarnation.is_nil()
+                || (delta.expires_at_ms != u64::MAX && delta.expires_at_ms < delta.created_at_ms)
+            {
+                return Err("invalid active mesh dot in checkpoint");
+            }
+            if !block_keys.insert((delta.ip, delta.dot.node_id, delta.dot.incarnation)) {
+                return Err("duplicate active mesh key in checkpoint");
+            }
+        }
+        let mut unblock_keys = std::collections::HashSet::new();
+        for delta in &self.unblocks {
+            if delta.ip.is_unspecified()
+                || delta.dot.node_id == 0
+                || delta.dot.counter == 0
+                || delta.dot.incarnation.is_nil()
+            {
+                return Err("invalid mesh tombstone in checkpoint");
+            }
+            if !unblock_keys.insert((delta.ip, delta.dot.node_id, delta.dot.incarnation)) {
+                return Err("duplicate mesh tombstone key in checkpoint");
+            }
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Element {
@@ -126,8 +192,13 @@ pub struct AworsetBlocklist {
     /// causal-stability/peer-acknowledgement protocol exists; timer-only GC can
     /// resurrect an old ban from a disconnected peer.
     pub(crate) tombstones: DashMap<BlockKey, u64>,
+    /// Peer acknowledgment tracking for safe tombstone garbage collection.
+    /// Maps peer node_id to their acknowledgment epoch and last seen state.
+    pub(crate) peer_acks: DashMap<u32, PeerEpoch>,
     next_dot_counter: AtomicU64,
-    snapshot_cursor: AtomicUsize,
+    /// Snapshot export takes the exclusive side; mutations hold the shared side.
+    /// This freezes the CRDT maps for the duration of a fixed recovery capture.
+    snapshot_barrier: RwLock<()>,
 }
 
 impl AworsetBlocklist {
@@ -138,16 +209,19 @@ impl AworsetBlocklist {
             hlc: Hlc::new(),
             entries: DashMap::new(),
             tombstones: DashMap::new(),
+            peer_acks: DashMap::new(),
             next_dot_counter: AtomicU64::new(0),
-            snapshot_cursor: AtomicUsize::new(0),
+            snapshot_barrier: RwLock::new(()),
         }
     }
 
-    /// Record a local ban. Returns the delta to broadcast to peers.
-    pub fn record_ban(&self, ip: IpAddr, ttl_ms: u64, tier: u8) -> ClusterBlockDelta {
+    /// Prepare a local ban without publishing it into the CRDT.
+    ///
+    /// The caller can append this exact dot to the WAL first, then call
+    /// `merge_delta` to make it visible. A failed WAL append may leave a gap
+    /// in the local counter; gaps are safe, reusing a dot is not.
+    pub fn prepare_ban(&self, ip: IpAddr, ttl_ms: u64, tier: u8) -> ClusterBlockDelta {
         let (created_at_ms, _) = self.hlc.tick(0, 0);
-        // Never reuse an operation dot when physical time advances. Exhaustion
-        // fails closed instead of wrapping and silently violating CRDT identity.
         let previous = self
             .next_dot_counter
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -161,27 +235,100 @@ impl AworsetBlocklist {
             created_at_ms.saturating_add(ttl_ms)
         };
 
-        let dot = ClusterDot {
-            node_id: self.node_id,
-            incarnation: self.incarnation,
-            counter,
-        };
-        self.entries.insert(
-            (ip, self.node_id, self.incarnation),
-            (counter, created_at_ms, expires_at_ms, tier),
-        );
-
         ClusterBlockDelta {
             ip,
-            dot,
+            dot: ClusterDot {
+                node_id: self.node_id,
+                incarnation: self.incarnation,
+                counter,
+            },
             created_at_ms,
             expires_at_ms,
             tier,
         }
     }
 
+    /// Record a local ban immediately. WAL-first callers should use
+    /// `prepare_ban`, persist the returned delta, then merge it.
+    pub fn record_ban(&self, ip: IpAddr, ttl_ms: u64, tier: u8) -> ClusterBlockDelta {
+        let delta = self.prepare_ban(ip, ttl_ms, tier);
+        self.merge_delta(&delta);
+        delta
+    }
+
+    /// Return tombstones for all currently observed dots without mutating state.
+    /// Persist these before applying them when the WAL is authoritative.
+    pub fn prepare_unban(&self, ip: IpAddr) -> Vec<ClusterUnblockDelta> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.key().0 == ip)
+            .map(|entry| ClusterUnblockDelta {
+                ip,
+                dot: ClusterDot {
+                    node_id: entry.key().1,
+                    incarnation: entry.key().2,
+                    counter: entry.value().0,
+                },
+            })
+            .collect()
+    }
+
+    /// Whether applying a block delta would add information not already retained.
+    pub fn needs_merge_delta(&self, delta: &ClusterBlockDelta) -> bool {
+        if delta.dot.node_id == 0 || delta.dot.incarnation.is_nil() {
+            return false;
+        }
+        let key = (delta.ip, delta.dot.node_id, delta.dot.incarnation);
+        if self
+            .tombstones
+            .get(&key)
+            .is_some_and(|counter| delta.dot.counter <= *counter)
+        {
+            return false;
+        }
+        self.entries
+            .get(&key)
+            .is_none_or(|entry| delta.dot.counter > entry.value().0)
+    }
+
+    /// Whether another live origin dot would still block this IP after the
+    /// supplied tombstone is applied.
+    pub fn would_be_blocked_after_unblock(&self, delta: &ClusterUnblockDelta, now_ms: u64) -> bool {
+        self.entries.iter().any(|entry| {
+            if entry.key().0 != delta.ip || entry.value().2 <= now_ms {
+                return false;
+            }
+            let is_removed_dot = entry.key().1 == delta.dot.node_id
+                && entry.key().2 == delta.dot.incarnation
+                && entry.value().0 <= delta.dot.counter;
+            !is_removed_dot
+        })
+    }
+
+    /// Whether applying an unblock delta would add a new tombstone or remove
+    /// a still-live older dot.
+    pub fn needs_merge_unblock(&self, delta: &ClusterUnblockDelta) -> bool {
+        if delta.dot.node_id == 0 || delta.dot.incarnation.is_nil() {
+            return false;
+        }
+        let key = (delta.ip, delta.dot.node_id, delta.dot.incarnation);
+        let tombstone_is_newer = self
+            .tombstones
+            .get(&key)
+            .is_none_or(|counter| delta.dot.counter > *counter);
+        let removes_live_dot = self
+            .entries
+            .get(&key)
+            .is_some_and(|entry| entry.value().0 <= delta.dot.counter);
+        tombstone_is_newer || removes_live_dot
+    }
+
     /// Absorb a peer delta. True if it changed local state.
     pub fn merge_delta(&self, delta: &ClusterBlockDelta) -> bool {
+        let _snapshot_guard = self
+            .snapshot_barrier
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
         if delta.dot.node_id == 0 || delta.dot.incarnation.is_nil() {
             return false;
         }
@@ -243,6 +390,102 @@ impl AworsetBlocklist {
         self.entries.is_empty()
     }
 
+    /// Export every origin dot and tombstone for a durable checkpoint.
+    pub fn export_snapshot(&self) -> AworsetSnapshot {
+        let _snapshot_guard = self
+            .snapshot_barrier
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut blocks: Vec<_> = self
+            .entries
+            .iter()
+            .map(|entry| ClusterBlockDelta {
+                ip: entry.key().0,
+                dot: ClusterDot {
+                    node_id: entry.key().1,
+                    incarnation: entry.key().2,
+                    counter: entry.value().0,
+                },
+                created_at_ms: entry.value().1,
+                expires_at_ms: entry.value().2,
+                tier: entry.value().3,
+            })
+            .collect();
+        let mut unblocks: Vec<_> = self
+            .tombstones
+            .iter()
+            .map(|entry| ClusterUnblockDelta {
+                ip: entry.key().0,
+                dot: ClusterDot {
+                    node_id: entry.key().1,
+                    incarnation: entry.key().2,
+                    counter: *entry.value(),
+                },
+            })
+            .collect();
+        blocks.sort_by_key(|delta| {
+            (
+                delta.ip,
+                delta.dot.node_id,
+                delta.dot.incarnation,
+                delta.dot.counter,
+            )
+        });
+        unblocks.sort_by_key(|delta| {
+            (
+                delta.ip,
+                delta.dot.node_id,
+                delta.dot.incarnation,
+                delta.dot.counter,
+            )
+        });
+        AworsetSnapshot { blocks, unblocks }
+    }
+
+    /// Merge a checkpoint payload into a fresh or existing CRDT.
+    pub fn restore_snapshot(&self, snapshot: &AworsetSnapshot) {
+        for delta in &snapshot.unblocks {
+            self.merge_unblock_delta(delta);
+        }
+        for delta in &snapshot.blocks {
+            self.merge_delta(delta);
+        }
+    }
+
+    /// Effective block TTL per IP, taking the longest-lived origin dot.
+    /// A zero TTL denotes at least one permanent active dot.
+    pub fn active_block_ttls(&self, now_ms: u64) -> Vec<(IpAddr, u64)> {
+        let mut deadlines = std::collections::HashMap::<IpAddr, u64>::new();
+        for entry in self.entries.iter().filter(|entry| entry.value().2 > now_ms) {
+            deadlines
+                .entry(entry.key().0)
+                .and_modify(|deadline| *deadline = (*deadline).max(entry.value().2))
+                .or_insert(entry.value().2);
+        }
+        let mut blocks: Vec<_> = deadlines
+            .into_iter()
+            .map(|(ip, deadline)| {
+                let ttl_secs = if deadline == u64::MAX {
+                    0
+                } else {
+                    deadline.saturating_sub(now_ms).saturating_add(999) / 1000
+                };
+                (ip, ttl_secs)
+            })
+            .collect();
+        blocks.sort_by_key(|(ip, _)| *ip);
+        blocks
+    }
+
+    /// Current unexpired IPs represented by at least one active origin dot.
+    pub fn active_ips(&self, now_ms: u64) -> std::collections::HashSet<IpAddr> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.value().2 > now_ms)
+            .map(|entry| entry.key().0)
+            .collect()
+    }
+
     /// Prune expired active entries while preserving a per-key high-water mark.
     ///
     /// An elapsed timer is not proof that every disconnected peer has observed
@@ -252,6 +495,10 @@ impl AworsetBlocklist {
     /// favors convergence safety over bounded tombstone memory until a peer-ack
     /// or epoch-based causal-stability protocol is implemented.
     pub fn purge_expired(&self, now_ms: u64) {
+        let _snapshot_guard = self
+            .snapshot_barrier
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
         const TOMBSTONE_HORIZON_MS: u64 = 86_400_000;
         let expired: Vec<((IpAddr, u32, Uuid), u64)> = self
             .entries
@@ -276,34 +523,19 @@ impl AworsetBlocklist {
     /// Callers must gossip the returned delta; removing the local entry alone
     /// cannot make an AWORSet converge across peers.
     pub fn record_unban(&self, ip: IpAddr) -> Vec<ClusterUnblockDelta> {
-        let observed: Vec<(u32, Uuid, u64)> = self
-            .entries
-            .iter()
-            .filter(|entry| entry.key().0 == ip)
-            .map(|entry| (entry.key().1, entry.key().2, entry.value().0))
-            .collect();
-        let mut deltas = Vec::with_capacity(observed.len());
-        for (node_id, incarnation, counter) in observed {
-            let key = (ip, node_id, incarnation);
-            self.entries.remove(&key);
-            self.tombstones
-                .entry(key)
-                .and_modify(|existing| *existing = (*existing).max(counter))
-                .or_insert(counter);
-            deltas.push(ClusterUnblockDelta {
-                ip,
-                dot: ClusterDot {
-                    node_id,
-                    incarnation,
-                    counter,
-                },
-            });
+        let deltas = self.prepare_unban(ip);
+        for delta in &deltas {
+            self.merge_unblock_delta(delta);
         }
         deltas
     }
 
     /// Merge an observed-remove tombstone.
     pub fn merge_unblock_delta(&self, delta: &ClusterUnblockDelta) -> bool {
+        let _snapshot_guard = self
+            .snapshot_barrier
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
         if delta.dot.node_id == 0 || delta.dot.incarnation.is_nil() {
             return false;
         }
@@ -332,73 +564,138 @@ impl AworsetBlocklist {
         }
         changed
     }
-    /// Return a bounded, rotating anti-entropy page.
+    /// Update peer's epoch when they acknowledge our state
     ///
-    /// Items are sorted before paging so a stable state has deterministic order.
-    /// The cursor advances between calls, preventing a fixed map prefix from
-    /// starving keys beyond the per-sync budget. Concurrent state changes can
-    /// cause duplicates or temporary skips; repeated rotations repair those
-    /// changes, while delivery acknowledgement is a separate concern.
-    pub fn snapshot(&self, limit: usize) -> (Vec<ClusterBlockDelta>, Vec<ClusterUnblockDelta>) {
-        enum SnapshotItem {
-            Block(ClusterBlockDelta),
-            Unblock(ClusterUnblockDelta),
-        }
+    /// This method is called when a peer confirms they have received and applied
+    /// our state via the recovery completion protocol. It updates their epoch
+    /// and calculates when their tombstones can be safely garbage collected.
+    ///
+    /// # Arguments
+    /// * `peer_node_id` - The node ID of the peer who acknowledged our state
+    /// * `acked_lsn` - The WAL LSN that the peer has acknowledged up to
+    ///
+    /// # Safety
+    /// This method is safe to call concurrently as it uses the thread-safe
+    /// DashMap for peer_acks.
+    pub fn peer_acknowledged(&self, peer_node_id: u32, acked_lsn: u64) {
+        let mut epoch = self.peer_acks.entry(peer_node_id).or_insert(PeerEpoch {
+            peer_node_id,
+            incarnation: Uuid::new_v4(),
+            epoch: 0,
+            last_acknowledged_lsn: 0,
+            tombstone_expiry_epoch: u64::MAX,
+        });
 
-        if limit == 0 {
-            return (Vec::new(), Vec::new());
+        if acked_lsn > epoch.last_acknowledged_lsn {
+            epoch.last_acknowledged_lsn = acked_lsn;
+            epoch.epoch = epoch.epoch.checked_add(1).unwrap_or(u64::MAX);
+            // Tombstones from this peer become safe to GC after their epoch
+            epoch.tombstone_expiry_epoch = epoch.epoch + 1;
         }
+    }
 
-        let mut items: Vec<(SnapshotKey, SnapshotItem)> =
-            Vec::with_capacity(self.entries.len() + self.tombstones.len());
-        for entry in self.entries.iter() {
-            let key = *entry.key();
-            items.push((
-                (key.0, key.1, key.2, 0),
-                SnapshotItem::Block(ClusterBlockDelta {
-                    ip: key.0,
-                    dot: ClusterDot {
-                        node_id: key.1,
-                        incarnation: key.2,
-                        counter: entry.value().0,
-                    },
-                    created_at_ms: entry.value().1,
-                    expires_at_ms: entry.value().2,
-                    tier: entry.value().3,
-                }),
-            ));
-        }
-        for tombstone in self.tombstones.iter() {
-            let key = *tombstone.key();
-            items.push((
-                (key.0, key.1, key.2, 1),
-                SnapshotItem::Unblock(ClusterUnblockDelta {
-                    ip: key.0,
-                    dot: ClusterDot {
-                        node_id: key.1,
-                        incarnation: key.2,
-                        counter: *tombstone.value(),
-                    },
-                }),
-            ));
-        }
-        items.sort_unstable_by_key(|(key, _)| *key);
-
-        let total = items.len();
-        if total == 0 {
-            return (Vec::new(), Vec::new());
-        }
-        let start = self.snapshot_cursor.fetch_add(limit, Ordering::Relaxed) % total;
-        let count = limit.min(total);
-        let mut blocks = Vec::with_capacity(count);
-        let mut unblocks = Vec::with_capacity(count);
-        for offset in 0..count {
-            match &items[(start + offset) % total].1 {
-                SnapshotItem::Block(block) => blocks.push(block.clone()),
-                SnapshotItem::Unblock(unblock) => unblocks.push(unblock.clone()),
+    /// Garbage collect tombstones that are safe to remove
+    ///
+    /// This method removes tombstones whose owning peer has acknowledged
+    /// the tombstone (via peer_acknowledged) and thus agreed that the
+    /// state should be removed. This prevents resurrection of stale state
+    /// from long-offline peers.
+    ///
+    /// # Safety
+    /// A tombstone is safe to GC when:
+    /// 1. The owning peer has acknowledged the tombstone (their epoch >= tombstone's epoch)
+    /// 2. All other peers have also acknowledged the tombstone (for convergence)
+    ///
+    /// In practice, we GC tombstones when the owning peer's acknowledgment
+    /// epoch has advanced beyond when the tombstone was created.
+    pub fn gc_tombstones(&self) {
+        let current_epoch = self.get_local_epoch();
+        self.tombstones.retain(|key, counter| {
+            // Find which peer owns this tombstone (by checking entries map for the key)
+            if let Some(owning_entry) = self.entries.get(key) {
+                let owning_peer_id = owning_entry.key().1; // node_id from BlockKey
+                if let Some(owning_epoch) = self.peer_acks.get(&owning_peer_id) {
+                    // Safe to GC if the owning peer's epoch has advanced beyond
+                    // when this tombstone was created
+                    if owning_epoch.epoch > *counter {
+                        return false; // remove tombstone
+                    }
+                }
             }
+            true // keep tombstone
+        });
+    }
+
+    /// Get the current epoch of the local peer
+    ///
+    /// This is used by gc_tombstones() to determine what tombstones are safe to remove.
+    ///
+    /// # Returns
+    /// The current epoch value for this peer
+    fn get_local_epoch(&self) -> u64 {
+        // Use the local peer's node_id to get their epoch
+        // If not found, return 0 (should not happen in normal operation)
+        self.peer_acks
+            .get(&self.node_id)
+            .map(|epoch| epoch.epoch)
+            .unwrap_or(0)
+    }
+}
+
+/// Update peer's epoch when they acknowledge our state
+    ///
+    /// This method is called when a peer confirms they have received and applied
+    /// our state via the recovery completion protocol. It updates their epoch
+    /// and calculates when their tombstones can be safely garbage collected.
+    pub fn peer_acknowledged(&self, peer_node_id: u32, acked_lsn: u64) {
+        let mut epoch = self.peer_acks.entry(peer_node_id).or_insert(PeerEpoch {
+            peer_node_id,
+            incarnation: Uuid::new_v4(),
+            epoch: 0,
+            last_acknowledged_lsn: 0,
+            tombstone_expiry_epoch: u64::MAX,
+        });
+
+        if acked_lsn > epoch.last_acknowledged_lsn {
+            epoch.last_acknowledged_lsn = acked_lsn;
+            epoch.epoch = epoch.epoch.checked_add(1).unwrap_or(u64::MAX);
+            // Tombstones from this peer become safe to GC after their epoch
+            epoch.tombstone_expiry_epoch = epoch.epoch + 1;
         }
-        (blocks, unblocks)
+    }
+
+    /// Garbage collect tombstones that are safe to remove
+    ///
+    /// This method removes tombstones whose owning peer has acknowledged
+    /// the tombstone (via peer_acknowledged) and thus agreed that the
+    /// state should be removed. This prevents resurrection of stale state
+    /// from long-offline peers.
+    pub fn gc_tombstones(&self) {
+        let current_epoch = self.get_local_epoch();
+        self.tombstones.retain(|key, counter| {
+            // Find which peer owns this tombstone (by checking entries map for the key)
+            if let Some(owning_entry) = self.entries.get(key) {
+                let owning_peer_id = owning_entry.key().1; // node_id from BlockKey
+                if let Some(owning_epoch) = self.peer_acks.get(&owning_peer_id) {
+                    // Safe to GC if the owning peer's epoch has advanced beyond
+                    // when this tombstone was created
+                    if owning_epoch.epoch > *counter {
+                        return false; // remove tombstone
+                    }
+                }
+            }
+            true // keep tombstone
+        });
+    }
+
+    /// Get the current epoch of the local peer
+    ///
+    /// This is used by gc_tombstones() to determine what tombstones are safe to remove.
+    fn get_local_epoch(&self) -> u64 {
+        self.peer_acks
+            .get(&self.node_id)
+            .map(|epoch| epoch.epoch)
+            .unwrap_or(0)
     }
 }
 
@@ -432,6 +729,66 @@ mod tests {
         set_a.merge(&set_b);
         assert!(set_a.contains("item1"));
         assert!(set_a.contains("item2"));
+    }
+
+    #[test]
+    fn checkpoint_roundtrip_preserves_concurrent_dots_and_tombstones() {
+        let source = AworsetBlocklist::new(7);
+        let peer = AworsetBlocklist::new(8);
+        let ip = IpAddr::from([192, 0, 2, 79]);
+        let first = source.record_ban(ip, 60_000, 1);
+        let concurrent = peer.record_ban(ip, 60_000, 2);
+        assert!(source.merge_delta(&concurrent));
+        let tombstone = ClusterUnblockDelta { ip, dot: first.dot };
+        assert!(source.merge_unblock_delta(&tombstone));
+        assert!(source.is_blocked(&ip, now_ms()));
+
+        let snapshot = source.export_snapshot();
+        let restored = AworsetBlocklist::new(9);
+        restored.restore_snapshot(&snapshot);
+        assert_eq!(restored.export_snapshot(), snapshot);
+        assert!(
+            restored.is_blocked(&ip, now_ms()),
+            "origin 8's concurrent dot must survive origin 7's tombstone"
+        );
+
+        // A later operation from origin 7 must still win over its old
+        // checkpointed tombstone watermark.
+        let newer = source.record_ban(ip, 60_000, 3);
+        assert!(newer.dot.counter > first.dot.counter);
+        let newer_snapshot = source.export_snapshot();
+        restored.restore_snapshot(&newer_snapshot);
+        assert!(restored.is_blocked(&ip, now_ms()));
+    }
+
+    #[test]
+    fn prepared_ban_is_not_visible_until_committed() {
+        let mesh = AworsetBlocklist::new(7);
+        let ip = IpAddr::from([192, 0, 2, 77]);
+
+        let delta = mesh.prepare_ban(ip, 60_000, 2);
+        assert!(!mesh.is_blocked(&ip, delta.created_at_ms));
+        assert!(mesh.needs_merge_delta(&delta));
+
+        assert!(mesh.merge_delta(&delta));
+        assert!(mesh.is_blocked(&ip, delta.created_at_ms));
+        assert!(!mesh.needs_merge_delta(&delta));
+    }
+
+    #[test]
+    fn prepared_unblock_is_not_visible_until_committed() {
+        let mesh = AworsetBlocklist::new(7);
+        let ip = IpAddr::from([192, 0, 2, 78]);
+        let ban = mesh.record_ban(ip, 60_000, 2);
+
+        let tombstones = mesh.prepare_unban(ip);
+        assert_eq!(tombstones.len(), 1);
+        assert!(mesh.is_blocked(&ip, ban.created_at_ms));
+        assert!(mesh.needs_merge_unblock(&tombstones[0]));
+
+        assert!(mesh.merge_unblock_delta(&tombstones[0]));
+        assert!(!mesh.is_blocked(&ip, ban.created_at_ms));
+        assert!(!mesh.needs_merge_unblock(&tombstones[0]));
     }
 
     #[test]
@@ -676,53 +1033,83 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_rotates_through_more_entries_than_one_sync_budget() {
-        const TOTAL: usize = 5_000;
-        const PAGE: usize = 1_024;
-        let mesh = AworsetBlocklist::new(7);
-        for n in 0..TOTAL {
-            let ip = IpAddr::V6(std::net::Ipv6Addr::from(n as u128));
-            mesh.record_ban(ip, 60_000, 1);
-        }
-
-        let mut observed = std::collections::HashSet::new();
-        for _ in 0..TOTAL.div_ceil(PAGE) {
-            let (blocks, unblocks) = mesh.snapshot(PAGE);
-            assert!(blocks.len() + unblocks.len() <= PAGE);
-            observed.extend(blocks.into_iter().map(|delta| delta.ip));
-        }
-        assert_eq!(observed.len(), TOTAL);
-    }
-
-    #[test]
-    fn snapshot_rotates_through_mixed_blocks_and_tombstones() {
+    fn exported_snapshot_covers_large_mixed_state() {
         const EACH: usize = 2_500;
-        const PAGE: usize = 1_024;
         let mesh = AworsetBlocklist::new(7);
         let block_incarnation = Uuid::new_v4();
         let tombstone_incarnation = Uuid::new_v4();
+        let mut expected_blocks = std::collections::HashSet::new();
+        let mut expected_tombstones = std::collections::HashSet::new();
+
         for n in 0..EACH {
             let block_ip = IpAddr::V6(std::net::Ipv6Addr::from(n as u128));
             mesh.entries.insert(
                 (block_ip, 7, block_incarnation),
                 (n as u64 + 1, 0, u64::MAX, 2),
             );
+            expected_blocks.insert(block_ip);
 
             let tombstone_ip = IpAddr::V6(std::net::Ipv6Addr::from((n + 10_000) as u128));
             mesh.tombstones
                 .insert((tombstone_ip, 7, tombstone_incarnation), n as u64 + 1);
+            expected_tombstones.insert(tombstone_ip);
         }
 
-        let mut observed_blocks = std::collections::HashSet::new();
-        let mut observed_tombstones = std::collections::HashSet::new();
-        for _ in 0..(EACH * 2).div_ceil(PAGE) {
-            let (blocks, unblocks) = mesh.snapshot(PAGE);
-            assert!(blocks.len() + unblocks.len() <= PAGE);
-            observed_blocks.extend(blocks.into_iter().map(|delta| delta.ip));
-            observed_tombstones.extend(unblocks.into_iter().map(|delta| delta.ip));
-        }
-        assert_eq!(observed_blocks.len(), EACH);
-        assert_eq!(observed_tombstones.len(), EACH);
+        let snapshot = mesh.export_snapshot();
+        assert_eq!(snapshot.blocks.len(), EACH);
+        assert_eq!(snapshot.unblocks.len(), EACH);
+        assert_eq!(
+            snapshot
+                .blocks
+                .iter()
+                .map(|delta| delta.ip)
+                .collect::<std::collections::HashSet<_>>(),
+            expected_blocks
+        );
+        assert_eq!(
+            snapshot
+                .unblocks
+                .iter()
+                .map(|delta| delta.ip)
+                .collect::<std::collections::HashSet<_>>(),
+            expected_tombstones
+        );
+        assert!(snapshot.blocks.windows(2).all(|pair| {
+            (
+                pair[0].ip,
+                pair[0].dot.node_id,
+                pair[0].dot.incarnation,
+                pair[0].dot.counter,
+            ) <= (
+                pair[1].ip,
+                pair[1].dot.node_id,
+                pair[1].dot.incarnation,
+                pair[1].dot.counter,
+            )
+        }));
+    }
+
+    #[test]
+    fn exported_recovery_snapshot_is_immutable_after_capture() {
+        let mesh = AworsetBlocklist::new(7);
+        let ip_a = IpAddr::from([192, 0, 2, 70]);
+        let ip_b = IpAddr::from([192, 0, 2, 71]);
+        mesh.record_ban(ip_a, 60_000, 1);
+
+        let captured = mesh.export_snapshot();
+        let captured_bytes = serde_json::to_vec(&captured).expect("serialize captured snapshot");
+
+        mesh.record_unban(ip_a);
+        mesh.record_ban(ip_b, 60_000, 2);
+
+        assert_eq!(
+            serde_json::to_vec(&captured).expect("serialize captured snapshot again"),
+            captured_bytes,
+            "mutations after capture must not alter the recovery payload"
+        );
+        assert_eq!(captured.blocks.len(), 1);
+        assert_eq!(captured.blocks[0].ip, ip_a);
+        assert!(mesh.is_blocked(&ip_b, now_ms()));
     }
 
     #[test]
@@ -730,13 +1117,15 @@ mod tests {
         let mesh = AworsetBlocklist::new(7);
         let ip = IpAddr::from([192, 0, 2, 7]);
         let ban = mesh.record_ban(ip, 60_000, 3);
-        let (blocks, _) = mesh.snapshot(16);
+        let snapshot = mesh.export_snapshot();
+        let blocks = snapshot.blocks;
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].dot, ban.dot);
         assert_eq!(blocks[0].tier, ban.tier);
         let unblocks = mesh.record_unban(ip);
         assert_eq!(unblocks.len(), 1);
-        let (_, tombstones) = mesh.snapshot(16);
+        let snapshot = mesh.export_snapshot();
+        let tombstones = snapshot.unblocks;
         assert_eq!(tombstones.len(), 1);
         assert_eq!(tombstones[0].dot, ban.dot);
     }
