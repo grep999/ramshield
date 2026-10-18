@@ -67,7 +67,10 @@ fn capture_mesh_recovery_snapshot(
 ) -> Option<(u64, ramshield_mesh::aworset::AworsetSnapshot)> {
     let shared = shared?;
     let blocklist = blocklist?;
-    let _guard = shared.barrier.lock().unwrap_or_else(|error| error.into_inner());
+    let _guard = shared
+        .barrier
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     Some((wal.durable_lsn(), blocklist.export_snapshot()))
 }
 
@@ -126,7 +129,9 @@ impl EnforcementService {
                     let current = values.get(&peer).copied().unwrap_or(0);
                     values.insert(peer, current.max(boundary_lsn));
                     drop(values);
-                    handle.acknowledge_recovery_cursor(peer, generation, boundary_lsn).await;
+                    handle
+                        .acknowledge_recovery_cursor(peer, generation, boundary_lsn)
+                        .await;
                 }
             }
             if handle.recovery_completion_pending(peer).await {
@@ -153,9 +158,13 @@ impl EnforcementService {
                     peer,
                     peers: peer_inflight,
                 };
-                let capture_recovery = || capture_mesh_recovery_snapshot(
-                    &peer_wal, peer_checkpoint_shared.as_ref(), peer_blocklist.as_ref()
-                );
+                let capture_recovery = || {
+                    capture_mesh_recovery_snapshot(
+                        &peer_wal,
+                        peer_checkpoint_shared.as_ref(),
+                        peer_blocklist.as_ref(),
+                    )
+                };
                 let next_cursor = async {
                     let latest_lsn = peer_wal.durable_lsn();
                     if cursor >= latest_lsn {

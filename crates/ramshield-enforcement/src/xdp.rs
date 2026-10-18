@@ -512,10 +512,13 @@ impl XdpApplier for AyaXdpApplier {
         let mut evicted_count: u64 = 0;
         for (name, expected) in [("BLOCKLIST", v4_keys), ("BLOCKLIST6", v6_keys)] {
             let expected: std::collections::HashSet<BlocklistKey> = expected.into_iter().collect();
-            let mut stale_count = 0usize;
             self.with_map(name, |m| {
                 let fd_raw = m.map().fd().as_fd().as_raw_fd();
                 let mut prev_key: Option<BlocklistKey> = None;
+                // STAGED DELETION BUFFER: decouple enumeration from deletion
+                // to avoid race conditions where in-loop deletion interrupts
+                // raw_get_next_key iteration and returns ENOENT.
+                let mut staged_deletions: Vec<BlocklistKey> = Vec::new();
                 loop {
                     // SAFETY: `fd_raw` comes from the BLOCKLIST/BLOCKLIST6 map
                     // borrowed as `m` for this whole closure, so it stays open;
@@ -524,11 +527,8 @@ impl XdpApplier for AyaXdpApplier {
                     match next {
                         Ok(Some(k)) => {
                             if !expected.contains(&k) {
-                                // SAFETY: same live map fd and 16-byte key
-                                // layout as the get-next-key call above.
-                                unsafe { raw_delete_elem(fd_raw, &k) }
-                                    .map_err(MapError::from)?;
-                                stale_count += 1;
+                                // Stage for deferred deletion instead of in-loop delete.
+                                staged_deletions.push(k);
                             } else {
                                 prev_key = Some(k);
                             }
@@ -536,6 +536,12 @@ impl XdpApplier for AyaXdpApplier {
                         Ok(None) => break,
                         Err(e) => return Err(MapError::from(e)),
                     }
+                }
+                // Execute deletions after collection to avoid race conditions.
+                let mut stale_count = staged_deletions.len();
+                for k in staged_deletions.iter() {
+                    // SAFETY: same live map fd and 16-byte key layout as before.
+                    unsafe { raw_delete_elem(fd_raw, k) }.map_err(MapError::from)?;
                 }
                 for k in &expected {
                     m.insert(*k, PERMANENT, 0)?;

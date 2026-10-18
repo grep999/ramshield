@@ -5,10 +5,10 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-ahash = "0.8"
-ramshield-metrics = { path = "../ramshield-metrics", version = "0.1.0" }
 ramshield-types = { path = "../ramshield-types", version = "0.1.0" }
 ramshield-storage = { path = "../ramshield-storage", version = "0.1.0" }
+ahash = "0.8"
+ramshield-metrics = { path = "../ramshield-metrics", version = "0.1.0" }
 ramshield-mesh = { path = "../ramshield-mesh", version = "0.3.0", optional = true }
 ramshield-xdp = { path = "../ramshield-xdp", version = "0.1.0", default-features = false, features = ["elf"], optional = true }
 aya = { version = "0.14", optional = true }

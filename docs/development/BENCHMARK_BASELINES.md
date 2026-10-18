@@ -72,3 +72,21 @@ capture, kernel scheduling, TPACKET_V3 ring traversal, packet loss, or NIC load;
 those require a separately controlled privileged host test. The memory value
 from `/usr/bin/time -v` is a whole-process peak-RSS observation and is not an
 isolated allocation budget. Mesh merge/gossip remains outside this core suite.
+
+## Missing Measurements (to be completed)
+
+### Kernel capture/TPACKET ring behavior
+- **Status**: Not measured due to lack of privileged test environment
+- **Plan**: Requires controlled privileged host test to measure AF_PACKET capture, kernel scheduling, TPACKET_V3 ring traversal, packet loss, and NIC load
+- **Note**: This measurement is explicitly called out as missing in the audit snapshot
+
+### Isolated memory behavior
+- **Status**: Not measured as isolated allocation budget
+- **Note**: The current RSS measurement is a whole-process peak-RSS observation and is not an isolated store measurement
+- **Plan**: Requires memory profiling tools to isolate store memory usage from benchmark process overhead
+
+## Variance Analysis
+- **Status**: Field-day variance on this host is too high to justify thresholds
+- **Note**: Before setting a threshold, collect repeated observations on a stable, identified runner class and assess its run-to-run variance
+- **Plan**: Repeat measurements on a stable runner class to determine acceptable variance thresholds
+
