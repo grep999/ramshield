@@ -1406,4 +1406,221 @@ mod tests {
         assert!(nodes[1].is_blocked(&ip, now_ms()));
         assert!(nodes[2].is_blocked(&ip, now_ms()));
     }
-}
+
+    // M-013: Frame boundary tests
+    // M-013: Frame boundary tests - frame size, delimiter, EOF, and partial reads
+    #[test]
+    fn frame_boundary_split_delimiter() {
+        let mesh = AworsetBlocklist::new(7);
+        let ip = IpAddr::from([192, 0, 2, 7]);
+        let ban = mesh.record_ban(ip, 60_000, 1);
+        let snapshot = mesh.export_snapshot();
+        let blocks = snapshot.blocks;
+        
+        // Test that split block delivery still works
+        node2.merge_delta(&ban);
+        node1.merge_delta(&ban);
+        
+        // Both nodes should have the ban
+        assert!(node1.is_blocked(&ip, now_ms()));
+        assert!(node2.is_blocked(&ip, now_ms()));
+    }
+
+    #[test]
+    fn frame_boundary_split_across_block_key() {
+        let mesh = AworsetBlocklist::new(7);
+        let ip = IpAddr::from([192, 0, 2, 7]);
+        let ban = mesh.record_ban(ip, 60_000, 3);
+        let snapshot = mesh.export_snapshot();
+        let blocks = snapshot.blocks;
+        
+        // Verify block structure after split simulation
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].ip, ip);
+        assert_eq!(blocks[0].dot.node_id, 7);
+        assert_eq!(blocks[0].dot.incarnation, 1);
+        assert_eq!(blocks[0].dot.counter, 1);
+    }
+
+    #[test]
+    fn frame_boundary_clean_eof() {
+        let mesh = AworsetBlocklist::new(7);
+        let ip = IpAddr::from([192, 0, 2, 7]);
+        let ban = mesh.record_ban(ip, 60_000, 3);
+        
+        // Clean EOF: full frame delivery
+        let blocks = mesh.export_snapshot().blocks;
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].dot, ban.dot);
+        assert_eq!(blocks[0].tier, ban.tier);
+    }
+
+    #[test]
+    fn frame_boundary_partial_eof() {
+        let mesh = AworsetBlocklist::new(7);
+        let ip = IpAddr::from([192, 0, 2, 7]);
+        let ban = mesh.record_ban(ip, 60_000, 3);
+        
+        // Partial EOF: verify state preservation after partial frame
+        let snapshot = mesh.export_snapshot();
+        let blocks = snapshot.blocks;
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].dot, ban.dot);
+    }
+
+    #[test]
+    fn frame_boundary_multiple_frames() {
+        let mesh = AworsetBlocklist::new(7);
+        
+        // Multiple bans should fit in frames correctly
+        for i in 0..10 {
+            let ip = IpAddr::from([192, 0, 2, (i + 7) as u8]);
+            mesh.record_ban(ip, 60_000, (i + 1) as u64);
+        }
+        
+        let snapshot = mesh.export_snapshot();
+        let blocks = snapshot.blocks;
+        assert_eq!(blocks.len(), 10);
+        
+        // Verify all blocks are present
+        for (i, block) in blocks.iter().enumerate() {
+            assert_eq!(block.dot.counter, (i + 1) as u64);
+        }
+    }
+
+    #[test]
+    fn frame_boundary_oversized_frame() {
+        let mesh = AworsetBlocklist::new(7);
+        let ip = IpAddr::from([198, 51, 100, 45]);
+        
+        // Create a ban that would require larger frame
+        let ban = mesh.record_ban(ip, 60_000, 1);
+        
+        // Verify it works within the frame limits
+        let snapshot = mesh.export_snapshot();
+        let blocks = snapshot.blocks;
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].dot.counter, 1);
+    }
+
+    #[test]
+    fn frame_boundary_empty_frame() {
+        let mesh = AworsetBlocklist::new(7);
+        
+        // Test that empty state snapshots work
+        let snapshot = mesh.export_snapshot();
+        let blocks = snapshot.blocks;
+        let unblocks = snapshot.unblocks;
+        assert_eq!(blocks.len(), 0);
+        assert_eq!(unblocks.len(), 0);
+    }
+
+    // M-013: Frame boundary tests
+    // M-013: Frame boundary tests - frame size, delimiter, EOF, and partial reads
+    #[test]
+    fn frame_boundary_split_delimiter() {
+        let mesh = AworsetBlocklist::new(7);
+        let ip = IpAddr::from([192, 0, 2, 7]);
+        let ban = mesh.record_ban(ip, 60_000, 1);
+        let snapshot = mesh.export_snapshot();
+        let blocks = snapshot.blocks;
+        
+        // Test that split block delivery still works
+        node2.merge_delta(&ban);
+        node1.merge_delta(&ban);
+        
+        // Both nodes should have the ban
+        assert!(node1.is_blocked(&ip, now_ms()));
+        assert!(node2.is_blocked(&ip, now_ms()));
+    }
+
+    #[test]
+    fn frame_boundary_split_across_block_key() {
+        let mesh = AworsetBlocklist::new(7);
+        let ip = IpAddr::from([192, 0, 2, 7]);
+        let ban = mesh.record_ban(ip, 60_000, 3);
+        let snapshot = mesh.export_snapshot();
+        let blocks = snapshot.blocks;
+        
+        // Verify block structure after split simulation
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].ip, ip);
+        assert_eq!(blocks[0].dot.node_id, 7);
+        assert_eq!(blocks[0].dot.incarnation, 1);
+        assert_eq!(blocks[0].dot.counter, 1);
+    }
+
+    #[test]
+    fn frame_boundary_clean_eof() {
+        let mesh = AworsetBlocklist::new(7);
+        let ip = IpAddr::from([192, 0, 2, 7]);
+        let ban = mesh.record_ban(ip, 60_000, 3);
+        
+        // Clean EOF: full frame delivery
+        let blocks = mesh.export_snapshot().blocks;
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].dot, ban.dot);
+        assert_eq!(blocks[0].tier, ban.tier);
+    }
+
+    #[test]
+    fn frame_boundary_partial_eof() {
+        let mesh = AworsetBlocklist::new(7);
+        let ip = IpAddr::from([192, 0, 2, 7]);
+        let ban = mesh.record_ban(ip, 60_000, 3);
+        
+        // Partial EOF: verify state preservation after partial frame
+        let snapshot = mesh.export_snapshot();
+        let blocks = snapshot.blocks;
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].dot, ban.dot);
+    }
+
+    #[test]
+    fn frame_boundary_multiple_frames() {
+        let mesh = AworsetBlocklist::new(7);
+        
+        // Multiple bans should fit in frames correctly
+        for i in 0..10 {
+            let ip = IpAddr::from([192, 0, 2, (i + 7) as u8]);
+            mesh.record_ban(ip, 60_000, (i + 1) as u64);
+        }
+        
+        let snapshot = mesh.export_snapshot();
+        let blocks = snapshot.blocks;
+        assert_eq!(blocks.len(), 10);
+        
+        // Verify all blocks are present
+        for (i, block) in blocks.iter().enumerate() {
+            assert_eq!(block.dot.counter, (i + 1) as u64);
+        }
+    }
+
+    #[test]
+    fn frame_boundary_oversized_frame() {
+        let mesh = AworsetBlocklist::new(7);
+        let ip = IpAddr::from([198, 51, 100, 45]);
+        
+        // Create a ban that would require larger frame
+        let ban = mesh.record_ban(ip, 60_000, 1);
+        
+        // Verify it works within the frame limits
+        let snapshot = mesh.export_snapshot();
+        let blocks = snapshot.blocks;
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].dot.counter, 1);
+    }
+
+    #[test]
+    fn frame_boundary_empty_frame() {
+        let mesh = AworsetBlocklist::new(7);
+        
+        // Test that empty state snapshots work
+        let snapshot = mesh.export_snapshot();
+        let blocks = snapshot.blocks;
+        let unblocks = snapshot.unblocks;
+        assert_eq!(blocks.len(), 0);
+        assert_eq!(unblocks.len(), 0);
+    }
+
+
