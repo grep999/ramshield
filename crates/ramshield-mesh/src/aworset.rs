@@ -1189,4 +1189,221 @@ mod tests {
         assert_eq!(node.tombstones.len(), 2);
         node.gc_tombstones();
         assert_eq!(node.tombstones.len(), 2);
+
+    // ==================== M-003: CONVERGENCE TESTS ====================
+    
+    /// Test that merge is commutative: A.merge(B) == B.merge(A)
+    #[test]
+    fn merge_is_commutative() {
+        let node1 = AworsetBlocklist::new(1);
+        let node2 = AworsetBlocklist::new(2);
+        
+        let ip1 = IpAddr::from([10, 0, 0, 1]);
+        let ip2 = IpAddr::from([10, 0, 0, 2]);
+        
+        // Independent operations
+        node1.record_ban(ip1, 60_000, 1);
+        node2.record_ban(ip2, 60_000, 1);
+        
+        // Merge in order 1->2
+        let delta1 = node1.export_snapshot();
+        let delta2 = node2.export_snapshot();
+        
+        let merge12 = AworsetBlocklist::new(99);
+        merge12.restore_snapshot(&delta1);
+        merge12.restore_snapshot(&delta2);
+        
+        // Merge in order 2->1
+        let merge21 = AworsetBlocklist::new(99);
+        merge21.restore_snapshot(&delta2);
+        merge21.restore_snapshot(&delta1);
+        
+        // Both should have both IPs blocked
+        assert!(merge12.is_blocked(&ip1, now_ms()));
+        assert!(merge12.is_blocked(&ip2, now_ms()));
+        assert!(merge21.is_blocked(&ip1, now_ms()));
+        assert!(merge21.is_blocked(&ip2, now_ms()));
     }
+    
+    /// Test that merge is idempotent: A.merge(B) twice == A.merge(B) once
+    #[test]
+    fn merge_is_idempotent() {
+        let node1 = AworsetBlocklist::new(1);
+        let node2 = AworsetBlocklist::new(2);
+        
+        let ip = IpAddr::from([10, 0, 0, 1]);
+        node1.record_ban(ip, 60_000, 1);
+        
+        let snapshot = node1.export_snapshot();
+        
+        let receiver = AworsetBlocklist::new(99);
+        receiver.restore_snapshot(&snapshot);
+        let after_first = receiver.export_snapshot();
+        
+        receiver.restore_snapshot(&snapshot);
+        let after_second = receiver.export_snapshot();
+        
+        // Applying same snapshot twice should be idempotent
+        assert_eq!(after_first, after_second, "merge should be idempotent");
+    }
+    
+    /// Test that merge is associative: (A+B)+C == A+(B+C)
+    #[test]
+    fn merge_is_associative() {
+        let node1 = AworsetBlocklist::new(1);
+        let node2 = AworsetBlocklist::new(2);
+        let node3 = AworsetBlocklist::new(3);
+        
+        let ip1 = IpAddr::from([10, 0, 0, 1]);
+        let ip2 = IpAddr::from([10, 0, 0, 2]);
+        let ip3 = IpAddr::from([10, 0, 0, 3]);
+        
+        node1.record_ban(ip1, 60_000, 1);
+        node2.record_ban(ip2, 60_000, 1);
+        node3.record_ban(ip3, 60_000, 1);
+        
+        let snap1 = node1.export_snapshot();
+        let snap2 = node2.export_snapshot();
+        let snap3 = node3.export_snapshot();
+        
+        // (1+2)+3
+        let left = AworsetBlocklist::new(99);
+        left.restore_snapshot(&snap1);
+        left.restore_snapshot(&snap2);
+        left.restore_snapshot(&snap3);
+        
+        // 1+(2+3)
+        let right = AworsetBlocklist::new(99);
+        right.restore_snapshot(&snap1);
+        right.restore_snapshot(&snap2);
+        right.restore_snapshot(&snap3);
+        
+        assert_eq!(left.export_snapshot(), right.export_snapshot());
+        assert!(left.is_blocked(&ip1, now_ms()));
+        assert!(left.is_blocked(&ip2, now_ms()));
+        assert!(left.is_blocked(&ip3, now_ms()));
+    }
+    
+    /// Test convergence after network partition heals
+    #[test]
+    fn convergence_after_partition_heals() {
+        let node_a = AworsetBlocklist::new(1);
+        let node_b = AworsetBlocklist::new(2);
+        
+        let ip_shared = IpAddr::from([10, 0, 0, 100]);
+        let ip_a_only = IpAddr::from([10, 0, 0, 101]);
+        let ip_b_only = IpAddr::from([10, 0, 0, 102]);
+        
+        // Initial state: both agree on ip_shared
+        node_a.record_ban(ip_shared, 60_000, 1);
+        let delta = node_a.export_snapshot();
+        node_b.restore_snapshot(&delta);
+        
+        // Network partition: nodes diverge
+        node_a.record_ban(ip_a_only, 60_000, 1);
+        node_b.record_ban(ip_b_only, 60_000, 1);
+        
+        // Also: node_a unbans ip_shared during partition
+        let unblocks = node_a.record_unban(ip_shared);
+        assert_eq!(unblocks.len(), 1);
+        
+        // Partition heals: exchange snapshots
+        let snap_a = node_a.export_snapshot();
+        let snap_b = node_b.export_snapshot();
+        
+        node_a.restore_snapshot(&snap_b);
+        node_b.restore_snapshot(&snap_a);
+        
+        // Both should converge to same state
+        assert!(node_a.is_blocked(&ip_a_only, now_ms()));
+        assert!(node_a.is_blocked(&ip_b_only, now_ms()));
+        assert!(!node_a.is_blocked(&ip_shared, now_ms()), "unban should win");
+        
+        assert!(node_b.is_blocked(&ip_a_only, now_ms()));
+        assert!(node_b.is_blocked(&ip_b_only, now_ms()));
+        assert!(!node_b.is_blocked(&ip_shared, now_ms()), "unban should win");
+        
+        // Snapshots should be identical after convergence
+        assert_eq!(node_a.export_snapshot(), node_b.export_snapshot());
+    }
+    
+    /// Test that concurrent operations from different nodes both survive merge
+    #[test]
+    fn concurrent_operations_both_survive() {
+        let node1 = AworsetBlocklist::new(1);
+        let node2 = AworsetBlocklist::new(2);
+        
+        let ip1 = IpAddr::from([10, 0, 0, 1]);
+        let ip2 = IpAddr::from([10, 0, 0, 2]);
+        
+        // Concurrent bans from different nodes
+        let delta1 = node1.record_ban(ip1, 60_000, 1);
+        let delta2 = node2.record_ban(ip2, 60_000, 1);
+        
+        // Exchange deltas
+        node1.merge_delta(&delta2);
+        node2.merge_delta(&delta1);
+        
+        // Both should see both bans
+        assert!(node1.is_blocked(&ip1, now_ms()));
+        assert!(node1.is_blocked(&ip2, now_ms()));
+        assert!(node2.is_blocked(&ip1, now_ms()));
+        assert!(node2.is_blocked(&ip2, now_ms()));
+    }
+    
+    /// Test that add-wins semantics work: concurrent add and remove on same IP
+    #[test]
+    fn add_wins_on_concurrent_operations() {
+        let node1 = AworsetBlocklist::new(1);
+        let node2 = AworsetBlocklist::new(2);
+        
+        let ip = IpAddr::from([10, 0, 0, 1]);
+        
+        // Node1 has existing ban, Node2 tries to unban concurrently
+        node1.record_ban(ip, 60_000, 1);
+        let initial = node1.export_snapshot();
+        node2.restore_snapshot(&initial);
+        
+        // Node1 refreshes ban (add), Node2 unbans (remove) - concurrent
+        let new_ban = node1.record_ban(ip, 60_000, 2);
+        let unblocks = node2.record_unban(ip);
+        assert_eq!(unblocks.len(), 1);
+        
+        // Exchange
+        node1.merge_unblock_delta(&unblocks[0]);
+        node2.merge_delta(&new_ban);
+        
+        // Add-wins: ban should still be active
+        assert!(node1.is_blocked(&ip, now_ms()), "add should win over concurrent remove");
+        assert!(node2.is_blocked(&ip, now_ms()), "add should win over concurrent remove");
+    }
+    
+    /// Test eventual consistency: all nodes converge after exchanging all deltas
+    #[test]
+    fn eventual_consistency_convergence() {
+        let nodes: Vec<AworsetBlocklist> = (1..=3).map(|id| AworsetBlocklist::new(id)).collect();
+        let ip = IpAddr::from([10, 0, 0, 1]);
+        
+        // Each node makes independent operation
+        for (idx, node) in nodes.iter().enumerate() {
+            node.record_ban(ip, 60_000, (idx + 1) as u8);
+        }
+        
+        // Gather all snapshots
+        let snapshots: Vec<_> = nodes.iter().map(|n| n.export_snapshot()).collect();
+        
+        // Each node applies all other nodes' snapshots
+        for node in &nodes {
+            for snap in &snapshots {
+                node.restore_snapshot(snap);
+            }
+        }
+        
+        // All nodes should converge
+        assert_eq!(nodes[0].export_snapshot(), nodes[1].export_snapshot());
+        assert_eq!(nodes[1].export_snapshot(), nodes[2].export_snapshot());
+        assert!(nodes[0].is_blocked(&ip, now_ms()));
+        assert!(nodes[1].is_blocked(&ip, now_ms()));
+        assert!(nodes[2].is_blocked(&ip, now_ms()));
+    }
+}
