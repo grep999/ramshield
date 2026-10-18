@@ -3,6 +3,153 @@ use super::*;
 /// Semantic shedding classifier (Vuln 2): events that are routine 200 OKs with
 /// benign fingerprint and small payload are LOW-signal — shed first at the
 /// high-water mark to preserve channel space for attack telemetry.
+# File: src/ipc/server/handlers.rs (T19 implementation)
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use crossbeam_channel::Sender;
+
+use crate::engine::Engine;
+use ramshield_protocol::message::{Request, Response, IpDetail, Stats};
+use ramshield_types::{ConnectionEvent, EnforceAction, EnforceCommand, BlockReason, EvidenceSource};
+
+/// Priority dispatcher for IPC requests.
+///
+/// Prevents T19 telemetry starvation by isolating low-priority, high-volume
+/// connection reports from critical, authoritative control-plane commands.
+pub async fn dispatch_request(
+    req: Request,
+    engine: Arc<Engine>,
+    event_tx: Sender<ConnectionEvent>,
+    enforce_tx: mpsc::Sender<EnforceCommand>,
+    actor_id: String,
+) -> Result<Response, (u16, &'static str)> {
+    match req {
+        // =====================================================================
+        // PRIORITY 1: CONTROL & HEALTH COMMANDS (Loss-Intolerant)
+        // Handled immediately; never blocked behind telemetry backpressure.
+        // =====================================================================
+        Request::CheckIp(ip) => {
+            let store = &engine.store;
+            let is_blocked = store.is_blocked(&ip) || store.is_blocked_by_cidr(&ip);
+            let threat = store.get_threat_score(&ip).unwrap_or(0.0);
+            let ewma = store.get_ewma_rps(&ip).unwrap_or(0.0);
+            
+            Ok(Response::IpStatus {
+                ip,
+                blocked: is_blocked,
+                threat,
+                ewma_rps: ewma,
+                reason: "queried".to_string(),
+            })
+        }
+
+        Request::Block(ip) => {
+            let cmd = EnforceCommand {
+                id: uuid::Uuid::new_v4(),
+                action: EnforceAction::Block,
+                evidence_source: EvidenceSource::Operator,
+                ip,
+                ttl_secs: Some(300), // Default 5 min
+                reason: BlockReason::Manual,
+                source_ip: ip,
+                source_port: 0,
+                actor: actor_id,
+            };
+
+            // Attempt delivery into enforcement channel with backpressure check
+            match enforce_tx.try_send(cmd) {
+                Ok(_) => Ok(Response::Ok { message: format!("blocked {ip}") }),
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    engine.metrics.inc_enforcement_queue_full();
+                    tracing::error!("enforcement channel full: dropping manual block for {ip}");
+                    Err((503, "enforcement queue full; system under extreme load"))
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    tracing::error!("enforcement channel closed; daemon shutting down");
+                    Err((500, "enforcement actor terminated"))
+                }
+            }
+        }
+
+        Request::Unblock(ip) => {
+            let cmd = EnforceCommand {
+                id: uuid::Uuid::new_v4(),
+                action: EnforceAction::Unblock,
+                evidence_source: EvidenceSource::Operator,
+                ip,
+                ttl_secs: None,
+                reason: BlockReason::Manual,
+                source_ip: ip,
+                source_port: 0,
+                actor: actor_id,
+            };
+
+            enforce_tx.send(cmd).await.map_err(|_| (500, "enforcement actor dead"))?;
+            Ok(Response::Unblocked)
+        }
+
+        Request::Stats => {
+            let snap = engine.dashboard_snapshot();
+            Ok(Response::StatsResponse(Stats {
+                blocked_ips: snap.blocked_total,
+                total_events: snap.events_ingested,
+                rps: snap.rps_current,
+                uptime_secs: snap.uptime_secs,
+            }))
+        }
+
+        Request::IpInfo(ip) => {
+            if let Some(record) = engine.store.get_record(&ip) {
+                Ok(Response::IpInfoResponse(IpDetail {
+                    ip: ip.to_string(),
+                    threat_score: record.threat_score,
+                    event_count: record.event_count,
+                    blocked: record.block_state.is_blocked(),
+                    first_seen: record.first_seen_ns / 1_000_000_000,
+                    last_seen: record.last_seen_ns / 1_000_000_000,
+                }))
+            } else {
+                Err((404, "ip not tracked in active memory"))
+            }
+        }
+
+        // =====================================================================
+        // PRIORITY 2: BULK INGEST TELEMETRY (Loss-Tolerant, Non-Blocking)
+        // Drops or sheds events before allowing channel starvation.
+        // =====================================================================
+        Request::Connection(report) => {
+            let src_ip = report.ip.parse().map_err(|_| (400, "invalid src_ip"))?;
+            let upstream_ip = report.upstream_ip.parse().map_err(|_| (400, "invalid upstream_ip"))?;
+            
+            let event = ConnectionEvent {
+                src_ip,
+                upstream_ip,
+                status: report.status,
+                response_time_ms: report.response_time_ms,
+                timestamp_ns: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0),
+            };
+
+            // Use non-blocking try_send into the crossbeam ingestion ring
+            match event_tx.try_send(event) {
+                Ok(_) => {
+                    engine.metrics.inc_ingested();
+                    Ok(Response::Ok { message: "accepted".into() })
+                }
+                Err(crossbeam_channel::TrySendError::Full(_)) => {
+                    engine.metrics.inc_shed();
+                    Err((429, "ingest queue saturated; telemetry dropped"))
+                }
+                Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                    Err((500, "detection engine offline"))
+                }
+            }
+        }
+    }
+}
 pub fn is_low_signal(status_code: u16, proto_fp: u32, bytes: u64) -> bool {
     status_code < 400 && proto_fp == 0 && bytes <= 65_536
 }

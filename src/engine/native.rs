@@ -34,6 +34,92 @@ const TP_STATUS_KERNEL: u32 = 0;
 #[cfg(target_os = "linux")]
 const TP_STATUS_USER: u32 = 1;
 #[cfg(target_os = "linux")]
+
+/// Network protocol ethertype constants.
+const ETHERTYPE_IPV4: u16 = 0x0800;
+const ETHERTYPE_IPV6: u16 = 0x86DD;
+const ETHERTYPE_VLAN: u16 = 0x8100;
+
+#[repr(C, packed)]
+struct EthHeader {
+    dst_mac: [u8; 6],
+    src_mac: [u8; 6],
+    ethertype: u16,
+}
+
+/// Safely inspects packet buffers from TPACKET_V3 mmap ring.
+/// Uses `ptr::read_unaligned` for all header parses, preventing SIGBUS faults
+/// on architectures with strict alignment requirements (ARM64).
+pub fn parse_packet_safe(raw_bytes: &[u8]) -> Option<(IpAddr, u8, u16)> {
+    let mut offset = 0usize;
+
+    // 1. Validate Ethernet frame bounds
+    if raw_bytes.len() < std::mem::size_of::<EthHeader>() {
+        return None;
+    }
+
+    let eth = unsafe {
+        ptr::read_unaligned(raw_bytes.as_ptr().add(offset) as *const EthHeader)
+    };
+    offset += std::mem::size_of::<EthHeader>();
+    let mut ethertype = u16::from_be(eth.ethertype);
+
+    // 2. Handle 802.1Q VLAN Tagging safely
+    if ethertype == ETHERTYPE_VLAN {
+        if raw_bytes.len() < offset + 4 {
+            return None;
+        }
+        // Extract inner ethertype after 4-byte VLAN tag
+        ethertype = u16::from_be(unsafe {
+            ptr::read_unaligned(raw_bytes.as_ptr().add(offset + 2) as *const u16)
+        });
+        offset += 4;
+    }
+
+    // 3. Extract L3 IP payload
+    match ethertype {
+        ETHERTYPE_IPV4 => {
+            if raw_bytes.len() < offset + std::mem::size_of::<Ipv4Header>() {
+                return None;
+            }
+
+            let ip_hdr = unsafe {
+                ptr::read_unaligned(raw_bytes.as_ptr().add(offset) as *const Ipv4Header)
+            };
+
+            let ihl = (ip_hdr.ver_ihl & 0x0F) as usize * 4;
+            if ihl < 20 || raw_bytes.len() < offset + ihl {
+                return None; // Invalid header length
+            }
+
+            let src = IpAddr::V4(Ipv4Addr::from(ip_hdr.src_ip));
+            let proto = ip_hdr.protocol;
+            offset += ihl;
+
+            // Extract L4 ports if TCP/UDP
+            let port = if (proto == 6 || proto == 17) && raw_bytes.len() >= offset + 4 {
+                u16::from_be(unsafe {
+                    ptr::read_unaligned(raw_bytes.as_ptr().add(offset + 2) as *const u16)
+                })
+            } else {
+                0
+            };
+
+            Some((src, proto, port))
+        }
+        ETHERTYPE_IPV6 => {
+            if raw_bytes.len() < offset + 40 {
+                return None;
+            }
+            let mut src_bytes = [0u8; 16];
+            src_bytes.copy_from_slice(&raw_bytes[offset + 8..offset + 24]);
+            let next_header = raw_bytes[offset + 6];
+            Some((IpAddr::V6(Ipv6Addr::from(src_bytes)), next_header, 0))
+        }
+        _ => None, // Fail-open: ignore non-IP traffic
+    }
+}
+
 const TPACKET_ALIGNMENT: usize = 16;
 
 #[cfg(target_os = "linux")]

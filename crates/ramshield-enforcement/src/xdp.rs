@@ -242,6 +242,8 @@ pub struct AyaXdpApplier {
     bpf: Option<Ebpf>,
     iface: String,
     flags: XdpMode,
+    // Maximum items processed in a single reconciliation slice to prevent CPU lockup
+    reconcile_chunk_size: usize,
 }
 
 impl AyaXdpApplier {
@@ -260,6 +262,8 @@ impl AyaXdpApplier {
             flags,
         }
     }
+    reconcile_chunk_size: 512,
+
 
     /// Load ELF + attach + return. Errors surface verbatim for boot logging.
     pub fn load_and_attach(&mut self) -> Result<(), EnforcementError> {

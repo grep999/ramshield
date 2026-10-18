@@ -23,6 +23,13 @@ pub enum MeshMutationAction {
     Unblock,
 }
 
+/// State transition safety for the WAL wrapper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalHealth {
+    Healthy,
+    Poisoned,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum WalEntry {
     BlockIp {
@@ -91,6 +98,7 @@ impl CheckpointBoundary {
 /// The guard is poisoned on rotation failure; `reopen()` replaces it.
 pub struct Wal {
     guard: Guard,
+    is_poisoned: std::sync::atomic::AtomicBool,
 }
 
 struct Guard {
@@ -105,6 +113,22 @@ impl Guard {
             inner: Mutex::new(inner),
             cfg,
         })
+    }
+}
+
+impl Wal {
+    /// Returns the current health state.
+    pub fn health(&self) -> WalHealth {
+        if self.is_poisoned.load(std::sync::atomic::Ordering::Acquire) {
+            WalHealth::Poisoned
+        } else {
+            WalHealth::Healthy
+        }
+    }
+    
+    /// Marks the WAL as poisoned after a critical failure.
+    fn poison(&self) {
+        self.is_poisoned.store(true, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -174,6 +198,7 @@ impl Wal {
         cfg.retention_max_bytes = retention_max;
         Ok(Self {
             guard: Guard::new(cfg)?,
+            is_poisoned: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -200,20 +225,43 @@ impl Wal {
 
     /// Append a record. Returns its LSN (1-based).
     pub fn append(&self, entry: &WalEntry) -> Result<u64> {
+        if self.is_poisoned.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(RsError::Io(std::io::Error::other(
+                "WAL is poisoned from a prior I/O failure",
+            )));
+        }
+        
         let payload = encode_entry(entry)?;
         // RAMWAL enforces its own record cap and rejects larger payloads;
         // map that error into RamShield's typed result.
-        let guard = self.guard.inner.lock().unwrap_or_else(|e| e.into_inner());
-        match guard.as_ref() {
-            Some(inner) => inner
-                .append(&payload)
-                .map(|lsn| lsn.get())
-                .map_err(|e| match e {
-                    RamWalError::InvalidConfiguration(msg) if msg.contains("exceeds max") => {
-                        RsError::Io(std::io::Error::other(msg))
+        let mut guard = self.guard.inner.lock().map_err(|_| {
+            self.poison();
+            RsError::Io(std::io::Error::other("WAL mutex poisoned"))
+        })?;
+        match guard.as_mut() {
+            Some(inner) => {
+                let result = inner
+                    .append(&payload)
+                    .map(|lsn| lsn.get())
+                    .map_err(|e| match e {
+                        RamWalError::InvalidConfiguration(msg) if msg.contains("exceeds max") => {
+                            RsError::Io(std::io::Error::other(msg))
+                        }
+                        other => map_error(other),
+                    });
+                
+                if result.is_err() {
+                    // Check if this is a critical error that should poison the WAL
+                    if let Err(ref e) = result {
+                        if matches!(e, RsError::Io(_)) {
+                            // I/O errors (disk full, etc.) should poison the WAL
+                            // to prevent torn writes
+                            self.poison();
+                        }
                     }
-                    other => map_error(other),
-                }),
+                }
+                result
+            }
             None => Err(RsError::Io(std::io::Error::other("WAL poisoned"))),
         }
     }
@@ -229,9 +277,21 @@ impl Wal {
 
     /// Flush + fsync the active segment. On Ok, all prior appends are durable.
     pub fn sync(&self) -> Result<()> {
-        let guard = self.guard.inner.lock().unwrap_or_else(|e| e.into_inner());
-        match guard.as_ref() {
-            Some(inner) => inner.sync().map_err(map_error),
+        if self.is_poisoned.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(RsError::Io(std::io::Error::other(
+                "cannot sync poisoned WAL",
+            )));
+        }
+        
+        let mut guard = self.guard.inner.lock().map_err(|_| {
+            self.poison();
+            RsError::Io(std::io::Error::other("WAL mutex poisoned"))
+        })?;
+        match guard.as_mut() {
+            Some(inner) => inner.sync().map_err(|e| {
+                self.poison();
+                map_error(e)
+            }),
             None => Err(RsError::Io(std::io::Error::other("WAL poisoned"))),
         }
     }
@@ -342,9 +402,18 @@ impl Wal {
     /// application snapshot through `boundary_lsn` first. RAMWAL owns the
     /// manifest; RamShield owns the snapshot path and contents.
     pub fn finish_checkpoint(&self, boundary_lsn: u64) -> Result<u64> {
+        if self.is_poisoned.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(RsError::Io(std::io::Error::other(
+                "cannot checkpoint poisoned WAL",
+            )));
+        }
+        
         let lsn = Lsn::new(boundary_lsn);
-        let guard = self.guard.inner.lock().unwrap_or_else(|e| e.into_inner());
-        match guard.as_ref() {
+        let mut guard = self.guard.inner.lock().map_err(|_| {
+            self.poison();
+            RsError::Io(std::io::Error::other("WAL mutex poisoned"))
+        })?;
+        match guard.as_mut() {
             Some(inner) => {
                 // RAMWAL checkpoints require the boundary LSN to be durable.
                 // RamShield's default Flush mode is not an fsync barrier, so

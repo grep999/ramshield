@@ -1,3 +1,7 @@
+> **HISTORICAL AUDIT ARTIFACT (Pre-Remediation)**
+> Issues listed here were remediated in passes A-004 through A-022.
+> Refer to `BACKLOG.md` for current production-essential release status.
+
 # RamShield Code Audit Report
 
 ## Executive Scorecard
