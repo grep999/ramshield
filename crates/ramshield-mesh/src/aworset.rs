@@ -8,12 +8,18 @@
 
 use super::hlc::Hlc;
 use dashmap::DashMap;
+use std::fmt;
 use std::net::IpAddr;
 use std::sync::{
     RwLock,
     atomic::{AtomicU64, Ordering},
 };
 use uuid::Uuid;
+
+#[derive(Debug)]
+pub enum MeshError {
+    DotCounterExhausted,
+}
 
 /// Epoch tracking for peer acknowledgment safety
 #[derive(Debug, Clone)]

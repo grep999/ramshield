@@ -399,11 +399,14 @@ impl Config {
         }
 
         // Rule 2: Hard rejection of sample development secrets (1810b §8)
-        const REJECTED_DEV_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        const REJECTED_DEV_KEY: &str =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         for key in &self.ipc.auth_keys {
             let secret = key.split(':').nth(1).unwrap_or(key);
             if secret.trim() == REJECTED_DEV_KEY {
-                anyhow::bail!("CRITICAL SECURITY ERROR: Public sample development key detected in production config");
+                anyhow::bail!(
+                    "CRITICAL SECURITY ERROR: Public sample development key detected in production config"
+                );
             }
         }
 

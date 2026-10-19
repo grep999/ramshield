@@ -260,10 +260,9 @@ impl AyaXdpApplier {
             bpf: None,
             iface: interface.to_string(),
             flags,
+            reconcile_chunk_size: 512,
         }
     }
-    reconcile_chunk_size: 512,
-
 
     /// Load ELF + attach + return. Errors surface verbatim for boot logging.
     pub fn load_and_attach(&mut self) -> Result<(), EnforcementError> {

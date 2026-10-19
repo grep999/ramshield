@@ -3,7 +3,7 @@ use super::*;
 /// Semantic shedding classifier (Vuln 2): events that are routine 200 OKs with
 /// benign fingerprint and small payload are LOW-signal — shed first at the
 /// high-water mark to preserve channel space for attack telemetry.
-# File: src/ipc/server/handlers.rs (T19 implementation)
+// File: src/ipc/server/handlers.rs (T19 implementation)
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::mpsc;

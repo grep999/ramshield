@@ -113,7 +113,7 @@ pub fn sign(key: &[u8], ts_ms: u64, payload: &[u8]) -> String
 pub fn verify(key: &[u8], ts_ms: u64, payload: &[u8], sig: &str, max_skew_ms: u64) -> Result<(), AuthError>
 ```
 
-`sign()` computes `HMAC-SHA256(key, "{ts_ms}:{payload}")` and returns the hex-encoded signature. `verify()` recomputes the HMAC and checks it matches, then verifies the timestamp is within `MAX_CLOCK_SKEW_MS` (30 seconds) of the server clock.
+`sign()` computes `HMAC-SHA256(key, "{ts_ms}.{key_id}{payload}")` and returns the hex-encoded signature. `verify()` recomputes the HMAC and checks it matches, then verifies the timestamp is within `MAX_CLOCK_SKEW_MS` (10 seconds) of the server clock.
 
 ### Replay Protection
 

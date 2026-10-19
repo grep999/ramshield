@@ -1,4 +1,4 @@
-# M013 Frame Boundary Tests - Requires Rust 2024 Edition
+// M013 Frame Boundary Tests - Requires Rust 2024 Edition
 
 // SPDX-License-Identifier: MIT
 

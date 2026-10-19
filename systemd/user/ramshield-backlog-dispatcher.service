@@ -5,12 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/m/vehicle_of_rationalism/ramshield/beta/rs-local-backlog-dispatcher
-Environment=PATH=/home/m/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/opt/ramshield/rs-local-backlog-dispatcher
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=GH_PROMPT_DISABLED=1
 Environment=RAMSHIELD_DISPATCHER_ENABLE_AFTER_PR=26
 UMask=0077
-ExecStart=/usr/bin/python3 /home/m/vehicle_of_rationalism/ramshield/beta/rs-local-backlog-dispatcher/.github/scripts/backlog_dispatcher.py
+ExecStart=/usr/bin/python3 /opt/ramshield/rs-local-backlog-dispatcher/.github/scripts/backlog_dispatcher.py
 TimeoutStartSec=2h
 
 [Install]

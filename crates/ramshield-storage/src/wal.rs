@@ -125,10 +125,11 @@ impl Wal {
             WalHealth::Healthy
         }
     }
-    
+
     /// Marks the WAL as poisoned after a critical failure.
     fn poison(&self) {
-        self.is_poisoned.store(true, std::sync::atomic::Ordering::Release);
+        self.is_poisoned
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -230,7 +231,7 @@ impl Wal {
                 "WAL is poisoned from a prior I/O failure",
             )));
         }
-        
+
         let payload = encode_entry(entry)?;
         // RAMWAL enforces its own record cap and rejects larger payloads;
         // map that error into RamShield's typed result.
@@ -249,7 +250,7 @@ impl Wal {
                         }
                         other => map_error(other),
                     });
-                
+
                 if result.is_err() {
                     // Check if this is a critical error that should poison the WAL
                     if let Err(ref e) = result {
@@ -282,7 +283,7 @@ impl Wal {
                 "cannot sync poisoned WAL",
             )));
         }
-        
+
         let mut guard = self.guard.inner.lock().map_err(|_| {
             self.poison();
             RsError::Io(std::io::Error::other("WAL mutex poisoned"))
@@ -407,7 +408,7 @@ impl Wal {
                 "cannot checkpoint poisoned WAL",
             )));
         }
-        
+
         let lsn = Lsn::new(boundary_lsn);
         let mut guard = self.guard.inner.lock().map_err(|_| {
             self.poison();

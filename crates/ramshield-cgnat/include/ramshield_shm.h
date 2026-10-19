@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stdatomic.h>
 #include <stddef.h>
+#include <sched.h>
 
 #define RAMSHIELD_SHM_TABLE_CAPACITY 262144
 #define RAMSHIELD_SHM_PROBE_LIMIT 4
@@ -96,7 +97,10 @@ ramshield_shm_read(const RamshieldShmRuleEntry *table,
 
         for (unsigned attempt = 0; attempt < 64; ++attempt) {
             uint32_t before = atomic_load_explicit(&entry->seq, memory_order_acquire);
-            if (before & 1u) continue;
+            if (before & 1u) {
+                sched_yield();
+                continue;
+            }
 
             uint64_t client_hash = atomic_load_explicit(&entry->client_hash, memory_order_relaxed);
             uint64_t expires_at_ms = atomic_load_explicit(&entry->expires_at_ms, memory_order_relaxed);
@@ -110,7 +114,10 @@ ramshield_shm_read(const RamshieldShmRuleEntry *table,
 
             atomic_thread_fence(memory_order_acquire);
             uint32_t after = atomic_load_explicit(&entry->seq, memory_order_acquire);
-            if (before != after || (after & 1u)) continue;
+            if (before != after || (after & 1u)) {
+                sched_yield();
+                continue;
+            }
 
             if (client_hash == hash && expires_at_ms > now_ms) {
                 out->client_hash = client_hash;
@@ -144,6 +151,9 @@ ramshield_shm_read_ipv4(const RamshieldShmRuleEntry *table,
                         uint64_t now_ms,
                         RamshieldShmRuleSnapshot *out)
 {
+    if (prefix_len > 32) {
+        return false;
+    }
     return ramshield_shm_read(
         table,
         ramshield_ipv4_subnet_key(client_ip, prefix_len),
