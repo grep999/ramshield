@@ -4,4 +4,4 @@ pub mod aworset;
 pub mod condition_sync;
 pub mod hlc;
 pub mod transport;
-pub use transport::{MeshHandle, MeshMessage, MeshPeer};
+pub use transport::{MeshHandle, MeshMessage};

@@ -1,4 +1,4 @@
-use crate::aworset::{AworsetBlocklist, AworsetSnapshot, ClusterBlockDelta, ClusterUnblockDelta};
+use crate::aworset::{AworsetBlocklist, AworsetSnapshot, ClusterBlockDelta, ClusterUnblockDelta, PeerEpoch};
 use crate::condition_sync::{ConditionSyncPlanner, SyncCondition, SyncPolicy};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -1027,7 +1027,7 @@ impl MeshHandle {
                 result = with_timeout(MAX_PEER_WRITE_TIMEOUT, async {
                     self.send_to_ack(peer, WireMessage::Recovery(RecoveryWireMessage::Complete {
                         generation: ctx.generation, recovery_id: ctx.recovery_id,
-                        boundary_lsn: ctx.boundary_lsn, snapshot_digest: digest.clone(), frame_count,
+                        boundary_lsn: ctx.boundary_lsn, snapshot_digest: digest.clone(), frame_count,        tombstone_acks: HashMap::new(),
                     })).await
                 }) => match result {
                     Ok(Ok(response)) => response,
@@ -1208,7 +1208,7 @@ impl MeshHandle {
                 boundary_lsn,
                 snapshot_digest,
                 frame_count,
-            }) => (
+             tombstone_acks }) => (
                 MeshMessage::Sync {
                     blocks: Vec::new(),
                     unblocks: Vec::new(),

@@ -8,7 +8,6 @@
 
 use super::hlc::Hlc;
 use dashmap::DashMap;
-use std::fmt;
 use std::net::IpAddr;
 use std::sync::{
     RwLock,
@@ -659,57 +658,6 @@ impl AworsetBlocklist {
     /// This method is called when a peer confirms they have received and applied
     /// our state via the recovery completion protocol. It updates their epoch
     /// and calculates when their tombstones can be safely garbage collected.
-    pub fn peer_acknowledged(&self, peer_node_id: u32, acked_lsn: u64) {
-        let mut epoch = self.peer_acks.entry(peer_node_id).or_insert(PeerEpoch {
-            peer_node_id,
-            incarnation: Uuid::new_v4(),
-            epoch: 0,
-            last_acknowledged_lsn: 0,
-            tombstone_expiry_epoch: u64::MAX,
-        });
-
-        if acked_lsn > epoch.last_acknowledged_lsn {
-            epoch.last_acknowledged_lsn = acked_lsn;
-            epoch.epoch = epoch.epoch.checked_add(1).unwrap_or(u64::MAX);
-            // Tombstones from this peer become safe to GC after their epoch
-            epoch.tombstone_expiry_epoch = epoch.epoch + 1;
-        }
-    }
-
-    /// Garbage collect tombstones that are safe to remove
-    ///
-    /// This method removes tombstones whose owning peer has acknowledged
-    /// the tombstone (via peer_acknowledged) and thus agreed that the
-    /// state should be removed. This prevents resurrection of stale state
-    /// from long-offline peers.
-    pub fn gc_tombstones(&self) {
-        let current_epoch = self.get_local_epoch();
-        self.tombstones.retain(|key, counter| {
-            // Find which peer owns this tombstone (by checking entries map for the key)
-            if let Some(owning_entry) = self.entries.get(key) {
-                let owning_peer_id = owning_entry.key().1; // node_id from BlockKey
-                if let Some(owning_epoch) = self.peer_acks.get(&owning_peer_id) {
-                    // Safe to GC if the owning peer's epoch has advanced beyond
-                    // when this tombstone was created
-                    if owning_epoch.epoch > *counter {
-                        return false; // remove tombstone
-                    }
-                }
-            }
-            true // keep tombstone
-        });
-    }
-
-    /// Get the current epoch of the local peer
-    ///
-    /// This is used by gc_tombstones() to determine what tombstones are safe to remove.
-    fn get_local_epoch(&self) -> u64 {
-        self.peer_acks
-            .get(&self.node_id)
-            .map(|epoch| epoch.epoch)
-            .unwrap_or(0)
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -1636,3 +1584,4 @@ mod tests {
     }
 
 
+} // mod tests closing brace
