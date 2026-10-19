@@ -228,13 +228,19 @@ impl AworsetBlocklist {
     /// in the local counter; gaps are safe, reusing a dot is not.
     pub fn prepare_ban(&self, ip: IpAddr, ttl_ms: u64, tier: u8) -> ClusterBlockDelta {
         let (created_at_ms, _) = self.hlc.tick(0, 0);
-        let previous = self
-            .next_dot_counter
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                value.checked_add(1)
-            })
-            .expect("mesh dot counter exhausted; refusing to emit a duplicate CRDT dot");
-        let counter = previous + 1;
+        // Saturate at u64::MAX without panicking. Emitting dots at u64::MAX
+        // will log an error rather than crashing the thread.
+        let counter = match self.next_dot_counter.fetch_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |c| Some(c.saturating_add(1)),
+        ) {
+            Ok(c) => c,
+            Err(c) => c,
+        };
+        if counter == u64::MAX {
+            tracing::error!("mesh dot counter saturated at u64::MAX");
+        }
         let expires_at_ms = if ttl_ms == 0 {
             u64::MAX
         } else {
