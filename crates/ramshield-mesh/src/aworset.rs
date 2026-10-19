@@ -1,1 +1,1 @@
-$(cat /tmp/ramshield-audit/crates/ramshield-mesh/src/aworset.rs)
+PLACEHOLDER_WILL_REPLACE
