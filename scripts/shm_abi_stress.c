@@ -124,6 +124,46 @@ int main(void)
     atomic_init(&stop_readers, false);
     atomic_init(&errors, 0u);
 
+    /* Invalid IPv4 prefixes must be rejected before any hash-table lookup.
+     * Deliberately make slot zero look like a live key-zero entry so a
+     * mistaken key-zero fallback would be observable. */
+    RamshieldShmRuleEntry *zero_slot = &table[0];
+    atomic_init(&zero_slot->seq, 0u);
+    atomic_init(&zero_slot->client_hash, 0u);
+    atomic_init(&zero_slot->expires_at_ms, UINT64_MAX);
+    atomic_init(&zero_slot->challenge_seed_lo, 0u);
+    atomic_init(&zero_slot->challenge_seed_hi, 0u);
+    atomic_init(&zero_slot->max_rps, 1u);
+    atomic_init(&zero_slot->tier, RAMSHIELD_TIER_BLOCK);
+    atomic_init(&zero_slot->flags, 0u);
+    RamshieldShmRuleSnapshot invalid_snapshot;
+    const uint8_t invalid_prefixes[] = {33u, UINT8_MAX};
+    for (size_t i = 0; i < sizeof(invalid_prefixes); ++i) {
+        if (ramshield_shm_read_ipv4_result(table, UINT32_C(0x01020304),
+                invalid_prefixes[i], 0, &invalid_snapshot) != RAMSHIELD_SHM_READ_INVALID_INPUT ||
+            ramshield_shm_read_ipv4(table, UINT32_C(0x01020304),
+                invalid_prefixes[i], 0, &invalid_snapshot)) {
+            fputs("SHM regression: invalid IPv4 prefix was not rejected\\n", stderr);
+            return 1;
+        }
+    }
+    if (ramshield_shm_read_ipv4_result(table, UINT32_C(0x01020304), 0u, 0,
+            &invalid_snapshot) == RAMSHIELD_SHM_READ_INVALID_INPUT ||
+        ramshield_shm_read_ipv4_result(table, UINT32_C(0x01020304), 32u, 0,
+            &invalid_snapshot) == RAMSHIELD_SHM_READ_INVALID_INPUT) {
+        fputs("SHM regression: valid IPv4 prefix rejected\\n", stderr);
+        return 1;
+    }
+
+    /* A permanently odd sequence is bounded contention, not an empty slot. */
+    atomic_store_explicit(&slot->seq, 1u, memory_order_release);
+    if (ramshield_shm_read_result(table, test_hash, 0, &invalid_snapshot) !=
+            RAMSHIELD_SHM_READ_CONTENDED) {
+        fputs("SHM regression: contended entry was not reported\\n", stderr);
+        return 1;
+    }
+    atomic_store_explicit(&slot->seq, 0u, memory_order_release);
+
     pthread_t readers[READER_COUNT];
     pthread_t writers[WRITER_COUNT];
     struct thread_arg args[WRITER_COUNT];
