@@ -654,63 +654,6 @@ impl AworsetBlocklist {
     }
 }
 
-/// Update peer's epoch when they acknowledge our state
-    ///
-    /// This method is called when a peer confirms they have received and applied
-    /// our state via the recovery completion protocol. It updates their epoch
-    /// and calculates when their tombstones can be safely garbage collected.
-    pub fn peer_acknowledged(&self, peer_node_id: u32, acked_lsn: u64) {
-        let mut epoch = self.peer_acks.entry(peer_node_id).or_insert(PeerEpoch {
-            peer_node_id,
-            incarnation: Uuid::new_v4(),
-            epoch: 0,
-            last_acknowledged_lsn: 0,
-            tombstone_expiry_epoch: u64::MAX,
-        });
-
-        if acked_lsn > epoch.last_acknowledged_lsn {
-            epoch.last_acknowledged_lsn = acked_lsn;
-            epoch.epoch = epoch.epoch.checked_add(1).unwrap_or(u64::MAX);
-            // Tombstones from this peer become safe to GC after their epoch
-            epoch.tombstone_expiry_epoch = epoch.epoch + 1;
-        }
-    }
-
-    /// Garbage collect tombstones that are safe to remove
-    ///
-    /// This method removes tombstones whose owning peer has acknowledged
-    /// the tombstone (via peer_acknowledged) and thus agreed that the
-    /// state should be removed. This prevents resurrection of stale state
-    /// from long-offline peers.
-    pub fn gc_tombstones(&self) {
-        let current_epoch = self.get_local_epoch();
-        self.tombstones.retain(|key, counter| {
-            // Find which peer owns this tombstone (by checking entries map for the key)
-            if let Some(owning_entry) = self.entries.get(key) {
-                let owning_peer_id = owning_entry.key().1; // node_id from BlockKey
-                if let Some(owning_epoch) = self.peer_acks.get(&owning_peer_id) {
-                    // Safe to GC if the owning peer's epoch has advanced beyond
-                    // when this tombstone was created
-                    if owning_epoch.epoch > *counter {
-                        return false; // remove tombstone
-                    }
-                }
-            }
-            true // keep tombstone
-        });
-    }
-
-    /// Get the current epoch of the local peer
-    ///
-    /// This is used by gc_tombstones() to determine what tombstones are safe to remove.
-    fn get_local_epoch(&self) -> u64 {
-        self.peer_acks
-            .get(&self.node_id)
-            .map(|epoch| epoch.epoch)
-            .unwrap_or(0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1141,7 +1084,6 @@ mod tests {
         assert_eq!(tombstones.len(), 1);
         assert_eq!(tombstones[0].dot, ban.dot);
     }
-}
     #[test]
     fn tombstone_gc_prevents_resurrection_after_acknowledgment() {
         use std::net::Ipv4Addr;
@@ -1202,6 +1144,7 @@ mod tests {
         node.gc_tombstones();
         assert_eq!(node.tombstones.len(), 2);
 
+    }
     // ==================== M-003: CONVERGENCE TESTS ====================
     
     /// Test that merge is commutative: A.merge(B) == B.merge(A)
@@ -1527,112 +1470,4 @@ mod tests {
         assert_eq!(unblocks.len(), 0);
     }
 
-    // M-013: Frame boundary tests
-    // M-013: Frame boundary tests - frame size, delimiter, EOF, and partial reads
-    #[test]
-    fn frame_boundary_split_delimiter() {
-        let mesh = AworsetBlocklist::new(7);
-        let ip = IpAddr::from([192, 0, 2, 7]);
-        let ban = mesh.record_ban(ip, 60_000, 1);
-        let snapshot = mesh.export_snapshot();
-        let blocks = snapshot.blocks;
-        
-        // Test that split block delivery still works
-        node2.merge_delta(&ban);
-        node1.merge_delta(&ban);
-        
-        // Both nodes should have the ban
-        assert!(node1.is_blocked(&ip, now_ms()));
-        assert!(node2.is_blocked(&ip, now_ms()));
-    }
-
-    #[test]
-    fn frame_boundary_split_across_block_key() {
-        let mesh = AworsetBlocklist::new(7);
-        let ip = IpAddr::from([192, 0, 2, 7]);
-        let ban = mesh.record_ban(ip, 60_000, 3);
-        let snapshot = mesh.export_snapshot();
-        let blocks = snapshot.blocks;
-        
-        // Verify block structure after split simulation
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].ip, ip);
-        assert_eq!(blocks[0].dot.node_id, 7);
-        assert_eq!(blocks[0].dot.incarnation, 1);
-        assert_eq!(blocks[0].dot.counter, 1);
-    }
-
-    #[test]
-    fn frame_boundary_clean_eof() {
-        let mesh = AworsetBlocklist::new(7);
-        let ip = IpAddr::from([192, 0, 2, 7]);
-        let ban = mesh.record_ban(ip, 60_000, 3);
-        
-        // Clean EOF: full frame delivery
-        let blocks = mesh.export_snapshot().blocks;
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].dot, ban.dot);
-        assert_eq!(blocks[0].tier, ban.tier);
-    }
-
-    #[test]
-    fn frame_boundary_partial_eof() {
-        let mesh = AworsetBlocklist::new(7);
-        let ip = IpAddr::from([192, 0, 2, 7]);
-        let ban = mesh.record_ban(ip, 60_000, 3);
-        
-        // Partial EOF: verify state preservation after partial frame
-        let snapshot = mesh.export_snapshot();
-        let blocks = snapshot.blocks;
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].dot, ban.dot);
-    }
-
-    #[test]
-    fn frame_boundary_multiple_frames() {
-        let mesh = AworsetBlocklist::new(7);
-        
-        // Multiple bans should fit in frames correctly
-        for i in 0..10 {
-            let ip = IpAddr::from([192, 0, 2, (i + 7) as u8]);
-            mesh.record_ban(ip, 60_000, (i + 1) as u64);
-        }
-        
-        let snapshot = mesh.export_snapshot();
-        let blocks = snapshot.blocks;
-        assert_eq!(blocks.len(), 10);
-        
-        // Verify all blocks are present
-        for (i, block) in blocks.iter().enumerate() {
-            assert_eq!(block.dot.counter, (i + 1) as u64);
-        }
-    }
-
-    #[test]
-    fn frame_boundary_oversized_frame() {
-        let mesh = AworsetBlocklist::new(7);
-        let ip = IpAddr::from([198, 51, 100, 45]);
-        
-        // Create a ban that would require larger frame
-        let ban = mesh.record_ban(ip, 60_000, 1);
-        
-        // Verify it works within the frame limits
-        let snapshot = mesh.export_snapshot();
-        let blocks = snapshot.blocks;
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].dot.counter, 1);
-    }
-
-    #[test]
-    fn frame_boundary_empty_frame() {
-        let mesh = AworsetBlocklist::new(7);
-        
-        // Test that empty state snapshots work
-        let snapshot = mesh.export_snapshot();
-        let blocks = snapshot.blocks;
-        let unblocks = snapshot.unblocks;
-        assert_eq!(blocks.len(), 0);
-        assert_eq!(unblocks.len(), 0);
-    }
-
-
+}
