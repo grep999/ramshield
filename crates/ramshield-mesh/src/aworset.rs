@@ -548,9 +548,7 @@ mod tests {
     #[test]
     fn snapshot_rotates_through_sorted_state() {
         let mesh = AworsetBlocklist::new(1);
-        let ips: Vec<_> = (1..10)
-            .map(|i| IpAddr::from([203, 0, 113, i]))
-            .collect();
+        let ips: Vec<_> = (1..10).map(|i| IpAddr::from([203, 0, 113, i])).collect();
         for ip in &ips {
             mesh.record_ban(*ip, 60_000, 1);
         }
