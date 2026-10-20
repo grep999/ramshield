@@ -160,10 +160,19 @@ pub struct MeshConfig {
     /// Expected node ID for each peer address; IDs must be unique and non-zero.
     #[serde(default)]
     pub peer_node_ids: Vec<u32>,
-    /// Hex-encoded HMAC key for each peer, parallel to peers/peer_node_ids.
+    /// Hex-encoded shared HMAC secret for the edge to each peer, parallel to
+    /// peers/peer_node_ids.
+    ///
+    /// Both ends of an edge must configure the identical secret, and the
+    /// secrets of two different edges on this node must differ. This is not a
+    /// public identity key: possession of an edge secret lets either endpoint
+    /// of that edge authenticate on that edge.
     #[serde(default)]
     pub peer_auth_keys: Vec<String>,
-    /// Hex-encoded local node HMAC key. Must differ from every peer key.
+    /// Hex-encoded local node key, retained for configuration compatibility.
+    ///
+    /// Mesh frame and application-ACK MACs use the per-edge secrets in
+    /// `peer_auth_keys`, not this field. May be empty when unused.
     #[serde(default)]
     pub auth_key: String,
 }

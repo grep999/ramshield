@@ -19,8 +19,13 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-const NODE_1_KEY: &[u8] = b"mesh-node-one-auth-key-at-least-32-bytes";
-const NODE_2_KEY: &[u8] = b"mesh-node-two-auth-key-at-least-32-bytes";
+/// The shared secret of the edge between the two nodes. Both ends configure
+/// the identical secret; it authenticates frames and application ACKs.
+const EDGE_KEY: &[u8] = b"mesh-edge-shared-auth-key-at-least-32-bytes";
+/// The local keys are retained for configuration compatibility only and no
+/// longer sign mesh traffic.
+const NODE_1_LOCAL_KEY: &[u8] = b"mesh-node-one-local-key-at-least-32-bytes";
+const NODE_2_LOCAL_KEY: &[u8] = b"mesh-node-two-local-key-at-least-32-bytes";
 
 async fn free_addr() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -82,8 +87,8 @@ async fn authenticated_block_crosses_real_tcp_transport() {
         2,
         Arc::new(AworsetBlocklist::new(2)),
         receiver_addr,
-        vec![MeshPeer::new(1, sender_addr, NODE_1_KEY.to_vec())],
-        NODE_2_KEY.to_vec(),
+        vec![MeshPeer::new(1, sender_addr, EDGE_KEY.to_vec())],
+        NODE_2_LOCAL_KEY.to_vec(),
     )
     .await
     .expect("bind receiver");
@@ -92,8 +97,8 @@ async fn authenticated_block_crosses_real_tcp_transport() {
         1,
         Arc::new(AworsetBlocklist::new(1)),
         sender_addr,
-        vec![MeshPeer::new(2, receiver_addr, NODE_2_KEY.to_vec())],
-        NODE_1_KEY.to_vec(),
+        vec![MeshPeer::new(2, receiver_addr, EDGE_KEY.to_vec())],
+        NODE_1_LOCAL_KEY.to_vec(),
     )
     .await
     .expect("bind sender");
@@ -143,8 +148,8 @@ async fn invalid_hmac_frame_never_enters_receive_queue() {
         2,
         Arc::new(AworsetBlocklist::new(2)),
         receiver_addr,
-        vec![MeshPeer::new(1, free_addr().await, NODE_1_KEY.to_vec())],
-        NODE_2_KEY.to_vec(),
+        vec![MeshPeer::new(1, free_addr().await, EDGE_KEY.to_vec())],
+        NODE_2_LOCAL_KEY.to_vec(),
     )
     .await
     .expect("bind receiver");

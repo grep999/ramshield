@@ -160,13 +160,16 @@ impl Config {
             if self.mesh.peers.iter().any(|p| p.trim().is_empty()) {
                 anyhow::bail!("mesh.peers must not contain empty addresses");
             }
-            if self.mesh.auth_key.trim().is_empty() {
-                anyhow::bail!("mesh.auth_key must be non-empty when mesh is enabled");
-            }
-            let key = hex::decode(self.mesh.auth_key.trim())
-                .map_err(|_| anyhow::anyhow!("mesh.auth_key must be hex"))?;
-            if key.len() < 16 {
-                anyhow::bail!("mesh.auth_key must decode to at least 16 bytes");
+            // The local key is compatibility-only: mesh frames and
+            // application ACKs are signed with the per-edge secrets. It may
+            // be empty, but a value that is present must still be a usable
+            // key.
+            if !self.mesh.auth_key.trim().is_empty() {
+                let key = hex::decode(self.mesh.auth_key.trim())
+                    .map_err(|_| anyhow::anyhow!("mesh.auth_key must be hex"))?;
+                if key.len() < 16 {
+                    anyhow::bail!("mesh.auth_key must decode to at least 16 bytes");
+                }
             }
             if self.mesh.peer_node_ids.len() != self.mesh.peers.len() {
                 anyhow::bail!("mesh.peer_node_ids must have one entry per mesh.peers address");
@@ -175,8 +178,10 @@ impl Config {
                 anyhow::bail!("mesh.peer_auth_keys must have one key per mesh.peers address");
             }
             let mut peer_ids = std::collections::HashSet::new();
-            let mut auth_keys = std::collections::HashSet::new();
-            auth_keys.insert(key);
+            // Edge secrets must differ from each other: two peers sharing a
+            // secret would let traffic authenticated for one edge also
+            // verify under the other peer's entry.
+            let mut edge_keys = std::collections::HashSet::new();
             for (index, peer_id) in self.mesh.peer_node_ids.iter().enumerate() {
                 if *peer_id == 0 || *peer_id == self.mesh.node_id {
                     anyhow::bail!(
@@ -191,8 +196,8 @@ impl Config {
                 if peer_key.len() < 16 {
                     anyhow::bail!("mesh.peer_auth_keys[{index}] must decode to at least 16 bytes");
                 }
-                if !auth_keys.insert(peer_key) {
-                    anyhow::bail!("mesh local and peer authentication keys must all be unique");
+                if !edge_keys.insert(peer_key) {
+                    anyhow::bail!("mesh edge authentication keys must be unique per peer");
                 }
             }
         }
@@ -520,7 +525,7 @@ mod mesh_peer_identity_tests {
     }
 
     #[test]
-    fn mesh_rejects_peer_without_matching_identity_or_key() {
+    fn mesh_rejects_peer_without_matching_identity() {
         let mut config = configured_mesh();
         config.mesh.peer_node_ids.clear();
         assert!(
@@ -530,15 +535,124 @@ mod mesh_peer_identity_tests {
                 .to_string()
                 .contains("peer_node_ids")
         );
+    }
 
+    /// The local key is compatibility-only: mesh frames and application ACKs
+    /// are signed with the per-edge secrets, so it may be left empty.
+    #[test]
+    fn mesh_accepts_empty_local_key_with_valid_edge_secrets() {
         let mut config = configured_mesh();
-        config.mesh.peer_auth_keys[0] = config.mesh.auth_key.clone();
+        config.mesh.auth_key = String::new();
+        config
+            .validate()
+            .expect("an empty local compatibility key must validate");
+    }
+
+    /// A local key that is present must still be a usable key.
+    #[test]
+    fn mesh_rejects_invalid_local_key_when_present() {
+        let mut config = configured_mesh();
+        config.mesh.auth_key = "11".repeat(8);
         assert!(
             config
                 .validate()
-                .expect_err("shared key must fail")
+                .expect_err("a short local key must fail")
                 .to_string()
-                .contains("keys must all be unique")
+                .contains("auth_key")
         );
+
+        let mut config = configured_mesh();
+        config.mesh.auth_key = "not-hex".into();
+        assert!(
+            config
+                .validate()
+                .expect_err("a non-hex local key must fail")
+                .to_string()
+                .contains("auth_key")
+        );
+    }
+
+    /// The local key is not used for mesh MACs, so it may coincide with an
+    /// edge secret without weakening the edge.
+    #[test]
+    fn mesh_accepts_local_key_equal_to_an_edge_secret() {
+        let mut config = configured_mesh();
+        config.mesh.peer_auth_keys[0] = config.mesh.auth_key.clone();
+        config
+            .validate()
+            .expect("the unused local key may equal an edge secret");
+    }
+
+    /// Edge secrets must be real keys: malformed or short entries are a
+    /// configuration error before any peer is contacted.
+    #[test]
+    fn mesh_rejects_invalid_edge_secrets() {
+        let mut config = configured_mesh();
+        config.mesh.peer_auth_keys[0] = "zz".repeat(32);
+        assert!(
+            config
+                .validate()
+                .expect_err("a non-hex edge secret must fail")
+                .to_string()
+                .contains("peer_auth_keys")
+        );
+
+        let mut config = configured_mesh();
+        config.mesh.peer_auth_keys[0] = "22".repeat(8);
+        assert!(
+            config
+                .validate()
+                .expect_err("a short edge secret must fail")
+                .to_string()
+                .contains("peer_auth_keys")
+        );
+    }
+
+    /// Two edges on one node must not share a secret: traffic authenticated
+    /// for one edge would then also verify under the other peer's entry.
+    #[test]
+    fn mesh_rejects_duplicate_edge_secrets_across_peers() {
+        let mut config = configured_mesh();
+        config.mesh.peers.push("127.0.0.1:7902".into());
+        config.mesh.peer_node_ids.push(3);
+        config.mesh.peer_auth_keys.push("22".repeat(32));
+        assert!(
+            config
+                .validate()
+                .expect_err("a duplicated edge secret must fail")
+                .to_string()
+                .contains("unique")
+        );
+    }
+
+    /// Duplicate peer identities are rejected independently of the secrets.
+    #[test]
+    fn mesh_rejects_duplicate_peer_node_ids() {
+        let mut config = configured_mesh();
+        config.mesh.peers.push("127.0.0.1:7902".into());
+        config.mesh.peer_node_ids.push(2);
+        config.mesh.peer_auth_keys.push("33".repeat(32));
+        assert!(
+            config
+                .validate()
+                .expect_err("a duplicated peer identity must fail")
+                .to_string()
+                .contains("peer_node_ids")
+        );
+    }
+
+    /// The same edge secret is configured at both ends of one edge: each
+    /// endpoint validates that locally, and only the two ends hold it.
+    #[test]
+    fn mesh_accepts_the_same_edge_secret_at_both_ends() {
+        let mut other = configured_mesh();
+        other.mesh.node_id = 2;
+        other.mesh.listen_addr = "127.0.0.1:7901".into();
+        other.mesh.peers = vec!["127.0.0.1:7900".into()];
+        other.mesh.peer_node_ids = vec![1];
+        other.mesh.peer_auth_keys = vec!["22".repeat(32)];
+        other
+            .validate()
+            .expect("both ends of one edge may configure the same secret");
     }
 }

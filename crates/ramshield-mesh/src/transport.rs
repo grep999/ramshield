@@ -73,19 +73,26 @@ pub enum MeshMessage {
 }
 
 /// A configured mesh peer: its node identity, its transport address, and the
-/// per-peer key that peer signs outbound frames and application ACKs with.
+/// shared HMAC secret for the undirected edge to that peer.
 ///
-/// Every peer owns a distinct key, so an authenticated frame is only accepted
-/// when the node identity inside the envelope matches a configured peer. A
-/// peer can therefore never speak for the local node or for another
-/// configured peer.
+/// Both endpoints of an edge must configure the identical secret. Frames and
+/// application ACKs on that edge are signed and verified with this secret.
+///
+/// A valid MAC proves possession of the edge secret, not the unique identity
+/// of the process that produced it: both endpoints of an edge hold the same
+/// secret, so HMAC alone cannot attribute a frame to one of them. Peer
+/// attribution therefore also depends on the source-address binding enforced
+/// on inbound frames and on the confidentiality of the edge secret.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MeshPeer {
     /// Stable node identity of the peer.
     pub node_id: u32,
     /// Address the peer listens on.
     pub address: SocketAddr,
-    /// Per-peer key the peer signs with.
+    /// Shared HMAC secret for the undirected edge to this peer.
+    ///
+    /// Must be identical at both ends of the edge, and must differ from the
+    /// secret of every other edge configured on this node.
     pub auth_key: Vec<u8>,
 }
 
@@ -533,8 +540,14 @@ pub struct MeshHandle {
     node_id: u32,
     blocklist: Arc<AworsetBlocklist>,
     peers: Arc<Vec<MeshPeer>>,
-    /// Key each configured peer signs with, keyed by peer node ID.
+    /// Edge secret for each configured peer, keyed by peer node ID.
+    ///
+    /// This is the only key an inbound frame is verified against: the claimed
+    /// node ID selects the edge, and the edge secret proves possession of it.
     trusted_keys: Arc<HashMap<u32, Vec<u8>>>,
+    /// Retained for API compatibility with `bind`. Mesh frame and application
+    /// ACK MACs use the per-edge secrets in `trusted_keys`, not this value.
+    #[allow(dead_code)]
     auth_key: Arc<Vec<u8>>,
     incoming: Arc<Mutex<VecDeque<IncomingFrame>>>,
     readers: Arc<Semaphore>,
@@ -609,11 +622,11 @@ impl MeshHandle {
                         }
                     }
                     accepted = listener.accept() => match accepted {
-                        Ok((stream, _)) => {
+                        Ok((stream, remote)) => {
                             let h = accept_handle.clone();
                             let Ok(permit) = h.readers.clone().try_acquire_owned() else { continue; };
                             tokio::spawn(async move {
-                                h.read_stream(stream).await;
+                                h.read_stream(stream, remote).await;
                                 drop(permit);
                             });
                         }
@@ -1153,22 +1166,24 @@ impl MeshHandle {
         peer: SocketAddr,
         body: B,
     ) -> std::io::Result<AckResponse> {
-        // The peer must be configured: its identity and key are what the
-        // application ACK is verified against.
-        let peer_node_id = self
-            .peer_by_address(peer)
-            .map(|peer| peer.node_id)
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "mesh peer is not configured",
-                )
-            })?;
+        // The peer must be configured: its identity and its edge secret are
+        // what the frame is signed with and the application ACK is verified
+        // against.
+        let peer_cfg = self.peer_by_address(peer).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "mesh peer is not configured",
+            )
+        })?;
+        let peer_node_id = peer_cfg.node_id;
+        let edge_key = peer_cfg.auth_key.clone();
         let body = body.into();
         let ts_ms = now_ms();
         let payload =
             serde_json::to_vec(&(ts_ms, self.node_id, &body)).map_err(std::io::Error::other)?;
-        let mac = sign(&self.auth_key, &payload)?;
+        // Sign with the edge secret shared with that peer: the receiver
+        // verifies the frame with the same secret for this edge.
+        let mac = sign(&edge_key, &payload)?;
         let frame = serde_json::to_vec(&Envelope {
             ts_ms,
             node_id: self.node_id,
@@ -1206,21 +1221,11 @@ impl MeshHandle {
         ))
         .map_err(std::io::Error::other)?;
         // The ACK must come from the configured peer itself and be signed
-        // with that peer's own key: a shared or local key would let any peer
-        // answer on behalf of another one.
-        let peer_key = self
-            .trusted_keys
-            .get(&peer_node_id)
-            .map(Vec::as_slice)
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "mesh peer is not configured",
-                )
-            })?;
+        // with the edge secret shared with that peer: any other secret would
+        // let another peer answer on behalf of it.
         if ack.node_id != peer_node_id
             || now_ms().abs_diff(ack.ts_ms) > MAX_CLOCK_SKEW_MS
-            || !verify(peer_key, &ack_payload, &ack.mac)
+            || !verify(&edge_key, &ack_payload, &ack.mac)
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -1239,7 +1244,7 @@ impl MeshHandle {
             recovery_proof: ack.recovery_proof,
         })
     }
-    async fn read_stream(&self, mut stream: TcpStream) {
+    async fn read_stream(&self, mut stream: TcpStream, remote: SocketAddr) {
         let mut shutdown = self.shutdown_tx.subscribe();
         if *shutdown.borrow() {
             return;
@@ -1266,17 +1271,38 @@ impl MeshHandle {
         if env.node_id == self.node_id {
             return;
         }
-        // Only a configured peer may deliver frames, and every peer is
-        // verified with its own key: a peer can never authenticate as the
-        // local node or as another configured peer.
-        let Some(peer_key) = self.trusted_keys.get(&env.node_id) else {
+        // Bind the claimed identity to the address the frame arrived from: a
+        // peer configured at a different address must not be able to speak for
+        // this one. Only the IP is compared, never the port — a peer dials
+        // from an ephemeral source port, so the configured *listen* port can
+        // never equal the remote port. This is defence in depth; the primary
+        // binding is the edge secret verified below.
+        if let Some(configured) = self.peers.iter().find(|peer| peer.node_id == env.node_id)
+            && remote.ip() != configured.address.ip()
+        {
+            warn!(
+                node_id = env.node_id,
+                %remote,
+                configured = %configured.address,
+                "mesh frame rejected: sender address does not match the configured peer"
+            );
+            return;
+        }
+        // Only a configured peer may deliver frames, and every frame is
+        // verified with the edge secret of the peer it claims to be. A valid
+        // MAC proves possession of that edge secret, not the unique identity
+        // of the process that produced it: both endpoints of an edge hold the
+        // same secret, so peer attribution also relies on the source-address
+        // binding above.
+        let Some(edge_key) = self.trusted_keys.get(&env.node_id).cloned() else {
             warn!(
                 node_id = env.node_id,
                 "mesh frame rejected: sender is not a configured peer"
             );
             return;
         };
-        if now_ms().abs_diff(env.ts_ms) > MAX_CLOCK_SKEW_MS || !verify(peer_key, &payload, &env.mac)
+        if now_ms().abs_diff(env.ts_ms) > MAX_CLOCK_SKEW_MS
+            || !verify(&edge_key, &payload, &env.mac)
         {
             warn!(
                 node_id = env.node_id,
@@ -1405,7 +1431,10 @@ impl MeshHandle {
             Ok(payload) => payload,
             Err(_) => return,
         };
-        let mac = match sign(&self.auth_key, &ack_payload) {
+        // The application ACK travels back over the same edge, so it is
+        // signed with the edge secret the accepted frame was verified under;
+        // the sender verifies it with that same secret.
+        let mac = match sign(&edge_key, &ack_payload) {
             Ok(mac) => mac,
             Err(_) => return,
         };
@@ -1431,16 +1460,21 @@ fn validate_bind_args(node_id: u32, peers: &[MeshPeer], auth_key: &[u8]) -> std:
     if node_id == 0 {
         return Err(invalid("mesh node_id must be non-zero"));
     }
-    if auth_key.len() < 16 {
-        return Err(invalid("mesh authentication key must be at least 16 bytes"));
+    // The local key is retained for configuration compatibility only: mesh
+    // frames and application ACKs are signed and verified with the per-edge
+    // secrets. It may be empty, but a value that is present must still be
+    // long enough to be a key.
+    if !auth_key.is_empty() && auth_key.len() < 16 {
+        return Err(invalid(
+            "mesh local authentication key must be empty or at least 16 bytes",
+        ));
     }
     if peers.len() > MAX_CONFIGURED_PEERS {
         return Err(invalid("mesh peer list exceeds 256 peers"));
     }
     let mut node_ids = HashSet::new();
     let mut addresses = HashSet::new();
-    let mut keys = HashSet::new();
-    keys.insert(auth_key.to_vec());
+    let mut edge_keys = HashSet::new();
     for peer in peers {
         if peer.node_id == 0 || peer.node_id == node_id {
             return Err(invalid(
@@ -1460,14 +1494,14 @@ fn validate_bind_args(node_id: u32, peers: &[MeshPeer], auth_key: &[u8]) -> std:
         }
         if peer.auth_key.len() < 16 {
             return Err(invalid(
-                "mesh peer authentication key must be at least 16 bytes",
+                "mesh edge authentication key must be at least 16 bytes",
             ));
         }
-        // Reusing the local key (or another peer's key) would let a peer
-        // authenticate as the local node or as a different configured peer.
-        if !keys.insert(peer.auth_key.clone()) {
+        // Two peers must not share an edge secret: traffic authenticated for
+        // one edge would then also verify under the other peer's entry.
+        if !edge_keys.insert(peer.auth_key.clone()) {
             return Err(invalid(
-                "mesh local and peer authentication keys must all be unique",
+                "mesh edge authentication keys must be unique per peer",
             ));
         }
     }
@@ -1498,7 +1532,8 @@ fn valid_wire_message(message: &WireMessage, now_ms: u64) -> bool {
                 && *frame_index < *frame_count
                 && blocks.len().saturating_add(unblocks.len()) <= MAX_SYNC_FRAME_ENTRIES
                 && blocks.iter().all(|d| {
-                    d.dot.node_id != 0
+                    !d.ip.is_unspecified()
+                        && d.dot.node_id != 0
                         && d.dot.counter != 0
                         && !d.dot.incarnation.is_nil()
                         && (d.created_at_ms == 0
@@ -1531,7 +1566,8 @@ fn valid_wire_message(message: &WireMessage, now_ms: u64) -> bool {
 fn valid_message(message: &MeshMessage, now_ms: u64) -> bool {
     let latest_creation = now_ms.saturating_add(MAX_CLOCK_SKEW_MS);
     let valid_block = |d: &ClusterBlockDelta| {
-        d.dot.node_id != 0
+        !d.ip.is_unspecified()
+            && d.dot.node_id != 0
             && d.dot.counter != 0
             && !d.dot.incarnation.is_nil()
             && (d.created_at_ms == 0 || d.created_at_ms <= latest_creation)
@@ -1775,20 +1811,30 @@ mod frame_tests {
     use std::time::Duration;
     use std::{
         collections::HashMap,
-        net::{IpAddr, Ipv6Addr},
+        net::{IpAddr, Ipv6Addr, SocketAddr},
         sync::Arc,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::time::timeout;
 
-    /// Distinct per-node keys: every node signs with its own key only.
+    /// Per-edge shared secrets: both ends of an edge configure the identical
+    /// secret, and a frame or application ACK on that edge is signed and
+    /// verified with it.
+    const EDGE_AB_KEY: &[u8] = b"mesh-test-edge-a-b-shared-secret-0001";
+    const EDGE_BC_KEY: &[u8] = b"mesh-test-edge-b-c-shared-secret-0002";
+    const EDGE_CA_KEY: &[u8] = b"mesh-test-edge-c-a-shared-secret-0003";
+    /// A secret that no configured edge uses.
+    const EDGE_MISMATCH_KEY: &[u8] = b"mesh-test-edge-mismatched-secret-04";
+    /// The local key is retained for configuration compatibility and no longer
+    /// signs mesh traffic.
     const NODE_A_KEY: &[u8] = b"mesh-test-node-a-auth-key-0001";
     const NODE_B_KEY: &[u8] = b"mesh-test-node-b-auth-key-0002";
     const NODE_C_KEY: &[u8] = b"mesh-test-node-c-auth-key-0003";
 
     /// An application ACK is only accepted when it comes from the peer the
     /// request was actually sent to: the claimed node id must be that peer,
-    /// and the MAC must verify under that peer's own configured key.
+    /// and the MAC must verify under the edge secret shared with that peer.
     ///
     /// Without that binding, any configured peer could answer on behalf of
     /// another one and let the sender advance state the intended peer never
@@ -1844,11 +1890,11 @@ mod frame_tests {
                 Arc::new(AworsetBlocklist::new(1)),
                 "127.0.0.1:0".parse().expect("listen address"),
                 vec![
-                    MeshPeer::new(2, peer_address, NODE_B_KEY.to_vec()),
+                    MeshPeer::new(2, peer_address, EDGE_AB_KEY.to_vec()),
                     MeshPeer::new(
                         3,
                         "127.0.0.1:2".parse().expect("peer address"),
-                        NODE_C_KEY.to_vec(),
+                        EDGE_BC_KEY.to_vec(),
                     ),
                 ],
                 NODE_A_KEY.to_vec(),
@@ -1868,7 +1914,7 @@ mod frame_tests {
             };
 
             // Positive control: the intended peer's own key is accepted.
-            let honest = fake_peer(2, NODE_B_KEY.to_vec()).await;
+            let honest = fake_peer(2, EDGE_AB_KEY.to_vec()).await;
             let handle = handle_for(honest).await;
             let acknowledged = handle
                 .send_wal_batch(honest, body.clone())
@@ -1879,7 +1925,7 @@ mod frame_tests {
 
             // An ACK that claims the intended peer but carries a MAC made
             // with another configured peer's key must be rejected.
-            let wrong_key = fake_peer(2, NODE_C_KEY.to_vec()).await;
+            let wrong_key = fake_peer(2, EDGE_BC_KEY.to_vec()).await;
             let handle = handle_for(wrong_key).await;
             let error = handle
                 .send_wal_batch(wrong_key, body.clone())
@@ -1895,7 +1941,7 @@ mod frame_tests {
             // An ACK that is correctly signed by another configured peer but
             // claims that peer's identity must be rejected as well: the ACK
             // has to come from the peer the request was sent to.
-            let other_peer = fake_peer(3, NODE_C_KEY.to_vec()).await;
+            let other_peer = fake_peer(3, EDGE_BC_KEY.to_vec()).await;
             let handle = handle_for(other_peer).await;
             let error = handle
                 .send_wal_batch(other_peer, body)
@@ -1934,7 +1980,7 @@ mod frame_tests {
                 1,
                 blocklist_a.clone(),
                 addr_a,
-                vec![MeshPeer::new(2, addr_b, NODE_B_KEY.to_vec())],
+                vec![MeshPeer::new(2, addr_b, EDGE_AB_KEY.to_vec())],
                 NODE_A_KEY.to_vec(),
             )
             .await
@@ -1943,7 +1989,7 @@ mod frame_tests {
                 2,
                 blocklist_b.clone(),
                 addr_b,
-                vec![MeshPeer::new(1, addr_a, NODE_A_KEY.to_vec())],
+                vec![MeshPeer::new(1, addr_a, EDGE_AB_KEY.to_vec())],
                 NODE_B_KEY.to_vec(),
             )
             .await
@@ -2183,24 +2229,15 @@ mod frame_tests {
     }
 
     #[test]
-    fn bind_rejects_duplicate_peer_identity_and_reused_keys() {
+    fn bind_rejects_duplicate_peer_identity_and_reused_edge_secrets() {
         let local_key = vec![7u8; 32];
-        let peer_key = vec![9u8; 32];
+        let edge_key = vec![9u8; 32];
         let address = "127.0.0.1:1234".parse().expect("peer address");
-
-        // A peer may not reuse the local key: it would authenticate as us.
-        let error = validate_bind_args(
-            1,
-            &[MeshPeer::new(2, address, local_key.clone())],
-            &local_key,
-        )
-        .unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 
         // A peer may not claim the local node identity.
         let error = validate_bind_args(
             1,
-            &[MeshPeer::new(1, address, peer_key.clone())],
+            &[MeshPeer::new(1, address, edge_key.clone())],
             &local_key,
         )
         .unwrap_err();
@@ -2210,12 +2247,37 @@ mod frame_tests {
         let error = validate_bind_args(
             1,
             &[
-                MeshPeer::new(2, address, peer_key.clone()),
-                MeshPeer::new(2, "127.0.0.1:1235".parse().expect("peer address"), peer_key),
+                MeshPeer::new(2, address, edge_key.clone()),
+                MeshPeer::new(
+                    2,
+                    "127.0.0.1:1235".parse().expect("peer address"),
+                    vec![8u8; 32],
+                ),
             ],
             &local_key,
         )
         .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        // Two peers must not share an edge secret: traffic authenticated for
+        // one edge would then also verify under the other peer's entry.
+        let error = validate_bind_args(
+            1,
+            &[
+                MeshPeer::new(2, address, edge_key.clone()),
+                MeshPeer::new(3, "127.0.0.1:1235".parse().expect("peer address"), edge_key),
+            ],
+            &local_key,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        // The local key is compatibility-only and signs nothing, so an empty
+        // one is accepted and one that is present must still be long enough.
+        validate_bind_args(1, &[MeshPeer::new(2, address, vec![9u8; 32])], &[])
+            .expect("an empty local key must be accepted");
+        let error = validate_bind_args(1, &[MeshPeer::new(2, address, vec![9u8; 32])], &[7u8; 15])
+            .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
 
@@ -2506,7 +2568,7 @@ mod frame_tests {
                 1,
                 sender_state.clone(),
                 sender_addr,
-                vec![MeshPeer::new(2, receiver_addr, NODE_B_KEY.to_vec())],
+                vec![MeshPeer::new(2, receiver_addr, EDGE_AB_KEY.to_vec())],
                 NODE_A_KEY.to_vec(),
             )
             .await
@@ -2515,7 +2577,7 @@ mod frame_tests {
                 2,
                 receiver_state.clone(),
                 receiver_addr,
-                vec![MeshPeer::new(1, sender_addr, NODE_A_KEY.to_vec())],
+                vec![MeshPeer::new(1, sender_addr, EDGE_AB_KEY.to_vec())],
                 NODE_B_KEY.to_vec(),
             )
             .await
@@ -2614,7 +2676,7 @@ mod frame_tests {
         let node_id = 2u32;
         // The sender signs the canonical serialization of the body.
         let payload = serde_json::to_vec(&(ts_ms, node_id, &body)).expect("canonical payload");
-        let mac = sign(NODE_B_KEY, &payload).expect("sign");
+        let mac = sign(EDGE_AB_KEY, &payload).expect("sign");
         let frame = serde_json::to_vec(&Envelope {
             ts_ms,
             node_id,
@@ -2634,7 +2696,7 @@ mod frame_tests {
             "completion body must serialize identically on both sides"
         );
         assert!(
-            verify(NODE_B_KEY, &receiver_payload, &envelope.mac),
+            verify(EDGE_AB_KEY, &receiver_payload, &envelope.mac),
             "a valid multi-entry completion must pass MAC verification"
         );
 
@@ -2657,7 +2719,7 @@ mod frame_tests {
             serde_json::to_vec(&(envelope.ts_ms, envelope.node_id, &tampered_body))
                 .expect("tampered payload");
         assert!(
-            !verify(NODE_B_KEY, &tampered_payload, &envelope.mac),
+            !verify(EDGE_AB_KEY, &tampered_payload, &envelope.mac),
             "a modified tombstone acknowledgment must fail MAC verification"
         );
     }
@@ -2714,5 +2776,316 @@ mod frame_tests {
             serde_json::to_vec(&completion(canonical_second)).expect("body b"),
             "canonical ordering must make the MAC-covered bytes identical"
         );
+    }
+
+    // --- F-01: per-edge HMAC secret acceptance and peer attribution ---
+
+    /// Reserve a free loopback port and release it again.
+    async fn free_addr() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("probe listener");
+        let address = listener.local_addr().expect("probe address");
+        drop(listener);
+        address
+    }
+
+    /// Build the wire bytes of an envelope for `node_id`, signed with `key`.
+    fn signed_frame(node_id: u32, key: &[u8], body: WireMessage) -> Vec<u8> {
+        let ts_ms = now_ms();
+        let payload = serde_json::to_vec(&(ts_ms, node_id, &body)).expect("canonical payload");
+        let mac = sign(key, &payload).expect("sign frame");
+        let mut frame = serde_json::to_vec(&Envelope {
+            ts_ms,
+            node_id,
+            body,
+            mac,
+        })
+        .expect("encode frame");
+        frame.push(b'\n');
+        frame
+    }
+
+    /// A well-formed but empty sync message.
+    fn empty_sync() -> WireMessage {
+        WireMessage::Standard(MeshMessage::Sync {
+            blocks: Vec::new(),
+            unblocks: Vec::new(),
+        })
+    }
+
+    /// Wait for the receiver to queue exactly one message.
+    async fn expect_one_queued(receiver: &MeshHandle) -> usize {
+        timeout(Duration::from_secs(2), async {
+            loop {
+                let drained = receiver.drain_with_ack().await;
+                if !drained.is_empty() {
+                    return drained.len();
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the frame must reach the incoming queue")
+    }
+
+    /// Assert that a rejected frame never reaches the incoming queue.
+    async fn expect_nothing_queued(receiver: &MeshHandle) {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(
+            receiver.drain().await.is_empty(),
+            "a rejected frame must not enter the incoming queue"
+        );
+    }
+
+    /// A configured peer authenticates even though it dials from an ephemeral
+    /// source port: the source-address binding compares the IP only, and the
+    /// edge secret is the primary protocol binding.
+    #[tokio::test]
+    async fn configured_peer_authenticates_from_an_ephemeral_source_port() {
+        let receiver_addr = free_addr().await;
+        let peer_addr = free_addr().await;
+        let receiver = MeshHandle::bind(
+            2,
+            Arc::new(AworsetBlocklist::new(2)),
+            receiver_addr,
+            vec![MeshPeer::new(1, peer_addr, EDGE_AB_KEY.to_vec())],
+            NODE_B_KEY.to_vec(),
+        )
+        .await
+        .expect("bind receiver");
+
+        let mut stream = TcpStream::connect(receiver_addr).await.expect("connect");
+        let local = stream.local_addr().expect("local address");
+        assert_ne!(
+            local.port(),
+            receiver_addr.port(),
+            "the client must dial from an ephemeral source port"
+        );
+        stream
+            .write_all(&signed_frame(1, EDGE_AB_KEY, empty_sync()))
+            .await
+            .expect("write frame");
+
+        assert_eq!(expect_one_queued(&receiver).await, 1);
+        receiver.shutdown();
+    }
+
+    /// A legitimate two-node exchange returns an application ACK that is
+    /// authenticated with the edge secret of the edge it travelled on.
+    #[tokio::test]
+    async fn legitimate_two_node_exchange_returns_an_edge_authenticated_ack() {
+        let receiver_addr = free_addr().await;
+        let peer_addr = free_addr().await;
+        let receiver = MeshHandle::bind(
+            2,
+            Arc::new(AworsetBlocklist::new(2)),
+            receiver_addr,
+            vec![MeshPeer::new(1, peer_addr, EDGE_AB_KEY.to_vec())],
+            NODE_B_KEY.to_vec(),
+        )
+        .await
+        .expect("bind receiver");
+
+        let mut stream = TcpStream::connect(receiver_addr).await.expect("connect");
+        stream
+            .write_all(&signed_frame(1, EDGE_AB_KEY, empty_sync()))
+            .await
+            .expect("write frame");
+
+        let received = timeout(Duration::from_secs(2), async {
+            loop {
+                let drained = receiver.drain_with_ack().await;
+                if !drained.is_empty() {
+                    break drained;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the frame must be accepted");
+        assert_eq!(received.len(), 1);
+        for frame in received {
+            frame.acknowledge(true);
+        }
+
+        let ack_frame = read_bounded_frame_with_timeout(&mut stream, Duration::from_secs(2))
+            .await
+            .expect("read ack")
+            .expect("ack frame");
+        let ack_line = ack_frame.strip_suffix(b"\n").unwrap_or(&ack_frame);
+        let ack: AckEnvelope = serde_json::from_slice(ack_line).expect("parse ack");
+        assert!(ack.accepted, "the receiver must accept the frame");
+        assert_eq!(ack.node_id, 2, "the ACK must claim the receiver identity");
+        let ack_payload = serde_json::to_vec(&(
+            ack.ts_ms,
+            ack.node_id,
+            ack.accepted,
+            ack.ack_lsn,
+            &ack.recovery_proof,
+        ))
+        .expect("ack payload");
+        assert!(
+            verify(EDGE_AB_KEY, &ack_payload, &ack.mac),
+            "the ACK must be signed with the edge secret of the edge"
+        );
+        receiver.shutdown();
+    }
+
+    /// A frame whose source address is not the configured peer's address is
+    /// rejected even when its MAC is valid: the source-address binding is
+    /// defence in depth on top of the edge secret.
+    #[tokio::test]
+    async fn frame_from_an_unconfigured_source_address_is_rejected() {
+        let receiver_addr = free_addr().await;
+        // The peer is configured at an address the client cannot originate
+        // from, so the source-address binding cannot be satisfied.
+        let peer_addr: SocketAddr = "192.0.2.10:7900".parse().expect("peer address");
+        let receiver = MeshHandle::bind(
+            2,
+            Arc::new(AworsetBlocklist::new(2)),
+            receiver_addr,
+            vec![MeshPeer::new(1, peer_addr, EDGE_AB_KEY.to_vec())],
+            NODE_B_KEY.to_vec(),
+        )
+        .await
+        .expect("bind receiver");
+
+        let mut stream = TcpStream::connect(receiver_addr).await.expect("connect");
+        stream
+            .write_all(&signed_frame(1, EDGE_AB_KEY, empty_sync()))
+            .await
+            .expect("write frame");
+        expect_nothing_queued(&receiver).await;
+        receiver.shutdown();
+    }
+
+    /// Two peers configured on the same IP are still distinguished by their
+    /// edge secret: a frame signed with one peer's secret is not accepted
+    /// as the other peer.
+    #[tokio::test]
+    async fn peers_sharing_an_ip_are_not_confused() {
+        let receiver_addr = free_addr().await;
+        let peer_b_addr = free_addr().await;
+        let peer_c_addr = free_addr().await;
+        let receiver = MeshHandle::bind(
+            2,
+            Arc::new(AworsetBlocklist::new(2)),
+            receiver_addr,
+            vec![
+                MeshPeer::new(1, peer_b_addr, EDGE_AB_KEY.to_vec()),
+                MeshPeer::new(3, peer_c_addr, EDGE_BC_KEY.to_vec()),
+            ],
+            NODE_B_KEY.to_vec(),
+        )
+        .await
+        .expect("bind receiver");
+
+        // Peer 1's secret must not authenticate a frame claiming peer 3.
+        let mut stream = TcpStream::connect(receiver_addr).await.expect("connect");
+        stream
+            .write_all(&signed_frame(3, EDGE_AB_KEY, empty_sync()))
+            .await
+            .expect("write frame");
+        expect_nothing_queued(&receiver).await;
+
+        // Peer 3's own secret still authenticates its own identity.
+        let mut stream = TcpStream::connect(receiver_addr).await.expect("connect");
+        stream
+            .write_all(&signed_frame(3, EDGE_BC_KEY, empty_sync()))
+            .await
+            .expect("write frame");
+        assert_eq!(expect_one_queued(&receiver).await, 1);
+        receiver.shutdown();
+    }
+
+    /// A peer that legitimately holds its own edge secret cannot make a
+    /// frame accepted as another configured peer: the claimed identity
+    /// selects the edge secret the MAC must verify under.
+    #[tokio::test]
+    async fn frame_claiming_another_peer_identity_is_rejected() {
+        let receiver_addr = free_addr().await;
+        let peer_addr = free_addr().await;
+        let other_addr = free_addr().await;
+        let receiver = MeshHandle::bind(
+            2,
+            Arc::new(AworsetBlocklist::new(2)),
+            receiver_addr,
+            vec![
+                MeshPeer::new(1, peer_addr, EDGE_AB_KEY.to_vec()),
+                MeshPeer::new(3, other_addr, EDGE_BC_KEY.to_vec()),
+            ],
+            NODE_B_KEY.to_vec(),
+        )
+        .await
+        .expect("bind receiver");
+
+        // The client holds only EDGE_AB_KEY but claims to be peer 3.
+        let mut stream = TcpStream::connect(receiver_addr).await.expect("connect");
+        stream
+            .write_all(&signed_frame(3, EDGE_AB_KEY, empty_sync()))
+            .await
+            .expect("write frame");
+        expect_nothing_queued(&receiver).await;
+        receiver.shutdown();
+    }
+
+    /// Two nodes that provision different secrets for the same edge cannot
+    /// authenticate each other: the frame never reaches the queue.
+    #[tokio::test]
+    async fn nodes_with_mismatched_edge_secrets_cannot_authenticate() {
+        let receiver_addr = free_addr().await;
+        let peer_addr = free_addr().await;
+        let receiver = MeshHandle::bind(
+            2,
+            Arc::new(AworsetBlocklist::new(2)),
+            receiver_addr,
+            vec![MeshPeer::new(1, peer_addr, EDGE_AB_KEY.to_vec())],
+            NODE_B_KEY.to_vec(),
+        )
+        .await
+        .expect("bind receiver");
+
+        // The sender provisioned a different secret for the same edge.
+        let mut stream = TcpStream::connect(receiver_addr).await.expect("connect");
+        stream
+            .write_all(&signed_frame(1, EDGE_MISMATCH_KEY, empty_sync()))
+            .await
+            .expect("write frame");
+        expect_nothing_queued(&receiver).await;
+        receiver.shutdown();
+    }
+
+    /// With three nodes, the secret one node shares with another does not
+    /// authenticate a frame in a third node's peer context: the receiver
+    /// verifies under the secret it shares with the claimed peer.
+    #[tokio::test]
+    async fn an_edge_secret_does_not_authenticate_in_another_peers_context() {
+        let receiver_addr = free_addr().await;
+        let peer_b_addr = free_addr().await;
+        let peer_a_addr = free_addr().await;
+        // The receiver is node C: it knows the edge secret it shares with B
+        // and the one it shares with A, and nothing else.
+        let receiver = MeshHandle::bind(
+            3,
+            Arc::new(AworsetBlocklist::new(3)),
+            receiver_addr,
+            vec![
+                MeshPeer::new(2, peer_b_addr, EDGE_BC_KEY.to_vec()),
+                MeshPeer::new(1, peer_a_addr, EDGE_CA_KEY.to_vec()),
+            ],
+            NODE_C_KEY.to_vec(),
+        )
+        .await
+        .expect("bind receiver");
+
+        // A frame claiming to be B, signed with the secret A shares with C.
+        let mut stream = TcpStream::connect(receiver_addr).await.expect("connect");
+        stream
+            .write_all(&signed_frame(2, EDGE_CA_KEY, empty_sync()))
+            .await
+            .expect("write frame");
+        expect_nothing_queued(&receiver).await;
+        receiver.shutdown();
     }
 }

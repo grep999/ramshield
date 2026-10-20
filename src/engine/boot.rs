@@ -259,12 +259,18 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
                 format!("invalid mesh.listen_addr: {e}"),
             )
         })?;
-        let local_key = hex::decode(cfg_snapshot.mesh.auth_key.trim()).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("invalid mesh.auth_key: {e}"),
-            )
-        })?;
+        // The local key is compatibility-only: mesh frames and application
+        // ACKs are signed with the per-edge secrets in `peer_auth_keys`.
+        let local_key = if cfg_snapshot.mesh.auth_key.trim().is_empty() {
+            Vec::new()
+        } else {
+            hex::decode(cfg_snapshot.mesh.auth_key.trim()).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("invalid mesh.auth_key: {e}"),
+                )
+            })?
+        };
         let mut peers = Vec::with_capacity(cfg_snapshot.mesh.peers.len());
         for (index, peer_address) in cfg_snapshot.mesh.peers.iter().enumerate() {
             let address = peer_address.parse().map_err(|e| {

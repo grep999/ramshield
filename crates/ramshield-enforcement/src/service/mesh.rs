@@ -233,6 +233,23 @@ impl EnforcementService {
                             "WAL page gap detected; awaiting receiver proof");
                         return None;
                     }
+                    // The application ACK covers the page's *last* LSN, so a
+                    // discontinuity inside the page must fail closed: the
+                    // receiver would otherwise acknowledge history it never
+                    // received, and the local cursor would skip over it
+                    // permanently. Retention removes a prefix, which the two
+                    // checks above already cover; this one covers a hole in
+                    // the middle of the page (missing or corrupt segment).
+                    if let Some((before_lsn, after_lsn)) = first_internal_lsn_hole(&records) {
+                        let Some((boundary_lsn, snapshot)) = capture_recovery() else {
+                            warn!(peer = %peer, "recovery snapshot capture unavailable; do not advance cursor");
+                            return None;
+                        };
+                        peer_handle.request_full_sync(peer, boundary_lsn, snapshot).await;
+                        warn!(peer = %peer, cursor_lsn = cursor, before_lsn, after_lsn, boundary_lsn,
+                            "WAL page internal LSN discontinuity detected; awaiting receiver proof");
+                        return None;
+                    }
                     let start_lsn = records[0].0;
                     let end_lsn = records.last().map(|record| record.0).unwrap_or(cursor);
                     let mut mutations = Vec::new();
@@ -746,6 +763,22 @@ fn should_skip_mesh_unblock(still_blocked: bool, locally_applied: bool) -> bool 
     still_blocked || !locally_applied
 }
 
+/// Return the first internal LSN discontinuity in a WAL page.
+///
+/// Returns the `(before, after)` pair of LSNs that should have been adjacent
+/// but are not, or `None` when every adjacent pair differs by exactly one.
+///
+/// Replication advances the peer cursor to the page's last LSN only after an
+/// application ACK of that LSN, so a hole *inside* the page would let a peer
+/// acknowledge history it never received while the sender permanently skips
+/// over it. Retention legitimately removes a *prefix*, which is validated
+/// separately against `oldest_lsn`; this check is only about the page body.
+fn first_internal_lsn_hole(page: &[(u64, WalEntry)]) -> Option<(u64, u64)> {
+    page.windows(2)
+        .find(|pair| Some(pair[1].0) != pair[0].0.checked_add(1))
+        .map(|pair| (pair[0].0, pair[1].0))
+}
+
 #[cfg(test)]
 mod retry_tests {
     use super::{
@@ -848,9 +881,13 @@ mod wal_batch_integration_tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tokio::net::TcpListener;
 
-    /// Distinct per-node keys: each node signs only with its own key.
-    const SENDER_KEY: &[u8] = b"test-mesh-sender-key-0123456789";
-    const RECEIVER_KEY: &[u8] = b"test-mesh-receiver-key-0123456789";
+    /// The shared secret of the edge between the two nodes. Both ends
+    /// configure the identical secret; it authenticates frames and ACKs.
+    const EDGE_KEY: &[u8] = b"test-mesh-edge-shared-key-0123456789";
+    /// The local keys are retained for configuration compatibility only and
+    /// no longer sign mesh traffic.
+    const SENDER_LOCAL_KEY: &[u8] = b"test-mesh-sender-local-key-012345678";
+    const RECEIVER_LOCAL_KEY: &[u8] = b"test-mesh-receiver-local-key-0123456";
 
     async fn free_addr() -> SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -873,8 +910,8 @@ mod wal_batch_integration_tests {
             2,
             receiver_blocklist.clone(),
             receiver_addr,
-            vec![MeshPeer::new(1, sender_addr, SENDER_KEY.to_vec())],
-            RECEIVER_KEY.to_vec(),
+            vec![MeshPeer::new(1, sender_addr, EDGE_KEY.to_vec())],
+            RECEIVER_LOCAL_KEY.to_vec(),
         )
         .await
         .unwrap();
@@ -883,8 +920,8 @@ mod wal_batch_integration_tests {
             1,
             Arc::new(ramshield_mesh::aworset::AworsetBlocklist::new(1)),
             sender_addr,
-            vec![MeshPeer::new(2, listen_addr, RECEIVER_KEY.to_vec())],
-            SENDER_KEY.to_vec(),
+            vec![MeshPeer::new(2, listen_addr, EDGE_KEY.to_vec())],
+            SENDER_LOCAL_KEY.to_vec(),
         )
         .await
         .unwrap();

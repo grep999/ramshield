@@ -145,7 +145,8 @@ listen_addr = "127.0.0.1:7900"
 peers = []
 peer_node_ids = []
 peer_auth_keys = []
-# Local node key. Keep secrets in a local overlay, not this template.
+# Compatibility-only local key; mesh traffic uses the per-edge secrets in
+# peer_auth_keys. Keep secrets in a local overlay, not this template.
 auth_key = ""
 
 # ── Upstream saturation escalation ────────────────────────────────────

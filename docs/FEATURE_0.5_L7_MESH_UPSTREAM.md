@@ -91,11 +91,38 @@ node_id = 1
 listen_addr = "10.0.0.11:7900"
 peers = ["10.0.0.12:7900", "10.0.0.13:7900"]
 peer_node_ids = [2, 3]
-peer_auth_keys = ["<node-2-hex-key>", "<node-3-hex-key>"]
-auth_key = "<node-1-hex-key>"
+peer_auth_keys = ["<edge-1-2-hex-secret>", "<edge-1-3-hex-secret>"]
+auth_key = ""
 ```
 
-Each node has its own HMAC key. `auth_key` is this node's signing key; `peer_auth_keys` are the trusted keys for the corresponding `peers` and `peer_node_ids` entries. All keys must be distinct and at least 16 decoded bytes. Configure the same node ID/key mapping on every peer. Do not reuse a cluster-wide shared secret: a node key must not authenticate a different node ID. The example values are placeholders, not usable credentials.
+Each configured edge has its own shared HMAC secret. `peer_auth_keys[i]` is the
+secret of the edge between this node and the peer at `peers[i]`, and **both
+ends of that edge must configure the identical secret**. The secrets of two
+different edges on one node must differ, and every secret must decode to at
+least 16 bytes.
+
+`auth_key` is retained for configuration compatibility only. Mesh frames and
+application ACKs are signed and verified with the per-edge secrets, so it may
+be left empty. It is no longer a local signing key, and it does not have to
+differ from an edge secret.
+
+**Key provisioning.** Node 1 above and node 2 must both hold the same secret
+for the 1-2 edge; node 1 and node 3 must both hold the same secret for the
+1-3 edge. A secret for one edge must not be provisioned to a node that is not
+an endpoint of that edge. This is a key-distribution change from earlier
+releases, where every node held a private key and each of its peers held a
+copy of it: provision the shared secret at both endpoints of every edge
+before enabling the mesh.
+
+**What the guarantee is, and is not.** A valid MAC proves possession of the
+edge secret. It does not prove which of the two endpoints produced the frame,
+because both hold the same secret. Inbound frames are additionally bound to
+the source IP address configured for the claimed peer, so attribution relies
+on that binding together with the confidentiality of the edge secret. A node
+that captures an edge secret can authenticate on that edge only; it cannot
+forge traffic for an edge it is not an endpoint of.
+
+The example values are placeholders, not usable credentials.
 
 ## 3. Uplink saturation / upstream escalation
 
