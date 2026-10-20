@@ -95,7 +95,7 @@ Independently verified by the implementer in the meantime (see `PROGRESS_LOG.md`
 |---|---|
 | Verdict A — HMAC protocol hardening | PASS (confirmed independently) |
 | Verdict B — peer identity isolation | PARTIAL — cross-edge isolation provided; within-edge endpoint identity not provided (symmetric-HMAC limit). Requires owner acceptance as residual risk. |
-| IPv4-mapped-IPv6 defect | **OPEN — P1, must be fixed before this branch is merged or shipped** |
+| IPv4-mapped-IPv6 defect | **FIXED** — `same_ip()` folds an IPv4-mapped IPv6 address onto IPv4 on both sides of the comparison (`crates/ramshield-mesh/src/transport.rs`). Verified RED→GREEN: with the normalization disabled both new tests fail; with it restored both pass. Commit `see git log feature/mesh-f01-hmac-edge-secrets`. |
 | Negative-test positive controls | **OPEN — P2** |
 | Contract audit checklist | **NOT DONE — re-run required** |
 | Merge gate (REQUEST CHANGES §9, 12 items) | Not formally signed off — blocked on the above |

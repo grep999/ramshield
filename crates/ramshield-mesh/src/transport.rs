@@ -1278,7 +1278,7 @@ impl MeshHandle {
         // never equal the remote port. This is defence in depth; the primary
         // binding is the edge secret verified below.
         if let Some(configured) = self.peers.iter().find(|peer| peer.node_id == env.node_id)
-            && remote.ip() != configured.address.ip()
+            && !same_ip(remote.ip(), configured.address.ip())
         {
             warn!(
                 node_id = env.node_id,
@@ -1454,6 +1454,27 @@ impl MeshHandle {
         }
     }
 }
+/// Compare an observed peer address with a configured peer address.
+///
+/// A dual-stack listener (`[::]:port`) reports an IPv4 client as the
+/// IPv4-mapped IPv6 address `::ffff:a.b.c.d`, which is never equal to the
+/// configured `IpAddr::V4`. Comparing the raw values would therefore reject
+/// every legitimate IPv4 peer on a dual-stack listener. Fold the mapped form
+/// back to IPv4 on both sides before comparing; a real IPv6 address is left
+/// untouched.
+fn same_ip(observed: IpAddr, configured: IpAddr) -> bool {
+    fn normalize(ip: IpAddr) -> IpAddr {
+        match ip {
+            IpAddr::V6(v6) => v6
+                .to_ipv4_mapped()
+                .map(IpAddr::V4)
+                .unwrap_or(IpAddr::V6(v6)),
+            v4 => v4,
+        }
+    }
+    normalize(observed) == normalize(configured)
+}
+
 /// Validate the public library boundary as well as the higher-level config.
 fn validate_bind_args(node_id: u32, peers: &[MeshPeer], auth_key: &[u8]) -> std::io::Result<()> {
     let invalid = |message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message);
@@ -1802,8 +1823,8 @@ mod frame_tests {
         AckEnvelope, Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES, MeshHandle,
         MeshMessage, MeshMutationKind, MeshPeer, PeerSendOutcome, RecoveryWireMessage,
         ReplicatedMeshMutation, TombstoneAck, WireMessage, canonical_tombstone_acks, chunk_sync,
-        now_ms, push_frame_bytes, read_bounded_frame, read_bounded_frame_with_timeout, sign,
-        valid_message, valid_tombstone_acks, validate_bind_args, verify, with_timeout,
+        now_ms, push_frame_bytes, read_bounded_frame, read_bounded_frame_with_timeout, same_ip,
+        sign, valid_message, valid_tombstone_acks, validate_bind_args, verify, with_timeout,
     };
     use crate::aworset::{
         AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta, PeerEpoch,
@@ -1811,7 +1832,7 @@ mod frame_tests {
     use std::time::Duration;
     use std::{
         collections::HashMap,
-        net::{IpAddr, Ipv6Addr, SocketAddr},
+        net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
         sync::Arc,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2862,6 +2883,77 @@ mod frame_tests {
             receiver_addr.port(),
             "the client must dial from an ephemeral source port"
         );
+        stream
+            .write_all(&signed_frame(1, EDGE_AB_KEY, empty_sync()))
+            .await
+            .expect("write frame");
+
+        assert_eq!(expect_one_queued(&receiver).await, 1);
+        receiver.shutdown();
+    }
+
+    /// The source-address comparison folds an IPv4-mapped IPv6 address back
+    /// onto the IPv4 address it represents.
+    #[test]
+    fn same_ip_folds_ipv4_mapped_ipv6_onto_ipv4() {
+        let mapped = IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0x7f00, 0x0001));
+        let plain = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let other = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+        let loopback_v6 = IpAddr::V6(Ipv6Addr::LOCALHOST);
+
+        assert!(
+            same_ip(mapped, plain),
+            "an IPv4-mapped IPv6 address is the IPv4 address it represents"
+        );
+        assert!(same_ip(plain, mapped), "the comparison is symmetric");
+        assert!(same_ip(plain, plain));
+        assert!(same_ip(loopback_v6, loopback_v6));
+        assert!(
+            !same_ip(loopback_v6, plain),
+            "a real IPv6 address is not an IPv4 address"
+        );
+        assert!(
+            !same_ip(mapped, other),
+            "different IPv4 addresses must not match"
+        );
+    }
+
+    /// A listener bound to `[::]` reports an IPv4 client as the IPv4-mapped
+    /// IPv6 address `::ffff:a.b.c.d`. That must still match a peer configured
+    /// with the plain IPv4 address, otherwise every IPv4 peer is rejected on
+    /// a dual-stack listener.
+    #[tokio::test]
+    async fn dual_stack_listener_accepts_an_ipv4_peer() {
+        // Probe for a usable dual-stack IPv6 socket and take a free port.
+        let Ok(probe) = TcpListener::bind("[::]:0").await else {
+            eprintln!("skipping: no dual-stack IPv6 socket available in this environment");
+            return;
+        };
+        let port = probe.local_addr().expect("probe address").port();
+        drop(probe);
+
+        let peer_addr = free_addr().await;
+        let receiver = match MeshHandle::bind(
+            2,
+            Arc::new(AworsetBlocklist::new(2)),
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port),
+            vec![MeshPeer::new(1, peer_addr, EDGE_AB_KEY.to_vec())],
+            NODE_B_KEY.to_vec(),
+        )
+        .await
+        {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                eprintln!("skipping: dual-stack bind failed: {error}");
+                return;
+            }
+        };
+
+        // The client dials the IPv4 address of the dual-stack listener, so the
+        // kernel reports the peer as ::ffff:127.0.0.1.
+        let mut stream = TcpStream::connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port))
+            .await
+            .expect("connect over IPv4 to the dual-stack listener");
         stream
             .write_all(&signed_frame(1, EDGE_AB_KEY, empty_sync()))
             .await
