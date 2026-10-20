@@ -1,1 +1,1 @@
-$(cat /tmp/aworset_fixed.rs)
+$(cat /workspace/artifacts/aworset_fixed.rs)
