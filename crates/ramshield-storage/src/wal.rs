@@ -208,10 +208,21 @@ impl Wal {
     /// segments on open; the LSN counter resumes from disk state. Callers
     /// must clear the rotation-failure cause first (e.g. remove a stray
     /// directory blocking `create`).
+    ///
+    /// The replacement handle is a healthy instance: RAMWAL's reopen
+    /// contract is "POISONED --reopen--> RECOVERY --> OPEN", and recovery
+    /// re-reads every segment before the new append boundary is
+    /// established. The adapter-level poison flag is therefore cleared
+    /// once the fresh handle is installed — a reopened WAL must accept
+    /// appends again, otherwise the poison would outlive its cause.
     pub fn reopen(&self) -> Result<()> {
         let new_inner = Arc::new(RamWal::open(self.guard.cfg.clone()).map_err(map_error)?);
         let mut guard = self.guard.inner.lock().unwrap_or_else(|e| e.into_inner());
         *guard = Some(new_inner);
+        // Clear only after the replacement is installed: a failed open must
+        // leave the poisoned state untouched.
+        self.is_poisoned
+            .store(false, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
@@ -251,15 +262,13 @@ impl Wal {
                         other => map_error(other),
                     });
 
-                if result.is_err() {
-                    // Check if this is a critical error that should poison the WAL
-                    if let Err(ref e) = result {
-                        if matches!(e, RsError::Io(_)) {
-                            // I/O errors (disk full, etc.) should poison the WAL
-                            // to prevent torn writes
-                            self.poison();
-                        }
-                    }
+                // Check if this is a critical error that should poison the WAL
+                if let Err(ref e) = result
+                    && matches!(e, RsError::Io(_))
+                {
+                    // I/O errors (disk full, etc.) should poison the WAL
+                    // to prevent torn writes
+                    self.poison();
                 }
                 result
             }

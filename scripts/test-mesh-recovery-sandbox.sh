@@ -58,8 +58,28 @@ if [[ ! -f Cargo.lock ]]; then
   exit 2
 fi
 
+# Run a named test and fail when the filter matched nothing: `cargo test`
+# exits 0 when a filter matches no test, so a stale name would silently turn
+# this gate into a no-op.
+run_named_test() {
+  local description="$1"; shift
+  local output
+  printf '\n%s\n' "$description"
+  if ! output="$("$@" 2>&1)"; then
+    printf '%s\n' "$output"
+    return 1
+  fi
+  printf '%s\n' "$output"
+  if ! grep -qE 'test result: ok\. [1-9][0-9]* passed' <<<"$output"; then
+    printf 'ERROR: the test filter matched no test — the gate would be vacuous.\n' >&2
+    return 1
+  fi
+}
+
 printf '\n[1/3] Full-sync captured-boundary regression\n'
-cargo test --locked -p ramshield-mesh full_sync_recovery_waits_for_receiver_completion_after_frame_acks
+run_named_test 'Full-sync captured-boundary regression' \
+  cargo test --locked -p ramshield-mesh --lib \
+  transport::frame_tests::full_sync_recovery_requires_receiver_digest_proof_before_cursor_release
 
 printf '\n[2/3] Real TCP mesh transport acceptance tests\n'
 cargo test --locked -p ramshield-mesh --test mesh_acceptance

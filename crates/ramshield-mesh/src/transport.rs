@@ -1,11 +1,11 @@
+use crate::aworset::PeerEpoch;
 use crate::aworset::{AworsetBlocklist, AworsetSnapshot, ClusterBlockDelta, ClusterUnblockDelta};
 use crate::condition_sync::{ConditionSyncPlanner, SyncCondition, SyncPolicy};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use crate::aworset::PeerEpoch;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     future::Future,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex as StdMutex},
@@ -72,6 +72,34 @@ pub enum MeshMessage {
     },
 }
 
+/// A configured mesh peer: its node identity, its transport address, and the
+/// per-peer key that peer signs outbound frames and application ACKs with.
+///
+/// Every peer owns a distinct key, so an authenticated frame is only accepted
+/// when the node identity inside the envelope matches a configured peer. A
+/// peer can therefore never speak for the local node or for another
+/// configured peer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MeshPeer {
+    /// Stable node identity of the peer.
+    pub node_id: u32,
+    /// Address the peer listens on.
+    pub address: SocketAddr,
+    /// Per-peer key the peer signs with.
+    pub auth_key: Vec<u8>,
+}
+
+impl MeshPeer {
+    /// Configure a peer by node identity, address, and per-peer key.
+    pub fn new(node_id: u32, address: SocketAddr, auth_key: Vec<u8>) -> Self {
+        Self {
+            node_id,
+            address,
+            auth_key,
+        }
+    }
+}
+
 /// Result of attempting to deliver a mesh message to one configured peer.
 /// `Written` means the receiver returned an authenticated application ACK after
 /// durable acceptance (or intentional stale/policy rejection), not just TCP write.
@@ -86,6 +114,22 @@ impl From<MeshMessage> for WireMessage {
     fn from(message: MeshMessage) -> Self {
         Self::Standard(message)
     }
+}
+
+/// One tombstone acknowledgment carried by a recovery completion.
+///
+/// A list of entries, not a map: JSON object keys are strings, so a map
+/// keyed by the peer node ID cannot be deserialized back into integer keys
+/// (`serde_json` rejects `"7"` for a `u32` key), and a map has no stable
+/// iteration order — the completion body is covered by the frame MAC, so
+/// the sender and the receiver must serialize it identically. The list is
+/// ordered by `peer_node_id`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TombstoneAck {
+    /// Node ID of the peer that acknowledged the tombstones.
+    pub peer_node_id: u32,
+    /// The peer's acknowledgment epoch.
+    pub epoch: PeerEpoch,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,8 +152,8 @@ enum RecoveryWireMessage {
         snapshot_digest: String,
         frame_count: u32,
         /// Tombstone acknowledgments from the recipient to the sender.
-        /// Maps peer node IDs to their acknowledgment epochs for tombstones.
-        tombstone_acks: HashMap<u32, PeerEpoch>,
+        /// One entry per peer, ordered by `peer_node_id`.
+        tombstone_acks: Vec<TombstoneAck>,
     },
 }
 
@@ -208,6 +252,11 @@ struct RecoveryContext {
     generation: u64,
     recovery_id: uuid::Uuid,
     boundary_lsn: u64,
+    /// Tombstone acknowledgment epochs published with the recovery completion.
+    ///
+    /// Ordered by `peer_node_id` for the same reason as the wire field: the
+    /// list is part of the MAC-covered completion body.
+    tombstone_acks: Vec<TombstoneAck>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,6 +304,15 @@ impl ReceivedMeshMessage {
         self.acknowledge_with_lsn(accepted, None);
     }
 
+    /// Acknowledge a received message, optionally reporting the WAL LSN that
+    /// makes the accepted state durable.
+    ///
+    /// Durability contract: the caller must have persisted the message's
+    /// deltas (WAL append) and merged them into the CRDT before acking.
+    /// A recovery completion proof is derived from this acknowledgement, so
+    /// acking before the state is durable would let the sender advance its
+    /// per-peer replication cursor while the receiver can still lose the
+    /// acknowledged state on restart.
     pub fn acknowledge_with_lsn(mut self, accepted: bool, ack_lsn: Option<u64>) {
         let mut accepted = accepted;
         let mut recovery_proof = None;
@@ -332,6 +390,7 @@ struct AckEnvelope {
     mac: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_recovery_frame(
     sessions: &Arc<StdMutex<HashMap<u32, RecoveryAssembly>>>,
     sender_node_id: u32,
@@ -473,7 +532,9 @@ fn complete_recovery(
 pub struct MeshHandle {
     node_id: u32,
     blocklist: Arc<AworsetBlocklist>,
-    peers: Arc<Vec<SocketAddr>>,
+    peers: Arc<Vec<MeshPeer>>,
+    /// Key each configured peer signs with, keyed by peer node ID.
+    trusted_keys: Arc<HashMap<u32, Vec<u8>>>,
     auth_key: Arc<Vec<u8>>,
     incoming: Arc<Mutex<VecDeque<IncomingFrame>>>,
     readers: Arc<Semaphore>,
@@ -489,18 +550,24 @@ impl MeshHandle {
         node_id: u32,
         blocklist: Arc<AworsetBlocklist>,
         listen: SocketAddr,
-        peers: Vec<SocketAddr>,
+        peers: Vec<MeshPeer>,
         auth_key: Vec<u8>,
     ) -> std::io::Result<Self> {
         validate_bind_args(node_id, &peers, &auth_key)?;
+        let trusted_keys: HashMap<u32, Vec<u8>> = peers
+            .iter()
+            .map(|peer| (peer.node_id, peer.auth_key.clone()))
+            .collect();
+        // Tombstone collection waits for an acknowledgment from every
+        // configured peer, so the blocklist must know the peer set.
+        blocklist.set_expected_peers(peers.iter().map(|peer| peer.node_id));
         let sync_states = peers
             .iter()
-            .copied()
             .map(|peer| {
                 ConditionSyncPlanner::new(SyncPolicy::default())
                     .map(|planner| {
                         (
-                            peer,
+                            peer.address,
                             PeerSyncState {
                                 planner,
                                 recovery_snapshot: None,
@@ -521,6 +588,7 @@ impl MeshHandle {
             node_id,
             blocklist,
             peers: Arc::new(peers),
+            trusted_keys: Arc::new(trusted_keys),
             auth_key: Arc::new(auth_key),
             incoming: Arc::new(Mutex::new(VecDeque::new())),
             readers: Arc::new(Semaphore::new(MAX_PEER_READERS)),
@@ -588,7 +656,12 @@ impl MeshHandle {
 
     /// Configured replication targets.
     pub fn peers(&self) -> Vec<SocketAddr> {
-        self.peers.as_ref().clone()
+        self.peers.iter().map(|peer| peer.address).collect()
+    }
+
+    /// Resolve the configured peer behind an address, if any.
+    fn peer_by_address(&self, address: SocketAddr) -> Option<&MeshPeer> {
+        self.peers.iter().find(|peer| peer.address == address)
     }
 
     pub async fn request_full_sync(
@@ -693,7 +766,7 @@ impl MeshHandle {
         let mut tasks = JoinSet::new();
         let mut report = BroadcastReport::default();
 
-        for peer in self.peers.iter().copied() {
+        for peer in self.peers.iter().map(|peer| peer.address) {
             let permit = match self.writers.clone().acquire_owned().await {
                 Ok(permit) => permit,
                 Err(error) => {
@@ -828,6 +901,7 @@ impl MeshHandle {
 
     async fn broadcast_sync(&self) {
         let now = self.sync_epoch.elapsed();
+        let blocklist = self.blocklist.clone();
         let due: Vec<(
             SocketAddr,
             Option<Arc<AworsetSnapshot>>,
@@ -843,6 +917,9 @@ impl MeshHandle {
                                 generation: state.generation,
                                 recovery_id,
                                 boundary_lsn,
+                                tombstone_acks: canonical_tombstone_acks(
+                                    blocklist.peer_ack_epochs(),
+                                ),
                             },
                         );
                         (*peer, state.recovery_snapshot.clone(), recovery)
@@ -894,13 +971,11 @@ impl MeshHandle {
                         let success = success && proof_matches;
                         state.planner.complete(at, success);
                         state.delivery_failed = !success;
-                        if success {
-                            if let Some(ctx) = recovery {
-                                state.completed_recovery = Some((ctx.generation, ctx.boundary_lsn));
-                                state.recovery_boundary_lsn = None;
-                                state.recovery_snapshot = None;
-                                state.recovery_id = None;
-                            }
+                        if success && let Some(ctx) = recovery {
+                            state.completed_recovery = Some((ctx.generation, ctx.boundary_lsn));
+                            state.recovery_boundary_lsn = None;
+                            state.recovery_snapshot = None;
+                            state.recovery_id = None;
                         }
                     }
                 }
@@ -1029,11 +1104,16 @@ impl MeshHandle {
                     self.send_to_ack(peer, WireMessage::Recovery(RecoveryWireMessage::Complete {
                         generation: ctx.generation, recovery_id: ctx.recovery_id,
                         boundary_lsn: ctx.boundary_lsn, snapshot_digest: digest.clone(), frame_count,
+                        tombstone_acks: ctx.tombstone_acks.clone(),
                     })).await
                 }) => match result {
-                    Ok(Ok(response)) => response,
-                    Ok(Err(error)) => { warn!(peer = %peer, error = %error, "recovery completion rejected"); drop(permit); return (false, None); }
-                    Err(error) => { warn!(peer = %peer, error = %error, "recovery completion timed out"); drop(permit); return (false, None); }
+                    Ok(response) => response,
+                    Err(error) => {
+                        let timed_out = error.kind() == std::io::ErrorKind::TimedOut;
+                        warn!(peer = %peer, error = %error, timed_out, "recovery completion rejected");
+                        drop(permit);
+                        return (false, None);
+                    }
                 },
                 changed = shutdown.changed() => { let _ = changed; drop(permit); return (false, None); }
             };
@@ -1048,6 +1128,13 @@ impl MeshHandle {
                 warn!(peer = %peer, generation = ctx.generation, boundary_lsn = ctx.boundary_lsn, "missing/mismatched receiver proof; cursor pinned");
                 drop(permit);
                 return (false, None);
+            }
+            // The peer confirmed that it durably applied this node's state up
+            // to the recovery boundary, so the local tombstone bookkeeping may
+            // record that acknowledgment.
+            if let Some(peer_config) = self.peer_by_address(peer) {
+                self.blocklist
+                    .peer_acknowledged(peer_config.node_id, ctx.boundary_lsn);
             }
             drop(permit);
             debug!(peer = %peer, blocks_count, tombstones_count, frame_count, generation = ctx.generation, boundary_lsn = ctx.boundary_lsn, elapsed_ms = started.elapsed().as_millis() as u64, "receiver-confirmed recovery complete");
@@ -1066,6 +1153,17 @@ impl MeshHandle {
         peer: SocketAddr,
         body: B,
     ) -> std::io::Result<AckResponse> {
+        // The peer must be configured: its identity and key are what the
+        // application ACK is verified against.
+        let peer_node_id = self
+            .peer_by_address(peer)
+            .map(|peer| peer.node_id)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "mesh peer is not configured",
+                )
+            })?;
         let body = body.into();
         let ts_ms = now_ms();
         let payload =
@@ -1107,9 +1205,22 @@ impl MeshHandle {
             &ack.recovery_proof,
         ))
         .map_err(std::io::Error::other)?;
-        if ack.node_id == self.node_id
+        // The ACK must come from the configured peer itself and be signed
+        // with that peer's own key: a shared or local key would let any peer
+        // answer on behalf of another one.
+        let peer_key = self
+            .trusted_keys
+            .get(&peer_node_id)
+            .map(Vec::as_slice)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "mesh peer is not configured",
+                )
+            })?;
+        if ack.node_id != peer_node_id
             || now_ms().abs_diff(ack.ts_ms) > MAX_CLOCK_SKEW_MS
-            || !verify(&self.auth_key, &ack_payload, &ack.mac)
+            || !verify(peer_key, &ack_payload, &ack.mac)
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -1152,16 +1263,25 @@ impl MeshHandle {
             Ok(v) => v,
             Err(_) => return,
         };
-        if now_ms().abs_diff(env.ts_ms) > MAX_CLOCK_SKEW_MS
-            || !verify(&self.auth_key, &payload, &env.mac)
+        if env.node_id == self.node_id {
+            return;
+        }
+        // Only a configured peer may deliver frames, and every peer is
+        // verified with its own key: a peer can never authenticate as the
+        // local node or as another configured peer.
+        let Some(peer_key) = self.trusted_keys.get(&env.node_id) else {
+            warn!(
+                node_id = env.node_id,
+                "mesh frame rejected: sender is not a configured peer"
+            );
+            return;
+        };
+        if now_ms().abs_diff(env.ts_ms) > MAX_CLOCK_SKEW_MS || !verify(peer_key, &payload, &env.mac)
         {
             warn!(
                 node_id = env.node_id,
                 "mesh frame rejected: authentication or timestamp invalid"
             );
-            return;
-        }
-        if env.node_id == self.node_id {
             return;
         }
         if matches!(
@@ -1209,19 +1329,38 @@ impl MeshHandle {
                 boundary_lsn,
                 snapshot_digest,
                 frame_count,
-            }) => (
-                MeshMessage::Sync {
-                    blocks: Vec::new(),
-                    unblocks: Vec::new(),
-                },
-                Some(ReceivedRecovery::Complete {
-                    generation,
-                    recovery_id,
-                    boundary_lsn,
-                    snapshot_digest,
-                    frame_count,
-                }),
-            ),
+                tombstone_acks,
+            }) => {
+                if !valid_tombstone_acks(&tombstone_acks) {
+                    warn!(
+                        node_id = env.node_id,
+                        "mesh frame rejected: tombstone acknowledgment map outside accepted bounds"
+                    );
+                    return;
+                }
+                // The reported epochs are authenticated by the sending peer,
+                // but they are not merged into the local peer epoch table: a
+                // peer must not be able to force premature tombstone
+                // collection on this node.
+                debug!(
+                    node_id = env.node_id,
+                    peers = tombstone_acks.len(),
+                    "recovery completion carried peer tombstone acknowledgments"
+                );
+                (
+                    MeshMessage::Sync {
+                        blocks: Vec::new(),
+                        unblocks: Vec::new(),
+                    },
+                    Some(ReceivedRecovery::Complete {
+                        generation,
+                        recovery_id,
+                        boundary_lsn,
+                        snapshot_digest,
+                        frame_count,
+                    }),
+                )
+            }
         };
         let (ack_tx, ack_rx) = oneshot::channel();
         let mut q = self.incoming.lock().await;
@@ -1287,7 +1426,7 @@ impl MeshHandle {
     }
 }
 /// Validate the public library boundary as well as the higher-level config.
-fn validate_bind_args(node_id: u32, peers: &[SocketAddr], auth_key: &[u8]) -> std::io::Result<()> {
+fn validate_bind_args(node_id: u32, peers: &[MeshPeer], auth_key: &[u8]) -> std::io::Result<()> {
     let invalid = |message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message);
     if node_id == 0 {
         return Err(invalid("mesh node_id must be non-zero"));
@@ -1298,13 +1437,39 @@ fn validate_bind_args(node_id: u32, peers: &[SocketAddr], auth_key: &[u8]) -> st
     if peers.len() > MAX_CONFIGURED_PEERS {
         return Err(invalid("mesh peer list exceeds 256 peers"));
     }
-    if peers
-        .iter()
-        .any(|peer| peer.port() == 0 || peer.ip().is_unspecified())
-    {
-        return Err(invalid(
-            "mesh peers must have a concrete IP address and non-zero port",
-        ));
+    let mut node_ids = HashSet::new();
+    let mut addresses = HashSet::new();
+    let mut keys = HashSet::new();
+    keys.insert(auth_key.to_vec());
+    for peer in peers {
+        if peer.node_id == 0 || peer.node_id == node_id {
+            return Err(invalid(
+                "mesh peer node IDs must be non-zero and distinct from the local node ID",
+            ));
+        }
+        if !node_ids.insert(peer.node_id) {
+            return Err(invalid("mesh peer node IDs must be unique"));
+        }
+        if peer.address.port() == 0 || peer.address.ip().is_unspecified() {
+            return Err(invalid(
+                "mesh peers must have a concrete IP address and non-zero port",
+            ));
+        }
+        if !addresses.insert(peer.address) {
+            return Err(invalid("mesh peer addresses must be unique"));
+        }
+        if peer.auth_key.len() < 16 {
+            return Err(invalid(
+                "mesh peer authentication key must be at least 16 bytes",
+            ));
+        }
+        // Reusing the local key (or another peer's key) would let a peer
+        // authenticate as the local node or as a different configured peer.
+        if !keys.insert(peer.auth_key.clone()) {
+            return Err(invalid(
+                "mesh local and peer authentication keys must all be unique",
+            ));
+        }
     }
     Ok(())
 }
@@ -1418,6 +1583,41 @@ fn valid_message(message: &MeshMessage, now_ms: u64) -> bool {
     }
 }
 
+/// Build the tombstone acknowledgment list in canonical order.
+///
+/// The list is part of the recovery completion body that the MAC covers, so
+/// its order must not depend on hash iteration order: two nodes that hold the
+/// same acknowledgment epochs have to produce identical MAC-covered bytes.
+fn canonical_tombstone_acks(
+    epochs: impl IntoIterator<Item = (u32, PeerEpoch)>,
+) -> Vec<TombstoneAck> {
+    let mut acks: Vec<TombstoneAck> = epochs
+        .into_iter()
+        .map(|(peer_node_id, epoch)| TombstoneAck {
+            peer_node_id,
+            epoch,
+        })
+        .collect();
+    acks.sort_by_key(|ack| ack.peer_node_id);
+    acks
+}
+
+/// Bound the tombstone acknowledgment map carried by a recovery completion.
+///
+/// The map is authenticated by the sending peer but is never merged into the
+/// local epoch table, so only its size and internal consistency are checked.
+fn valid_tombstone_acks(acks: &[TombstoneAck]) -> bool {
+    acks.len() <= MAX_CONFIGURED_PEERS
+        && acks.iter().all(|ack| {
+            ack.peer_node_id != 0 && ack.epoch.peer_node_id == ack.peer_node_id
+        })
+        // Canonical order: the acknowledgments are part of the MAC-covered
+        // body, so the sender and the receiver must agree on the sequence.
+        && acks
+            .windows(2)
+            .all(|pair| pair[0].peer_node_id < pair[1].peer_node_id)
+}
+
 fn valid_digest(digest: &str) -> bool {
     digest.len() == 64
         && digest
@@ -1472,9 +1672,9 @@ fn chunk_sync(blocks: &[ClusterBlockDelta], unblocks: &[ClusterUnblockDelta]) ->
     messages
 }
 
-async fn with_timeout<F>(timeout: Duration, future: F) -> std::io::Result<()>
+async fn with_timeout<F, T>(timeout: Duration, future: F) -> std::io::Result<T>
 where
-    F: Future<Output = std::io::Result<()>>,
+    F: Future<Output = std::io::Result<T>>,
 {
     tokio::time::timeout(timeout, future).await.map_err(|_| {
         std::io::Error::new(std::io::ErrorKind::TimedOut, "mesh outbound send timed out")
@@ -1563,19 +1763,152 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod frame_tests {
     use super::{
-        Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES, MeshHandle, MeshMessage,
-        MeshMutationKind, PeerSendOutcome, ReplicatedMeshMutation, chunk_sync, now_ms,
-        push_frame_bytes, read_bounded_frame, read_bounded_frame_with_timeout, valid_message,
-        validate_bind_args, with_timeout,
+        AckEnvelope, Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES, MeshHandle,
+        MeshMessage, MeshMutationKind, MeshPeer, PeerSendOutcome, RecoveryWireMessage,
+        ReplicatedMeshMutation, TombstoneAck, WireMessage, canonical_tombstone_acks, chunk_sync,
+        now_ms, push_frame_bytes, read_bounded_frame, read_bounded_frame_with_timeout, sign,
+        valid_message, valid_tombstone_acks, validate_bind_args, verify, with_timeout,
     };
-    use crate::aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
+    use crate::aworset::{
+        AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta, PeerEpoch,
+    };
     use std::time::Duration;
     use std::{
-        net::{IpAddr, Ipv6Addr, SocketAddr},
+        collections::HashMap,
+        net::{IpAddr, Ipv6Addr},
         sync::Arc,
     };
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    /// Distinct per-node keys: every node signs with its own key only.
+    const NODE_A_KEY: &[u8] = b"mesh-test-node-a-auth-key-0001";
+    const NODE_B_KEY: &[u8] = b"mesh-test-node-b-auth-key-0002";
+    const NODE_C_KEY: &[u8] = b"mesh-test-node-c-auth-key-0003";
+
+    /// An application ACK is only accepted when it comes from the peer the
+    /// request was actually sent to: the claimed node id must be that peer,
+    /// and the MAC must verify under that peer's own configured key.
+    ///
+    /// Without that binding, any configured peer could answer on behalf of
+    /// another one and let the sender advance state the intended peer never
+    /// received.
+    #[test]
+    fn application_ack_is_bound_to_the_intended_peer() {
+        /// Spawn a fake peer that answers one request with an ACK claiming
+        /// `claimed_node_id`, signed with `signing_key`.
+        async fn fake_peer(claimed_node_id: u32, signing_key: Vec<u8>) -> std::net::SocketAddr {
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("fake peer");
+            let address = listener.local_addr().expect("fake peer address");
+            tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.expect("accept request");
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 1024];
+                while !request.contains(&b'\n') {
+                    let read = stream.read(&mut chunk).await.expect("read request");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..read]);
+                }
+                let ack = AckEnvelope {
+                    ts_ms: now_ms(),
+                    node_id: claimed_node_id,
+                    accepted: true,
+                    ack_lsn: Some(7),
+                    recovery_proof: None,
+                    mac: String::new(),
+                };
+                let payload = serde_json::to_vec(&(
+                    ack.ts_ms,
+                    ack.node_id,
+                    ack.accepted,
+                    ack.ack_lsn,
+                    &ack.recovery_proof,
+                ))
+                .expect("encode ack payload");
+                let mac = sign(&signing_key, &payload).expect("sign ack");
+                let mut frame =
+                    serde_json::to_vec(&AckEnvelope { mac, ..ack }).expect("encode ack");
+                frame.push(b'\n');
+                let _ = stream.write_all(&frame).await;
+            });
+            address
+        }
+
+        /// Bind a mesh handle whose peer 2 lives at `peer_address` and whose
+        /// peer 3 has its own distinct key.
+        async fn handle_for(peer_address: std::net::SocketAddr) -> MeshHandle {
+            MeshHandle::bind(
+                1,
+                Arc::new(AworsetBlocklist::new(1)),
+                "127.0.0.1:0".parse().expect("listen address"),
+                vec![
+                    MeshPeer::new(2, peer_address, NODE_B_KEY.to_vec()),
+                    MeshPeer::new(
+                        3,
+                        "127.0.0.1:2".parse().expect("peer address"),
+                        NODE_C_KEY.to_vec(),
+                    ),
+                ],
+                NODE_A_KEY.to_vec(),
+            )
+            .await
+            .expect("bind mesh")
+        }
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async {
+            let body = MeshMessage::Sync {
+                blocks: Vec::new(),
+                unblocks: Vec::new(),
+            };
+
+            // Positive control: the intended peer's own key is accepted.
+            let honest = fake_peer(2, NODE_B_KEY.to_vec()).await;
+            let handle = handle_for(honest).await;
+            let acknowledged = handle
+                .send_wal_batch(honest, body.clone())
+                .await
+                .expect("the intended peer's ACK must be accepted");
+            assert_eq!(acknowledged, Some(7));
+            handle.shutdown();
+
+            // An ACK that claims the intended peer but carries a MAC made
+            // with another configured peer's key must be rejected.
+            let wrong_key = fake_peer(2, NODE_C_KEY.to_vec()).await;
+            let handle = handle_for(wrong_key).await;
+            let error = handle
+                .send_wal_batch(wrong_key, body.clone())
+                .await
+                .expect_err("an ACK signed with another peer's key must be rejected");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert!(
+                error.to_string().contains("authentication failed"),
+                "unexpected error: {error}"
+            );
+            handle.shutdown();
+
+            // An ACK that is correctly signed by another configured peer but
+            // claims that peer's identity must be rejected as well: the ACK
+            // has to come from the peer the request was sent to.
+            let other_peer = fake_peer(3, NODE_C_KEY.to_vec()).await;
+            let handle = handle_for(other_peer).await;
+            let error = handle
+                .send_wal_batch(other_peer, body)
+                .await
+                .expect_err("an ACK from another peer must be rejected");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert!(
+                error.to_string().contains("authentication failed"),
+                "unexpected error: {error}"
+            );
+            handle.shutdown();
+        });
+    }
 
     #[test]
     fn two_peer_condition_sync_converges_after_remote_merge() {
@@ -1597,12 +1930,24 @@ mod frame_tests {
 
             let blocklist_a = Arc::new(AworsetBlocklist::new(1));
             let blocklist_b = Arc::new(AworsetBlocklist::new(2));
-            let a = MeshHandle::bind(1, blocklist_a.clone(), addr_a, vec![addr_b], vec![7; 32])
-                .await
-                .expect("bind node A");
-            let b = MeshHandle::bind(2, blocklist_b.clone(), addr_b, vec![addr_a], vec![7; 32])
-                .await
-                .expect("bind node B");
+            let a = MeshHandle::bind(
+                1,
+                blocklist_a.clone(),
+                addr_a,
+                vec![MeshPeer::new(2, addr_b, NODE_B_KEY.to_vec())],
+                NODE_A_KEY.to_vec(),
+            )
+            .await
+            .expect("bind node A");
+            let b = MeshHandle::bind(
+                2,
+                blocklist_b.clone(),
+                addr_b,
+                vec![MeshPeer::new(1, addr_a, NODE_A_KEY.to_vec())],
+                NODE_B_KEY.to_vec(),
+            )
+            .await
+            .expect("bind node B");
 
             let ip_a = IpAddr::V6(Ipv6Addr::from(0xabcdu128));
             let delta_a = blocklist_a.record_ban(ip_a, 60_000, 1);
@@ -1816,14 +2161,61 @@ mod frame_tests {
         let error = validate_bind_args(1, &[], &[7u8; 15]).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 
-        let peers: Vec<SocketAddr> = (0..=MAX_CONFIGURED_PEERS)
-            .map(|_| "127.0.0.1:1234".parse().expect("peer address"))
+        let peers: Vec<MeshPeer> = (0..=MAX_CONFIGURED_PEERS)
+            .map(|index| {
+                MeshPeer::new(
+                    u32::try_from(index + 1).expect("peer node id"),
+                    "127.0.0.1:1234".parse().expect("peer address"),
+                    vec![9u8; 32],
+                )
+            })
             .collect();
         let error = validate_bind_args(1, &peers, &valid_key).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
 
-        let invalid_peer = ["0.0.0.0:1234".parse().expect("unspecified peer")];
+        let invalid_peer = [MeshPeer::new(
+            2,
+            "0.0.0.0:1234".parse().expect("unspecified peer"),
+            vec![9u8; 32],
+        )];
         let error = validate_bind_args(1, &invalid_peer, &valid_key).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn bind_rejects_duplicate_peer_identity_and_reused_keys() {
+        let local_key = vec![7u8; 32];
+        let peer_key = vec![9u8; 32];
+        let address = "127.0.0.1:1234".parse().expect("peer address");
+
+        // A peer may not reuse the local key: it would authenticate as us.
+        let error = validate_bind_args(
+            1,
+            &[MeshPeer::new(2, address, local_key.clone())],
+            &local_key,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        // A peer may not claim the local node identity.
+        let error = validate_bind_args(
+            1,
+            &[MeshPeer::new(1, address, peer_key.clone())],
+            &local_key,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        // Peer node identities must be unique.
+        let error = validate_bind_args(
+            1,
+            &[
+                MeshPeer::new(2, address, peer_key.clone()),
+                MeshPeer::new(2, "127.0.0.1:1235".parse().expect("peer address"), peer_key),
+            ],
+            &local_key,
+        )
+        .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
 
@@ -1844,7 +2236,7 @@ mod frame_tests {
                 1,
                 Arc::new(AworsetBlocklist::new(1)),
                 "127.0.0.1:0".parse().expect("listen address"),
-                vec![unavailable_peer],
+                vec![MeshPeer::new(2, unavailable_peer, vec![9u8; 32])],
                 vec![7; 32],
             )
             .await
@@ -2053,9 +2445,12 @@ mod frame_tests {
             .build()
             .expect("test runtime");
         runtime.block_on(async {
-            let error = with_timeout(Duration::from_millis(10), std::future::pending())
-                .await
-                .unwrap_err();
+            let error = with_timeout(
+                Duration::from_millis(10),
+                std::future::pending::<std::io::Result<()>>(),
+            )
+            .await
+            .unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         });
     }
@@ -2098,6 +2493,11 @@ mod frame_tests {
                 .expect("reserve receiver");
             let receiver_addr = probe.local_addr().expect("receiver address");
             drop(probe);
+            let probe = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("reserve sender");
+            let sender_addr = probe.local_addr().expect("sender address");
+            drop(probe);
             let sender_state = Arc::new(AworsetBlocklist::new(1));
             let receiver_state = Arc::new(AworsetBlocklist::new(2));
             let ip = IpAddr::V6(Ipv6Addr::from(0xfeedbeefu128));
@@ -2105,9 +2505,9 @@ mod frame_tests {
             let sender = MeshHandle::bind(
                 1,
                 sender_state.clone(),
-                "127.0.0.1:0".parse().unwrap(),
-                vec![receiver_addr],
-                vec![7; 32],
+                sender_addr,
+                vec![MeshPeer::new(2, receiver_addr, NODE_B_KEY.to_vec())],
+                NODE_A_KEY.to_vec(),
             )
             .await
             .expect("bind sender");
@@ -2115,8 +2515,8 @@ mod frame_tests {
                 2,
                 receiver_state.clone(),
                 receiver_addr,
-                Vec::new(),
-                vec![7; 32],
+                vec![MeshPeer::new(1, sender_addr, NODE_A_KEY.to_vec())],
+                NODE_B_KEY.to_vec(),
             )
             .await
             .expect("bind receiver");
@@ -2171,5 +2571,148 @@ mod frame_tests {
             sender.shutdown();
             receiver.shutdown();
         });
+    }
+
+    /// A recovery completion body is covered by the frame MAC, and the
+    /// receiver re-serializes the deserialized body before verifying it.
+    /// The tombstone-ack map must therefore serialize deterministically:
+    /// with a hash map the sender and the receiver can compute different
+    /// MAC inputs and a valid completion is rejected. The map is also
+    /// tamper-evident: changing one acknowledgment must break the MAC.
+    #[test]
+    fn recovery_completion_mac_is_stable_across_multiple_tombstone_acks() {
+        let epoch = |peer_node_id: u32, epoch: u64| PeerEpoch {
+            peer_node_id,
+            incarnation: uuid::Uuid::from_u128(peer_node_id as u128),
+            epoch,
+            last_acknowledged_lsn: epoch * 10,
+            tombstone_expiry_epoch: epoch + 1,
+        };
+        let acks = vec![
+            TombstoneAck {
+                peer_node_id: 3,
+                epoch: epoch(3, 9),
+            },
+            TombstoneAck {
+                peer_node_id: 7,
+                epoch: epoch(7, 3),
+            },
+            TombstoneAck {
+                peer_node_id: 11,
+                epoch: epoch(11, 1),
+            },
+        ];
+        let body = WireMessage::Recovery(RecoveryWireMessage::Complete {
+            generation: 4,
+            recovery_id: uuid::Uuid::from_u128(0xfeed),
+            boundary_lsn: 128,
+            snapshot_digest: "a".repeat(64),
+            frame_count: 2,
+            tombstone_acks: acks.clone(),
+        });
+        let ts_ms = now_ms();
+        let node_id = 2u32;
+        // The sender signs the canonical serialization of the body.
+        let payload = serde_json::to_vec(&(ts_ms, node_id, &body)).expect("canonical payload");
+        let mac = sign(NODE_B_KEY, &payload).expect("sign");
+        let frame = serde_json::to_vec(&Envelope {
+            ts_ms,
+            node_id,
+            body: body.clone(),
+            mac,
+        })
+        .expect("frame");
+
+        // The receiver parses the frame into fresh instances and re-serializes
+        // the body for verification: the MAC must still verify.
+        let envelope: Envelope = serde_json::from_slice(&frame).expect("parse envelope");
+        let receiver_payload =
+            serde_json::to_vec(&(envelope.ts_ms, envelope.node_id, &envelope.body))
+                .expect("receiver payload");
+        assert_eq!(
+            receiver_payload, payload,
+            "completion body must serialize identically on both sides"
+        );
+        assert!(
+            verify(NODE_B_KEY, &receiver_payload, &envelope.mac),
+            "a valid multi-entry completion must pass MAC verification"
+        );
+
+        // Tampering with a single acknowledgment must invalidate the MAC.
+        let mut tampered = acks.clone();
+        tampered[1].epoch = epoch(7, 4);
+        assert!(
+            valid_tombstone_acks(&tampered),
+            "the tampered list is well formed; only the MAC may reject it"
+        );
+        let tampered_body = WireMessage::Recovery(RecoveryWireMessage::Complete {
+            generation: 4,
+            recovery_id: uuid::Uuid::from_u128(0xfeed),
+            boundary_lsn: 128,
+            snapshot_digest: "a".repeat(64),
+            frame_count: 2,
+            tombstone_acks: tampered,
+        });
+        let tampered_payload =
+            serde_json::to_vec(&(envelope.ts_ms, envelope.node_id, &tampered_body))
+                .expect("tampered payload");
+        assert!(
+            !verify(NODE_B_KEY, &tampered_payload, &envelope.mac),
+            "a modified tombstone acknowledgment must fail MAC verification"
+        );
+    }
+
+    #[test]
+    fn recovery_completion_tombstone_acks_are_canonically_ordered() {
+        let epoch = |peer_node_id: u32, epoch: u64| PeerEpoch {
+            peer_node_id,
+            incarnation: uuid::Uuid::from_u128(peer_node_id as u128),
+            epoch,
+            last_acknowledged_lsn: epoch * 10,
+            tombstone_expiry_epoch: epoch + 1,
+        };
+        // The same logical acknowledgments inserted in different orders must
+        // produce the same canonical list: the list is part of the MAC-covered
+        // completion body, so hash iteration order must not reach the wire.
+        let mut first: HashMap<u32, PeerEpoch> = HashMap::new();
+        first.insert(11, epoch(11, 1));
+        first.insert(3, epoch(3, 9));
+        first.insert(7, epoch(7, 3));
+        let mut second: HashMap<u32, PeerEpoch> = HashMap::new();
+        second.insert(7, epoch(7, 3));
+        second.insert(11, epoch(11, 1));
+        second.insert(3, epoch(3, 9));
+
+        let canonical_first = canonical_tombstone_acks(first);
+        let canonical_second = canonical_tombstone_acks(second);
+        assert_eq!(
+            canonical_first, canonical_second,
+            "acknowledgment order must not depend on hash iteration order"
+        );
+        assert_eq!(
+            canonical_first
+                .iter()
+                .map(|ack| ack.peer_node_id)
+                .collect::<Vec<_>>(),
+            vec![3, 7, 11],
+            "the MAC-covered list must be ordered by peer node id"
+        );
+
+        // Two nodes holding the same acknowledgments sign identical bytes.
+        let completion = |acks: Vec<TombstoneAck>| {
+            WireMessage::Recovery(RecoveryWireMessage::Complete {
+                generation: 4,
+                recovery_id: uuid::Uuid::from_u128(0xfeed),
+                boundary_lsn: 128,
+                snapshot_digest: "a".repeat(64),
+                frame_count: 2,
+                tombstone_acks: acks,
+            })
+        };
+        assert_eq!(
+            serde_json::to_vec(&completion(canonical_first)).expect("body a"),
+            serde_json::to_vec(&completion(canonical_second)).expect("body b"),
+            "canonical ordering must make the MAC-covered bytes identical"
+        );
     }
 }

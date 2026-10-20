@@ -1,5 +1,96 @@
 use crate::*;
 
+/// Whether the durable WAL record for a decision already exists.
+///
+/// A mesh delta is journalled with its origin dot when it is first applied,
+/// so a later projection repair must not append a second, provenance-free
+/// record for the same dot. That contract is stated by the caller instead of
+/// being inferred from the free-form `source` label: a decision that merely
+/// claims the `mesh` source would otherwise silently never reach the log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "mesh"), allow(dead_code))]
+pub(crate) enum WalDurability {
+    /// Append a WAL record for this decision.
+    Append,
+    /// The decision is already durable; only repair the projection.
+    AlreadyDurable,
+}
+
+/// A mesh mutation received from a peer.
+///
+/// The mutation carries the remote origin dot so the event is persisted to the
+/// WAL and merged into the CRDT exactly once, with provenance intact.
+#[derive(Clone, Debug)]
+#[cfg_attr(not(feature = "mesh"), allow(dead_code))]
+pub(crate) enum PendingMeshMutation {
+    Block {
+        ip: std::net::IpAddr,
+        node_id: u32,
+        incarnation: uuid::Uuid,
+        counter: u64,
+        created_at_ms: u64,
+        expires_at_ms: Option<u64>,
+        tier: u8,
+    },
+    Unblock {
+        ip: std::net::IpAddr,
+        node_id: u32,
+        incarnation: uuid::Uuid,
+        counter: u64,
+    },
+}
+
+impl PendingMeshMutation {
+    /// Encode the mutation as a WAL entry that preserves the origin dot.
+    ///
+    /// Only the mesh path encodes mutations, so the helper is dead code in
+    /// a build without the `mesh` feature.
+    #[cfg_attr(not(feature = "mesh"), allow(dead_code))]
+    pub(crate) fn to_wal_entry(&self, ts_ns: u64) -> WalEntry {
+        match self {
+            Self::Block {
+                ip,
+                node_id,
+                incarnation,
+                counter,
+                created_at_ms,
+                expires_at_ms,
+                tier,
+            } => WalEntry::MeshMutation {
+                schema_version: 1,
+                origin_node_id: *node_id,
+                origin_incarnation: incarnation.to_string(),
+                origin_counter: *counter,
+                ip: ip.to_string(),
+                action: ramshield_storage::wal::MeshMutationAction::Block,
+                created_at_ms: *created_at_ms,
+                expires_at_ms: *expires_at_ms,
+                tier: *tier,
+                signature: None,
+                ts_ns,
+            },
+            Self::Unblock {
+                ip,
+                node_id,
+                incarnation,
+                counter,
+            } => WalEntry::MeshMutation {
+                schema_version: 1,
+                origin_node_id: *node_id,
+                origin_incarnation: incarnation.to_string(),
+                origin_counter: *counter,
+                ip: ip.to_string(),
+                action: ramshield_storage::wal::MeshMutationAction::Unblock,
+                created_at_ms: ts_ns / 1_000_000,
+                expires_at_ms: None,
+                tier: 0,
+                signature: None,
+                ts_ns,
+            },
+        }
+    }
+}
+
 impl EnforcementService {
     pub(crate) fn remember_result(&mut self, result: &EnforceResult) {
         if self
@@ -60,6 +151,32 @@ impl EnforcementService {
             None
         };
         Ok(wal_lsn)
+    }
+
+    /// Append a mesh mutation to the WAL with its original CRDT dot.
+    ///
+    /// The record is synced before the CRDT merge so a crash can never leave
+    /// the CRDT ahead of the durable log.
+    #[cfg(feature = "mesh")]
+    fn append_mesh_wal(
+        &mut self,
+        mutation: &PendingMeshMutation,
+    ) -> Result<Option<u64>, EnforcementError> {
+        let Some(ref wal) = self.wal else {
+            return Ok(None);
+        };
+        let ts_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let entry = mutation.to_wal_entry(ts_ns);
+        let lsn = wal
+            .append(&entry)
+            .map_err(|e| EnforcementError::Wal(e.to_string()))?;
+        wal.sync()
+            .map_err(|e| EnforcementError::Wal(e.to_string()))?;
+        self.last_wal_lsn = Some(lsn);
+        Ok(Some(lsn))
     }
 
     fn commit_block_state(
@@ -251,6 +368,47 @@ impl EnforcementService {
         &mut self,
         cmd: EnforceCommand,
     ) -> Result<EnforceResult, EnforcementError> {
+        self.enforce_inner(cmd, None, WalDurability::Append).await
+    }
+
+    /// Apply a mesh mutation received from a peer.
+    ///
+    /// The remote origin dot is persisted to the WAL and merged into the CRDT
+    /// inside the checkpoint barrier, before any projection is touched, so a
+    /// crash can never leave the WAL and the CRDT disagreeing.
+    #[cfg(feature = "mesh")]
+    pub(crate) async fn enforce_mesh_mutation(
+        &mut self,
+        cmd: EnforceCommand,
+        mutation: PendingMeshMutation,
+    ) -> Result<EnforceResult, EnforcementError> {
+        self.enforce_inner(cmd, Some(mutation), WalDurability::Append)
+            .await
+    }
+
+    /// Re-project a mesh decision whose CRDT dot is already durable.
+    ///
+    /// The delta was journalled with its origin dot when it was first
+    /// applied, so this call must not append a second, provenance-free record
+    /// for the same dot. The durability contract is stated here instead of
+    /// being inferred from the `source` label, so a decision that only claims
+    /// the `mesh` source can never silently skip the log.
+    #[cfg(feature = "mesh")]
+    pub(crate) async fn enforce_durable_mesh_projection(
+        &mut self,
+        cmd: EnforceCommand,
+    ) -> Result<EnforceResult, EnforcementError> {
+        self.enforce_inner(cmd, None, WalDurability::AlreadyDurable)
+            .await
+    }
+
+    #[cfg_attr(not(feature = "mesh"), allow(unused_variables))]
+    async fn enforce_inner(
+        &mut self,
+        cmd: EnforceCommand,
+        incoming_mesh_mutation: Option<PendingMeshMutation>,
+        wal_durability: WalDurability,
+    ) -> Result<EnforceResult, EnforcementError> {
         // Idempotent replay: return what actually happened the first time —
         // a fabricated `xdp_applied: true` would hide a dataplane failure
         // from every retry consumer.
@@ -282,7 +440,68 @@ impl EnforcementService {
             .map(|s| s.barrier.lock().unwrap_or_else(|e| e.into_inner()));
 
         // Step 1: commit intent to WAL (durable) — before any state change.
+        // A mesh mutation is persisted with its original CRDT dot so recovery
+        // can rebuild the CRDT from the log; a second, provenance-free record
+        // is never written for it.
+        #[cfg(feature = "mesh")]
+        let wal_lsn = match incoming_mesh_mutation.as_ref() {
+            Some(mutation) => self.append_mesh_wal(mutation)?,
+            // The caller states that this decision is already durable (a mesh
+            // delta that was journalled with its origin dot when it was first
+            // applied), so only the projection is repaired here.
+            None if wal_durability == WalDurability::AlreadyDurable => None,
+            None => self.append_wal(&cmd)?,
+        };
+        #[cfg(not(feature = "mesh"))]
         let wal_lsn = self.append_wal(&cmd)?;
+
+        // Once the event is durable, publish the exact same operation into the
+        // CRDT before touching projections. If a later store/XDP operation
+        // fails, WAL and mesh still agree and reconciliation can repair the
+        // projection.
+        #[cfg(feature = "mesh")]
+        if let Some(mesh) = &self.mesh_blocklist
+            && let Some(mutation) = incoming_mesh_mutation.as_ref()
+        {
+            match mutation {
+                PendingMeshMutation::Block {
+                    ip,
+                    node_id,
+                    incarnation,
+                    counter,
+                    created_at_ms,
+                    expires_at_ms,
+                    tier,
+                } => {
+                    mesh.merge_delta(&ramshield_mesh::aworset::ClusterBlockDelta {
+                        ip: *ip,
+                        dot: ramshield_mesh::aworset::ClusterDot {
+                            node_id: *node_id,
+                            incarnation: *incarnation,
+                            counter: *counter,
+                        },
+                        created_at_ms: *created_at_ms,
+                        expires_at_ms: expires_at_ms.unwrap_or(u64::MAX),
+                        tier: *tier,
+                    });
+                }
+                PendingMeshMutation::Unblock {
+                    ip,
+                    node_id,
+                    incarnation,
+                    counter,
+                } => {
+                    mesh.merge_unblock_delta(&ramshield_mesh::aworset::ClusterUnblockDelta {
+                        ip: *ip,
+                        dot: ramshield_mesh::aworset::ClusterDot {
+                            node_id: *node_id,
+                            incarnation: *incarnation,
+                            counter: *counter,
+                        },
+                    });
+                }
+            }
+        }
 
         // Step 2: storage mutation.
         let now_ns = SystemTime::now()
@@ -353,11 +572,14 @@ impl EnforcementService {
                     #[cfg(feature = "mesh")]
                     {
                         if let Some(mesh) = &self.mesh_blocklist {
-                            let deltas = mesh.record_unban(cmd.ip);
-                            self.metrics.inc_mesh_record_unban();
                             if cmd.source != "mesh" {
-                                pending_unban_deltas = deltas;
+                                // A local/operator unblock originates its own
+                                // tombstone and publishes it to the peers.
+                                pending_unban_deltas = mesh.record_unban(cmd.ip);
                             }
+                            // An incoming mesh tombstone was already merged with
+                            // its origin dot and must not be re-originated here.
+                            self.metrics.inc_mesh_record_unban();
                         }
                         if cmd.source != "mesh" {
                             self.mesh_operator_suppressions.insert(cmd.ip);

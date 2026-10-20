@@ -1345,3 +1345,193 @@ mod send_assert {
         assert_send::<EnforcementService>();
     }
 }
+
+/// Replay equivalence: a full WAL replay and a snapshot+tail replay of the
+/// same history must produce the same blocked set and the same remaining
+/// TTLs. The seeded variant is the checkpoint-accelerated path used at boot,
+/// so a divergence would silently drop or resurrect blocks on restart.
+///
+/// This lives here rather than in the root package's `recovery_restart` suite
+/// because that package does not currently compile, which would leave the
+/// invariant unverified.
+#[tokio::test]
+async fn seeded_replay_matches_full_replay() {
+    let dir = std::env::temp_dir().join(format!("rs_replay_equiv_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let mut s = svc_with_wal(Box::new(RecordingApplier::new()), dir.to_str().unwrap());
+    let blocked_a = ip([10, 90, 0, 1]);
+    let blocked_b = ip([10, 90, 0, 2]);
+    s.enforce(block_cmd(blocked_a, 3600)).await.unwrap();
+    s.enforce(block_cmd(blocked_b, 1800)).await.unwrap();
+    // Tail entry: A is unblocked after the checkpoint boundary.
+    s.enforce(unblock_cmd(blocked_a)).await.unwrap();
+    drop(s);
+
+    let wal = Wal::open(
+        dir.to_str().unwrap(),
+        false,
+        ramshield_types::Durability::None,
+        64 * 1024 * 1024,
+        0,
+    )
+    .unwrap();
+    let (records, _more) = wal.replay_with_lsn_page(0, 64).unwrap();
+    assert_eq!(
+        records.len(),
+        3,
+        "two blocks and one unblock are journalled"
+    );
+
+    // The checkpoint boundary sits after the second entry, so the snapshot
+    // state is "A and B blocked" and the tail holds only the unblock of A.
+    let checkpoint_lsn = records[1].0;
+    let mut seed = std::collections::HashMap::new();
+    for (lsn, entry) in &records {
+        if *lsn > checkpoint_lsn {
+            break;
+        }
+        if let WalEntry::BlockIp {
+            ip,
+            reason,
+            ttl_secs,
+            ts_ns,
+        } = entry
+        {
+            let parsed: IpAddr = ip.parse().expect("WAL block IP parses");
+            let deadline_ns = ttl_secs
+                .map(|secs| ts_ns.saturating_add(secs.saturating_mul(1_000_000_000)))
+                .unwrap_or(0);
+            seed.insert(parsed, (reason.clone(), *ts_ns, deadline_ns));
+        }
+    }
+    assert_eq!(seed.len(), 2, "the snapshot seed carries both blocked IPs");
+
+    let full_store = Arc::new(Store::new(16));
+    let full = replay_wal_into_store(&full_store, &wal, 0).unwrap();
+
+    // Production order: the snapshot's records are restored into the store
+    // first, then the tail is folded on top of them. Replay the prefix (the
+    // entries up to the checkpoint boundary) into a second store to obtain
+    // exactly that pre-state, so the seeded replay has to reconcile the
+    // snapshot IPs that the tail unblocked.
+    let snap_dir =
+        std::env::temp_dir().join(format!("rs_replay_equiv_snap_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&snap_dir);
+    let snap_wal = Wal::open(
+        snap_dir.to_str().unwrap(),
+        false,
+        ramshield_types::Durability::None,
+        64 * 1024 * 1024,
+        0,
+    )
+    .unwrap();
+    for (lsn, entry) in &records {
+        if *lsn > checkpoint_lsn {
+            break;
+        }
+        snap_wal.append(entry).unwrap();
+    }
+    // The appended prefix has to reach the segment before it can be replayed.
+    snap_wal.sync().unwrap();
+    let seeded_store = Arc::new(Store::new(16));
+    replay_wal_into_store(&seeded_store, &snap_wal, 0).unwrap();
+    for snapshot_ip in [blocked_a, blocked_b] {
+        assert!(
+            matches!(seeded_store.get(&snapshot_ip), Some(Value::IpRecord(_))),
+            "the restored snapshot must hold {snapshot_ip} before the tail replay"
+        );
+    }
+    drop(snap_wal);
+    let _ = std::fs::remove_dir_all(&snap_dir);
+
+    let seeded = replay_wal_into_store_seeded(&seeded_store, &wal, checkpoint_lsn, seed).unwrap();
+
+    let full_map: std::collections::HashMap<IpAddr, u64> = full.into_iter().collect();
+    let seeded_map: std::collections::HashMap<IpAddr, u64> = seeded.into_iter().collect();
+    assert_eq!(
+        full_map
+            .keys()
+            .copied()
+            .collect::<std::collections::HashSet<_>>(),
+        seeded_map
+            .keys()
+            .copied()
+            .collect::<std::collections::HashSet<_>>(),
+        "full replay and snapshot+tail replay must cover the same IPs"
+    );
+    assert_eq!(full_map.len(), 1, "only B survives the tail unblock");
+    assert!(
+        full_map.contains_key(&blocked_b),
+        "B stays blocked in both replays"
+    );
+    assert!(
+        !full_map.contains_key(&blocked_a),
+        "the tail unblock removes A in both replays"
+    );
+    for (addr, ttl) in &full_map {
+        let other = seeded_map
+            .get(addr)
+            .expect("the seeded replay covers the same IP");
+        assert!(
+            other.abs_diff(*ttl) <= 1,
+            "remaining TTL must match within rounding: {ttl} vs {other}"
+        );
+    }
+
+    // Store records must agree too: A absent (no phantom block left by the
+    // snapshot seed), B blocked.
+    for store in [&full_store, &seeded_store] {
+        assert!(
+            !matches!(store.get(&blocked_a), Some(Value::IpRecord(_))),
+            "an unblocked IP must not survive as a blocked store record"
+        );
+        match store.get(&blocked_b) {
+            Some(Value::IpRecord(r)) => assert!(
+                matches!(r.block_state, BlockState::Blocked { .. }),
+                "B must be restored as blocked"
+            ),
+            other => panic!("expected B as a blocked IpRecord, got {other:?}"),
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A decision that only claims the `mesh` source must still be journalled.
+///
+/// The WAL record for a mesh delta is written when the delta is first
+/// applied, so a later projection repair must not append a second record for
+/// the same dot. Suppressing that record based on the free-form `source`
+/// label would let a locally originated decision silently never reach the
+/// log, so the durability contract has to be stated by the caller.
+#[cfg(feature = "mesh")]
+#[tokio::test]
+async fn mesh_source_label_does_not_suppress_wal_durability() {
+    let dir = std::env::temp_dir().join(format!("rs_mesh_source_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let mut s = svc_with_wal(Box::new(RecordingApplier::new()), dir.to_str().unwrap());
+    let target = ip([10, 91, 0, 7]);
+    let mut cmd = block_cmd(target, 60);
+    cmd.source = "mesh".into();
+    s.enforce(cmd).await.unwrap();
+    drop(s);
+
+    let wal = Wal::open(
+        dir.to_str().unwrap(),
+        false,
+        ramshield_types::Durability::None,
+        64 * 1024 * 1024,
+        0,
+    )
+    .unwrap();
+    let (records, _more) = wal.replay_with_lsn_page(0, 64).unwrap();
+    assert_eq!(
+        records.len(),
+        1,
+        "a mesh-labelled decision is journalled exactly once"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

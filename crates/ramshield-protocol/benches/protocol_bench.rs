@@ -1,7 +1,8 @@
 /// A-037 Core benchmarks and regression budgets for ramshield-protocol.
 /// Establishes reproducible baselines for protocol operations under load.
 use criterion::{Criterion, criterion_group, criterion_main};
-use ramshield_protocol::{Message, ReplayStore, Request, sign};
+use ramshield_protocol::auth::{ReplayStore, sign};
+use ramshield_protocol::{Message, Request};
 use std::time::Duration;
 
 /// Benchmark Message serialization - measures encoding throughput

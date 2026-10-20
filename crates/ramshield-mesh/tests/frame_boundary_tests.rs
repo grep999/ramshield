@@ -14,7 +14,9 @@ const MAX_FRAME_SIZE: usize = 65_536;
 
 /// Helper to spin up a loopback mock reader that implements the transport frame loop
 async fn spawn_mock_receiver() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind ephemeral");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral");
     let addr = listener.local_addr().expect("local_addr");
 
     let handle = tokio::spawn(async move {
@@ -68,7 +70,10 @@ async fn test_m013_frame_exact_maximum() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     let mut check_buf = [0u8; 1];
     let res = tokio::time::timeout(Duration::from_millis(50), stream.read(&mut check_buf)).await;
-    assert!(res.is_err(), "Stream should not be closed on valid max frame");
+    assert!(
+        res.is_err(),
+        "Stream should not be closed on valid max frame"
+    );
 
     drop(stream);
     let _ = handle.await;
@@ -83,13 +88,19 @@ async fn test_m013_frame_one_byte_over_maximum() {
     let mut payload = vec![b'a'; MAX_FRAME_SIZE + 1];
     payload.push(b'\n');
 
-    stream.write_all(&payload).await.expect("write oversized frame");
+    stream
+        .write_all(&payload)
+        .await
+        .expect("write oversized frame");
     stream.flush().await.expect("flush");
 
     // The server must detect frame overflow and close the connection
     let mut buf = [0u8; 16];
     let n = stream.read(&mut buf).await.expect("read after violation");
-    assert_eq!(n, 0, "Server must close connection on frame exceeding limit");
+    assert_eq!(
+        n, 0,
+        "Server must close connection on frame exceeding limit"
+    );
 
     let _ = handle.await;
 }
@@ -119,14 +130,20 @@ async fn test_m013_clean_eof_and_partial_eof() {
     // 1. Partial EOF test (stream dropped before closing delimiter)
     let (addr1, handle1) = spawn_mock_receiver().await;
     let mut stream1 = TcpStream::connect(addr1).await.expect("connect");
-    stream1.write_all(b"{\"partial\": true}").await.expect("write partial");
+    stream1
+        .write_all(b"{\"partial\": true}")
+        .await
+        .expect("write partial");
     drop(stream1); // Immediate EOF without '\n'
     let _ = handle1.await;
 
     // 2. Clean EOF test (stream dropped cleanly after delimiter)
     let (addr2, handle2) = spawn_mock_receiver().await;
     let mut stream2 = TcpStream::connect(addr2).await.expect("connect");
-    stream2.write_all(b"{\"complete\": true}\n").await.expect("write complete");
+    stream2
+        .write_all(b"{\"complete\": true}\n")
+        .await
+        .expect("write complete");
     stream2.flush().await.expect("flush");
     drop(stream2); // Clean EOF
     let _ = handle2.await;

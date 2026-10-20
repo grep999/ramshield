@@ -120,15 +120,23 @@ impl EnforcementService {
         };
         let cursors = self.mesh_wal_cursors.clone();
         let inflight = self.mesh_wal_inflight.clone();
-        let checkpoint_shared = self.checkpoint_shared.clone();
-        let blocklist = self.mesh_blocklist.clone();
+        let peer_checkpoint_shared = self.checkpoint_shared.clone();
+        let peer_blocklist = self.mesh_blocklist.clone();
 
         for peer in handle.peers() {
             if let Some((generation, boundary_lsn)) = handle.completed_recovery(peer).await {
-                if let Ok(mut values) = cursors.lock() {
-                    let current = values.get(&peer).copied().unwrap_or(0);
-                    values.insert(peer, current.max(boundary_lsn));
-                    drop(values);
+                // The lock result is consumed before the await: holding the
+                // `Result<MutexGuard, PoisonError>` temporary across an await
+                // would make the whole future non-`Send`.
+                let cursor_updated = match cursors.lock() {
+                    Ok(mut values) => {
+                        let current = values.get(&peer).copied().unwrap_or(0);
+                        values.insert(peer, current.max(boundary_lsn));
+                        true
+                    }
+                    Err(_) => false,
+                };
+                if cursor_updated {
                     handle
                         .acknowledge_recovery_cursor(peer, generation, boundary_lsn)
                         .await;
@@ -153,6 +161,8 @@ impl EnforcementService {
             let peer_handle = handle.clone();
             let peer_cursors = cursors.clone();
             let peer_inflight = inflight.clone();
+            let peer_checkpoint_shared = peer_checkpoint_shared.clone();
+            let peer_blocklist = peer_blocklist.clone();
             tokio::spawn(async move {
                 let _in_flight = WalPeerInFlight {
                     peer,
@@ -311,10 +321,10 @@ impl EnforcementService {
                 }
                 .await;
 
-                if let Some(next_lsn) = next_cursor {
-                    if let Ok(mut values) = peer_cursors.lock() {
-                        values.insert(peer, next_lsn);
-                    }
+                if let Some(next_lsn) = next_cursor
+                    && let Ok(mut values) = peer_cursors.lock()
+                {
+                    values.insert(peer, next_lsn);
                 }
             });
         }
@@ -373,7 +383,7 @@ impl EnforcementService {
                     action: EnforceAction::Block,
                     evidence_source: ramshield_types::EvidenceSource::FleetSignals,
                 };
-                if let Err(error) = self.enforce(cmd).await {
+                if let Err(error) = self.enforce_durable_mesh_projection(cmd).await {
                     warn!(ip = %ip, error = %error, "mesh-to-Store block reconciliation failed");
                 }
                 if matches!(
@@ -412,7 +422,7 @@ impl EnforcementService {
                 action: EnforceAction::Unblock,
                 evidence_source: ramshield_types::EvidenceSource::FleetSignals,
             };
-            if let Err(error) = self.enforce(cmd).await {
+            if let Err(error) = self.enforce_durable_mesh_projection(cmd).await {
                 warn!(ip = %ip, error = %error, "mesh-to-Store unblock reconciliation failed");
             }
             if !matches!(
@@ -613,7 +623,7 @@ impl EnforcementService {
             )
             .await
         } else {
-            self.enforce(cmd).await
+            self.enforce_durable_mesh_projection(cmd).await
         }
         .and_then(|result| require_xdp_projection(result, "block"));
         if matches!(
@@ -682,7 +692,7 @@ impl EnforcementService {
             )
             .await
         } else {
-            self.enforce(cmd).await
+            self.enforce_durable_mesh_projection(cmd).await
         }
         .and_then(|result| require_xdp_projection(result, "unblock"));
         if !matches!(
@@ -828,7 +838,7 @@ mod wal_batch_integration_tests {
     use super::*;
     use crate::StubXdpApplier;
     use ramshield_mesh::transport::{
-        MeshHandle, MeshMessage, MeshMutationKind, ReplicatedMeshMutation,
+        MeshHandle, MeshMessage, MeshMutationKind, MeshPeer, ReplicatedMeshMutation,
     };
     use ramshield_storage::wal::{MeshMutationAction, Wal, WalEntry};
     use ramshield_types::Durability;
@@ -837,6 +847,10 @@ mod wal_batch_integration_tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tokio::net::TcpListener;
+
+    /// Distinct per-node keys: each node signs only with its own key.
+    const SENDER_KEY: &[u8] = b"test-mesh-sender-key-0123456789";
+    const RECEIVER_KEY: &[u8] = b"test-mesh-receiver-key-0123456789";
 
     async fn free_addr() -> SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -853,13 +867,14 @@ mod wal_batch_integration_tests {
         let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 111));
         let origin_incarnation = uuid::Uuid::new_v4();
         let receiver_addr = free_addr().await;
+        let sender_addr = free_addr().await;
         let receiver_blocklist = Arc::new(ramshield_mesh::aworset::AworsetBlocklist::new(2));
         let receiver = MeshHandle::bind(
             2,
             receiver_blocklist.clone(),
             receiver_addr,
-            Vec::new(),
-            b"test-mesh-key-0123456789abcdef".to_vec(),
+            vec![MeshPeer::new(1, sender_addr, SENDER_KEY.to_vec())],
+            RECEIVER_KEY.to_vec(),
         )
         .await
         .unwrap();
@@ -867,9 +882,9 @@ mod wal_batch_integration_tests {
         let sender = MeshHandle::bind(
             1,
             Arc::new(ramshield_mesh::aworset::AworsetBlocklist::new(1)),
-            "127.0.0.1:0".parse().unwrap(),
-            vec![listen_addr],
-            b"test-mesh-key-0123456789abcdef".to_vec(),
+            sender_addr,
+            vec![MeshPeer::new(2, listen_addr, RECEIVER_KEY.to_vec())],
+            SENDER_KEY.to_vec(),
         )
         .await
         .unwrap();

@@ -51,11 +51,21 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-async fn wait_for_one(handle: &MeshHandle) -> Vec<MeshMessage> {
+/// Drain one frame and acknowledge it.
+///
+/// The transport only reports a peer write as delivered once the receiver has
+/// returned an authenticated application ACK, so the receiver has to
+/// acknowledge the frame for the sender's broadcast report to settle.
+async fn wait_for_one_acked(handle: &MeshHandle) -> Vec<MeshMessage> {
     timeout(Duration::from_secs(2), async {
         loop {
-            let messages = handle.drain().await;
-            if !messages.is_empty() {
+            let received = handle.drain_with_ack().await;
+            if !received.is_empty() {
+                let messages: Vec<MeshMessage> =
+                    received.iter().map(|frame| frame.message.clone()).collect();
+                for frame in received {
+                    frame.acknowledge(true);
+                }
                 break messages;
             }
             sleep(Duration::from_millis(5)).await;
@@ -101,11 +111,21 @@ async fn authenticated_block_crosses_real_tcp_transport() {
         tier: 2,
     };
 
-    let report = sender.broadcast(MeshMessage::Block(delta.clone())).await;
+    // The sender waits for the receiver's authenticated application ACK, so
+    // the broadcast runs concurrently with the receiver draining and
+    // acknowledging the frame.
+    let broadcast = {
+        let sender = sender.clone();
+        let delta = delta.clone();
+        tokio::spawn(async move { sender.broadcast(MeshMessage::Block(delta)).await })
+    };
+
+    let received = wait_for_one_acked(&receiver).await;
+
+    let report = broadcast.await.expect("broadcast task must not panic");
     assert_eq!(report.written_count(), 1);
     assert!(report.all_written());
 
-    let received = wait_for_one(&receiver).await;
     assert_eq!(received.len(), 1);
     match &received[0] {
         MeshMessage::Block(received_delta) => assert_eq!(received_delta, &delta),
