@@ -122,6 +122,25 @@ on that binding together with the confidentiality of the edge secret. A node
 that captures an edge secret can authenticate on that edge only; it cannot
 forge traffic for an edge it is not an endpoint of.
 
+**Operational caveat — the source-IP binding is strict.** The binding compares
+the peer's *observed* source IP with the *configured* peer address. These must
+be the same address for the peer to be accepted:
+
+- Configure each peer with the address it actually dials **from**, not the
+  address it is reached at. A peer behind NAT, behind a different egress
+  address, or on a multi-homed host must be configured with its egress
+  address.
+- Where a peer cannot be configured with its true source address, it will be
+  dropped with only a `warn!` in the log and no other symptom. Before
+  enabling the mesh, confirm the configured peer address matches the source
+  address the peer actually presents.
+- Only the IP is compared, never the port — peers dial from an ephemeral
+  source port, so the configured port is never compared against it.
+- An IPv4 peer connecting to a listener bound to an IPv6 wildcard (`[::]`) is
+  reported by the kernel as `::ffff:a.b.c.d`; that mapped form is normalised
+  back to IPv4 before the comparison, so IPv4 peers are not rejected on a
+  dual-stack listener.
+
 The example values are placeholders, not usable credentials.
 
 ## 3. Uplink saturation / upstream escalation

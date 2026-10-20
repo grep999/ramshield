@@ -158,6 +158,50 @@ signed with another edge's secret), `two_peer_condition_sync_converges_after_rem
 `recovery_completion_mac_covers_every_tombstone_ack` — all retained and now
 exercised against the edge-secret model.
 
+### Which of the new tests actually discriminate the change
+
+An independent execution-lens reviewer rebuilt the pre-change production code
+and ran the new tests against it. Nine of the fourteen genuinely fail on the
+old code, proving they are not vacuous:
+
+| Suite | Failing on pre-change code |
+|---|---|
+| `ramshield-mesh` lib | `bind_rejects_duplicate_peer_identity_and_reused_edge_secrets`, `frame_from_an_unconfigured_source_address_is_rejected`, `legitimate_two_node_exchange_returns_an_edge_authenticated_ack`, `two_peer_condition_sync_converges_after_remote_merge`, `full_sync_recovery_requires_receiver_digest_proof_before_cursor_release` |
+| `ramshield-mesh` `mesh_acceptance` | `authenticated_block_crosses_real_tcp_transport` |
+| `ramshield-config` | `mesh_accepts_empty_local_key_with_valid_edge_secrets`, `mesh_accepts_local_key_equal_to_an_edge_secret` |
+| `ramshield-enforcement --features mesh` | `wal_batch_is_durable_before_ack_and_projection_retries` |
+
+The root cause of the mesh failures is the model change itself: the old code
+signs outbound frames with the *local* key while the receiver verifies with the
+*peer* key, so every frame is rejected.
+
+The other five mesh tests and four config tests **pass on the pre-change
+code**. They are still valid security assertions — they confirm properties
+that must continue to hold — but they do not by themselves demonstrate the
+change. One of them is weaker than its name suggests:
+`mesh_accepts_the_same_edge_secret_at_both_ends` only validates two
+*independent* `Config` objects and cannot assert that the two ends
+interoperate; that property is covered by the transport tests.
+
+### Flakiness
+
+The reviewer ran the mesh suite repeatedly — 5 consecutive runs of the 7 new
+authentication tests, 5 runs of the full mesh lib, 8 runs of
+`mesh_acceptance`, 3 runs of the enforcement mesh feature, plus single-threaded
+and default-threaded runs — with no flakiness observed. The tests use real TCP
+sockets, ephemeral ports and timeouts; the negative tests use a 150 ms window,
+which was ample on every run.
+
+### Independent review outcome
+
+The execution-lens reviewer returned **CONFIRMED** on these claims, with one
+material behavioural defect (the IPv4-mapped-IPv6 source-IP mismatch), now
+fixed and covered by two new tests. It also flagged the source-IP binding's
+operational strictness — peers whose observed source IP differs from their
+configured address (NAT, multi-homed, different egress) are dropped — which
+was undocumented; it is now documented in
+`docs/FEATURE_0.5_L7_MESH_UPSTREAM.md`.
+
 ### Commands run and results
 
 ```
@@ -167,13 +211,32 @@ cargo clippy --workspace --all-targets -- -D warnings         exit 0
 cargo test -p ramshield-mesh                                  exit 0  (78 lib + 4 integration, 0 failed)
 cargo test -p ramshield-config                                exit 0  (39 passed, 0 failed)
 cargo test -p ramshield-enforcement                           exit 0  (39 + 4 + 2 passed, 0 failed)
-cargo test --workspace                                         exit 0  (570 passed / 0 failed / 14 ignored)
+cargo test --workspace                                        exit 0  (570 passed / 0 failed / 14 ignored)
+cargo test --workspace --all-features                         exit 0  (601 passed / 0 failed / 14 ignored)
 cargo doc --workspace --no-deps                               exit 0  (7 pre-existing warnings, none in ramshield-mesh)
 ```
 
-**SHA tested:** `774818e9c5a6a305840588de69314c8494d75424` plus the
-uncommitted F-01 patch in the working tree. The patch is **not committed**;
-the tested tree is HEAD + working-tree diff.
+**Coverage caveat — `--all-features` is the run that exercises the changed
+enforcement and startup code.** `cargo test --workspace` with *default*
+features does not compile `crates/ramshield-enforcement/src/service/mesh.rs`
+at all: the module is gated behind the `mesh` feature, and the root package's
+`full` feature forwards `xdp` but not `mesh`. The mesh block of
+`src/engine/boot.rs` is gated the same way. So the 570-passed figure does not
+exercise the changed enforcement/boot code; `cargo test --workspace
+--all-features` (601 passed / 0 failed / 14 ignored) is the run that does, and
+it is clean. Nothing is broken — the default-feature number was simply
+narrower than it appeared.
+
+The 601 vs 599 difference against the independent reviewer's `--all-features`
+count on the pre-fix tree is the two tests added with the IPv4-mapped-IPv6
+correction (`same_ip_folds_ipv4_mapped_ipv6_onto_ipv4`,
+`dual_stack_listener_accepts_an_ipv4_peer`).
+
+**SHA tested:** `774818e9c5a6a305840588de69314c8494d75424` plus the F-01 patch,
+now committed on branch `feature/mesh-f01-hmac-edge-secrets` as `6aeaaa1`
+(F-01 pairwise edge secrets) and `2d827fa` (IPv4-mapped-IPv6 correction), with
+this documentation change on top. The branch is unpushed; `master` is
+untouched.
 
 ---
 
