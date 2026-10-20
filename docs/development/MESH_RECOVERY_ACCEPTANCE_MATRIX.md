@@ -82,13 +82,13 @@ Append a short PR #19 handoff for every meaningful change with:
 - **Next owner/action:** one bounded task.
 
 
-## Candidate record — integration candidate `3dfc80d` (uncommitted mesh integration patch)
+## Candidate record — frozen integration candidate `3308049` (on base `3dfc80d`)
 
 **Role / result:** implementation + regression tests + one independent read-only review round with findings (triaged in place, see "Independent review findings"). Two further read-only review rounds were dispatched against this final tree; both stalled in file-by-file exploration and were stopped without producing a written verdict, so **no second independent verdict exists for this tree** — that gap is recorded below rather than papered over.
-**Base SHA → resulting SHA:** `3dfc80df79e748d3b13690a42bcbf350ed2dc75e` → unchanged. The patch is an **uncommitted working-tree diff** on top of `3dfc80d`; no commit, merge, rebase, or history rewrite was performed. `refs/backup/pre-merge` still points at `1ebfc2ca0095d25c5d782bf0d577d62f10574b0b`.
+**Base SHA → resulting SHA:** `3dfc80df79e748d3b13690a42bcbf350ed2dc75e` → `33080496e0c5c73dcf406aee5bbe9708b4d8dcb8` (tree `cefc02b84f632a57be2f491f5bbcfa395b2ec6bb`, byte-identical to the verified working tree — the tree hash was captured before the commit and compared after it). The patch was frozen into a single commit on `integration/fixfixfix-sync` after explicit authorization; no merge, rebase, force-push, or history rewrite was performed, and **nothing was pushed**. `refs/backup/pre-merge` still points at `1ebfc2ca0095d25c5d782bf0d577d62f10574b0b`.
 **Changed paths (14 tracked files):** mesh scope — `crates/ramshield-mesh/src/aworset.rs`, `crates/ramshield-mesh/src/transport.rs`, `crates/ramshield-mesh/tests/mesh_acceptance.rs`, `crates/ramshield-mesh/tests/frame_boundary_tests.rs` (formatting only); enforcement scope — `crates/ramshield-enforcement/src/service/enforce.rs`, `crates/ramshield-enforcement/src/service/mesh.rs`, `crates/ramshield-enforcement/src/tests/mod.rs`; separate XDP scope — `crates/ramshield-enforcement/src/xdp.rs`; storage scope — `crates/ramshield-storage/src/wal.rs`; tooling — `crates/ramshield-protocol/benches/protocol_bench.rs`, `scripts/test-mesh-recovery-sandbox.sh`; separate legacy-root scope — `src/ipc/server/handlers.rs`, `src/engine/native.rs` (dead-code removal only, see below); documentation — this file. All 11 pre-existing untracked files (including both `.bak` files) are untouched, and all 24 stashes are intact.
 
-**Checks — exact commands and observed exit status (2026-10-20, this working tree):**
+**Checks — exact commands and observed exit status (2026-10-20, frozen candidate `3308049`):**
 
 | Command | Exit | Observed result |
 |---|---|---|
@@ -113,7 +113,8 @@ Append a short PR #19 handoff for every meaningful change with:
 | `cargo test -p ramshield-enforcement --locked --all-features mesh_source_label_does_not_suppress_wal_durability` | 0 | 1 passed (new regression; mutation-tested — restoring the string-based WAL suppression fails it) |
 | CI-equivalent ladder (core / mesh / all-features check + `full` / all-features Clippy + core / full / all-features workspace test + mesh crate test + CI filter + format check) | 0 | 12/12 gates `OK`, `fmt_exit=0 diff_hunks=0` (`/tmp/ladder3.sh`, log `/tmp/ladder3_run4.log`) |
 | Working-tree recovery sandbox equivalent (captured-boundary full-sync, TCP mesh acceptance, enforcement-with-mesh) | 0 | `PASS: all minimal mesh-recovery sandbox gates passed (working-tree source)` — re-run after the WAL-durability change |
-| `scripts/test-mesh-recovery-sandbox.sh` | — | repository script archives committed `HEAD` (`3dfc80d`), which does not compile; its working-tree equivalent passes |
+| `scripts/test-mesh-recovery-sandbox.sh` | **0** | **PASS: all minimal mesh-recovery sandbox gates passed.** Run after the freeze, so the script archived the committed candidate `3308049` (all three gates: captured-boundary full-sync, TCP mesh acceptance, enforcement-with-mesh). This closes the previously recorded gap that the script could only ever archive the non-compiling `3dfc80d`. |
+| `cargo test -p ramshield-mesh --locked --lib gc_tombstones_respects_causal_safety` (×30, and ×3 with `--all-features`) | 0 | 33/33 passed — a failure reported by one late background run (`left: 0, right: 2`, `aworset.rs:1364`) does not reproduce on this tree; it was a pre-fix snapshot. |
 | working-tree recovery sandbox (same three gates, candidate tree instead of `HEAD`) | 0 | **PASS** — captured-boundary full-sync regression, TCP mesh acceptance, and enforcement-with-mesh (44 tests) all green in a disposable copy of the candidate tree |
 | `git diff --exit-code 3dfc80d -- crates/ramshield-cgnat/include/ramshield_shm.h scripts/shm_abi_stress.c` | 0 | SHM ABI surface untouched by this patch |
 | `scripts/verify_shm_header.sh` (no TSAN) | 0 | "SHM C ABI and concurrent reader/writer stress: PASS" |
@@ -172,10 +173,10 @@ Provenance and reachability: both blocks were introduced by the same branch comm
 - Only one independent review produced findings. The two follow-up rounds against the final tree (after the tombstone-GC/ACK/canonical-ordering changes and after the legacy-root repair) were stopped while still exploring, so the final tree has no second independent verdict.
 - Two protocol-level weaknesses are documented above and are **not** closed by this patch: the collection rule uses an acknowledgement epoch rather than a per-removal watermark, and the peer incarnation is locally generated rather than learned from an authenticated handshake. Both fail safe today (retain rather than collect early) and both need a wire-format change plus a protocol review.
 
-- Recovery fault injection still runs through the repository sandbox script, which archives committed `HEAD`; the working-tree equivalent passes, but a committed candidate is needed for the script's own verdict.
+- Recovery fault injection is exercised by the repository sandbox script against the frozen candidate `3308049`: all three gates pass. That script still covers a single-process run only; the two-process fault-injection harness below is still missing.
 - `gc_tombstones` has no production caller yet; the GC rule is exercised by unit tests only.
 - Multi-process fault injection (frame loss/duplication/reordering, sender and receiver restart) is not yet covered by an automated two-process harness.
-- No exact-SHA CI run exists for this candidate: it is uncommitted, so no hosted workflow result can be linked.
+- No hosted CI run is linked for this candidate: the frozen commit `3308049` was not pushed, so no workflow result can be attached to the exact SHA. The local CI-equivalent ladder reproduces the workflow's matrix and passes.
 - The legacy root package was repaired by *removing* dead code, not by porting the T19 dispatcher to the current API. If the T19 priority dispatcher is still wanted, it needs to be rewritten against the current struct-variant protocol API as its own change set.
 
-**Next owner/action:** freeze the patch into a commit on `integration/fixfixfix-sync` (requires explicit authorization), then re-run the repository recovery sandbox against that SHA and attach the hosted CI run to this record.
+**Next owner/action:** the patch is frozen at `33080496e0c5c73dcf406aee5bbe9708b4d8dcb8` on `integration/fixfixfix-sync`, and the repository recovery sandbox has run green against that exact SHA. Remaining, in order: (1) push the branch and attach the hosted CI run for `3308049`; (2) implement the two protocol design items above — the per-removal acknowledgement watermark and the peer incarnation on the wire — as their own change sets with a protocol review; (3) obtain the missing second independent review verdict for the frozen tree.
