@@ -276,3 +276,17 @@ jobs:
           - Do not merge/force-push as part of backlog workflow.
           MANIFEST
           cat evidence/manifest.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce gate contract
+        run: |
+          set -euo pipefail
+          bash scripts/backlog_gate_guard.sh
+        env:
+          INVENTORY_RESULT: ${{ needs.inventory.result }}
+          FORMAT_RESULT: ${{ needs.fmt.result }}
+          TPACKET_RESULT: ${{ needs.tpacket.result }}
+          CORE_MATRIX_RESULT: ${{ needs.core-matrix.result }}
+          SHM_ABI_RESULT: ${{ needs.shm_abi.result }}
+          DIFF_CHECK_RESULT: ${{ needs.diff-check.result }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_FULL_WORKSPACE: ${{ github.event.inputs.run_full_workspace || 'true' }}
