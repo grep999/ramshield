@@ -240,44 +240,43 @@ impl EnforcementService {
             }
         } else {
             // Explicit IP detention.
-            let rec = self
-                .store
-                .get(&cmd.ip)
-                .and_then(|v| match v {
-                    Value::IpRecord(r) => Some(r),
-                    _ => None,
-                })
-                .unwrap_or(IpRecord {
-                    ip: cmd.ip,
-                    request_count: 0,
-                    ewma_rps: 0.0,
-                    cusum_s: 0.0,
-                    baseline_rps: 0.0,
-                    prev_sample_hot: false,
-                    sample_count: 0,
-                    relative_breach_streak: 0,
-                    pulse_samples_in_window: 0,
-                    pulse_window_start_ns: 0,
-                    first_seen_ns: now_ns,
-                    last_seen_ns: now_ns,
-                    bytes_in: 0,
-                    status_dist: [0; 5],
-                    proto_fingerprint: 0,
-                    threat_score: 0.0,
-                    block_state: BlockState::Clean,
-                });
-            let mut updated = rec;
-            updated.block_state = BlockState::Blocked {
-                reason,
-                since_ns: now_ns,
+            //
+            // F-9: this used to be `get()` -> mutate -> `insert()`, two
+            // lock acquisitions. A detection flush that ran in between
+            // advanced the record's counters and the block then published
+            // its stale snapshot back, rewinding the attacker's evidence.
+            // `block_ip` changes only the block state, under one lock.
+            //
+            // This record is published only when there is no live one.
+            // Its stat fields are zero: an IP with no history has none.
+            let rec = IpRecord {
+                ip: cmd.ip,
+                request_count: 0,
+                ewma_rps: 0.0,
+                cusum_s: 0.0,
+                baseline_rps: 0.0,
+                prev_sample_hot: false,
+                sample_count: 0,
+                relative_breach_streak: 0,
+                pulse_samples_in_window: 0,
+                pulse_window_start_ns: 0,
+                first_seen_ns: now_ns,
+                last_seen_ns: now_ns,
+                bytes_in: 0,
+                status_dist: [0; 5],
+                proto_fingerprint: 0,
+                threat_score: 0.0,
+                block_state: BlockState::Blocked {
+                    reason,
+                    since_ns: now_ns,
+                },
             };
 
             // Do not let Store's passive expiry hide a still-blocked record.
             self.store
-                .insert(
+                .block_ip(
                     cmd.ip,
-                    Value::IpRecord(updated),
-                    None,
+                    rec,
                     self.store.traffic.ram_limit_mb.load(Ordering::Relaxed) * 1024 * 1024,
                 )
                 .map_err(|e| EnforcementError::Storage(e.to_string()))?;
@@ -572,19 +571,13 @@ impl EnforcementService {
                     }
                     self.store.active_cidrs.remove(&network);
                 } else {
-                    if let Some(Value::IpRecord(mut rec)) = self.store.get(&cmd.ip) {
-                        rec.block_state = BlockState::Clean;
-                        self.store
-                            .insert(
-                                cmd.ip,
-                                Value::IpRecord(rec),
-                                None,
-                                self.store.traffic.ram_limit_mb.load(Ordering::Relaxed)
-                                    * 1024
-                                    * 1024,
-                            )
-                            .map_err(|e| EnforcementError::Storage(e.to_string()))?;
-                    }
+                    // F-9: the mirror of the block path. `unblock_ip`
+                    // clears the block state under one lock and leaves
+                    // the stat fields alone, so a detection flush in
+                    // between is not rolled back. A missing or expired
+                    // record is left alone: an unblock must not create
+                    // a record for an IP there is no state for.
+                    self.store.unblock_ip(&cmd.ip);
                     self.blocked_ips.remove(&cmd.ip);
                     self.drops_by_blocked.remove(&cmd.ip);
                     // Ponytail: mesh CRDT unbans — publish so dashboard reflects
