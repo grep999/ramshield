@@ -33,7 +33,7 @@ are the ones used here.
 | **F2** | **Native capture worker lifecycle** | **P2** | **OPEN** | **yes — restart vs. degrade vs. refuse readiness** |
 | F6 | `BACKLOG.md` is not a reliable master ledger | P2 (doc) | CLOSED — the owner lifted the fence and the file was re-pointed at `master` | no — the fence was lifted by the owner on 2026-10-21 | rule |
 | F7 | Performance/RSS claims need workload evidence | P2 (process) | OPEN | yes — the release-claims policy |
-| **F9** | **Enforcement's block path is a lost update against detection** | **P1** | **OPEN** — found while re-verifying I-011; no code change yet | no — the fix shape is mechanical, but it touches the block write path |
+| **F9** | **Enforcement's block path is a lost update against detection** | **P1** | **FIXED** on `fix/f9-enforcement-lost-update` — the store has block-only mutators under one shard lock | no — the fix shape was mechanical |
 | F8 | The audit was not locally reproduced | n/a (method) | not actionable | no |
 | **F10** | **The IPC server MACs a key-sorted payload, not the client's bytes** | **P1** | **OPEN** — found by independent review while re-verifying I-024; the README is corrected, the server behaviour is not | yes — the fix shape is a canonicalisation decision, and it changes the wire contract |
 | F11 | Crate README documentation drift (54 claims) | P2 (docs) | OPEN — 2 of 54 fixed; the rest are listed in `docs/development/DOC_DRIFT_SWEEP.md` | no — per-file documentation edits |
@@ -338,8 +338,15 @@ reviewer did not contradict it but did not confirm it.
 
 ## F9 — Enforcement's block path is a lost update against detection
 
-**Status:** OPEN (P1) — found while re-verifying backlog row I-011, and
-**not** what that row describes. No code change has been made.
+**Status:** FIXED on `fix/f9-enforcement-lost-update` — the store has two
+block-only mutators, each under one shard lock, each touching only
+`block_state`. The block path and the unblock path both use them, so
+neither can publish a stale snapshot of detection's counters. The
+property test (`a_block_never_makes_the_detection_counters_go_backwards`)
+fails against the old two-lock pattern and passes with the mutators.
+
+**Status of the original report:** found while re-verifying backlog row
+I-011, and **not** what that row describes.
 
 **Where it came from.** Backlog row I-011 asks whether "cardinality-driven
 LRU eviction" can erase an attacker's CUSUM/pulse-wave history. Its premise
@@ -381,6 +388,30 @@ contract already says the mutation must not touch `block_state`
 (`write.rs:165-168`) — a second, block-only mutator is the missing piece.
 It must also not resurrect a *clean* record for an IP that is still
 blocked, which is what the expired-record default does today.
+
+**What was done about it.** `Store::block_ip` and `Store::unblock_ip` in
+`crates/ramshield-storage/src/store/write.rs`:
+
+- `block_ip` changes the block state of a live record and leaves every
+  stat field alone. With no live record it publishes the caller's
+  record directly in the blocked state, so a clean state is never
+  published for an IP the enforcement actor holds blocked.
+- `unblock_ip` clears the block state of a live record and leaves the
+  stat fields alone. A missing or expired record is left alone: an
+  unblock must not create a record for an IP there is no state for.
+- Both keep the store's `blocked_count` / `blocked_set` index in step
+  under the same lock, and keep the TTL semantics the old
+  `insert(ttl = None)` had: a blocked record does not expire under the
+  store's passive expiry.
+
+The enforcement actor's block path and unblock path
+(`crates/ramshield-enforcement/src/service/enforce.rs`) now call them.
+The unblock path had the same window and is fixed by the same change.
+
+Five tests in the storage crate pin it. The property test
+(`a_block_never_makes_the_detection_counters_go_backwards`) was proven
+load-bearing: reimplementing `block_ip` as the old `get()` + `insert()`
+makes it fail.
 
 **Required test.** A test that races a detection `update_ip` against the
 block path and asserts the stat fields are not rolled back. It must fail on
