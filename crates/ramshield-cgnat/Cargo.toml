@@ -6,6 +6,3 @@ license = "MIT"
 
 [dependencies]
 memmap2 = "0.9"
-
-[dev-dependencies]
-ramshield-mesh = { path = "../ramshield-mesh", version = "0.3.0" }
