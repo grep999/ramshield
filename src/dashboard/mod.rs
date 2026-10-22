@@ -496,8 +496,8 @@ async fn api_stream(
             serde_json::json!({"stage":"wire","unit":"events","ingress":snapshot.events_ingested+snapshot.events_rejected+snapshot.events_shed,"drops":0}),
             serde_json::json!({"stage":"xdp","unit":"packets","ingress":state.engine.metrics.xdp_wire_pass.load(std::sync::atomic::Ordering::Relaxed)+state.engine.metrics.xdp_v4_drops.load(std::sync::atomic::Ordering::Relaxed)+state.engine.metrics.xdp_v6_drops.load(std::sync::atomic::Ordering::Relaxed),"drops":state.engine.metrics.xdp_v4_drops.load(std::sync::atomic::Ordering::Relaxed)+state.engine.metrics.xdp_v6_drops.load(std::sync::atomic::Ordering::Relaxed)}),
             serde_json::json!({"stage":"ipc","unit":"events","ingress":snapshot.events_ingested,"drops":snapshot.events_rejected+snapshot.events_shed}),
-            serde_json::json!({"stage":"cold","unit":"IPs","ingress":snapshot.pipeline.batched,"drops":snapshot.cold_skipped}),
-            serde_json::json!({"stage":"detection","unit":"IPs","ingress":snapshot.pipeline.promoted+snapshot.pipeline.merged+snapshot.pipeline.blocked,"drops":0}),
+            serde_json::json!({"stage":"cold","unit":"IPs","ingress":snapshot.pipeline.promoted+snapshot.cold_skipped,"drops":snapshot.cold_skipped}),
+            serde_json::json!({"stage":"detection","unit":"IPs","ingress":snapshot.pipeline.promoted,"drops":0}),
             serde_json::json!({"stage":"enforcement","unit":"blocks","ingress":snapshot.pipeline.blocked,"drops":0}),
         ];
         let payload = serde_json::json!({
@@ -526,6 +526,8 @@ async fn api_stream(
                 "cold_skipped_total": snapshot.cold_skipped,
                 "blocks_total": snapshot.blocks_applied,
                 "blocks_detection": state.engine.metrics.blocks_detection.load(std::sync::atomic::Ordering::Relaxed),
+                "capacity_exceeded_total": state.engine.metrics.capacity_exceeded_count.load(std::sync::atomic::Ordering::Relaxed),
+                "capacity_refused_ips_total": state.engine.metrics.capacity_exceeded_ips.load(std::sync::atomic::Ordering::Relaxed),
                 "subnet_blocks": state.engine.metrics.blocks_subnet.load(std::sync::atomic::Ordering::Relaxed),
                 "forecast_blocks": state.engine.metrics.blocks_forecast.load(std::sync::atomic::Ordering::Relaxed),
                 "modules": modules

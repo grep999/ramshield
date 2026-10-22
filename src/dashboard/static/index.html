@@ -250,8 +250,7 @@
         <div class="ops-row"><span class="ops-label">V6 Drops</span><span class="ops-value" id="od-v6">0</span></div>
         <div class="ops-row"><span class="ops-label">Wire Pass</span><span class="ops-value" id="od-pass">0</span></div>
         <div class="ops-row"><span class="ops-label">Parse Fail</span><span class="ops-value" id="od-fail">0</span></div>
-        <div class="ops-row"><span class="ops-label">Blocklist</span><span class="ops-value" id="od-blcap">0 / 102400</span></div>
-        <div class="ops-bar-track"><div class="ops-bar-fill ok" id="od-bar" style="width:0%"></div></div>
+        <div class="ops-row"><span class="ops-label">Blocks (lifetime)</span><span class="ops-value" id="od-blcap">0</span></div>
       </div>
       <div class="ops-panel" id="ops-ipc">
         <div class="ops-title">L7 Event Processing</div>
@@ -463,25 +462,23 @@
   function fmt(v, d) { return typeof v === 'number' ? v.toLocaleString(undefined, { maximumFractionDigits: d || 2 }) : '0'; }
   function pctClass(pct) { return pct > 75 ? 'crit' : pct > 50 ? 'warn' : 'ok'; }
 
-  let previous = null, refreshInFlight = false, latestSubnets = [];
+  let refreshInFlight = false, latestSubnets = [];
   function renderTelemetry(snap, modules, subnets) {
-    const ts = Number(snap.ts_ms || Date.now()), elapsed = previous ? Math.max(.1, (ts - previous.ts) / 1000) : 2;
-    const ingress = previous ? Math.max(0, ((snap.events_ingested || 0) - previous.ingest) / elapsed) : 0;
-    previous = {ts, ingest: snap.events_ingested || 0};
+    const ts = Number(snap.ts_ms || Date.now());
     const det = (modules || []).find(m => m.label === 'Detection') || {}, fc = (modules || []).find(m => m.label === 'Forecasting') || {};
     const dd = det.detail || {}, fd = fc.detail || {}, active = Math.min(256, (subnets || []).length);
     // ponytail: renderTelemetry is also called from renderStream (SSE path) —
     // do NOT clobber SSE-computed values; only set elements SSE doesn't manage.
     $('current-timestamp').textContent=new Date(ts).toISOString().substring(11,19)+' UTC'; $('bitmap-count').textContent=active+' / 256 ACTIVE';
-    for(let i=0;i<256;i++){cells[i].className='matrix-cell';if(i<active)cells[i].classList.add(i%5===0?'tier-block':'tier-pass')} pushTelemetry(0,ingress);renderChart();
+    for(let i=0;i<256;i++){cells[i].className='matrix-cell';if(i<active)cells[i].classList.add(i%5===0?'tier-block':'tier-pass')} renderChart();
     const healthy=!!snap.is_healthy&&!!snap.xdp_active; $('cluster-status').className=healthy?'badge-status':'badge-status degraded'; $('cluster-status-text').textContent=healthy?'HEALTHY':(snap.xdp_active?(snap.health_reason||'DEGRADED'):'XDP INACTIVE');
-    $('od-capex').textContent='n/a'; $('od-submap').textContent=active;
+    $('od-submap').textContent=active;
     $('od-cpu').textContent=(snap.cpu_usage||0).toFixed(1)+'%'; $('od-rss').textContent=fmt(snap.memory_usage_mb,0)+' MB'; $('od-ram').textContent=(snap.ram_pct||0).toFixed(1)+'%'; $('od-ram-bar').style.width=Math.min(100,snap.ram_pct||0)+'%'; $('od-ips').textContent=fmt(snap.ips_tracked,0);
   }
   async function loadBlocks(){
     const body=$('quarantineBody'); try { let r=await fetch('/api/blocks/active'); if(!r.ok)r=await fetch('/api/history/blocks'); if(!r.ok)throw Error('blocks '+r.status); const data=(await r.json()||[]).slice().reverse().slice(0,50); body.replaceChildren();
       if(!data.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=5;cell.textContent='Zero active threat quarantines.';row.appendChild(cell);body.appendChild(row);return;}
-      for(const b of data){const row=document.createElement('tr');for(const v of [b.ip,b.module||'enforcement','CRITICAL','Tier 3 (XDP)',new Date(b.ts_ms).toLocaleTimeString()]){const cell=document.createElement('td');cell.textContent=v;row.appendChild(cell)}body.appendChild(row)}
+      for(const b of data){const row=document.createElement('tr');for(const v of [b.ip,b.module||'enforcement',b.reason||'-','-',new Date(b.ts_ms).toLocaleTimeString()]){const cell=document.createElement('td');cell.textContent=v;row.appendChild(cell)}body.appendChild(row)}
       filterTable();
     } catch(e){console.error('quarantine feed:',e)}
   }
@@ -526,22 +523,23 @@
       }
     }else{for(const k of Object.keys(dSlots))dSlots[k+'_pps']=0;}
     renderStream.prev={...dSlots,ts:d.ts_ms};
+    pushTelemetry(dSlots.drops_total_pps||0, dSlots.ingest_total_pps||0); renderChart();
     const snap={...d,ts_ms:d.ts_ms||d.ts,events_ingested:ipc.ingest_total,events_rejected:ipc.rejected_total,events_shed:ipc.shed_total,channel_depth:ipc.ring_depth,blocked_total:det.blocks_total,
       is_healthy:(d.health||{}).is_healthy, xdp_active:(d.health||{}).xdp_active, health_reason:(d.health||{}).health_reason};
     renderTelemetry(snap,det.modules||[],latestSubnets);
     renderPipeline(d.pipeline);
     const wirePass=x.wire_pass_total||0, dropsTotal=(x.v4_drops_total||0)+(x.v6_drops_total||0);
-    $('kpi-xdp').textContent=fmt(dSlots.drops_pps,1)+' drops/s ('+fmt(wirePass,0)+' wire pass)'; $('kpi-ingress').textContent=fmt(dSlots.ingest_pps,1)+' events/s ('+fmt(dSlots.ingest_total,0)+' total)';
+    $('kpi-xdp').textContent=fmt(dSlots.drops_total_pps,1)+' drops/s ('+fmt(wirePass,0)+' wire pass)'; $('kpi-ingress').textContent=fmt(dSlots.ingest_total_pps,1)+' events/s ('+fmt(dSlots.ingest_total,0)+' total)';
     $('kpi-rules').textContent=fmt(snap.blocked_total,0);
     const fcAll=d.forecasting||{};
     $('kpi-entropy').textContent=fmt(fcAll.entropy,2);
     const mesh=d.mesh||{};
     $('kpi-hlc').textContent=fmt(mesh.hlc_ticks,0)+' HLC ticks';
-    $('od-v4').textContent=fmt(dSlots.drops_pps,0)+' pps ('+fmt(x.v4_drops_total,0)+')'; $('od-v6').textContent='0 pps ('+fmt(x.v6_drops_total,0)+')'; $('od-pass').textContent=fmt(x.wire_pass_total,0); $('od-fail').textContent=fmt(x.parse_fails_total,0);
-    $('od-blcap').textContent=fmt(snap.blocked_total,0)+' / '+fmt(x.map_capacity,0); $('od-bar').style.width=Math.min(100,(snap.blocked_total||0)/(x.map_capacity||1)*100)+'%';
-    $('od-ingest').textContent=fmt(dSlots.ingest_pps,1)+' events/s ('+fmt(dSlots.ingest_total,0)+' total)'; $('od-reject').textContent=fmt(ipc.rejected_total,0); $('od-badframe').textContent=fmt(ipc.frames_rejected_total||0,0); $('od-shed').textContent=fmt(dSlots.shed_pps,1)+' /s'; $('od-chan').textContent=fmt(ipc.ring_depth,0)+' / '+fmt(ipc.ring_capacity,0); $('od-chan-bar').style.width=Math.min(100,(ipc.ring_depth||0)/(ipc.ring_capacity||1)*100)+'%';
+    $('od-v4').textContent=fmt(dSlots.drops_total_pps,0)+' pps ('+fmt(x.v4_drops_total,0)+')'; $('od-v6').textContent='0 pps ('+fmt(x.v6_drops_total,0)+')'; $('od-pass').textContent=fmt(x.wire_pass_total,0); $('od-fail').textContent=fmt(x.parse_fails_total,0);
+    $('od-blcap').textContent=fmt(snap.blocked_total,0);
+    $('od-ingest').textContent=fmt(dSlots.ingest_total_pps,1)+' events/s ('+fmt(dSlots.ingest_total,0)+' total)'; $('od-reject').textContent=fmt(ipc.rejected_total,0); $('od-badframe').textContent=fmt(ipc.frames_rejected_total||0,0); $('od-shed').textContent=fmt(dSlots.shed_total_pps,1)+' /s'; $('od-chan').textContent=fmt(ipc.ring_depth,0)+' / '+fmt(ipc.ring_capacity,0); $('od-chan-bar').style.width=Math.min(100,(ipc.ring_depth||0)/(ipc.ring_capacity||1)*100)+'%';
     const fc=d.forecasting||{},cg=d.cgnat||{},an=d.analytics||{},mh=d.mesh||{},sy=d.system||{};
-    $('od-promo').textContent=fmt(det.promotions_total,1); $('od-cold').textContent=fmt(det.cold_skipped_total,1); $('od-bdet').textContent=fmt(det.blocks_detection||0,0); $('od-bsub').textContent=fmt(det.subnet_blocks||0,0); $('od-bfc').textContent=fmt(det.forecast_blocks||0,0); $('od-capex').textContent='n/a'; $('od-submap').textContent='n/a';
+    $('od-promo').textContent=fmt(det.promotions_total,1); $('od-cold').textContent=fmt(det.cold_skipped_total,1); $('od-bdet').textContent=fmt(det.blocks_detection||0,0); $('od-bsub').textContent=fmt(det.subnet_blocks||0,0); $('od-bfc').textContent=fmt(det.forecast_blocks||0,0); $('od-capex').textContent=fmt(det.capacity_exceeded_total||0,0)+' refusals ('+fmt(det.capacity_refused_ips_total||0,0)+' IPs)';
     $('od-fcst').textContent=fmt(fc.hw_forecast,1); $('od-zscore').textContent=fmt(fc.hw_zscore,2); $('od-baseline').textContent=fmt(fc.hw_rps,1); $('od-ent').textContent=fmt(fc.entropy,2); $('od-entt').textContent=fmt(fc.entropy_ticks,0); $('od-fctt').textContent=fmt(fc.forecast_ticks,0);
     $('od-cgcls').textContent=fmt(cg.classify_ticks,0); $('od-cgallow').textContent=fmt(cg.tier_allow,0); $('od-cgchall').textContent=fmt(cg.tier_challenge,0); $('od-cgpow').textContent=fmt(cg.tier_powdrop,0); $('od-cgblock').textContent=fmt(cg.tier_block,0); $('od-cgpub').textContent=fmt(cg.shm_publishes,0); $('od-cghit').textContent=fmt(cg.shm_cache_hits,0);
     $('od-hll').textContent=fmt(an.hll_inserts,0); $('od-cms').textContent=fmt(an.cms_increments,0); $('od-cmsdec').textContent=fmt(an.cms_decay_ticks,0);
@@ -552,7 +550,7 @@
   renderStream.prev=null;
   let stream;
   const telemetryStore = { latest: null, renderQueued: false };
-  const ewma = { alpha: 0.3, drops_pps: 0, ingress_rps: 0, shed_rps: 0, promo_rps: 0, cold_rps: 0 };
+  const ewma = { alpha: 0.3, drops_total_pps: 0, ingest_total_pps: 0, shed_total_pps: 0, promo_total_pps: 0, cold_total_pps: 0 };
   function ewmaUpdate(key, raw){
     if(typeof ewma[key] !== 'number'){ewma[key]=raw;return raw;}
     ewma[key]=ewma[key]*(1-ewma.alpha)+raw*ewma.alpha;
