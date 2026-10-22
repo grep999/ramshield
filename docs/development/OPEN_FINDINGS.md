@@ -49,7 +49,7 @@ are the ones used here.
 | F29 | The Subnet Stress Pin gate asserts against a fixed four-second sleep | P2 (CI) | **FIXED** — the script now waits for the counters to settle | no |
 | F30 | `block_ip` trusts the caller to pass a blocked fallback; the only guard is a `debug_assert!` | P3 (hardening) | OPEN — the release build publishes whatever `block_state` the fallback carries, and a clean fallback would put the key in the blocked index while the record says clean | no |
 | F31 | The dashboard's rate readouts read keys the SSE writer never sets | P2 (operator-visible) | OPEN — An operator watching a live attack sees `0 drops/s` and `0 events/s` on the headline KPIs and the overview rows. | no |
-| F32 | The dashboard's auth counters go to a Metrics instance that is never exported | P1 (control-plane telemetry) | OPEN — `ramshield_csrf_blocked_total`, `ramshield_csrf_allowed_total`, the lockout counter and the Argon2 wait gauge stay 0 in `/metrics` forever, so control-plane abuse is invisible to Prometheus. | no |
+| F32 | The dashboard's auth counters go to a Metrics instance that is never exported | P1 (control-plane telemetry) | **FIXED** — the auth state shares the engine's metrics instance, so the CSRF and lockout counters reach the exporter | no |
 | F33 | The shipped server ConfigMap sets an ipc.max_connections the daemon refuses to start with | P1 (deployment) | **FIXED** — the ConfigMap sets 1,024, the value the validator accepts | no |
 | F34 | The Kubernetes probes target the pod IP while the daemon binds loopback | P1 (deployment) | OPEN — The pod never passes its startup probe and is killed and restarted, so the control plane never comes up on the shipped manifests even once F-33 is fixed. | no |
 | F35 | The ramshield-cli binary is a stub, yet the release ships it and the installer requires it | P1 (operator tooling) | OPEN — `ramshield-cli block 1.2.3.4 --reason manual --ttl 300` prints `RamShield CLI` and exits 0, so an operator believes a block was applied when nothing happened. | no |
@@ -1424,7 +1424,8 @@ The rate values change when the counters change, and no key is read that is not 
 
 ## F32 — The dashboard's auth counters go to a Metrics instance that is never exported
 
-**Status:** OPEN
+**Status:** FIXED (P1) — the auth state shares the engine's metrics instance, so the
+CSRF and lockout counters reach the exporter.
 **Files:** `src/dashboard/mod.rs, src/dashboard/auth.rs`
 **Severity:** P1 (control-plane telemetry)
 

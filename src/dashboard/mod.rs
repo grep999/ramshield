@@ -30,7 +30,13 @@ pub struct AppState {
 
 // ponytail: this is redundant due to Rust edition; async fn is part of
 // the standard (edition 2021). Keep for clarity, but no syntax change needed.
-pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), String> {
+/// Build the dashboard's auth state and app state around the engine.
+///
+/// The auth state shares the **engine's** metrics instance. It used to
+/// get a fresh one, so the CSRF and lockout counters it wrote never
+/// reached the instance `/metrics` exports - the control-plane abuse
+/// signals were structurally always zero.
+fn app_state(engine: &Arc<Engine>, cfg: &Config) -> (auth::AuthState, AppState) {
     let auth = auth::AuthState::new(
         cfg.dashboard.admin_password_hash.clone(),
         cfg.dashboard.session_ttl_secs,
@@ -40,13 +46,18 @@ pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), 
         cfg.dashboard
             .cookie_secure
             .unwrap_or(cfg.dashboard.tls_enabled),
-        Arc::new(ramshield_metrics::Metrics::new()),
+        engine.metrics.clone(),
         cfg.dashboard.argon2_parallelism,
     );
     let app_state = AppState {
         engine: engine.clone(),
         auth: Arc::new(auth.clone()),
     };
+    (auth, app_state)
+}
+
+pub async fn serve(engine: Arc<Engine>, addr: &str, cfg: &Config) -> Result<(), String> {
+    let (auth, app_state) = app_state(&engine, cfg);
     let login = auth::router().with_state(auth);
     let app = Router::new()
         .route("/", get(index))
@@ -713,6 +724,32 @@ mod tests {
             }
         }
         items
+    }
+
+    /// F-32: the auth state must share the engine's metrics instance.
+    /// It used to get a fresh one, so the CSRF and lockout counters it
+    /// writes never reached the instance `/metrics` exports, and the
+    /// control-plane abuse signals were structurally always zero.
+    #[test]
+    fn the_auth_state_shares_the_engine_metrics() {
+        use crate::metrics::Metrics;
+        use crate::storage::Store;
+        let engine = Arc::new(Engine::new(
+            Config::default(),
+            Arc::new(Store::new(16)),
+            Arc::new(Metrics::new()),
+        ));
+        let (_auth, state) = app_state(&engine, &Config::default());
+        assert!(
+            Arc::ptr_eq(&state.auth.metrics, &state.engine.metrics),
+            "the auth state must share the engine's metrics, or its counters are never exported"
+        );
+        state.auth.metrics.inc_csrf_blocked();
+        let text = state.engine.metrics.render_prometheus();
+        assert!(
+            text.contains("ramshield_csrf_blocked_total 1"),
+            "a blocked CSRF request must reach the exported series:\n{text}"
+        );
     }
 
     fn test_app_state() -> AppState {
