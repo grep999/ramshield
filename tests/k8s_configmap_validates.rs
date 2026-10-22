@@ -34,15 +34,38 @@ fn configmap_toml(path: &str) -> String {
     out
 }
 
+/// The ConfigMaps the shipped manifests load, and the workload that
+/// loads each one.
+const SHIPPED: [(&str, &str); 2] = [
+    ("deploy/k8s/configmap.yaml", "the server Deployment"),
+    ("deploy/k8s/configmap-node.yaml", "the node-guard DaemonSet"),
+];
+
 #[test]
 fn the_shipped_configmaps_are_configs_the_daemon_accepts() {
-    let config: ramshield_config::Config =
-        toml::from_str(&configmap_toml("deploy/k8s/configmap.yaml"))
-            .expect("the server ConfigMap must parse as a config");
-    if let Err(err) = config.validate() {
-        panic!(
-            "deploy/k8s/configmap.yaml must pass Config::validate(), the daemon \
-             refuses to start otherwise: {err}"
+    for (path, who) in SHIPPED {
+        let config: ramshield_config::Config = toml::from_str(&configmap_toml(path))
+            .unwrap_or_else(|e| panic!("{path} must parse as a config: {e}"));
+        if let Err(err) = config.validate() {
+            panic!(
+                "{path} must pass Config::validate(), the daemon refuses to start otherwise: {err}"
+            );
+        }
+        // The config must actually carry the settings the manifest
+        // exists to set. A block that was gutted to comments parses to
+        // `Config::default()` and validates, so without this the test
+        // would pass on a file that says nothing.
+        assert!(
+            config.ipc.max_connections > 0,
+            "{path} must set ipc.max_connections ({who} loads it)"
+        );
+        assert!(
+            !config.ipc.tcp_addr.is_empty(),
+            "{path} must set ipc.tcp_addr ({who} loads it)"
+        );
+        assert!(
+            !config.dashboard.http_addr.is_empty(),
+            "{path} must set the dashboard address ({who} loads it)"
         );
     }
 }

@@ -50,7 +50,7 @@ are the ones used here.
 | F30 | `block_ip` trusts the caller to pass a blocked fallback; the only guard is a `debug_assert!` | P3 (hardening) | **FIXED** — a clean fallback is refused and publishes nothing | no |
 | F31 | The dashboard's rate readouts read keys the SSE writer never sets | P2 (operator-visible) | **FIXED** — the rate readouts read the keys the stream writes | no |
 | F32 | The dashboard's auth counters go to a Metrics instance that is never exported | P1 (control-plane telemetry) | **FIXED** — the auth state shares the engine's metrics instance, so the CSRF and lockout counters reach the exporter | no |
-| F33 | The shipped server ConfigMap sets an ipc.max_connections the daemon refuses to start with | P1 (deployment) | **FIXED** — the ConfigMap sets 1,024, the value the validator accepts | no |
+| F33 | The shipped server ConfigMap sets an ipc.max_connections the daemon refuses to start with | P1 (deployment) | **FIXED** — the ConfigMap sets 1,024, the value the validator accepts (`1d57839`, PR #68) | no |
 | F34 | The Kubernetes probes target the pod IP while the daemon binds loopback | P1 (deployment) | **FIXED** — the probes address the loopback bind the daemon actually uses | no |
 | F35 | The ramshield-cli binary is a stub, yet the release ships it and the installer requires it | P1 (operator tooling) | **FIXED** — the pre-deletion implementation is restored and works | no |
 | F36 | The 403 rejections are counted but never exported | P2 (metrics) | **FIXED** — the 403 rejections are exported | no |
@@ -1454,11 +1454,11 @@ After one blocked CSRF request and one lockout the corresponding series is great
 
 Found by the 2026-10-22 full-codebase audit.
 
-### What it is
+### What it was
 
-`deploy/k8s/configmap.yaml:20` sets `max_connections = 4096`; `crates/ramshield-config/src/validate.rs:313-315` rejects anything above 1,024. The node-guard ConfigMap uses 1,024 (`configmap-node.yaml:20`). The auditor reproduced it: the extracted ConfigMap, with only the WAL dir and ports rewritten, makes the binary exit 1 with `ipc.max_connections should not exceed 1,024`.
+`deploy/k8s/configmap.yaml:20` set `max_connections = 4096`; `crates/ramshield-config/src/validate.rs:313-315` rejects anything above 1,024. The node-guard ConfigMap used 1,024 (`configmap-node.yaml:20`). The auditor reproduced it: the extracted ConfigMap, with only the WAL dir and ports rewritten, made the binary exit 1 with `ipc.max_connections should not exceed 1,024`.
 
-**Why it matters.** `kubectl apply -f deploy/k8s/` puts the server pod into CrashLoopBackOff at boot. `scripts/verify_release.sh` only checks the loopback addresses in that file, so the release gate passes.
+**Why it mattered.** `kubectl apply -f deploy/k8s/` put the server pod into CrashLoopBackOff at boot. `scripts/verify_release.sh` only checked the loopback addresses in that file, so the release gate passed.
 
 ### Closure criterion
 
