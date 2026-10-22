@@ -74,11 +74,14 @@ impl Metrics {
             0
         };
         self.reconcile_age_seconds.store(age, Ordering::Relaxed);
-        if self.xdp_projection_active.load(Ordering::Acquire) {
-            self.xdp_projection_stale.store(
-                (last == 0 || age > XDP_PROJECTION_STALE_SECS) as u64,
-                Ordering::Release,
-            );
+        // The age can only make the projection MORE stale, never less. A
+        // mutation failure raises the flag on its own, and only a
+        // successful reconcile may clear it - recomputing it here erased
+        // the failure within one 250 ms tick.
+        if self.xdp_projection_active.load(Ordering::Acquire)
+            && (last == 0 || age > XDP_PROJECTION_STALE_SECS)
+        {
+            self.xdp_projection_stale.store(1, Ordering::Release);
         }
     }
 }

@@ -130,6 +130,43 @@ fn blocked_record(ip: IpAddr) -> IpRecord {
     }
 }
 
+/// F-30: `block_ip` must not publish a record whose block state is not
+/// blocked. The old guard was a `debug_assert!`, which is compiled out
+/// in release builds: a clean fallback put the key in the blocked index
+/// while the record said it was clean.
+#[test]
+fn a_clean_fallback_is_refused_and_publishes_nothing() {
+    let store = Store::new(16);
+    let ip: IpAddr = "10.7.7.7".parse().unwrap();
+    let mut clean = blocked_record(ip);
+    clean.block_state = BlockState::Clean;
+
+    let err = store
+        .block_ip(ip, clean, 64 * 1024 * 1024)
+        .expect_err("a clean fallback must be refused");
+    assert!(
+        matches!(err, RsError::InvalidState(_)),
+        "the refusal must name the invalid state, got {err:?}"
+    );
+
+    // Nothing may be published: no record, no blocked index entry.
+    assert!(
+        store.get(&ip).is_none(),
+        "the refused block published a record"
+    );
+    assert!(
+        store.get_all_blocked_ips().is_empty(),
+        "the refused block put the key in the blocked index"
+    );
+    assert_eq!(
+        store
+            .blocked_count
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "the refused block changed the blocked count"
+    );
+}
+
 /// P1 regression: a CapacityExceeded rollback removes the entry from
 /// `inner` but must NOT leave the blocked indexes incremented. Before
 /// the fix, blocked accounting ran before the capacity gate, so every

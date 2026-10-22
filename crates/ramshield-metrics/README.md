@@ -272,7 +272,7 @@ Measured in the workspace `hot_paths` bench (see `docs/BENCHMARKS.md`):
 
 ## Testing
 
-17 tests: JSON-cache invalidation for the block log and the batch history,
+18 tests: JSON-cache invalidation for the block log and the batch history,
 the 1-second Prometheus render cache, the ingest depth and peak gauges,
 the IPC rejection breakdown series, the bloom series and the k=2
 false-positive formula, the XDP staleness and apply-failure counters, the

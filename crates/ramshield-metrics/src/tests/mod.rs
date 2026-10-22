@@ -159,3 +159,35 @@ fn ingest_channel_depth_peak_is_monotonic_and_exported() {
         "the high-water mark must be exported:\n{rendered}"
     );
 }
+
+#[test]
+fn a_mutation_failure_keeps_the_projection_stale_until_a_successful_reconcile() {
+    use std::sync::atomic::Ordering;
+    let m = Metrics::new();
+    m.set_xdp_projection_active(true);
+    m.record_reconcile_success(1_000);
+
+    // A failed XDP apply raises the flag on its own.
+    m.mark_xdp_projection_stale();
+    assert_eq!(
+        m.xdp_projection_stale.load(Ordering::Relaxed),
+        1,
+        "a failed apply must raise the stale flag"
+    );
+
+    // The 250 ms tick recomputes the age. It must not clear the flag.
+    m.tick_reconcile_age(1_001);
+    assert_eq!(
+        m.xdp_projection_stale.load(Ordering::Relaxed),
+        1,
+        "the age tick must not clear a stale flag raised by a failed apply"
+    );
+
+    // A successful reconcile is what clears it.
+    m.record_reconcile_success(1_002);
+    assert_eq!(
+        m.xdp_projection_stale.load(Ordering::Relaxed),
+        0,
+        "a successful reconcile must clear the stale flag"
+    );
+}

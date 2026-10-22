@@ -45,9 +45,9 @@ are the ones used here.
 | F25 | `ramshield-protocol` declares a dependency on `ramshield-storage` it never uses | P3 (hygiene) | **FIXED** — on `master` as `1315236` (PR #63, the code commit `4fbf680`): the dependency is gone from `crates/ramshield-protocol/Cargo.toml`; the crate declares only `ramshield-types` | no |
 | F26 | `FAIL_SAFE_BEHAVIOR.md` claims a global fail-closed posture the dataplane does not have | P2 (doc) | **FIXED** — the document states each subsystem's own posture, and `tests/fail_safe_claims.rs` pins it to the source | no |
 | F27 | `scripts/prod_smoke.sh` claims checks it does not perform, and it deletes an env-overridable path | P1 (data loss) | **FIXED** — the script does what it claims and deletes only its own directory | no — the cleanup needs a guard, the checks need to exist |
-| F28 | The advanced CI workflow runs the benchmarks as tests and masks the benchmark build failure | P2 (CI) | OPEN — `cargo test --all-targets` and `cargo bench --no-run || true` | no |
+| F28 | The advanced CI workflow runs the benchmarks as tests and masks the benchmark build failure | P2 (CI) | **FIXED** — the benchmark build failure fails the job | no |
 | F29 | The Subnet Stress Pin gate asserts against a fixed four-second sleep | P2 (CI) | **FIXED** — the script now waits for the counters to settle | no |
-| F30 | `block_ip` trusts the caller to pass a blocked fallback; the only guard is a `debug_assert!` | P3 (hardening) | OPEN — the release build publishes whatever `block_state` the fallback carries, and a clean fallback would put the key in the blocked index while the record says clean | no |
+| F30 | `block_ip` trusts the caller to pass a blocked fallback; the only guard is a `debug_assert!` | P3 (hardening) | **FIXED** — a clean fallback is refused and publishes nothing | no |
 | F31 | The dashboard's rate readouts read keys the SSE writer never sets | P2 (operator-visible) | **FIXED** — the rate readouts read the keys the stream writes | no |
 | F32 | The dashboard's auth counters go to a Metrics instance that is never exported | P1 (control-plane telemetry) | **FIXED** — the auth state shares the engine's metrics instance, so the CSRF and lockout counters reach the exporter | no |
 | F33 | The shipped server ConfigMap sets an ipc.max_connections the daemon refuses to start with | P1 (deployment) | **FIXED** — the ConfigMap sets 1,024, the value the validator accepts | no |
@@ -55,7 +55,7 @@ are the ones used here.
 | F35 | The ramshield-cli binary is a stub, yet the release ships it and the installer requires it | P1 (operator tooling) | OPEN — `ramshield-cli block 1.2.3.4 --reason manual --ttl 300` prints `RamShield CLI` and exits 0, so an operator believes a block was applied when nothing happened. | no |
 | F36 | The 403 rejections are counted but never exported | P2 (metrics) | **FIXED** — the 403 rejections are exported | no |
 | F37 | The store-RAM refusals are counted but no surface exposes them | P2 (metrics) | **FIXED** — the store's RAM refusals are exported and shown | no |
-| F38 | The XDP-divergence stale flag is erased 250 ms after it is raised | P2 (health signal) | OPEN — Apply failure sets stale for a fraction of a second; the health computation in `src/engine/mod.rs:232` never observes the divergence. Only the separate failure counter remains as evidence. | no |
+| F38 | The XDP-divergence stale flag is erased 250 ms after it is raised | P2 (health signal) | **FIXED** — the age tick no longer clears the flag a failed apply raised | no |
 | F39 | The "Drops vs Ingress" chart never plots drops | P2 (operator-visible) | **FIXED** — the chart plots the real drop rate | no |
 | F40 | The blocklist gauge compares a lifetime counter with a hardcoded capacity | P2 (operator-visible) | **FIXED** — the blocklist row is labelled as what it shows | no |
 | F41 | Two dashboard rows are overwritten with `n/a` by the SSE path | P2 (operator-visible) | **FIXED** — the SSE path no longer overwrites the two rows | no |
@@ -66,8 +66,8 @@ are the ones used here.
 | F46 | The pipeline stage bars mix units | P3 (display) | **FIXED** — the pipeline stages share their units | no |
 | F47 | The quarantine table fabricates the severity and tier of every row | P3 (display) | **FIXED** — the quarantine table shows the record's reason | no |
 | F48 | `/metrics` bypasses the session auth that guards every other route | P3 (exposure) | OPEN — An unauthenticated metrics endpoint on a port the network policy opens to other namespaces. | no |
-| F49 | The backlog gate's open-row parser never matches BACKLOG.md | P3 (CI) | OPEN — The Backlog Gate's own summary misstates the open backlog: `A-038` is OPEN while the gate reports zero open P0/P1 rows. | no |
-| F50 | Three scheduled workflows can never run | P3 (CI) | OPEN — The `*/5`, `*/30` and `*/15` cron jobs are skipped on every tick and the three agent scripts never run in CI; the only signal is the absence of activity. | no |
+| F49 | The backlog gate's open-row parser never matches BACKLOG.md | P3 (CI) | **FIXED** — the gate's parser reads the table BACKLOG.md has | no |
+| F50 | Three scheduled workflows can never run | P3 (CI) | **FIXED** — the three dead scheduled workflows are deleted | no |
 | F12 | Two stray compiled binaries tracked at the repository root | P2 (hygiene) | **CLOSED** — removed and gitignored in `f900664` | no |
 | F14 | The store's `insert()` publishes a record and then updates the blocked index, with the shard lock released in between | P2 (latent) | **FIXED** — the vacant branch of `insert()` and of `update_ip()` now publish with `insert_entry`, which keeps the shard lock until the guard is dropped, and the index and the size accounting land in that critical section | no |
 | F15 | The Kubernetes DaemonSet asks for a `Bidirectional` mount propagation without `privileged` | P1 | **OPEN** — the API server rejects the manifest: bidirectional propagation is only available to privileged containers, so `kubectl apply` fails | yes — privileged and host-visible BPF pins, or a pin model that does not need them |
@@ -1156,7 +1156,7 @@ disagree, which is exactly how the stale entry was caught.
 
 ## F30 — `block_ip` trusts the caller to pass a blocked fallback
 
-**Status:** OPEN
+**Status:** FIXED — a clean fallback is refused and publishes nothing
 **Files:** `crates/ramshield-storage/src/store/write.rs`,
 `crates/ramshield-enforcement/src/service/enforce.rs`
 **Severity:** P3 (hardening)
@@ -1363,7 +1363,7 @@ and the script cannot delete a directory it did not create.
 
 ## F28 — The advanced CI workflow runs the benchmarks as tests and masks the benchmark build failure
 
-**Status:** OPEN
+**Status:** FIXED — the benchmark build failure fails the job
 **Files:** `.github/workflows/advanced.yml`
 **Severity:** P2 (CI)
 
@@ -1546,7 +1546,7 @@ The refusal appears in `/metrics` and on the dashboard row that exists for it.
 
 ## F38 — The XDP-divergence stale flag is erased 250 ms after it is raised
 
-**Status:** OPEN
+**Status:** FIXED — the age tick no longer clears the flag a failed apply raised
 **Files:** `crates/ramshield-enforcement/src/service/run.rs, crates/ramshield-metrics/src/xdp_health.rs`
 **Severity:** P2 (health signal)
 
@@ -1766,7 +1766,7 @@ The exemption is documented as intentional, or `/metrics` is restricted.
 
 ## F49 — The backlog gate's open-row parser never matches BACKLOG.md
 
-**Status:** OPEN
+**Status:** FIXED — the gate's parser reads the table BACKLOG.md has
 **Files:** `backlog.yml`
 **Severity:** P3 (CI)
 
@@ -1786,7 +1786,7 @@ The parser reads the priority column and the status cell of the real table forma
 
 ## F50 — Three scheduled workflows can never run
 
-**Status:** OPEN
+**Status:** FIXED — the three dead scheduled workflows are deleted
 **Files:** `helper.yml, error_healer.yml, health_dashboard.yml`
 **Severity:** P3 (CI)
 

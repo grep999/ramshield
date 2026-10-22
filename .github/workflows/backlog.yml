@@ -73,17 +73,25 @@ jobs:
         id: parse
         run: |
           set -euo pipefail
-          # Status column is last; count OPEN rows for P0/P1 tables only.
-          OPEN_P0=$(awk '
-            /^## P0/ {sec=1; next}
-            /^## / {sec=0}
-            sec && /^\| A-[0-9]+ / && /\| OPEN[ |]*$/ {c++}
+          # BACKLOG.md's pending table: | I-nnn | Pn | title | status |.
+          # The priority is a column, the status cell is the last one, and
+          # an open row's status starts with OPEN. The old parser looked
+          # for "## P0" headings and "| A-nnn " rows, and matched neither,
+          # so this step always reported zero open rows.
+          OPEN_P0=$(awk -F'|' '
+            /^\| *I-[0-9]+ / {
+              pri=$3; gsub(/^ +| +$/,"",pri);
+              st=$(NF-1); gsub(/^ +| +$/,"",st);
+              if (pri == "P0" && st ~ /^OPEN/) c++
+            }
             END {print c+0}
           ' BACKLOG.md)
-          OPEN_P1=$(awk '
-            /^## P1/ {sec=1; next}
-            /^## / {sec=0}
-            sec && /^\| A-[0-9]+ / && /\| OPEN[ |]*$/ {c++}
+          OPEN_P1=$(awk -F'|' '
+            /^\| *I-[0-9]+ / {
+              pri=$3; gsub(/^ +| +$/,"",pri);
+              st=$(NF-1); gsub(/^ +| +$/,"",st);
+              if (pri == "P1" && st ~ /^OPEN/) c++
+            }
             END {print c+0}
           ' BACKLOG.md)
           echo "open_p0=$OPEN_P0" >> "$GITHUB_OUTPUT"
@@ -98,10 +106,10 @@ jobs:
             echo "| ID | Status cell |"
             echo "|---|---|"
             awk -F'|' '
-              /^\| A-[0-9]+ / {
+              /^\| *I-[0-9]+ / {
                 id=$2; gsub(/^ +| +$/,"",id);
-                st=$NF; gsub(/^ +| +$/,"",st);
-                if (id ~ /^A-/) print "| " id " | " st " |"
+                st=$(NF-1); gsub(/^ +| +$/,"",st);
+                if (id ~ /^I-/) print "| " id " | " st " |"
               }
             ' BACKLOG.md
           } >> "$GITHUB_STEP_SUMMARY"
