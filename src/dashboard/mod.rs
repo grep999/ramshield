@@ -526,6 +526,8 @@ async fn api_stream(
                 "cold_skipped_total": snapshot.cold_skipped,
                 "blocks_total": snapshot.blocks_applied,
                 "blocks_detection": state.engine.metrics.blocks_detection.load(std::sync::atomic::Ordering::Relaxed),
+                "capacity_exceeded_total": state.engine.metrics.capacity_exceeded_count.load(std::sync::atomic::Ordering::Relaxed),
+                "capacity_refused_ips_total": state.engine.metrics.capacity_exceeded_ips.load(std::sync::atomic::Ordering::Relaxed),
                 "subnet_blocks": state.engine.metrics.blocks_subnet.load(std::sync::atomic::Ordering::Relaxed),
                 "forecast_blocks": state.engine.metrics.blocks_forecast.load(std::sync::atomic::Ordering::Relaxed),
                 "modules": modules

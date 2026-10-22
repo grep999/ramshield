@@ -53,16 +53,16 @@ are the ones used here.
 | F33 | The shipped server ConfigMap sets an ipc.max_connections the daemon refuses to start with | P1 (deployment) | **FIXED** — the ConfigMap sets 1,024, the value the validator accepts | no |
 | F34 | The Kubernetes probes target the pod IP while the daemon binds loopback | P1 (deployment) | OPEN — The pod never passes its startup probe and is killed and restarted, so the control plane never comes up on the shipped manifests even once F-33 is fixed. | no |
 | F35 | The ramshield-cli binary is a stub, yet the release ships it and the installer requires it | P1 (operator tooling) | OPEN — `ramshield-cli block 1.2.3.4 --reason manual --ttl 300` prints `RamShield CLI` and exits 0, so an operator believes a block was applied when nothing happened. | no |
-| F36 | The 403 rejections are counted but never exported | P2 (metrics) | OPEN — The gap between `events_rejected_total` and its exported breakdown equals the 403 count, and no series explains it. | no |
-| F37 | The store-RAM refusals are counted but no surface exposes them | P2 (metrics) | OPEN — Under the RAM budget an IP is dropped from tracking entirely and every displayed counter stays flat, while the ledger says the event is visible. | no |
+| F36 | The 403 rejections are counted but never exported | P2 (metrics) | **FIXED** — the 403 rejections are exported | no |
+| F37 | The store-RAM refusals are counted but no surface exposes them | P2 (metrics) | **FIXED** — the store's RAM refusals are exported and shown | no |
 | F38 | The XDP-divergence stale flag is erased 250 ms after it is raised | P2 (health signal) | **FIXED** — the age tick no longer clears the flag a failed apply raised | no |
 | F39 | The "Drops vs Ingress" chart never plots drops | P2 (operator-visible) | OPEN — The red drop series stays glued to the axis while the ingress series moves, contradicting the panel's own title. | no |
 | F40 | The blocklist gauge compares a lifetime counter with a hardcoded capacity | P2 (operator-visible) | OPEN — After 102,400 lifetime blocks the bar pins at 100% forever, and with a non-default `BLOCKLIST_CAP` the denominator is wrong too. | no |
-| F41 | Two dashboard rows are overwritten with `n/a` by the SSE path | P2 (operator-visible) | OPEN — The "Subnet Bitmap" row shows a number for at most one frame after each refresh and `n/a` the rest of the time - effectively never visible. | no |
+| F41 | Two dashboard rows are overwritten with `n/a` by the SSE path | P2 (operator-visible) | **FIXED** — the SSE path no longer overwrites the two rows | no |
 | F42 | The release gate greps for a dependency-audit flag the workflow no longer uses | P2 (CI) | **FIXED** — the gate checks the flags the workflow runs | no |
-| F43 | The installer writes a unit that grants the daemon write access it must never have | P2 (security) | OPEN — The two ways to install RamShield produce different sandboxes, and the looser one is the default the installer writes. | no |
+| F43 | The installer writes a unit that grants the daemon write access it must never have | P2 (security) | **FIXED** — the installer no longer grants /proc/sys write access | no |
 | F44 | The Ansible deploy role renders into a directory that does not exist and applies a stub template | P2 (deployment) | OPEN — The k8s deploy path cannot work: the rendered Deployment mounts no config, the `ramshield-admin` Secret is absent, and the static manifests in `deploy/k8s/` are never applied. The default `latest` tag also violates the pinned-tag policy `scripts/verify_release.sh:12` enforces. | no |
-| F45 | Two exported series miss the `ramshield_` namespace | P3 (metrics) | OPEN — The two series collide with another exporter's names in a shared Prometheus. | no |
+| F45 | Two exported series miss the `ramshield_` namespace | P3 (metrics) | **FIXED** — every exported series carries the namespace | no |
 | F46 | The pipeline stage bars mix units | P3 (display) | OPEN — The stage bars are not meaningful: the numbers contradict the labels. | no |
 | F47 | The quarantine table fabricates the severity and tier of every row | P3 (display) | OPEN — The table misrepresents the reason each block was issued for. | no |
 | F48 | `/metrics` bypasses the session auth that guards every other route | P3 (exposure) | OPEN — An unauthenticated metrics endpoint on a port the network policy opens to other namespaces. | no |
@@ -1506,7 +1506,7 @@ Either the CLI works as documented, or the binary, its packaging, the installer 
 
 ## F36 — The 403 rejections are counted but never exported
 
-**Status:** OPEN
+**Status:** FIXED — the 403 rejections are exported
 **Files:** `crates/ramshield-metrics/src/prometheus.rs, src/ipc/server/handlers.rs`
 **Severity:** P2 (metrics)
 
@@ -1526,7 +1526,7 @@ The exported breakdown sums to the aggregate, and 403s have their own series.
 
 ## F37 — The store-RAM refusals are counted but no surface exposes them
 
-**Status:** OPEN
+**Status:** FIXED — the store's RAM refusals are exported and shown
 **Files:** `crates/ramshield-detection/src/flush.rs, crates/ramshield-metrics/src/prometheus.rs`
 **Severity:** P2 (metrics)
 
@@ -1606,7 +1606,7 @@ The row shows current map occupancy, or is labelled as what it actually is.
 
 ## F41 — Two dashboard rows are overwritten with `n/a` by the SSE path
 
-**Status:** OPEN
+**Status:** FIXED — the SSE path no longer overwrites the two rows
 **Files:** `src/dashboard/static/index.html`
 **Severity:** P2 (operator-visible)
 
@@ -1646,7 +1646,7 @@ Found by the 2026-10-22 full-codebase audit.
 
 ## F43 — The installer writes a unit that grants the daemon write access it must never have
 
-**Status:** OPEN
+**Status:** FIXED — the installer no longer grants /proc/sys write access
 **Files:** `scripts/install.sh, deploy/systemd/ramshield.service`
 **Severity:** P2 (security)
 
@@ -1686,7 +1686,7 @@ The k8s deploy path applies the same manifest set as `deploy/k8s/` with a pinned
 
 ## F45 — Two exported series miss the `ramshield_` namespace
 
-**Status:** OPEN
+**Status:** FIXED — every exported series carries the namespace
 **Files:** `crates/ramshield-metrics/src/prometheus.rs`
 **Severity:** P3 (metrics)
 

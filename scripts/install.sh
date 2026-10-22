@@ -83,8 +83,8 @@ ProtectSystem=strict
 ProtectHome=true
 ProtectControlGroups=true
 ProtectKernelTunables=true
-# SYNPROXY needs exactly these three kernel tunables; keep all other tunables read-only.
-ReadWritePaths=/proc/sys/net/ipv4/tcp_syncookies /proc/sys/net/ipv4/tcp_timestamps /proc/sys/net/netfilter/nf_conntrack_tcp_loose
+# The SYNPROXY tunables are managed by sysctl.d at boot; the daemon only
+# reads them, so /proc/sys stays read-only.
 ProtectKernelModules=true
 ProtectKernelLogs=true
 RestrictRealtime=true

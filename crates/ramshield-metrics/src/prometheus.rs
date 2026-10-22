@@ -200,16 +200,39 @@ impl Metrics {
             "counter"
         ));
         out.push_str(&emit!(
-            "auth_lockout_total",
+            "ramshield_auth_lockout_total",
             self.auth_lockout_total.load(Ordering::Relaxed),
             "Total dashboard login lockout events.",
             "counter"
         ));
         out.push_str(&emit!(
-            "auth_verification_wait_ms",
+            "ramshield_auth_verification_wait_ms",
             self.auth_verification_wait_ms.load(Ordering::Relaxed),
             "Latest Argon2 verification wait duration in ms.",
             "gauge"
+        ));
+        // The 403 breakdown: the aggregate above counts every rejected
+        // request, this one counts the authorization rejections, so the
+        // two can be compared.
+        out.push_str(&emit!(
+            "ramshield_ipc_authz_rejections_total",
+            self.ipc_authz_rejections.load(Ordering::Relaxed),
+            "Total IPC requests rejected with 403 for authorization reasons.",
+            "counter"
+        ));
+        // The store's RAM refusal: the IP was dropped from tracking
+        // entirely, so the count is the only trace it left.
+        out.push_str(&emit!(
+            "ramshield_store_ram_refusals_total",
+            self.capacity_exceeded_count.load(Ordering::Relaxed),
+            "Total records the store refused to admit because of the RAM budget.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_store_ram_refused_ips_total",
+            self.capacity_exceeded_ips.load(Ordering::Relaxed),
+            "Total IPs the store refused to admit because of the RAM budget.",
+            "counter"
         ));
         // Patch A: bloom is an advisory revisit cache over PROMOTED ips (not
         // a block list). n = distinct promotes this 8s epoch, m = capacity in
