@@ -17,7 +17,7 @@ data:
 
     [ipc]
     tcp_addr = "127.0.0.1:7890"
-    max_connections = 4096
+    max_connections = 1024
 
     [dashboard]
     enabled = true

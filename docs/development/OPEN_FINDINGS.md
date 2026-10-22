@@ -1444,7 +1444,8 @@ After one blocked CSRF request and one lockout the corresponding series is great
 
 ## F33 — The shipped server ConfigMap sets an ipc.max_connections the daemon refuses to start with
 
-**Status:** OPEN
+**Status:** FIXED (P1) — `deploy/k8s/configmap.yaml` sets `max_connections =
+1024`, the value the validator accepts.
 **Files:** `deploy/k8s/configmap.yaml`
 **Severity:** P1 (deployment)
 
