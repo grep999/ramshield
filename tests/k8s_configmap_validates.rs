@@ -36,10 +36,9 @@ fn configmap_toml(path: &str) -> String {
 
 #[test]
 fn the_shipped_configmaps_are_configs_the_daemon_accepts() {
-    let config: ramshield_config::Config = toml::from_str(&configmap_toml(
-        "deploy/k8s/configmap.yaml",
-    ))
-    .expect("the server ConfigMap must parse as a config");
+    let config: ramshield_config::Config =
+        toml::from_str(&configmap_toml("deploy/k8s/configmap.yaml"))
+            .expect("the server ConfigMap must parse as a config");
     if let Err(err) = config.validate() {
         panic!(
             "deploy/k8s/configmap.yaml must pass Config::validate(), the daemon \
