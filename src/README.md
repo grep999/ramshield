@@ -50,15 +50,18 @@ The workspace crates are libraries. They need an entry point that creates shared
 2. **Enforcement** — `EnforcementService::new(store, metrics, xdp, shutdown)` takes the enforcement channel receiver and spawns a tokio task that processes `EnforceCommand`s.
 3. **Detection** — `DetectionEngine::new(cfg, store, metrics, enforcement_tx)` creates the batch processing system and `spawn_workers()` launches N batch processor threads (default: CPU core count) plus one subnet aggregation thread.
 4. **IPC** — `IpcServer::bind(addr)` starts accepting TCP connections. Each connection spawns a tokio task that reads line-delimited JSON, dispatches to detection/enforcement, and writes responses.
-5. **Select loop** — `tokio::select!` monitors the shutdown signal. When SIGTERM or SIGINT arrives, it sets the shutdown flag and breaks the loop.
+5. **Forecasting** — when `forecasting.enabled` is set,
+   `Forecaster::new(store, config, enforcement_tx, metrics)` starts a
+   tokio task that ticks once a second: the Holt-Winters forecast, the
+   CUSUM drift detector, the Bayesian hypothesis tracker and the subnet
+   entropy. A forecast that reaches a hypothesis gate sends an
+   `EnforceCommand` on the enforcement channel.
+6. **Select loop** — `tokio::select!` monitors the shutdown signal. When SIGTERM or SIGINT arrives, it sets the shutdown flag and breaks the loop.
 
-**Forecasting is not in the pipeline.** The `ramshield-forecasting` crate
-implements `Forecaster`, but the daemon never constructs one —
-`Forecaster::new` is called only from that crate's own tests. The crate is
-in the workspace and its types are re-exported, so the capability exists,
-but nothing in `boot_pipeline()` starts it and no forecast reaches the
-enforcement channel. Treat forecasting as unwired, not as an active
-mitigation path.
+**Forecasting is an active mitigation path.** The
+`ramshield-forecasting` crate implements `Forecaster` and `boot_pipeline()`
+constructs one when `forecasting.enabled` is set. Its forecast-driven
+blocks go through the same enforcement channel as detection's.
 
 ### Graceful Shutdown
 

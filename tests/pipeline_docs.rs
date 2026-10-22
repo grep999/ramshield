@@ -1,48 +1,49 @@
 //! The daemon's pipeline description must match what the daemon actually
 //! builds.
 //!
-//! `src/README.md` listed "Forecasting — `Forecaster::new(...)` spawns a
-//! tokio task" as a boot-pipeline step. The daemon never constructs a
-//! `Forecaster`; only the forecasting crate's own tests do. A reader
-//! believed forecasting was an active mitigation path.
+//! This test used to assert the opposite: that `src/README.md` did not
+//! claim forecasting was in the pipeline and that `boot_pipeline()` did
+//! not construct a `Forecaster`. The daemon never constructed one, so a
+//! reader who believed the README would have believed forecasting was an
+//! active mitigation path when it was not.
 //!
-//! The check reads both sides: the README must not claim the forecaster
-//! runs, and the pipeline must not construct one. If a future change wires
-//! forecasting in for real, this test fails and the README gets updated
-//! with it.
+//! The forecasting subsystem is now wired (I-034), so the check is
+//! inverted: the README must describe the forecaster as a pipeline step
+//! and the boot path must construct one. The two sides move together -
+//! the file that says forecasting runs and the code that runs it.
 
 const README: &str = include_str!("../src/README.md");
 const BOOT: &str = include_str!("../src/engine/boot.rs");
 
 #[test]
-fn readme_does_not_claim_forecasting_runs_in_the_pipeline() {
+fn readme_describes_forecasting_as_a_pipeline_step() {
     assert!(
-        !README.contains("**Forecasting** —"),
-        "src/README.md still lists Forecasting as a boot-pipeline step"
+        README.contains("**Forecasting** —"),
+        "src/README.md must list Forecasting as a boot-pipeline step"
     );
     assert!(
-        README.contains("Forecasting is not in the pipeline"),
-        "src/README.md must say that the daemon does not start the forecaster"
+        !README.contains("Forecasting is not in the pipeline"),
+        "src/README.md must not say the daemon does not start the forecaster"
     );
     // The prose and the diagram are read separately, and a reader of
-    // either one takes it at face value. The first fix here corrected the
-    // prose and left `Forecaster::new()` in the pipeline diagram two dozen
-    // lines above it, so the file still said forecasting was in the
-    // pipeline. The diagram is what a skimming reader sees.
+    // either one takes it at face value. A fix that corrected the prose
+    // and left `Forecaster::new()` out of the pipeline diagram left the
+    // file saying forecasting was in the pipeline while the code did not
+    // run it.
     assert!(
-        !README.contains("Forecaster::new()"),
-        "src/README.md still shows Forecaster::new() in the boot-pipeline diagram"
-    );
-    assert!(
-        !README.contains("forecast, enforcement"),
-        "src/README.md still shows a forecast arm in the tokio::select! that drives the daemon"
+        README.contains("Forecaster::new(store, config, enforcement_tx, metrics)"),
+        "src/README.md must show how the forecaster is constructed"
     );
 }
 
 #[test]
-fn the_daemon_does_not_construct_a_forecaster() {
+fn the_daemon_constructs_a_forecaster() {
     assert!(
-        !BOOT.contains("Forecaster"),
-        "the boot pipeline now constructs a Forecaster - update src/README.md and this test together"
+        BOOT.contains("Forecaster::new("),
+        "the boot pipeline must construct a Forecaster - update src/README.md and this test together"
+    );
+    assert!(
+        BOOT.contains("cfg_snapshot.forecasting.enabled"),
+        "the forecaster must follow the config's forecasting.enabled"
     );
 }

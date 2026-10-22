@@ -17,10 +17,11 @@ store.traffic ──→ Forecaster::run()  (1 Hz)
               H3       ──→ no block
 ```
 
-**The daemon does not run this crate.** `Forecaster` is exported from
-`ramshield`'s lib, but the boot pipeline never constructs one, so
-nothing in the running daemon produces an `EnforceCommand` from a
-forecast. The diagram above is the crate's own loop, not the daemon's.
+**The daemon runs this crate.** `Forecaster` is exported from
+`ramshield`'s lib, and `boot_pipeline()` constructs one when
+`forecasting.enabled` is set, so the running daemon produces
+`EnforceCommand`s from a forecast. The diagram above is the crate's own
+loop, which the daemon's task runs.
 
 ## Why it exists
 
@@ -196,7 +197,7 @@ The crate emits the wire string reason `"forecast_anomaly"`, not a
 the injected `mpsc::Sender<EnforceCommand>`.
 
 **Read by:** the root `ramshield` package, which re-exports `Forecaster`
-and never constructs one.
+and constructs one in `boot_pipeline()` when `forecasting.enabled` is set.
 
 ## Configuration
 

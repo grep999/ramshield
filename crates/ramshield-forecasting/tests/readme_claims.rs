@@ -104,11 +104,15 @@ fn the_readme_lists_the_real_hypothesis_variants() {
 }
 
 #[test]
-fn the_readme_says_the_daemon_does_not_run_the_crate() {
+fn the_readme_says_the_daemon_runs_the_crate() {
     let text = readme();
     assert!(
-        text.contains("does not run this crate"),
-        "the README must say the daemon does not construct a `Forecaster`"
+        text.contains("The daemon runs this crate"),
+        "the README must say the daemon constructs a `Forecaster`"
+    );
+    assert!(
+        !text.contains("does not run this crate"),
+        "the README must not claim the daemon does not construct a `Forecaster`"
     );
 }
 
