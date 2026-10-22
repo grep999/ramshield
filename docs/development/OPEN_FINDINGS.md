@@ -48,7 +48,7 @@ are the ones used here.
 | F28 | The advanced CI workflow runs the benchmarks as tests and masks the benchmark build failure | P2 (CI) | OPEN — `cargo test --all-targets` and `cargo bench --no-run || true` | no |
 | F29 | The Subnet Stress Pin gate asserts against a fixed four-second sleep | P2 (CI) | **FIXED** — the script now waits for the counters to settle | no |
 | F30 | `block_ip` trusts the caller to pass a blocked fallback; the only guard is a `debug_assert!` | P3 (hardening) | OPEN — the release build publishes whatever `block_state` the fallback carries, and a clean fallback would put the key in the blocked index while the record says clean | no |
-| F31 | The dashboard's rate readouts read keys the SSE writer never sets | P2 (operator-visible) | OPEN — An operator watching a live attack sees `0 drops/s` and `0 events/s` on the headline KPIs and the overview rows. | no |
+| F31 | The dashboard's rate readouts read keys the SSE writer never sets | P2 (operator-visible) | **FIXED** — the rate readouts read the keys the stream writes | no |
 | F32 | The dashboard's auth counters go to a Metrics instance that is never exported | P1 (control-plane telemetry) | **FIXED** — the auth state shares the engine's metrics instance, so the CSRF and lockout counters reach the exporter | no |
 | F33 | The shipped server ConfigMap sets an ipc.max_connections the daemon refuses to start with | P1 (deployment) | **FIXED** — the ConfigMap sets 1,024, the value the validator accepts | no |
 | F34 | The Kubernetes probes target the pod IP while the daemon binds loopback | P1 (deployment) | OPEN — The pod never passes its startup probe and is killed and restarted, so the control plane never comes up on the shipped manifests even once F-33 is fixed. | no |
@@ -56,15 +56,15 @@ are the ones used here.
 | F36 | The 403 rejections are counted but never exported | P2 (metrics) | OPEN — The gap between `events_rejected_total` and its exported breakdown equals the 403 count, and no series explains it. | no |
 | F37 | The store-RAM refusals are counted but no surface exposes them | P2 (metrics) | OPEN — Under the RAM budget an IP is dropped from tracking entirely and every displayed counter stays flat, while the ledger says the event is visible. | no |
 | F38 | The XDP-divergence stale flag is erased 250 ms after it is raised | P2 (health signal) | OPEN — Apply failure sets stale for a fraction of a second; the health computation in `src/engine/mod.rs:232` never observes the divergence. Only the separate failure counter remains as evidence. | no |
-| F39 | The "Drops vs Ingress" chart never plots drops | P2 (operator-visible) | OPEN — The red drop series stays glued to the axis while the ingress series moves, contradicting the panel's own title. | no |
-| F40 | The blocklist gauge compares a lifetime counter with a hardcoded capacity | P2 (operator-visible) | OPEN — After 102,400 lifetime blocks the bar pins at 100% forever, and with a non-default `BLOCKLIST_CAP` the denominator is wrong too. | no |
+| F39 | The "Drops vs Ingress" chart never plots drops | P2 (operator-visible) | **FIXED** — the chart plots the real drop rate | no |
+| F40 | The blocklist gauge compares a lifetime counter with a hardcoded capacity | P2 (operator-visible) | **FIXED** — the blocklist row is labelled as what it shows | no |
 | F41 | Two dashboard rows are overwritten with `n/a` by the SSE path | P2 (operator-visible) | OPEN — The "Subnet Bitmap" row shows a number for at most one frame after each refresh and `n/a` the rest of the time - effectively never visible. | no |
 | F42 | The release gate greps for a dependency-audit flag the workflow no longer uses | P2 (CI) | **FIXED** — the gate checks the flags the workflow runs | no |
 | F43 | The installer writes a unit that grants the daemon write access it must never have | P2 (security) | OPEN — The two ways to install RamShield produce different sandboxes, and the looser one is the default the installer writes. | no |
 | F44 | The Ansible deploy role renders into a directory that does not exist and applies a stub template | P2 (deployment) | OPEN — The k8s deploy path cannot work: the rendered Deployment mounts no config, the `ramshield-admin` Secret is absent, and the static manifests in `deploy/k8s/` are never applied. The default `latest` tag also violates the pinned-tag policy `scripts/verify_release.sh:12` enforces. | no |
 | F45 | Two exported series miss the `ramshield_` namespace | P3 (metrics) | OPEN — The two series collide with another exporter's names in a shared Prometheus. | no |
-| F46 | The pipeline stage bars mix units | P3 (display) | OPEN — The stage bars are not meaningful: the numbers contradict the labels. | no |
-| F47 | The quarantine table fabricates the severity and tier of every row | P3 (display) | OPEN — The table misrepresents the reason each block was issued for. | no |
+| F46 | The pipeline stage bars mix units | P3 (display) | **FIXED** — the pipeline stages share their units | no |
+| F47 | The quarantine table fabricates the severity and tier of every row | P3 (display) | **FIXED** — the quarantine table shows the record's reason | no |
 | F48 | `/metrics` bypasses the session auth that guards every other route | P3 (exposure) | OPEN — An unauthenticated metrics endpoint on a port the network policy opens to other namespaces. | no |
 | F49 | The backlog gate's open-row parser never matches BACKLOG.md | P3 (CI) | OPEN — The Backlog Gate's own summary misstates the open backlog: `A-038` is OPEN while the gate reports zero open P0/P1 rows. | no |
 | F50 | Three scheduled workflows can never run | P3 (CI) | OPEN — The `*/5`, `*/30` and `*/15` cron jobs are skipped on every tick and the three agent scripts never run in CI; the only signal is the absence of activity. | no |
@@ -1404,7 +1404,7 @@ failure is visible.
 
 ## F31 — The dashboard's rate readouts read keys the SSE writer never sets
 
-**Status:** OPEN
+**Status:** FIXED — the rate readouts read the keys the stream writes
 **Files:** `src/dashboard/static/index.html`
 **Severity:** P2 (operator-visible)
 
@@ -1566,7 +1566,7 @@ After a failed apply the stale flag stays set until a successful reconcile.
 
 ## F39 — The "Drops vs Ingress" chart never plots drops
 
-**Status:** OPEN
+**Status:** FIXED — the chart plots the real drop rate
 **Files:** `src/dashboard/static/index.html`
 **Severity:** P2 (operator-visible)
 
@@ -1586,7 +1586,7 @@ The red series tracks the XDP drop counters.
 
 ## F40 — The blocklist gauge compares a lifetime counter with a hardcoded capacity
 
-**Status:** OPEN
+**Status:** FIXED — the blocklist row is labelled as what it shows
 **Files:** `src/dashboard/static/index.html, src/dashboard/mod.rs`
 **Severity:** P2 (operator-visible)
 
@@ -1706,7 +1706,7 @@ Every exported series is namespaced.
 
 ## F46 — The pipeline stage bars mix units
 
-**Status:** OPEN
+**Status:** FIXED — the pipeline stages share their units
 **Files:** `src/dashboard/mod.rs`
 **Severity:** P3 (display)
 
@@ -1726,7 +1726,7 @@ Each stage's ingress and drops share a unit.
 
 ## F47 — The quarantine table fabricates the severity and tier of every row
 
-**Status:** OPEN
+**Status:** FIXED — the quarantine table shows the record's reason
 **Files:** `src/dashboard/static/index.html`
 **Severity:** P3 (display)
 
@@ -1740,7 +1740,7 @@ Found by the 2026-10-22 full-codebase audit.
 
 ### Closure criterion
 
-The severity and tier columns derive from the record.
+The severity column shows the record's reason, and the tier column no longer claims a tier the record does not carry.
 
 ---
 
