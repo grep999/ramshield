@@ -5,10 +5,11 @@
 # every public IPC + dashboard endpoint to confirm health, block path,
 # metrics export, and WAL state. Exits non-zero on first failure.
 #
-# Coverage (review 31 Batch 16):
-#  BOOT → health → protection_state → IPC auth → manual block →
-#  userspace block → WAL persisted → SIGKILL → restart → block restored →
-#  unblock → verify absent → CIDR block → verify → TTL expiry → verify
+# Coverage:
+#  BOOT → health → IPC auth → manual block → block visible in the history →
+#  snapshot → status modules → Prometheus metrics → unblock → verify absent →
+#  CIDR block → verify → CIDR unblock → verify absent → short TTL → verify
+#  expired → WAL persisted → SIGKILL → restart → block restored
 #
 # Usage:  ./scripts/prod_smoke.sh
 # Assumes: ./target/release/ramshield built with --features full.
@@ -16,8 +17,14 @@
 set -euo pipefail
 
 BIN="${BIN:-./target/release/ramshield}"
-CFG="${CFG:-./config.prod.toml}"
-WAL_DIR="${WAL_DIR:-/tmp/ramshield-prod-smoke-wal}"
+# The shipped baseline config. There is no config.prod.toml in the tree,
+# so the old default pointed at a file that does not exist and the script
+# could not run at all.
+CFG="${CFG:-./config.baseline.toml}"
+# A fresh directory by default. The script deletes this path on start, so
+# it must be one it created: WAL_DIR may be overridden, and an operator
+# who has it pointing at a real data directory would lose it.
+WAL_DIR="${WAL_DIR:-$(mktemp -d /tmp/ramshield-prod-smoke-wal.XXXXXX)}"
 LOG="${LOG:-/tmp/ramshield-prod-smoke.log}"
 DASH_ADDR="${DASH_ADDR:-127.0.0.1:19999}"
 IPC_HOST="${IPC_HOST:-127.0.0.1}"
@@ -33,14 +40,19 @@ cleanup() {
     fi
 }
 
-# Reset state
-rm -rf "$WAL_DIR"
+# Reset state. Only a path that carries this script's own name may be
+# deleted: the directory is ours, never the operator's.
+case "$WAL_DIR" in
+    *ramshield-prod-smoke-wal*) ;;
+    *) fail "refusing to delete $WAL_DIR: it does not carry the smoke test's own name" ;;
+esac
+rm -rf -- "$WAL_DIR"
 mkdir -p "$WAL_DIR"
 cleanup
 sleep 0.5
 
-# config.prod.toml binds 0.0.0.0 and now fail-closes without credentials
-# (Config::validate). Smoke tests exercise endpoints, not public exposure —
+# The source config may bind 0.0.0.0 and fail-close without credentials
+# (Config::validate). Smoke tests exercise endpoints, not public exposure -
 # rewrite binds to loopback and point the WAL at the scratch dir. The
 # fail-closed rule itself is covered by ramshield-config unit tests.
 SMOKE_CFG="${SMOKE_CFG:-/tmp/ramshield-prod-smoke.toml}"
@@ -53,17 +65,25 @@ sed -e "s|^[[:space:]]*tcp_addr = .*|tcp_addr = \"127.0.0.1:$IPC_PORT\"|" \
 echo "→ booting binary with $SMOKE_CFG (WAL=$WAL_DIR)"
 python3 - "$SMOKE_CFG" <<'PY'
 from pathlib import Path
+import re
 import sys
 p = Path(sys.argv[1])
 t = p.read_text()
-if "auth_keys = []" in t:
-    t = t.replace(
-        "auth_keys = []",
-        'auth_keys = ["k1:0b8d647fda3a0ae3c38207e0d7e61edfdfe59bda7359c89f953f76ed68f3768b"]\n'
-        'key_roles = [{ key_id = "k1", role = "Admin" }]',
-        1,
-    )
-    p.write_text(t)
+# Install the smoke test's own IPC key, whatever the source config held.
+# The old script only replaced the literal "auth_keys = []", so against a
+# config that already carried a key the daemon used that key while the
+# script signed with its own - and every signed frame was rejected with
+# "signature mismatch" before the first check ran.
+key_line = 'auth_keys = ["k1:0b8d647fda3a0ae3c38207e0d7e61edfdfe59bda7359c89f953f76ed68f3768b"]'
+roles_line = 'key_roles = [{ key_id = "k1", role = "Admin" }]'
+t, n = re.subn(r"^auth_keys\s*=.*$", key_line, t, count=1, flags=re.M)
+if n == 0:
+    t = t.rstrip("\n") + "\n" + key_line + "\n"
+# The roles table must name the same key_id.
+t, n = re.subn(r"^key_roles\s*=.*$", roles_line, t, count=1, flags=re.M)
+if n == 0:
+    t = t.rstrip("\n") + "\n" + roles_line + "\n"
+p.write_text(t)
 PY
 RAMSHIELD_ENGINE__RAM_LIMIT_MB=1024 \
     "$BIN" --config "$SMOKE_CFG" --no-xdp > "$LOG" 2>&1 &
@@ -135,10 +155,39 @@ MT=$(curl -sf -m 3 "http://$DASH_ADDR/metrics")
 echo "$MT" | grep -q "ramshield_blocks_total" || fail "Prometheus metrics missing blocks_total"
 green "✓ DASH: /metrics serves Prometheus format"
 
-# Unblock
+# Unblock - and verify the IP is really gone.
 RESP=$(ipc_send "$(sign_payload '{"type":"unblock_ip","ip":"203.0.113.7"}')")
 echo "$RESP" | grep -q "unblock queued" || fail "unblock_ip did not respond: $RESP"
 green "✓ IPC: unblock_ip queued"
+sleep 1
+RESP=$(ipc_send "$(sign_payload '{"type":"check_ip","ip":"203.0.113.7"}')")
+echo "$RESP" | grep -q '"blocked":false' || fail "unblock did not take effect: $RESP"
+green "✓ IPC: the unblocked IP is absent"
+
+# CIDR block - and verify a member of the CIDR is blocked, then gone.
+RESP=$(ipc_send "$(sign_payload '{"type":"block_cidr","cidr":"203.0.113.128/25","reason":"manual","ttl_secs":300}')")
+echo "$RESP" | grep -q "block queued" || fail "block_cidr did not respond: $RESP"
+sleep 1
+RESP=$(ipc_send "$(sign_payload '{"type":"check_ip","ip":"203.0.113.200"}')")
+echo "$RESP" | grep -q '"blocked":true' || fail "the CIDR block did not cover its member: $RESP"
+green "✓ IPC: the CIDR block covers its member"
+RESP=$(ipc_send "$(sign_payload '{"type":"unblock_cidr","cidr":"203.0.113.128/25"}')")
+echo "$RESP" | grep -q "unblock queued" || fail "unblock_cidr did not respond: $RESP"
+sleep 1
+RESP=$(ipc_send "$(sign_payload '{"type":"check_ip","ip":"203.0.113.200"}')")
+echo "$RESP" | grep -q '"blocked":false' || fail "the CIDR unblock did not take effect: $RESP"
+green "✓ IPC: the unblocked CIDR is gone"
+
+# A short TTL must expire and the block must disappear.
+RESP=$(ipc_send "$(sign_payload '{"type":"block_ip","ip":"203.0.113.42","reason":"manual","ttl_secs":2}')")
+echo "$RESP" | grep -q "block queued" || fail "the short-TTL block_ip did not respond: $RESP"
+sleep 1
+RESP=$(ipc_send "$(sign_payload '{"type":"check_ip","ip":"203.0.113.42"}')")
+echo "$RESP" | grep -q '"blocked":true' || fail "the short-TTL block did not take effect: $RESP"
+sleep 4
+RESP=$(ipc_send "$(sign_payload '{"type":"check_ip","ip":"203.0.113.42"}')")
+echo "$RESP" | grep -q '"blocked":false' || fail "the short TTL did not expire: $RESP"
+green "✓ IPC: the short TTL expired and the block is gone"
 
 # Hot subnets
 HS=$(curl -sf -m 3 "http://$DASH_ADDR/api/hot-subnets" || echo "[]")
