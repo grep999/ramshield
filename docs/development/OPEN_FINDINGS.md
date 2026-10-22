@@ -55,7 +55,7 @@ are the ones used here.
 | F35 | The ramshield-cli binary is a stub, yet the release ships it and the installer requires it | P1 (operator tooling) | OPEN — `ramshield-cli block 1.2.3.4 --reason manual --ttl 300` prints `RamShield CLI` and exits 0, so an operator believes a block was applied when nothing happened. | no |
 | F36 | The 403 rejections are counted but never exported | P2 (metrics) | OPEN — The gap between `events_rejected_total` and its exported breakdown equals the 403 count, and no series explains it. | no |
 | F37 | The store-RAM refusals are counted but no surface exposes them | P2 (metrics) | OPEN — Under the RAM budget an IP is dropped from tracking entirely and every displayed counter stays flat, while the ledger says the event is visible. | no |
-| F38 | The XDP-divergence stale flag is erased 250 ms after it is raised | P2 (health signal) | OPEN — Apply failure sets stale for a fraction of a second; the health computation in `src/engine/mod.rs:232` never observes the divergence. Only the separate failure counter remains as evidence. | no |
+| F38 | The XDP-divergence stale flag is erased 250 ms after it is raised | P2 (health signal) | **FIXED** — the age tick no longer clears the flag a failed apply raised | no |
 | F39 | The "Drops vs Ingress" chart never plots drops | P2 (operator-visible) | OPEN — The red drop series stays glued to the axis while the ingress series moves, contradicting the panel's own title. | no |
 | F40 | The blocklist gauge compares a lifetime counter with a hardcoded capacity | P2 (operator-visible) | OPEN — After 102,400 lifetime blocks the bar pins at 100% forever, and with a non-default `BLOCKLIST_CAP` the denominator is wrong too. | no |
 | F41 | Two dashboard rows are overwritten with `n/a` by the SSE path | P2 (operator-visible) | OPEN — The "Subnet Bitmap" row shows a number for at most one frame after each refresh and `n/a` the rest of the time - effectively never visible. | no |
@@ -1546,7 +1546,7 @@ The refusal appears in `/metrics` and on the dashboard row that exists for it.
 
 ## F38 — The XDP-divergence stale flag is erased 250 ms after it is raised
 
-**Status:** OPEN
+**Status:** FIXED — the age tick no longer clears the flag a failed apply raised
 **Files:** `crates/ramshield-enforcement/src/service/run.rs, crates/ramshield-metrics/src/xdp_health.rs`
 **Severity:** P2 (health signal)
 
