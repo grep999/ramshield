@@ -69,6 +69,9 @@ are the ones used here.
 | F49 | The backlog gate's open-row parser never matches BACKLOG.md | P3 (CI) | **FIXED** — the gate's parser reads the table BACKLOG.md has | no |
 | F50 | Three scheduled workflows can never run | P3 (CI) | **FIXED** — the three dead scheduled workflows are deleted | no |
 | F51 | The qualification docs tell operators to run a cargo-audit invocation that does not exist | P3 (docs) | **FIXED** — the docs name the flags the workflow runs (PR #83) | no |
+| F52 | The WAF's request line accepts a tab as a field separator | P2 (security) | **FIXED** — the request line is `method SP target SP version`, and only SP separates the components | no |
+| F53 | The WAF's Transfer-Encoding parser strips whitespace inside a coding token | P2 (security) | **FIXED** — a coding token keeps its interior, and `chunked` is accepted exactly once | no |
+| F54 | The WAF's chunked parser accepts malformed trailers and ignores trailing bytes | P2 (security) | **FIXED** — the trailer section is parsed, and the request ends at the terminator | no |
 | F12 | Two stray compiled binaries tracked at the repository root | P2 (hygiene) | **CLOSED** — removed and gitignored in `f900664` | no |
 | F14 | The store's `insert()` publishes a record and then updates the blocked index, with the shard lock released in between | P2 (latent) | **FIXED** — the vacant branch of `insert()` and of `update_ip()` now publish with `insert_entry`, which keeps the shard lock until the guard is dropped, and the index and the size accounting land in that critical section | no |
 | F15 | The Kubernetes DaemonSet asks for a `Bidirectional` mount propagation without `privileged` | P1 | **FIXED** — the DaemonSet drops the Bidirectional propagation and asks for no privileged container | no |
@@ -1784,6 +1787,112 @@ Found by the 2026-10-22 full-codebase audit.
 ### Closure criterion
 
 The parser reads the priority column and the status cell of the real table format, and the reported counts match a hand-count.
+
+---
+
+## F52 — The WAF's request line accepts a tab as a field separator
+
+**Status:** FIXED — the request line is `method SP target SP version`, and only SP separates the components
+**Files:** `src/engine/waf.rs`
+**Severity:** P2 (security)
+
+Reported as RS-05 in the 2026-10-22 security report.
+
+### What it was
+
+`src/engine/waf.rs:52` split the request line on `b' '` **or** `b'\t'` and then dropped every empty field:
+
+```rust
+let mut parts = request_line
+    .split(|&b| b == b' ' || b == b'\t')
+    .filter(|p| !p.is_empty());
+```
+
+So `GET\t/evil\tHTTP/1.1` parsed as method `GET`, target `/evil`, version `HTTP/1.1`, and the gate returned no finding. The same filter also accepted `GET  /evil HTTP/1.1` and a trailing space, because the empty fields were removed rather than rejected.
+
+### Why it mattered
+
+RFC 9112 3 defines the request line as `method SP request-target SP HTTP-version` - one SP, not a tab. A parser that accepts a tab as a separator and one that does not disagree about where the request target begins, and a disagreement about the target is a request smuggling primitive. The gate is the parser that decides, and it was deciding on a spelling no RFC allows.
+
+### Reachability
+
+`src/engine/waf.rs` has no production caller today - `docs/development/MASTER_SCAN_FIXES.md` records exactly that ("Not a reachable vulnerability. The module has zero production callers"). The three findings above are therefore latent rather than live: no request reaches this parser today. They are still real defects, because `docs/SECURITY_GATEWAY.md` 3 and 74 document this parser as the WAF boundary and the security invariant "WAF parsing is bounded and deterministic", so the module is the reference implementation of a boundary the product claims to have. A parser that accepts `chu nked` as `chunked` is wrong the moment a producer starts feeding it.
+
+### Root cause
+
+`src/engine/waf.rs` was created by `415f75f` (2026-10-08), a commit titled `docs: update README files and add code health backlog`. That commit added 158 lines of new security-relevant parser under a `docs:` title, so nothing in the change looked like a behaviour change and no reviewer was dispatched for it. The module's own doc comment claims it "enforces strict HTTP framing", but the framing rules were never written down, so the ten later `fix(waf)` commits each patched one symptom (`70d78dc`, `7ff7ed1`, `44b298f`, `cec814a`) without ever stating the rule they were approximating.
+
+This breaks the repository's own boundary rule (`docs/ENGINEERING_CONSTITUTION.md`: "Boundary - untrusted input converted into a bounded internal form") and `docs/CODE_BIBLE.md` 9 ("explicit bounds").
+
+### Closure criterion
+
+The request line is parsed as exactly three components separated by exactly one SP, a tab is not a separator, an empty component is rejected, and the target carries no control character.
+
+---
+
+## F53 — The WAF's Transfer-Encoding parser strips whitespace inside a coding token
+
+**Status:** FIXED — a coding token keeps its interior, and `chunked` is accepted exactly once
+**Files:** `src/engine/waf.rs`
+**Severity:** P2 (security)
+
+Reported as RS-02 in the 2026-10-22 security report.
+
+### What it was
+
+`src/engine/waf.rs:131-136` built each Transfer-Encoding token by removing *every* whitespace byte from it:
+
+```rust
+let tokens = value.split(|b| *b == b',').map(|t| {
+    t.iter().copied().filter(|b| !b.is_ascii_whitespace()).collect::<Vec<_>>()
+});
+```
+
+`chu nked` therefore compared equal to `chunked` and was accepted as chunked framing. Separately, the "chunked must be unique" check was scoped to a single header field, so two `Transfer-Encoding: chunked` header fields were both accepted; RFC 9110 5.6.1 combines repeated header fields into one list, and `chunked` may appear only once in it.
+
+### Why it mattered
+
+Whitespace around a list element is legal; whitespace *inside* a token is not. Removing it makes the gate decide that `chu nked` means `chunked` - a framing decision the gate does not own, and one a stricter intermediary reads differently. The same applies to the repeated header field.
+
+### Root cause
+
+Same as F52: the framing rules were never written down, so the parser normalised where it should have rejected.
+
+### Closure criterion
+
+A coding token is trimmed of optional whitespace at its ends only and compared verbatim, `chunked` is accepted exactly once across all Transfer-Encoding header fields, and whitespace around a list element is still accepted.
+
+---
+
+## F54 — The WAF's chunked parser accepts malformed trailers and ignores trailing bytes
+
+**Status:** FIXED — the trailer section is parsed, and the request ends at the terminator
+**Files:** `src/engine/waf.rs`
+**Severity:** P2 (security)
+
+Reported as RS-01 in the 2026-10-22 security report.
+
+### What it was
+
+`src/engine/waf.rs:200-213`, on reaching the last chunk, accepted any remaining bytes that contained a CRLF anywhere:
+
+```rust
+return if tail.windows(2).any(|w| w == b"\r\n") { Ok(out) } else { Err(Finding::Malformed) };
+```
+
+So `0\r\nNOT-A-TRAILER\r\n\r\n` - a trailer line with no colon - was accepted, and `0\r\n\r\nGET /evil HTTP/1.1\r\nHost: x\r\n\r\n` was accepted with the second request ignored entirely. The Content-Length path already rejects a body that does not exactly fill the buffer; the chunked path did not.
+
+### Why it mattered
+
+RFC 9112 7.1.2 defines the trailer section as field lines followed by a final empty line, and the request ends there. A trailer section that is not terminated by an empty line is malformed, not "bounded enough": a parser that stops at a different place than this one is a smuggling primitive, and a second request in the same buffer must not be covered by a verdict on the first.
+
+### Root cause
+
+Same as F52: the framing rules were never written down. The chunked path was written as a bounded scan rather than as a parser for the construct, so "there is a CRLF in there somewhere" stood in for "the trailer section is well-formed and the request ends".
+
+### Closure criterion
+
+The trailer section is parsed as field lines terminated by a final empty line, a trailer field must have a name and a colon, and bytes after the terminator are rejected.
 
 ---
 

@@ -4,6 +4,29 @@
 //! coverage. It enforces strict HTTP framing and bounded parsing first, then
 //! applies cheap deterministic signatures. HTTPS/HTTP2/HTTP3 remain terminator
 //! responsibilities unless a producer supplies decrypted HTTP telemetry.
+//!
+//! # The framing rules this gate enforces
+//!
+//! The parser is a trust boundary: it decides where one request ends. A
+//! downstream parser that disagrees about that boundary is a request
+//! smuggling primitive, so this gate accepts only the one spelling of each
+//! construct and rejects everything else. The rules, in one place:
+//!
+//! - **Request line** (RFC 9112 3): `method SP request-target SP
+//!   HTTP-version`. Exactly one SP between the components, no tab, no
+//!   empty component, and no control character in the target.
+//! - **Transfer-Encoding** (RFC 9112 6.1, RFC 9110 5.6.1): the only
+//!   accepted coding is `chunked`, exactly once across all Transfer-Encoding
+//!   header fields, and it may not appear with Content-Length. A coding
+//!   token carries no interior whitespace.
+//! - **Chunked body** (RFC 9112 7.1): the last chunk is followed by an
+//!   optional trailer section of well-formed field lines and a final empty
+//!   line, and the request ends there. Bytes after that are a second
+//!   request in the same buffer, not part of this one.
+//!
+//! The input is one request per buffer, which is what the Content-Length
+//! path already assumes: a body that does not exactly fill the buffer is
+//! rejected. The chunked path now assumes the same thing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Finding {
     SqlInjection,
@@ -48,22 +71,24 @@ fn parse_request(request: &[u8], max_bytes: usize) -> Result<RequestParts<'_>, F
     let request_line = raw_request_line
         .strip_suffix(b"\r")
         .unwrap_or(raw_request_line);
-    let mut parts = request_line
-        .split(|&b| b == b' ' || b == b'\t')
-        .filter(|p| !p.is_empty());
+    // Exactly one SP between the components. A tab is not a separator, and
+    // an empty component is not a component: accepting either would let
+    // this parser and a stricter one disagree about the request target.
+    let mut parts = request_line.split(|&b| b == b' ');
     let method = parts.next().ok_or(Finding::Malformed)?;
     let target = parts.next().ok_or(Finding::Malformed)?;
     let version = parts.next().ok_or(Finding::Malformed)?;
     if parts.next().is_some()
+        || method.is_empty()
         || method.len() > 16
+        || target.is_empty()
         || target.len() > MAX_TARGET_BYTES
         || (version != b"HTTP/1.1" && version != b"HTTP/1.0")
     {
         return Err(Finding::Malformed);
     }
-    if !method.iter().all(|b| b.is_ascii_alphabetic())
-        || target.iter().any(|b| *b == 0 || *b == b'\r' || *b == b'\n')
-    {
+    // A request target is a URI reference: no control character, no tab.
+    if !method.iter().all(|b| b.is_ascii_alphabetic()) || target.iter().any(|b| *b < 0x21) {
         return Err(Finding::Malformed);
     }
 
@@ -127,31 +152,33 @@ fn parse_request(request: &[u8], max_bytes: usize) -> Result<RequestParts<'_>, F
         if eq_ci(name, b"transfer-encoding") {
             // Security gate: reject unsupported transfer codings rather than
             // attempting to normalize an intermediary's framing semantics.
-            // If chunked is present it must be the final coding.
-            let tokens = value.split(|b| *b == b',').map(|t| {
-                t.iter()
-                    .copied()
-                    .filter(|b| !b.is_ascii_whitespace())
-                    .collect::<Vec<_>>()
-            });
+            // Only `chunked` is accepted, and exactly once across all
+            // Transfer-Encoding header fields.
+            //
+            // A coding is a token (RFC 9110 5.6.1). Whitespace around a
+            // comma is legal; whitespace *inside* a token is not, so the
+            // token is trimmed at its ends only and the interior is
+            // compared verbatim. Stripping interior whitespace would make
+            // `chu nked` equal to `chunked`, which is a framing decision
+            // this gate does not get to make.
+            if transfer_chunked {
+                // A second Transfer-Encoding header field. Its value is
+                // combined with the first, and `chunked` may appear only
+                // once in the combined list.
+                return Err(Finding::HeaderSmuggling);
+            }
             let mut token_count = 0usize;
-            let mut chunked = false;
-            for token in tokens {
+            for token in value.split(|b| *b == b',') {
+                let token = trim_ows(token);
                 if token.is_empty() {
                     return Err(Finding::Malformed);
                 }
                 token_count += 1;
-                if eq_ci(&token, b"chunked") {
-                    // chunked must be unique and final.
-                    if chunked {
-                        return Err(Finding::HeaderSmuggling);
-                    }
-                    chunked = true;
-                } else {
+                if !eq_ci(token, b"chunked") {
                     return Err(Finding::HeaderSmuggling);
                 }
             }
-            if token_count == 0 || !chunked {
+            if token_count != 1 {
                 return Err(Finding::HeaderSmuggling);
             }
             transfer_chunked = true;
@@ -162,7 +189,15 @@ fn parse_request(request: &[u8], max_bytes: usize) -> Result<RequestParts<'_>, F
     }
     let raw_body = &request[sep + 4..];
     let body = if transfer_chunked {
-        decode_chunked(raw_body, max_bytes)?
+        let (body, consumed) = decode_chunked(raw_body, max_bytes)?;
+        // The request ends where the chunked body ends. Bytes after the
+        // terminator are a second request in the same buffer: a producer
+        // that hands this gate two requests at once must not get a verdict
+        // on the first that covers the second.
+        if consumed != raw_body.len() {
+            return Err(Finding::Malformed);
+        }
+        body
     } else {
         if let Some(len) = content_length
             && (len != raw_body.len() || len > max_bytes)
@@ -178,7 +213,13 @@ fn parse_request(request: &[u8], max_bytes: usize) -> Result<RequestParts<'_>, F
     })
 }
 
-fn decode_chunked(raw: &[u8], max_bytes: usize) -> Result<Vec<u8>, Finding> {
+/// Decode a chunked body, returning the body and the number of bytes
+/// consumed from `raw`.
+///
+/// The consumed count is what lets the caller see that the request ended
+/// at the terminator: a chunked body is followed by an optional trailer
+/// section and a final empty line, and nothing else.
+fn decode_chunked(raw: &[u8], max_bytes: usize) -> Result<(Vec<u8>, usize), Finding> {
     let mut pos = 0usize;
     let mut out = Vec::with_capacity(raw.len().min(max_bytes));
     loop {
@@ -198,19 +239,11 @@ fn decode_chunked(raw: &[u8], max_bytes: usize) -> Result<Vec<u8>, Finding> {
         .map_err(|_| Finding::Malformed)?;
         pos = end + 2;
         if size == 0 {
-            if raw.get(pos..pos + 2) == Some(b"\r\n") {
-                return Ok(out);
-            }
-            // Trailer fields are permitted; parse them only as bounded syntax.
-            let tail = &raw[pos..];
-            if tail.len() > MAX_HEADER_BYTES {
-                return Err(Finding::Oversized);
-            }
-            return if tail.windows(2).any(|w| w == b"\r\n") {
-                Ok(out)
-            } else {
-                Err(Finding::Malformed)
-            };
+            // The last chunk is followed by an optional trailer section
+            // (RFC 9112 7.1.2: field lines, then a final empty line) and
+            // then the end of the request.
+            let trailer_end = parse_chunk_trailers(raw, pos)?;
+            return Ok((out, trailer_end));
         }
         if size > max_bytes || pos.checked_add(size + 2).is_none() || pos + size + 2 > raw.len() {
             return Err(Finding::Malformed);
@@ -227,6 +260,51 @@ fn decode_chunked(raw: &[u8], max_bytes: usize) -> Result<Vec<u8>, Finding> {
     }
 }
 
+/// Parse the trailer section that follows the last chunk.
+///
+/// RFC 9112 7.1.2: zero or more trailer field lines, then a final empty
+/// line. Returns the offset just past the end of the request.
+///
+/// A trailer field is a header field: it has a name, a colon, and a
+/// value. A section that is not terminated by an empty line is malformed
+/// rather than "bounded enough", because a parser that stops at a
+/// different place than this one is a smuggling primitive.
+fn parse_chunk_trailers(raw: &[u8], start: usize) -> Result<usize, Finding> {
+    let mut pos = start;
+    let mut field_count = 0usize;
+    loop {
+        let rel = raw[pos..]
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .ok_or(Finding::Malformed)?;
+        let end = pos + rel;
+        let line = &raw[pos..end];
+        pos = end + 2;
+        if line.is_empty() {
+            // The final empty line ends the trailer section.
+            return Ok(pos);
+        }
+        field_count += 1;
+        if field_count > MAX_HEADERS {
+            return Err(Finding::Oversized);
+        }
+        let colon = line
+            .iter()
+            .position(|b| *b == b':')
+            .ok_or(Finding::Malformed)?;
+        let name = &line[..colon];
+        if name.is_empty()
+            || name.len() > 128
+            || !name.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'-')
+        {
+            return Err(Finding::Malformed);
+        }
+        if line.len() > MAX_HEADER_BYTES {
+            return Err(Finding::Oversized);
+        }
+    }
+}
+
 fn parse_decimal(v: &[u8]) -> Option<usize> {
     if v.is_empty() {
         return None;
@@ -239,6 +317,28 @@ fn parse_decimal(v: &[u8]) -> Option<usize> {
         n = n.checked_mul(10)?.checked_add((b - b'0') as usize)?;
     }
     Some(n)
+}
+
+/// Trim optional whitespace (SP and HTAB) at both ends of a token.
+///
+/// RFC 9110 5.6.1: whitespace is allowed *around* a list element, never
+/// inside one.
+fn trim_ows(mut v: &[u8]) -> &[u8] {
+    while let Some((first, rest)) = v.split_first() {
+        if *first == b' ' || *first == b'\t' {
+            v = rest;
+        } else {
+            break;
+        }
+    }
+    while let Some((last, rest)) = v.split_last() {
+        if *last == b' ' || *last == b'\t' {
+            v = rest;
+        } else {
+            break;
+        }
+    }
+    v
 }
 
 fn eq_ci(a: &[u8], b: &[u8]) -> bool {
@@ -437,5 +537,106 @@ mod tests {
     #[test]
     fn parses_chunked_body() {
         assert_eq!(inspect(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n12\r\n<script>x</script>\r\n0\r\n\r\n", 65536), Some(Finding::Xss));
+    }
+
+    // --- the framing rules, each with a negative control ---
+
+    #[test]
+    fn rejects_a_tab_separated_request_line() {
+        // A tab is not a separator. A parser that treats it as one sees a
+        // different request target than a parser that does not.
+        assert_eq!(
+            inspect(b"GET\t/evil\tHTTP/1.1\r\nHost: example\r\n\r\n", 65536),
+            Some(Finding::Malformed)
+        );
+    }
+
+    #[test]
+    fn rejects_an_empty_request_line_component() {
+        // Two spaces, or a trailing space: an empty component is not a
+        // component, and the components must be separated by exactly one SP.
+        assert_eq!(
+            inspect(b"GET  /evil HTTP/1.1\r\nHost: example\r\n\r\n", 65536),
+            Some(Finding::Malformed)
+        );
+        assert_eq!(
+            inspect(b"GET /evil HTTP/1.1 \r\nHost: example\r\n\r\n", 65536),
+            Some(Finding::Malformed)
+        );
+    }
+
+    #[test]
+    fn rejects_a_transfer_encoding_token_with_interior_whitespace() {
+        // `chu nked` is not `chunked`. Stripping the interior whitespace
+        // would make this gate make a framing decision it does not own.
+        assert_eq!(
+            inspect(
+                b"POST / HTTP/1.1\r\nTransfer-Encoding: chun ked\r\n\r\n0\r\n\r\n",
+                65536
+            ),
+            Some(Finding::HeaderSmuggling)
+        );
+    }
+
+    #[test]
+    fn rejects_repeated_transfer_encoding_headers() {
+        // The values combine, and `chunked` may appear only once in the
+        // combined list.
+        assert_eq!(
+            inspect(
+                b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+                65536
+            ),
+            Some(Finding::HeaderSmuggling)
+        );
+    }
+
+    #[test]
+    fn accepts_a_transfer_encoding_coding_with_surrounding_whitespace() {
+        // Whitespace around a list element is legal (RFC 9110 5.6.1).
+        assert_eq!(
+            inspect(
+                b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked \r\n\r\n0\r\n\r\n",
+                65536
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_a_malformed_chunked_trailer() {
+        // A trailer field is a header field: it has a name and a colon.
+        assert_eq!(
+            inspect(
+                b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nNOT-A-TRAILER\r\n\r\n",
+                65536
+            ),
+            Some(Finding::Malformed)
+        );
+    }
+
+    #[test]
+    fn rejects_bytes_after_the_chunked_terminator() {
+        // The request ends at the terminator. What follows is a second
+        // request in the same buffer, and a verdict on the first must not
+        // cover it.
+        assert_eq!(
+            inspect(
+                b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /evil HTTP/1.1\r\nHost: example\r\n\r\n",
+                65536
+            ),
+            Some(Finding::Malformed)
+        );
+    }
+
+    #[test]
+    fn accepts_a_well_formed_chunked_trailer() {
+        assert_eq!(
+            inspect(
+                b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nX-Checksum: abc\r\n\r\n",
+                65536
+            ),
+            None
+        );
     }
 }
