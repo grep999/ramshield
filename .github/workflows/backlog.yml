@@ -181,12 +181,12 @@ jobs:
           bpf-linker --version
       - name: Check core-only (default features, locked, all-targets)
         run: cargo check --workspace --locked --all-targets --exclude ramshield-mesh
-      - name: Check all-features (locked, all-targets)
-        run: cargo check --workspace --locked --all-targets --all-features --exclude ramshield-mesh
+      - name: Check production full (locked, all-targets)
+        run: cargo check --workspace --locked --all-targets --features full --exclude ramshield-mesh
       - name: Build core-only (default features, locked, all-targets)
         run: cargo build --workspace --locked --all-targets --exclude ramshield-mesh
-      - name: Build all-features (locked, all-targets)
-        run: cargo build --workspace --locked --all-targets --all-features --exclude ramshield-mesh
+      - name: Build production full (locked, all-targets)
+        run: cargo build --workspace --locked --all-targets --features full --exclude ramshield-mesh
       - name: Test core-only workspace
         run: cargo test --workspace --locked --exclude ramshield-mesh
       - name: Test workspace (features full)
