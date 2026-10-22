@@ -615,23 +615,6 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
         metrics.clone(),
         engine.shutdown.clone(),
     )?);
-
-    // The forecaster. It was implemented and unit-tested but never
-    // constructed by the daemon, so the whole forecasting subsystem -
-    // the Holt-Winters forecast, the CUSUM drift detector, the Bayesian
-    // hypothesis tracker and the entropy signal - never ran in
-    // production (I-034).
-    if cfg_snapshot.forecasting.enabled {
-        let forecaster = Arc::new(ramshield_forecasting::Forecaster::new(
-            store.clone(),
-            cfg_snapshot.forecasting.clone(),
-            engine.enforcement_tx.clone(),
-            metrics.clone(),
-        ));
-        tokio::spawn(async move {
-            forecaster.run().await;
-        });
-    }
     let event_tx = detection.event_sender();
     if cfg_snapshot.native_ingest.enabled
         && let Err(e) = crate::engine::native::spawn(
