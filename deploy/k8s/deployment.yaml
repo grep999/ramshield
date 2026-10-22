@@ -72,20 +72,27 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          # The daemon binds the dashboard on 127.0.0.1 (the ConfigMap's
+          # http_addr), so a probe without `host` connects to the pod IP and
+          # never reaches it: the pod never became Ready and the kubelet
+          # killed it.
           readinessProbe:
             httpGet:
+              host: 127.0.0.1
               path: /healthz
               port: dashboard
             initialDelaySeconds: 2
             periodSeconds: 5
           startupProbe:
             httpGet:
+              host: 127.0.0.1
               path: /healthz
               port: dashboard
             failureThreshold: 30
             periodSeconds: 10
           livenessProbe:
             httpGet:
+              host: 127.0.0.1
               path: /livez
               port: dashboard
             initialDelaySeconds: 10

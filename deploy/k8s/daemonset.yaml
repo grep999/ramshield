@@ -53,7 +53,7 @@ spec:
                 secretKeyRef:
                   name: ramshield-admin
                   key: argon2-hash
-                  optional: false  # dashboard binds 0.0.0.0:9999 — auth is mandatory
+                  optional: false  # the dashboard binds 127.0.0.1:9999 — auth is mandatory
             - name: RAMSHIELD_IPC__AUTH_KEYS
               valueFrom:
                 secretKeyRef:
@@ -74,14 +74,20 @@ spec:
             limits:
               cpu: "4000m"
               memory: "2Gi"
+          # The node ConfigMap binds the dashboard on 127.0.0.1, so a
+          # probe without `host` connects to the pod IP and never reaches
+          # it. With hostNetwork the pod shares the host's network
+          # namespace, so 127.0.0.1 is the daemon's own listener.
           livenessProbe:
             httpGet:
+              host: 127.0.0.1
               path: /livez
               port: 9999
             initialDelaySeconds: 5
             periodSeconds: 10
           readinessProbe:
             httpGet:
+              host: 127.0.0.1
               path: /healthz
               port: 9999
             initialDelaySeconds: 3
@@ -92,9 +98,13 @@ spec:
               readOnly: true
             - name: bpf-fs
               mountPath: /sys/fs/bpf
-              # HostPath + Bidirectional propagation so BPF pins created by
-              # the container are visible to the host and other pods.
-              mountPropagation: Bidirectional
+              # HostToContainer, not Bidirectional. Bidirectional requires
+              # `privileged: true`, and the API server refuses the
+              # combination, so the DaemonSet was never admitted. The
+              # volume is the host's own /sys/fs/bpf, so the pins the
+              # container creates land in the host's bpffs and the other
+              # pods see them - no mount propagation is needed for that.
+              mountPropagation: HostToContainer
             - name: shm
               mountPath: /dev/shm
             - name: wal-data

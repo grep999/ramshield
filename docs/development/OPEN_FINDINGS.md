@@ -51,7 +51,7 @@ are the ones used here.
 | F31 | The dashboard's rate readouts read keys the SSE writer never sets | P2 (operator-visible) | **FIXED** — the rate readouts read the keys the stream writes | no |
 | F32 | The dashboard's auth counters go to a Metrics instance that is never exported | P1 (control-plane telemetry) | **FIXED** — the auth state shares the engine's metrics instance, so the CSRF and lockout counters reach the exporter | no |
 | F33 | The shipped server ConfigMap sets an ipc.max_connections the daemon refuses to start with | P1 (deployment) | **FIXED** — the ConfigMap sets 1,024, the value the validator accepts | no |
-| F34 | The Kubernetes probes target the pod IP while the daemon binds loopback | P1 (deployment) | OPEN — The pod never passes its startup probe and is killed and restarted, so the control plane never comes up on the shipped manifests even once F-33 is fixed. | no |
+| F34 | The Kubernetes probes target the pod IP while the daemon binds loopback | P1 (deployment) | **FIXED** — the probes address the loopback bind the daemon actually uses | no |
 | F35 | The ramshield-cli binary is a stub, yet the release ships it and the installer requires it | P1 (operator tooling) | OPEN — `ramshield-cli block 1.2.3.4 --reason manual --ttl 300` prints `RamShield CLI` and exits 0, so an operator believes a block was applied when nothing happened. | no |
 | F36 | The 403 rejections are counted but never exported | P2 (metrics) | **FIXED** — the 403 rejections are exported | no |
 | F37 | The store-RAM refusals are counted but no surface exposes them | P2 (metrics) | **FIXED** — the store's RAM refusals are exported and shown | no |
@@ -70,7 +70,7 @@ are the ones used here.
 | F50 | Three scheduled workflows can never run | P3 (CI) | **FIXED** — the three dead scheduled workflows are deleted | no |
 | F12 | Two stray compiled binaries tracked at the repository root | P2 (hygiene) | **CLOSED** — removed and gitignored in `f900664` | no |
 | F14 | The store's `insert()` publishes a record and then updates the blocked index, with the shard lock released in between | P2 (latent) | **FIXED** — the vacant branch of `insert()` and of `update_ip()` now publish with `insert_entry`, which keeps the shard lock until the guard is dropped, and the index and the size accounting land in that critical section | no |
-| F15 | The Kubernetes DaemonSet asks for a `Bidirectional` mount propagation without `privileged` | P1 | **OPEN** — the API server rejects the manifest: bidirectional propagation is only available to privileged containers, so `kubectl apply` fails | yes — privileged and host-visible BPF pins, or a pin model that does not need them |
+| F15 | The Kubernetes DaemonSet asks for a `Bidirectional` mount propagation without `privileged` | P1 | **FIXED** — the DaemonSet drops the Bidirectional propagation and asks for no privileged container | no |
 | F16 | The ansible quality gate reported a red CI run as a pass | P2 | **FIXED** — the role now compares the run's conclusion with `success` and exits 1 otherwise | no |
 | F17 | The dashboard's quarantine table had 5 headers and 6 cells, and its CSV export dropped the Time column | P2 | **FIXED** — the surplus cell is gone and the export takes all five columns | no |
 | F18 | `scripts/attack_nexus.py`'s `stop` command does not stop the flood | P3 | **FIXED** — the flood polls the flag the command sets | no |
@@ -826,7 +826,7 @@ is fixed with this change.
 
 ## F15 — the Kubernetes DaemonSet asks for a Bidirectional mount propagation it cannot have
 
-**Status:** OPEN (P1) — the manifest is rejected by the API server
+**Status:** FIXED — the DaemonSet drops the Bidirectional propagation and asks for no privileged container
 
 **What it is.** `deploy/k8s/daemonset.yaml:93-97` mounts the BPF
 filesystem with `mountPropagation: Bidirectional`, and the file has no
@@ -1466,7 +1466,7 @@ The shipped ConfigMap passes `Config::validate()`, and a gate asserts it.
 
 ## F34 — The Kubernetes probes target the pod IP while the daemon binds loopback
 
-**Status:** OPEN
+**Status:** FIXED — the probes address the loopback bind the daemon actually uses
 **Files:** `deploy/k8s/deployment.yaml, deploy/k8s/daemonset.yaml, deploy/k8s/configmap.yaml`
 **Severity:** P1 (deployment)
 
