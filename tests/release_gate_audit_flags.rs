@@ -19,18 +19,63 @@ fn the_release_gate_audits_the_flags_the_workflow_runs() {
     let script = read("scripts/verify_release.sh");
     let workflow = read(".github/workflows/dependency_audit.yml");
 
-    let flags = script
+    // The flags the gate audits: the whole tail of its `cargo audit`
+    // invocation, not the first token. A gate that audited
+    // `--no-yanked` while the workflow ran `--no-yanked --deny warnings`
+    // would be checking something the workflow does not do.
+    let invocation = script
         .lines()
         .map(str::trim)
-        .find_map(|l| l.strip_prefix("cargo audit "))
-        .and_then(|rest| rest.split_whitespace().next())
+        .find(|l| l.starts_with("cargo audit "))
         .expect("the release gate must run cargo audit with flags");
+    let flags = invocation["cargo audit ".len()..]
+        .split("&&")
+        .next()
+        .expect("split always yields one element")
+        .trim();
     assert!(
-        workflow.contains(&format!("cargo audit {flags}")),
-        "the workflow must run the flags the release gate audits: cargo audit {flags}"
+        !flags.is_empty(),
+        "the release gate must audit cargo audit with flags"
+    );
+
+    // The workflow must run exactly that invocation.
+    let workflow_run = workflow
+        .lines()
+        .map(str::trim)
+        .find_map(|l| l.strip_prefix("run: "))
+        .filter(|l| l.starts_with("cargo audit"))
+        .expect("the dependency-audit workflow must run cargo audit");
+    assert_eq!(
+        workflow_run,
+        format!("cargo audit {flags}"),
+        "the workflow must run exactly the invocation the release gate audits"
+    );
+
+    // The gate's grep must name the file it greps. A gate that pointed
+    // the grep at a file without a `cargo audit` line would pass this
+    // test while failing at runtime.
+    let grep_line = script
+        .lines()
+        .find(|l| l.contains("grep") && l.contains("cargo audit"))
+        .expect("the release gate must grep for the cargo audit invocation");
+    let target = grep_line
+        .split("&&")
+        .next()
+        .expect("split always yields one element")
+        .trim()
+        .split_whitespace()
+        .last()
+        .expect("the grep line must name a file");
+    assert_eq!(
+        target, ".github/workflows/dependency_audit.yml",
+        "the release gate must grep the dependency-audit workflow"
     );
     assert!(
-        script.contains(&format!("grep -q 'cargo audit {flags}'")),
+        grep_line.contains(&format!("cargo audit {flags}")),
         "the release gate must check the flags the workflow runs: cargo audit {flags}"
+    );
+    assert!(
+        read(target).contains(&format!("cargo audit {flags}")),
+        "the file the release gate greps must contain the invocation it checks"
     );
 }

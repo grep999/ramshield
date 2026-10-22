@@ -68,6 +68,7 @@ are the ones used here.
 | F48 | `/metrics` bypasses the session auth that guards every other route | P3 (exposure) | OPEN — An unauthenticated metrics endpoint on a port the network policy opens to other namespaces. | no |
 | F49 | The backlog gate's open-row parser never matches BACKLOG.md | P3 (CI) | **FIXED** — the gate's parser reads the table BACKLOG.md has | no |
 | F50 | Three scheduled workflows can never run | P3 (CI) | **FIXED** — the three dead scheduled workflows are deleted | no |
+| F51 | The qualification docs tell operators to run a cargo-audit invocation that does not exist | P3 (docs) | **FIXED** — the docs name the flags the workflow runs (PR #83) | no |
 | F12 | Two stray compiled binaries tracked at the repository root | P2 (hygiene) | **CLOSED** — removed and gitignored in `f900664` | no |
 | F14 | The store's `insert()` publishes a record and then updates the blocked index, with the shard lock released in between | P2 (latent) | **FIXED** — the vacant branch of `insert()` and of `update_ip()` now publish with `insert_entry`, which keeps the shard lock until the guard is dropped, and the index and the size accounting land in that critical section | no |
 | F15 | The Kubernetes DaemonSet asks for a `Bidirectional` mount propagation without `privileged` | P1 | **FIXED** — the DaemonSet drops the Bidirectional propagation and asks for no privileged container | no |
@@ -1783,6 +1784,26 @@ Found by the 2026-10-22 full-codebase audit.
 ### Closure criterion
 
 The parser reads the priority column and the status cell of the real table format, and the reported counts match a hand-count.
+
+---
+
+## F51 — The qualification docs tell operators to run a cargo-audit invocation that does not exist
+
+**Status:** FIXED — the docs name the flags the workflow runs
+**Files:** `docs/PRODUCTION_QUALIFICATION.md, docs/PRODUCTION_0.4.0.md`
+**Severity:** P3 (docs)
+
+Found by the 2026-10-22 F-42 review.
+
+### What it was
+
+`docs/PRODUCTION_QUALIFICATION.md:10` and `docs/PRODUCTION_0.4.0.md:99` listed `cargo audit --locked` in the operator-facing qualification checklist. `--locked` is not a cargo-audit flag: cargo-audit 0.22.2 rejects the invocation with `error: unexpected argument '--locked' found` and exits 2. The stale expectation came from the same 2026-10-06 change that left `scripts/verify_release.sh` auditing `--locked` while the workflow ran `--no-yanked` (F-42).
+
+**Why it mattered.** An operator following the qualification checklist ran a command that cannot succeed, and the failure looks like a broken toolchain rather than a wrong flag.
+
+### Closure criterion
+
+The checklist names the invocation the dependency-audit workflow actually runs.
 
 ---
 

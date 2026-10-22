@@ -7,7 +7,7 @@ cargo fmt --all -- --check
 cargo check --workspace --locked --all-targets --features full
 cargo clippy --workspace --locked --all-targets --features full -- -D warnings
 cargo test --workspace --locked --features full
-cargo audit --locked
+cargo audit --no-yanked
 scripts/upgrade_qualification.sh
 scripts/xdp_qual_matrix.sh --live
 scripts/prod_smoke.sh

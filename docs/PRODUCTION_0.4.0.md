@@ -96,7 +96,7 @@ fmt --check
 check --locked --all-targets --features full
 clippy --locked --all-targets --features full -- -D warnings
 test --workspace --locked --features full
-cargo audit --locked
+cargo audit --no-yanked
 cargo deny check
 installer checksum/signature verification
 upgrade + rollback state preservation
