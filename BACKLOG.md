@@ -128,6 +128,31 @@ These are the items tracked as findings rather than as rows: the open items from
 | **F28** | The advanced CI workflow runs the benchmarks as tests and masks the benchmark build failure. | OPEN — `cargo test --all-targets` and `cargo bench --no-run || true`. |
 | **F29** | The Subnet Stress Pin gate asserts against a fixed four-second sleep. | FIXED — the script waits for the counters to settle. The run on `4b88864` was red on a docs-only commit (206 IPs tracked against a threshold of 800). |
 | **F30** | `block_ip` trusts the caller to pass a blocked fallback; the only guard is a `debug_assert!`. | OPEN — the release build publishes whatever `block_state` the fallback carries, and a clean fallback would put the key in the blocked index while the record says clean. The only production caller passes the right thing. |
+**The 2026-10-22 full-codebase audit** (8 areas, read-only) added 20 findings, F-31..F-50, all in `docs/development/OPEN_FINDINGS.md`. The ones that change what an operator sees or what a deployment does:
+
+| id | finding | severity |
+|---|---|---|
+| F-31 | the dashboard's rate readouts read keys the SSE writer never sets, so every rate reads 0 | P2 |
+| F-32 | the dashboard's auth counters go to a Metrics instance that is never exported | P1 |
+| F-33 | the shipped server ConfigMap's `ipc.max_connections` exceeds the validated limit, so the pod refuses to start | P1 |
+| F-34 | the Kubernetes probes target the pod IP while the daemon binds loopback | P1 |
+| F-35 | `ramshield-cli` is a five-line stub but the release ships it, the installer requires it and the docs document its commands | P1 |
+| F-36 | the 403 rejections are counted but never exported | P2 |
+| F-37 | the store-RAM refusals are counted but no surface exposes them | P2 |
+| F-38 | the XDP-divergence stale flag is erased 250 ms after it is raised | P2 |
+| F-39 | the "Drops vs Ingress" chart plots a literal 0 for drops | P2 |
+| F-40 | the blocklist gauge compares a lifetime counter with a hardcoded capacity | P2 |
+| F-41 | two dashboard rows are overwritten with `n/a` by the 100 ms SSE path | P2 |
+| F-42 | the release gate greps for a dependency-audit flag the workflow no longer uses | P2 |
+| F-43 | the installer writes a unit that grants the daemon `/proc/sys` write access it must never have | P2 |
+| F-44 | the Ansible deploy role renders into a directory that does not exist and applies a 22-line stub template | P2 |
+| F-45 | two exported series miss the `ramshield_` namespace | P3 |
+| F-46 | the pipeline stage bars mix units | P3 |
+| F-47 | the quarantine table fabricates the severity and tier of every row | P3 |
+| F-48 | `/metrics` bypasses the session auth | P3 |
+| F-49 | the backlog gate's open-row parser never matches `BACKLOG.md` | P3 |
+| F-50 | three scheduled workflows are gated on a branch that does not exist | P3 |
+
 
 **The 2026-10-22 master audit** (`35f4557`) is in this table already, item
 by item: the node-guard admission blocker is **I-027**/F15, the IPC

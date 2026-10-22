@@ -48,6 +48,26 @@ are the ones used here.
 | F28 | The advanced CI workflow runs the benchmarks as tests and masks the benchmark build failure | P2 (CI) | OPEN — `cargo test --all-targets` and `cargo bench --no-run || true` | no |
 | F29 | The Subnet Stress Pin gate asserts against a fixed four-second sleep | P2 (CI) | **FIXED** — the script now waits for the counters to settle | no |
 | F30 | `block_ip` trusts the caller to pass a blocked fallback; the only guard is a `debug_assert!` | P3 (hardening) | OPEN — the release build publishes whatever `block_state` the fallback carries, and a clean fallback would put the key in the blocked index while the record says clean | no |
+| F31 | The dashboard's rate readouts read keys the SSE writer never sets | P2 (operator-visible) | OPEN — An operator watching a live attack sees `0 drops/s` and `0 events/s` on the headline KPIs and the overview rows. | no |
+| F32 | The dashboard's auth counters go to a Metrics instance that is never exported | P1 (control-plane telemetry) | OPEN — `ramshield_csrf_blocked_total`, `ramshield_csrf_allowed_total`, the lockout counter and the Argon2 wait gauge stay 0 in `/metrics` forever, so control-plane abuse is invisible to Prometheus. | no |
+| F33 | The shipped server ConfigMap sets an ipc.max_connections the daemon refuses to start with | P1 (deployment) | OPEN — `kubectl apply -f deploy/k8s/` puts the server pod into CrashLoopBackOff at boot. `scripts/verify_release.sh` only checks the loopback addresses in that file, so the release gate passes. | no |
+| F34 | The Kubernetes probes target the pod IP while the daemon binds loopback | P1 (deployment) | OPEN — The pod never passes its startup probe and is killed and restarted, so the control plane never comes up on the shipped manifests even once F-33 is fixed. | no |
+| F35 | The ramshield-cli binary is a stub, yet the release ships it and the installer requires it | P1 (operator tooling) | OPEN — `ramshield-cli block 1.2.3.4 --reason manual --ttl 300` prints `RamShield CLI` and exits 0, so an operator believes a block was applied when nothing happened. | no |
+| F36 | The 403 rejections are counted but never exported | P2 (metrics) | OPEN — The gap between `events_rejected_total` and its exported breakdown equals the 403 count, and no series explains it. | no |
+| F37 | The store-RAM refusals are counted but no surface exposes them | P2 (metrics) | OPEN — Under the RAM budget an IP is dropped from tracking entirely and every displayed counter stays flat, while the ledger says the event is visible. | no |
+| F38 | The XDP-divergence stale flag is erased 250 ms after it is raised | P2 (health signal) | OPEN — Apply failure sets stale for a fraction of a second; the health computation in `src/engine/mod.rs:232` never observes the divergence. Only the separate failure counter remains as evidence. | no |
+| F39 | The "Drops vs Ingress" chart never plots drops | P2 (operator-visible) | OPEN — The red drop series stays glued to the axis while the ingress series moves, contradicting the panel's own title. | no |
+| F40 | The blocklist gauge compares a lifetime counter with a hardcoded capacity | P2 (operator-visible) | OPEN — After 102,400 lifetime blocks the bar pins at 100% forever, and with a non-default `BLOCKLIST_CAP` the denominator is wrong too. | no |
+| F41 | Two dashboard rows are overwritten with `n/a` by the SSE path | P2 (operator-visible) | OPEN — The "Subnet Bitmap" row shows a number for at most one frame after each refresh and `n/a` the rest of the time - effectively never visible. | no |
+| F42 | The release gate greps for a dependency-audit flag the workflow no longer uses | P2 (CI) | OPEN — Every operator who runs the documented release gate gets a non-zero exit and a false dependency-audit failure, which erodes trust in the other 27 checks. | no |
+| F43 | The installer writes a unit that grants the daemon write access it must never have | P2 (security) | OPEN — The two ways to install RamShield produce different sandboxes, and the looser one is the default the installer writes. | no |
+| F44 | The Ansible deploy role renders into a directory that does not exist and applies a stub template | P2 (deployment) | OPEN — The k8s deploy path cannot work: the rendered Deployment mounts no config, the `ramshield-admin` Secret is absent, and the static manifests in `deploy/k8s/` are never applied. The default `latest` tag also violates the pinned-tag policy `scripts/verify_release.sh:12` enforces. | no |
+| F45 | Two exported series miss the `ramshield_` namespace | P3 (metrics) | OPEN — The two series collide with another exporter's names in a shared Prometheus. | no |
+| F46 | The pipeline stage bars mix units | P3 (display) | OPEN — The stage bars are not meaningful: the numbers contradict the labels. | no |
+| F47 | The quarantine table fabricates the severity and tier of every row | P3 (display) | OPEN — The table misrepresents the reason each block was issued for. | no |
+| F48 | `/metrics` bypasses the session auth that guards every other route | P3 (exposure) | OPEN — An unauthenticated metrics endpoint on a port the network policy opens to other namespaces. | no |
+| F49 | The backlog gate's open-row parser never matches BACKLOG.md | P3 (CI) | OPEN — The Backlog Gate's own summary misstates the open backlog: `A-038` is OPEN while the gate reports zero open P0/P1 rows. | no |
+| F50 | Three scheduled workflows can never run | P3 (CI) | OPEN — The `*/5`, `*/30` and `*/15` cron jobs are skipped on every tick and the three agent scripts never run in CI; the only signal is the absence of activity. | no |
 | F12 | Two stray compiled binaries tracked at the repository root | P2 (hygiene) | **CLOSED** — removed and gitignored in `f900664` | no |
 | F14 | The store's `insert()` publishes a record and then updates the blocked index, with the shard lock released in between | P2 (latent) | **FIXED** — the vacant branch of `insert()` and of `update_ip()` now publish with `insert_entry`, which keeps the shard lock until the guard is dropped, and the index and the size accounting land in that critical section | no |
 | F15 | The Kubernetes DaemonSet asks for a `Bidirectional` mount propagation without `privileged` | P1 | **OPEN** — the API server rejects the manifest: bidirectional propagation is only available to privileged containers, so `kubectl apply` fails | yes — privileged and host-visible BPF pins, or a pin model that does not need them |
@@ -1379,5 +1399,405 @@ nothing says the benchmark targets stopped compiling.
 
 No CI job runs the benchmark harness as a test, and a benchmark build
 failure is visible.
+
+---
+
+## F31 — The dashboard's rate readouts read keys the SSE writer never sets
+
+**Status:** OPEN
+**Files:** `src/dashboard/static/index.html`
+**Severity:** P2 (operator-visible)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`index.html:525` writes `drops_total_pps`, `ingest_total_pps` and `shed_total_pps` into `dSlots`, but the readouts at `:534`, `:540` and `:542` read `drops_pps`, `ingest_pps` and `shed_pps`. `fmt` returns `'0'` for an undefined key, so every rate on the dashboard is 0 at any traffic. The `ewma` table at `:555` defines the short names, but `:525` updates the long ones.
+
+**Why it matters.** An operator watching a live attack sees `0 drops/s` and `0 events/s` on the headline KPIs and the overview rows.
+
+### Closure criterion
+
+The rate values change when the counters change, and no key is read that is not written.
+
+---
+
+## F32 — The dashboard's auth counters go to a Metrics instance that is never exported
+
+**Status:** OPEN
+**Files:** `src/dashboard/mod.rs, src/dashboard/auth.rs`
+**Severity:** P1 (control-plane telemetry)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`src/dashboard/mod.rs:43` passes a fresh `Arc::new(Metrics::new())` into `AuthState::new`. The exported instance is `state.engine.metrics` (`:154`). The CSRF and lockout counters are written to the auth instance (`mod.rs:346`, `:360`, `auth.rs:417`, `:443`) and the exporter reads them from the engine instance (`prometheus.rs:482-489`, `:203-211`).
+
+**Why it matters.** `ramshield_csrf_blocked_total`, `ramshield_csrf_allowed_total`, the lockout counter and the Argon2 wait gauge stay 0 in `/metrics` forever, so control-plane abuse is invisible to Prometheus.
+
+### Closure criterion
+
+After one blocked CSRF request and one lockout the corresponding series is greater than zero.
+
+---
+
+## F33 — The shipped server ConfigMap sets an ipc.max_connections the daemon refuses to start with
+
+**Status:** OPEN
+**Files:** `deploy/k8s/configmap.yaml`
+**Severity:** P1 (deployment)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`deploy/k8s/configmap.yaml:20` sets `max_connections = 4096`; `crates/ramshield-config/src/validate.rs:313-315` rejects anything above 1,024. The node-guard ConfigMap uses 1,024 (`configmap-node.yaml:20`). The auditor reproduced it: the extracted ConfigMap, with only the WAL dir and ports rewritten, makes the binary exit 1 with `ipc.max_connections should not exceed 1,024`.
+
+**Why it matters.** `kubectl apply -f deploy/k8s/` puts the server pod into CrashLoopBackOff at boot. `scripts/verify_release.sh` only checks the loopback addresses in that file, so the release gate passes.
+
+### Closure criterion
+
+The shipped ConfigMap passes `Config::validate()`, and a gate asserts it.
+
+---
+
+## F34 — The Kubernetes probes target the pod IP while the daemon binds loopback
+
+**Status:** OPEN
+**Files:** `deploy/k8s/deployment.yaml, deploy/k8s/daemonset.yaml, deploy/k8s/configmap.yaml`
+**Severity:** P1 (deployment)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+Both ConfigMaps set `[dashboard] http_addr = "127.0.0.1:9999"` (`configmap.yaml:24`, `configmap-node.yaml:25`) and `src/dashboard/mod.rs:80` binds that address verbatim. The probes in `deployment.yaml:70-93` and `daemonset.yaml:77-88` are `httpGet` on the named port with no `host:`, so the kubelet connects to the pod IP. The manifests also disagree with each other: `daemonset.yaml:56` says the dashboard binds `0.0.0.0:9999` and `networkpolicy.yaml` opens 9999 to other namespaces.
+
+**Why it matters.** The pod never passes its startup probe and is killed and restarted, so the control plane never comes up on the shipped manifests even once F-33 is fixed.
+
+### Closure criterion
+
+`kubectl apply` of `deploy/k8s` yields a pod that becomes Ready with no restarts.
+
+---
+
+## F35 — The ramshield-cli binary is a stub, yet the release ships it and the installer requires it
+
+**Status:** OPEN
+**Files:** `src/cli.rs`
+**Severity:** P1 (operator tooling)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`src/cli.rs` is five lines: it prints `RamShield CLI` and exits 0. `Cargo.toml:35-37` declares the binary, `release.yml:50,56` tars it into both archives, `scripts/install.sh:44` fails the install when it is missing and `:52` installs it, and `README.md:69-80` plus `docs/OPERATIONS.md:16-52` document `status`, `stats`, `check`, `info`, `block`, `unblock` and `unblock-cidr`. The 231-line implementation was deleted in `a6fe284` and re-added as the stub in `918732b`; `git show 59d4bc6:src/cli.rs` is the pre-deletion version. `scripts/upgrade_qualification.sh:70-85` drives the qualification with exactly those subcommands and greps for `"blocked": true`.
+
+**Why it matters.** `ramshield-cli block 1.2.3.4 --reason manual --ttl 300` prints `RamShield CLI` and exits 0, so an operator believes a block was applied when nothing happened.
+
+### Closure criterion
+
+Either the CLI works as documented, or the binary, its packaging, the installer check and the documented commands are removed in the same change.
+
+---
+
+## F36 — The 403 rejections are counted but never exported
+
+**Status:** OPEN
+**Files:** `crates/ramshield-metrics/src/prometheus.rs, src/ipc/server/handlers.rs`
+**Severity:** P2 (metrics)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`src/ipc/server/handlers.rs:59-60` increments `inc_rejected(1)` and `inc_ipc_authz_rejections(1)` on a 403. The exporter publishes `ramshield_ipc_event_drops_total`, `ramshield_ipc_auth_rejections_total` and `ramshield_ipc_rejected_connections_total`, and no series for `ipc_authz_rejections`, so the breakdown the field's own doc comment promises (`crates/ramshield-metrics/src/lib.rs:37-43`) does not sum to the aggregate.
+
+**Why it matters.** The gap between `events_rejected_total` and its exported breakdown equals the 403 count, and no series explains it.
+
+### Closure criterion
+
+The exported breakdown sums to the aggregate, and 403s have their own series.
+
+---
+
+## F37 — The store-RAM refusals are counted but no surface exposes them
+
+**Status:** OPEN
+**Files:** `crates/ramshield-detection/src/flush.rs, crates/ramshield-metrics/src/prometheus.rs`
+**Severity:** P2 (metrics)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`crates/ramshield-detection/src/flush.rs:218-225` increments `capacity_exceeded_count` and `capacity_exceeded_ips`; neither field appears in the exporter, and the dashboard's "Cap Exceeded" row is the literal `'n/a'` (`src/dashboard/static/index.html:544`). `docs/development/OPEN_FINDINGS.md` states the refusal "is already observable (`capacity_exceeded_count` / `capacity_exceeded_ips`)", which the code contradicts.
+
+**Why it matters.** Under the RAM budget an IP is dropped from tracking entirely and every displayed counter stays flat, while the ledger says the event is visible.
+
+### Closure criterion
+
+The refusal appears in `/metrics` and on the dashboard row that exists for it.
+
+---
+
+## F38 — The XDP-divergence stale flag is erased 250 ms after it is raised
+
+**Status:** OPEN
+**Files:** `crates/ramshield-enforcement/src/service/run.rs, crates/ramshield-metrics/src/xdp_health.rs`
+**Severity:** P2 (health signal)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`crates/ramshield-enforcement/src/service/enforce.rs:333` calls `mark_xdp_projection_stale()` on a failed XDP apply. The 250 ms tick in `service/run.rs:34,63` calls `tick_reconcile_age`, which recomputes the flag in `xdp_health.rs:77-82` as `(last == 0 || age > XDP_PROJECTION_STALE_SECS)` - zero whenever the last reconcile worked recently, which is the normal case.
+
+**Why it matters.** Apply failure sets stale for a fraction of a second; the health computation in `src/engine/mod.rs:232` never observes the divergence. Only the separate failure counter remains as evidence.
+
+### Closure criterion
+
+After a failed apply the stale flag stays set until a successful reconcile.
+
+---
+
+## F39 — The "Drops vs Ingress" chart never plots drops
+
+**Status:** OPEN
+**Files:** `src/dashboard/static/index.html`
+**Severity:** P2 (operator-visible)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+The panel is titled "Packet Pipeline Velocity (Drops vs Ingress)" (`index.html:346`) and the only telemetry push is `:476` `pushTelemetry(0, ingress)` - the drop argument is a literal 0. The SSE path has the drop totals in `d.xdp.v4_drops_total` / `v6_drops_total` (`:520`) and does not use them.
+
+**Why it matters.** The red drop series stays glued to the axis while the ingress series moves, contradicting the panel's own title.
+
+### Closure criterion
+
+The red series tracks the XDP drop counters.
+
+---
+
+## F40 — The blocklist gauge compares a lifetime counter with a hardcoded capacity
+
+**Status:** OPEN
+**Files:** `src/dashboard/static/index.html, src/dashboard/mod.rs`
+**Severity:** P2 (operator-visible)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+The row is labelled "Blocklist" with `0 / 102400` (`index.html:253`) and rendered as `fmt(snap.blocked_total,0)+' / '+fmt(x.map_capacity,0)` (`:541`). `snap.blocked_total` is the cumulative `blocks_total` counter, not current map occupancy, and `x.map_capacity` is the literal `102400` (`src/dashboard/mod.rs:502`) while the real cap is `BLOCKLIST_CAP` (`crates/ramshield-xdp/ramshield-xdp-bpf/src/main.rs:89-109`).
+
+**Why it matters.** After 102,400 lifetime blocks the bar pins at 100% forever, and with a non-default `BLOCKLIST_CAP` the denominator is wrong too.
+
+### Closure criterion
+
+The row shows current map occupancy, or is labelled as what it actually is.
+
+---
+
+## F41 — Two dashboard rows are overwritten with `n/a` by the SSE path
+
+**Status:** OPEN
+**Files:** `src/dashboard/static/index.html`
+**Severity:** P2 (operator-visible)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+The 5-second refresh computes the "Subnet Bitmap" and "Cap Exceeded" rows (`index.html:478`), but the 100 ms SSE path `renderStream` (`:544`) sets both to the literal `'n/a'`, and it runs 10 times a second.
+
+**Why it matters.** The "Subnet Bitmap" row shows a number for at most one frame after each refresh and `n/a` the rest of the time - effectively never visible.
+
+### Closure criterion
+
+The rows hold a value continuously.
+
+---
+
+## F42 — The release gate greps for a dependency-audit flag the workflow no longer uses
+
+**Status:** OPEN
+**Files:** `scripts/verify_release.sh`
+**Severity:** P2 (CI)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`scripts/verify_release.sh:14` requires the workflow to contain `cargo audit --locked`; `.github/workflows/dependency_audit.yml:20` runs `cargo audit --no-yanked`. The auditor ran the gate on the audited tree: `FAIL dependency audit gate` and `release gate: 27 pass, 1 fail` (exit 1). `deny.toml:4` sets `yanked = "deny"`, so the workflow's flag is the deliberate policy and the script's expectation is the stale half.
+
+**Why it matters.** Every operator who runs the documented release gate gets a non-zero exit and a false dependency-audit failure, which erodes trust in the other 27 checks.
+
+### Closure criterion
+
+`scripts/verify_release.sh --static` exits 0 on master, and the workflow's flags match the script's expectation.
+
+---
+
+## F43 — The installer writes a unit that grants the daemon write access it must never have
+
+**Status:** OPEN
+**Files:** `scripts/install.sh, deploy/systemd/ramshield.service`
+**Severity:** P2 (security)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`scripts/install.sh:87` writes a `ReadWritePaths=` line for three `/proc/sys` tunables, and systemd's `ReadWritePaths=` is additive, so the unit the installer writes grants them. The tracked unit `deploy/systemd/ramshield.service:32` grants no `/proc/sys` write path, and `src/engine/synproxy.rs:150-151` states the daemon never writes `/proc/sys` and must never try.
+
+**Why it matters.** The two ways to install RamShield produce different sandboxes, and the looser one is the default the installer writes.
+
+### Closure criterion
+
+`install.sh` and `deploy/systemd/ramshield.service` produce equivalent units, and neither grants `/proc/sys` write access.
+
+---
+
+## F44 — The Ansible deploy role renders into a directory that does not exist and applies a stub template
+
+**Status:** OPEN
+**Files:** `ansible/roles/deploy/tasks/main.yml, ansible/roles/deploy/templates/k8s-deployment.yaml.j2`
+**Severity:** P2 (deployment)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`ansible/roles/deploy/tasks/main.yml:57` renders into `{{ project_dir }}/deploy/rendered/deployment.yaml`; no task creates that directory, and `:61` applies whatever is in it. The template `k8s-deployment.yaml.j2` is 22 lines: a Deployment with an image tag (default `latest`) and `--config /etc/ramshield/config.toml`, and no volumes, ConfigMap mount, WAL PVC, probes, secret reference or env.
+
+**Why it matters.** The k8s deploy path cannot work: the rendered Deployment mounts no config, the `ramshield-admin` Secret is absent, and the static manifests in `deploy/k8s/` are never applied. The default `latest` tag also violates the pinned-tag policy `scripts/verify_release.sh:12` enforces.
+
+### Closure criterion
+
+The k8s deploy path applies the same manifest set as `deploy/k8s/` with a pinned image tag, and the rendered directory is created by the role.
+
+---
+
+## F45 — Two exported series miss the `ramshield_` namespace
+
+**Status:** OPEN
+**Files:** `crates/ramshield-metrics/src/prometheus.rs`
+**Severity:** P3 (metrics)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`prometheus.rs:203` exports `auth_lockout_total` and `:209` exports `auth_verification_wait_ms`; every other series in the file carries the `ramshield_` prefix.
+
+**Why it matters.** The two series collide with another exporter's names in a shared Prometheus.
+
+### Closure criterion
+
+Every exported series is namespaced.
+
+---
+
+## F46 — The pipeline stage bars mix units
+
+**Status:** OPEN
+**Files:** `src/dashboard/mod.rs`
+**Severity:** P3 (display)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`src/dashboard/mod.rs:489` emits the cold stage with `unit: "IPs"` and `ingress: snapshot.pipeline.batched`, which is `metrics.batches_total` (a count of flushes) while `drops` is an IP count; `:490` mixes the cumulative `promoted`/`blocked` with `merged`, which is `stats.ips_tracked`, a current gauge. The frontend derives a utilisation percentage across the mixed units (`index.html:507-509`).
+
+**Why it matters.** The stage bars are not meaningful: the numbers contradict the labels.
+
+### Closure criterion
+
+Each stage's ingress and drops share a unit.
+
+---
+
+## F47 — The quarantine table fabricates the severity and tier of every row
+
+**Status:** OPEN
+**Files:** `src/dashboard/static/index.html`
+**Severity:** P3 (display)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`index.html:484` renders every row with the constants `'CRITICAL'` and `'Tier 3 (XDP)'`, while the record carries a real `reason` (`crates/ramshield-metrics/src/types.rs`, filled by `record_block_ip` in `history.rs:49-64`).
+
+**Why it matters.** The table misrepresents the reason each block was issued for.
+
+### Closure criterion
+
+The severity and tier columns derive from the record.
+
+---
+
+## F48 — `/metrics` bypasses the session auth that guards every other route
+
+**Status:** OPEN
+**Files:** `src/dashboard/auth.rs`
+**Severity:** P3 (exposure)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`src/dashboard/auth.rs:334` exempts `/metrics` from `require_auth` together with `/healthz`, `/livez` and `/login`. The exporter emits no per-IP data, so the exposure is operational counters only, but `deploy/k8s/networkpolicy.yaml` admits 9999 from selected namespaces.
+
+**Why it matters.** An unauthenticated metrics endpoint on a port the network policy opens to other namespaces.
+
+### Closure criterion
+
+The exemption is documented as intentional, or `/metrics` is restricted.
+
+---
+
+## F49 — The backlog gate's open-row parser never matches BACKLOG.md
+
+**Status:** OPEN
+**Files:** `backlog.yml`
+**Severity:** P3 (CI)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`.github/workflows/backlog.yml:77-88` counts rows with an awk that looks for a `## P0` heading and a trailing `| OPEN` cell. `BACKLOG.md` has no such heading - priority is a column (`:71`) and the status cell is free prose (`:75`). The auditor ran the workflow's exact awk on the committed file: every row yields an empty status cell, so the step summary prints "OPEN P0 rows: 0" and publishes those zeros.
+
+**Why it matters.** The Backlog Gate's own summary misstates the open backlog: `A-038` is OPEN while the gate reports zero open P0/P1 rows.
+
+### Closure criterion
+
+The parser reads the priority column and the status cell of the real table format, and the reported counts match a hand-count.
+
+---
+
+## F50 — Three scheduled workflows can never run
+
+**Status:** OPEN
+**Files:** `helper.yml, error_healer.yml, health_dashboard.yml`
+**Severity:** P3 (CI)
+
+Found by the 2026-10-22 full-codebase audit.
+
+### What it is
+
+`.github/workflows/helper.yml:11`, `error_healer.yml:11` and `health_dashboard.yml:11` gate their job on `if: github.ref == 'refs/heads/feature/ramshield-advanced'`. No such branch exists on the remote, and for a `schedule` event GitHub evaluates `github.ref` as the default branch, which is `master`. The same dead branch gates `advanced.yml:5`.
+
+**Why it matters.** The `*/5`, `*/30` and `*/15` cron jobs are skipped on every tick and the three agent scripts never run in CI; the only signal is the absence of activity.
+
+### Closure criterion
+
+The scheduled workflows either target the default branch or are deleted.
 
 ---
