@@ -45,7 +45,7 @@ are the ones used here.
 | F25 | `ramshield-protocol` declares a dependency on `ramshield-storage` it never uses | P3 (hygiene) | **FIXED** — on `master` as `1315236` (PR #63, the code commit `4fbf680`): the dependency is gone from `crates/ramshield-protocol/Cargo.toml`; the crate declares only `ramshield-types` | no |
 | F26 | `FAIL_SAFE_BEHAVIOR.md` claims a global fail-closed posture the dataplane does not have | P2 (doc) | **FIXED** — the document states each subsystem's own posture, and `tests/fail_safe_claims.rs` pins it to the source | no |
 | F27 | `scripts/prod_smoke.sh` claims checks it does not perform, and it deletes an env-overridable path | P1 (data loss) | OPEN — the unblock, CIDR and TTL checks are advertised and absent, and `rm -rf "$WAL_DIR"` runs on a path the environment can override | no — the cleanup needs a guard, the checks need to exist |
-| F28 | The advanced CI workflow runs the benchmarks as tests and masks the benchmark build failure | P2 (CI) | OPEN — `cargo test --all-targets` and `cargo bench --no-run || true` | no |
+| F28 | The advanced CI workflow runs the benchmarks as tests and masks the benchmark build failure | P2 (CI) | **FIXED** — the benchmark build failure fails the job | no |
 | F29 | The Subnet Stress Pin gate asserts against a fixed four-second sleep | P2 (CI) | **FIXED** — the script now waits for the counters to settle | no |
 | F30 | `block_ip` trusts the caller to pass a blocked fallback; the only guard is a `debug_assert!` | P3 (hardening) | OPEN — the release build publishes whatever `block_state` the fallback carries, and a clean fallback would put the key in the blocked index while the record says clean | no |
 | F31 | The dashboard's rate readouts read keys the SSE writer never sets | P2 (operator-visible) | OPEN — An operator watching a live attack sees `0 drops/s` and `0 events/s` on the headline KPIs and the overview rows. | no |
@@ -1363,7 +1363,7 @@ and the script cannot delete a directory it did not create.
 
 ## F28 — The advanced CI workflow runs the benchmarks as tests and masks the benchmark build failure
 
-**Status:** OPEN
+**Status:** FIXED — the benchmark build failure fails the job
 **Files:** `.github/workflows/advanced.yml`
 **Severity:** P2 (CI)
 

@@ -71,4 +71,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo bench --no-run || true
+      # No `|| true`: a benchmark build failure must fail the job. The
+      # build passes on this tree - verified locally with
+      # `cargo bench --no-run` - so the mask only hid the failures it
+      # was there to hide.
+      - run: cargo bench --no-run

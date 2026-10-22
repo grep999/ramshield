@@ -147,3 +147,39 @@ fn no_scheduled_workflow_is_gated_on_a_branch_that_cannot_exist() {
         "the repository must still have scheduled workflows"
     );
 }
+
+#[test]
+fn no_jobs_last_step_masks_its_own_failure() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".github/workflows");
+    for entry in std::fs::read_dir(&dir).expect("the workflows directory must exist") {
+        let path = entry.expect("a workflow entry must be readable").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("yml") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("a workflow must be readable");
+        // The run steps of each job, in order. A step's exit code is the
+        // job's only when it is the last one, so a last step that masks
+        // its own failure makes the job green whatever happened.
+        let mut job = String::new();
+        let mut steps: Vec<(usize, String)> = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            if line.starts_with("  ") && !line.starts_with("   ") && line.trim_end().ends_with(':')
+            {
+                job = line.trim().trim_end_matches(':').to_string();
+                steps.clear();
+                continue;
+            }
+            if let Some(step) = line.trim().strip_prefix("- run:") {
+                steps.push((n + 1, step.trim().to_string()));
+            }
+        }
+        if let Some((n, step)) = steps.last() {
+            assert!(
+                !step.ends_with("|| true"),
+                "{}:{n} - the last step of the job `{job}` masks its own failure, so \
+                 the job is green whatever happened: {step}",
+                path.display()
+            );
+        }
+    }
+}
