@@ -62,7 +62,6 @@ fn the_release_gate_audits_the_flags_the_workflow_runs() {
         .split("&&")
         .next()
         .expect("split always yields one element")
-        .trim()
         .split_whitespace()
         .last()
         .expect("the grep line must name a file");
