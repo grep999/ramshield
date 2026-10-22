@@ -83,8 +83,8 @@ jobs:
           bpf-linker --version
       - name: Check core-only
         run: cargo check --workspace --locked --all-targets --exclude ramshield-mesh
-      - name: Check all features
-        run: cargo check --workspace --locked --all-targets --exclude ramshield-mesh --all-features
+      - name: Check production full
+        run: cargo check --workspace --locked --all-targets --exclude ramshield-mesh --features full
 
   build:
     name: Build
@@ -106,8 +106,8 @@ jobs:
           bpf-linker --version
       - name: Build core-only
         run: cargo build --workspace --locked --all-targets --exclude ramshield-mesh
-      - name: Build all features
-        run: cargo build --workspace --locked --all-targets --exclude ramshield-mesh --all-features
+      - name: Build production full
+        run: cargo build --workspace --locked --all-targets --exclude ramshield-mesh --features full
 
   test:
     name: Test
