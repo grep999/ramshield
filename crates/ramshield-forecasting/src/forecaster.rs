@@ -123,7 +123,7 @@ impl Forecaster {
         };
 
         // ── Entropy delta: current Shannon entropy minus baseline ────────────
-        let delta_h = {
+        let (delta_h, h) = {
             // ponytail: stack array, no heap alloc per tick
             let mut counts = [0u64; 256];
             let mut total = 0u64;
@@ -141,8 +141,14 @@ impl Forecaster {
             let dh = if *prev == 0.0 { 0.0 } else { h - *prev };
             *prev = h;
             self.metrics.set_entropy(h);
-            dh
+            (dh, h)
         };
+        // The entropy floor. Below it the traffic is concentrated on a
+        // few subnets, so an entropy DROP is not a flash crowd (a
+        // legitimate spread-out surge) but a narrowing - the anomaly the
+        // forecaster exists to see. The knob was validated and
+        // documented and never read (F-23).
+        let concentrated = h < self.config.min_entropy;
 
         // ── Bayesian update ──────────────────────────────────────────────────
         let hypothesis = {
@@ -209,10 +215,20 @@ impl Forecaster {
                 self.cusum.lock().await.reset();
             }
             Some((Hypothesis::FlashCrowd, conf)) => {
-                info!(
-                    "BAYESIAN H3 FLASH-CROWD conf={:.2} ΔH={:.2} rps={:.1} — no block",
-                    conf, delta_h, rps
-                );
+                if concentrated {
+                    // The traffic was already concentrated when the
+                    // entropy fell, so this is not a legitimate surge
+                    // spreading out - it is a narrowing.
+                    warn!(
+                        "BAYESIAN H3 ENTROPY-ANOMALY conf={:.2} ΔH={:.2} entropy={:.2} < min_entropy={:.2} rps={:.1} — no block",
+                        conf, delta_h, h, self.config.min_entropy, rps
+                    );
+                } else {
+                    info!(
+                        "BAYESIAN H3 FLASH-CROWD conf={:.2} ΔH={:.2} rps={:.1} — no block",
+                        conf, delta_h, rps
+                    );
+                }
                 // intentional: flash crowd = legitimate traffic surge, no blocking
             }
             _ => {
