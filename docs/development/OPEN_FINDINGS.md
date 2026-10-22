@@ -66,8 +66,8 @@ are the ones used here.
 | F46 | The pipeline stage bars mix units | P3 (display) | OPEN — The stage bars are not meaningful: the numbers contradict the labels. | no |
 | F47 | The quarantine table fabricates the severity and tier of every row | P3 (display) | OPEN — The table misrepresents the reason each block was issued for. | no |
 | F48 | `/metrics` bypasses the session auth that guards every other route | P3 (exposure) | OPEN — An unauthenticated metrics endpoint on a port the network policy opens to other namespaces. | no |
-| F49 | The backlog gate's open-row parser never matches BACKLOG.md | P3 (CI) | OPEN — The Backlog Gate's own summary misstates the open backlog: `A-038` is OPEN while the gate reports zero open P0/P1 rows. | no |
-| F50 | Three scheduled workflows can never run | P3 (CI) | OPEN — The `*/5`, `*/30` and `*/15` cron jobs are skipped on every tick and the three agent scripts never run in CI; the only signal is the absence of activity. | no |
+| F49 | The backlog gate's open-row parser never matches BACKLOG.md | P3 (CI) | **FIXED** — the gate's parser reads the table BACKLOG.md has | no |
+| F50 | Three scheduled workflows can never run | P3 (CI) | **FIXED** — the three dead scheduled workflows are deleted | no |
 | F12 | Two stray compiled binaries tracked at the repository root | P2 (hygiene) | **CLOSED** — removed and gitignored in `f900664` | no |
 | F14 | The store's `insert()` publishes a record and then updates the blocked index, with the shard lock released in between | P2 (latent) | **FIXED** — the vacant branch of `insert()` and of `update_ip()` now publish with `insert_entry`, which keeps the shard lock until the guard is dropped, and the index and the size accounting land in that critical section | no |
 | F15 | The Kubernetes DaemonSet asks for a `Bidirectional` mount propagation without `privileged` | P1 | **OPEN** — the API server rejects the manifest: bidirectional propagation is only available to privileged containers, so `kubectl apply` fails | yes — privileged and host-visible BPF pins, or a pin model that does not need them |
@@ -1766,7 +1766,7 @@ The exemption is documented as intentional, or `/metrics` is restricted.
 
 ## F49 — The backlog gate's open-row parser never matches BACKLOG.md
 
-**Status:** OPEN
+**Status:** FIXED — the gate's parser reads the table BACKLOG.md has
 **Files:** `backlog.yml`
 **Severity:** P3 (CI)
 
@@ -1786,7 +1786,7 @@ The parser reads the priority column and the status cell of the real table forma
 
 ## F50 — Three scheduled workflows can never run
 
-**Status:** OPEN
+**Status:** FIXED — the three dead scheduled workflows are deleted
 **Files:** `helper.yml, error_healer.yml, health_dashboard.yml`
 **Severity:** P3 (CI)
 
