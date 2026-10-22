@@ -71,7 +71,7 @@ thiserror         = "2"
 anyhow            = "1"
 tracing           = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false }
-clap              = { version = "4", default-features = false, features = ["std", "derive"] }
+clap              = { version = "4", default-features = false, features = ["std", "derive", "help"] }
 toml              = "1"
 axum              = "0.7"
 tower             = { version = "0.5", features = ["util"] }

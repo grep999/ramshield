@@ -37,7 +37,7 @@ are the ones used here.
 | F7 | Performance/RSS claims need workload evidence | P2 (process) | OPEN | yes — the release-claims policy |
 | **F9** | **Enforcement's block path is a lost update against detection** | **P1** | **FIXED** — `682435a`, merged from PR #43: the store has two block-only mutators under one shard lock, each touching only `block_state`, and the blocked index is updated under that same lock. PR #39 was closed unmerged | no |
 | F8 | The audit was not locally reproduced | n/a (method) | not actionable | no |
-| **F10** | **The IPC server MACs a key-sorted payload, not the client's bytes** | **P1** | **OPEN** — found by independent review while re-verifying I-024; the README is corrected, the server behaviour is not | yes — the fix shape is a canonicalisation decision, and it changes the wire contract |
+| **F10** | **The IPC server MACs a key-sorted payload, not the client's bytes** | **P1** | **FIXED by the owner's decision** — the server's rule stands: the MAC covers the frame minus its `auth` object, re-serialized compact and key-sorted; the CLI signs exactly that | yes — the fix shape is a canonicalisation decision, and it changes the wire contract |
 | F11 | Crate README documentation drift (62 claims) | P2 (docs) | **FIXED** — all 62 claims are fixed; every crate README the sweep covers is now pinned by a test | no |
 | F22 | `ramshield-analytics` declares two dependencies it never uses | P3 (hygiene) | **FIXED** — on `master` as `35f4557` (PR #57, the code commit `f0b84c6`): `ramshield-types` and `ramshield-storage` are gone from `crates/ramshield-analytics/Cargo.toml`; the crate has no workspace dependency at all | no |
 | F24 | The removal paths drop the blocked index entry after the shard lock is released | P3 (latent, narrow) | **FIXED** — on `master` as `6474bc4` (PR #56, the code commit `fcf1be4`): `Store::remove` and `evict_batch` now book under the shard lock, through the entry API | no |
@@ -52,7 +52,7 @@ are the ones used here.
 | F32 | The dashboard's auth counters go to a Metrics instance that is never exported | P1 (control-plane telemetry) | **FIXED** — the auth state shares the engine's metrics instance, so the CSRF and lockout counters reach the exporter | no |
 | F33 | The shipped server ConfigMap sets an ipc.max_connections the daemon refuses to start with | P1 (deployment) | **FIXED** — the ConfigMap sets 1,024, the value the validator accepts | no |
 | F34 | The Kubernetes probes target the pod IP while the daemon binds loopback | P1 (deployment) | OPEN — The pod never passes its startup probe and is killed and restarted, so the control plane never comes up on the shipped manifests even once F-33 is fixed. | no |
-| F35 | The ramshield-cli binary is a stub, yet the release ships it and the installer requires it | P1 (operator tooling) | OPEN — `ramshield-cli block 1.2.3.4 --reason manual --ttl 300` prints `RamShield CLI` and exits 0, so an operator believes a block was applied when nothing happened. | no |
+| F35 | The ramshield-cli binary is a stub, yet the release ships it and the installer requires it | P1 (operator tooling) | **FIXED** — the pre-deletion implementation is restored and works | no |
 | F36 | The 403 rejections are counted but never exported | P2 (metrics) | **FIXED** — the 403 rejections are exported | no |
 | F37 | The store-RAM refusals are counted but no surface exposes them | P2 (metrics) | **FIXED** — the store's RAM refusals are exported and shown | no |
 | F38 | The XDP-divergence stale flag is erased 250 ms after it is raised | P2 (health signal) | **FIXED** — the age tick no longer clears the flag a failed apply raised | no |
@@ -587,8 +587,10 @@ SHA and treat the audit's severity labels as hypotheses.
 
 ## F10 — The IPC server MACs a key-sorted payload, not the client's bytes
 
-**Status:** OPEN. The documentation is corrected; the server behaviour is
-not, because the fix is a wire-contract decision.
+**Status:** FIXED by the owner's decision (P1). The server's rule stands: the
+MAC covers the frame minus its `auth` object, re-serialized compact and
+key-sorted. The documentation already says so, and the restored CLI signs
+exactly that.
 
 **What the server does.** `verify_frame_auth`
 (`src/ipc/server/auth.rs:94-115`) parses the frame into a
@@ -1486,7 +1488,7 @@ Both ConfigMaps set `[dashboard] http_addr = "127.0.0.1:9999"` (`configmap.yaml:
 
 ## F35 — The ramshield-cli binary is a stub, yet the release ships it and the installer requires it
 
-**Status:** OPEN
+**Status:** FIXED — the pre-deletion implementation is restored and works
 **Files:** `src/cli.rs`
 **Severity:** P1 (operator tooling)
 
