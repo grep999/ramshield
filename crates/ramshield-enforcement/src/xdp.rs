@@ -1,1 +1,1 @@
-PLACEHOLDER_WILL_FAIL_IF_TOO_LARGE
+$(cat /tmp/xdp.rs)
