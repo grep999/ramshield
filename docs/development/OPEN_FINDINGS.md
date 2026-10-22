@@ -59,8 +59,8 @@ are the ones used here.
 | F39 | The "Drops vs Ingress" chart never plots drops | P2 (operator-visible) | OPEN — The red drop series stays glued to the axis while the ingress series moves, contradicting the panel's own title. | no |
 | F40 | The blocklist gauge compares a lifetime counter with a hardcoded capacity | P2 (operator-visible) | OPEN — After 102,400 lifetime blocks the bar pins at 100% forever, and with a non-default `BLOCKLIST_CAP` the denominator is wrong too. | no |
 | F41 | Two dashboard rows are overwritten with `n/a` by the SSE path | P2 (operator-visible) | **FIXED** — the SSE path no longer overwrites the two rows | no |
-| F42 | The release gate greps for a dependency-audit flag the workflow no longer uses | P2 (CI) | OPEN — Every operator who runs the documented release gate gets a non-zero exit and a false dependency-audit failure, which erodes trust in the other 27 checks. | no |
-| F43 | The installer writes a unit that grants the daemon write access it must never have | P2 (security) | OPEN — The two ways to install RamShield produce different sandboxes, and the looser one is the default the installer writes. | no |
+| F42 | The release gate greps for a dependency-audit flag the workflow no longer uses | P2 (CI) | **FIXED** — the gate checks the flags the workflow runs | no |
+| F43 | The installer writes a unit that grants the daemon write access it must never have | P2 (security) | **FIXED** — the installer no longer grants /proc/sys write access | no |
 | F44 | The Ansible deploy role renders into a directory that does not exist and applies a stub template | P2 (deployment) | OPEN — The k8s deploy path cannot work: the rendered Deployment mounts no config, the `ramshield-admin` Secret is absent, and the static manifests in `deploy/k8s/` are never applied. The default `latest` tag also violates the pinned-tag policy `scripts/verify_release.sh:12` enforces. | no |
 | F45 | Two exported series miss the `ramshield_` namespace | P3 (metrics) | **FIXED** — every exported series carries the namespace | no |
 | F46 | The pipeline stage bars mix units | P3 (display) | OPEN — The stage bars are not meaningful: the numbers contradict the labels. | no |
@@ -1626,7 +1626,7 @@ The rows hold a value continuously.
 
 ## F42 — The release gate greps for a dependency-audit flag the workflow no longer uses
 
-**Status:** OPEN
+**Status:** FIXED — the gate checks the flags the workflow runs
 **Files:** `scripts/verify_release.sh`
 **Severity:** P2 (CI)
 
@@ -1646,7 +1646,7 @@ Found by the 2026-10-22 full-codebase audit.
 
 ## F43 — The installer writes a unit that grants the daemon write access it must never have
 
-**Status:** OPEN
+**Status:** FIXED — the installer no longer grants /proc/sys write access
 **Files:** `scripts/install.sh, deploy/systemd/ramshield.service`
 **Severity:** P2 (security)
 
