@@ -11,7 +11,7 @@ grep -q "$V" deploy/k8s/daemonset.yaml && ok 'Kubernetes daemonset version' || b
 grep -q 'RAMSHIELD_VERSION' docker/Dockerfile Containerfile scripts/build_docker.sh && ok 'container builds consume authoritative version' || bad 'container version plumbing'
 if grep -RInE 'ghcr.io/grep999/ramshield:(latest|0\.2|0\.3\.[0-3])([[:space:]"`]|$)' deploy docker Containerfile scripts --exclude='*.md' >/dev/null 2>&1; then bad 'stale image tag'; else ok 'active image tags pinned'; fi
 grep -q 'verify-blob' scripts/install.sh && grep -q 'COSIGN_BIN' scripts/install.sh && ok 'installer verifies signatures' || bad 'installer signature gate'
-grep -q 'cargo audit --locked' .github/workflows/dependency_audit.yml && ok 'dependency audit hard gate' || bad 'dependency audit gate'
+grep -q 'cargo audit --no-yanked' .github/workflows/dependency_audit.yml && ok 'dependency audit hard gate' || bad 'dependency audit gate'
 grep -q 'cargo deny check' .github/workflows/release.yml && ok 'cargo-deny release gate' || bad 'cargo-deny release gate'
 grep -q 'actions/attest-build-provenance' .github/workflows/release.yml && ok 'provenance attestation' || bad 'provenance'
 grep -q 'SPDX-2.3' scripts/generate_sbom.py && ok 'SPDX SBOM generator' || bad 'SBOM generator'
