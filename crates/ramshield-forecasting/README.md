@@ -204,8 +204,10 @@ and never constructs one.
 `hw_beta` 0.1, `hw_gamma` 0.1, `seasonality_period` 3,600,
 `anomaly_zscore` 2.5, `min_entropy` 2.0. The EWMA span (120 ticks) and
 the CUSUM slack and boundary (0.5 and 4.0) are hard-coded in the
-forecaster, not configurable. `min_entropy` is validated by the config
-crate but never read here.
+forecaster, not configurable. `min_entropy` is the entropy floor: below
+it the traffic is concentrated on a few subnets, so an entropy drop is
+an anomaly (a narrowing) rather than a flash crowd (a legitimate
+spread-out surge). The forecaster reports the two cases differently.
 
 ## Benchmarks
 
