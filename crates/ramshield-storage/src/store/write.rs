@@ -181,11 +181,22 @@ impl Store {
     /// A genuinely new key that the RAM budget refuses is an error, the
     /// same refusal `insert` gives.
     pub fn block_ip(&self, key: IpAddr, fallback: IpRecord, ram_limit_bytes: usize) -> Result<()> {
-        let state = fallback.block_state.clone();
-        debug_assert!(
-            matches!(state, BlockState::Blocked { .. }),
-            "block_ip publishes a blocked record"
-        );
+        // The caller owns the reason, so the fallback must carry a
+        // blocked state. Publishing it as-is would put the key in the
+        // blocked index while the record says it is clean - the
+        // `debug_assert!` that used to guard this was compiled out in
+        // release builds.
+        let state = match &fallback.block_state {
+            BlockState::Blocked { reason, since_ns } => BlockState::Blocked {
+                reason: *reason,
+                since_ns: *since_ns,
+            },
+            other => {
+                return Err(RsError::InvalidState(format!(
+                    "block_ip requires a blocked fallback, got {other:?}"
+                )));
+            }
+        };
         match self.inner.entry(key) {
             dashmap::Entry::Occupied(mut o) => {
                 let e = o.get_mut();

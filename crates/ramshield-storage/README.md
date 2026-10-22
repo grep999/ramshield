@@ -245,7 +245,7 @@ The storage benchmarks in it are `subnet_key_v4`, `subnet_key_v6`,
 
 ## Testing
 
-50 tests: shard-level concurrency (8 threads inserting at once), the RAM
+51 tests: shard-level concurrency (8 threads inserting at once), the RAM
 limit (an insert past the limit is refused, and no phantom entry or
 blocked-index entry is left behind), the blocked index staying in step
 with the records (a blocked record published through `update_ip` is

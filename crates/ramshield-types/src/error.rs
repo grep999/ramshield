@@ -15,6 +15,9 @@ pub enum RsError {
     CorruptWal { offset: u64 },
     #[error("record too large: {size} bytes (max {max})")]
     RecordTooLarge { size: usize, max: usize },
+    /// A caller passed a record in a state the operation may not publish.
+    #[error("invalid state: {0}")]
+    InvalidState(String),
 }
 
 pub type Result<T> = std::result::Result<T, RsError>;
