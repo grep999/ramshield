@@ -37,14 +37,14 @@ are the ones used here.
 | F7 | Performance/RSS claims need workload evidence | P2 (process) | OPEN | yes — the release-claims policy |
 | **F9** | **Enforcement's block path is a lost update against detection** | **P1** | **FIXED** — `682435a`, merged from PR #43: the store has two block-only mutators under one shard lock, each touching only `block_state`, and the blocked index is updated under that same lock. PR #39 was closed unmerged | no |
 | F8 | The audit was not locally reproduced | n/a (method) | not actionable | no |
-| **F10** | **The IPC server MACs a key-sorted payload, not the client's bytes** | **P1** | **OPEN** — found by independent review while re-verifying I-024; the README is corrected, the server behaviour is not | yes — the fix shape is a canonicalisation decision, and it changes the wire contract |
+| **F10** | **The IPC server MACs a key-sorted payload, not the client's bytes** | **P1** | **FIXED by the owner's decision** — the server's rule stands: the MAC covers the frame minus its `auth` object, re-serialized compact and key-sorted; the CLI signs exactly that | yes — the fix shape is a canonicalisation decision, and it changes the wire contract |
 | F11 | Crate README documentation drift (62 claims) | P2 (docs) | **FIXED** — all 62 claims are fixed; every crate README the sweep covers is now pinned by a test | no |
 | F22 | `ramshield-analytics` declares two dependencies it never uses | P3 (hygiene) | **FIXED** — on `master` as `35f4557` (PR #57, the code commit `f0b84c6`): `ramshield-types` and `ramshield-storage` are gone from `crates/ramshield-analytics/Cargo.toml`; the crate has no workspace dependency at all | no |
 | F24 | The removal paths drop the blocked index entry after the shard lock is released | P3 (latent, narrow) | **FIXED** — on `master` as `6474bc4` (PR #56, the code commit `fcf1be4`): `Store::remove` and `evict_batch` now book under the shard lock, through the entry API | no |
 | F23 | `forecasting.min_entropy` is a config knob nothing reads | P3 (hygiene) | OPEN — the config crate validates it (finite, >= 0) and the forecasting crate never reads it; the entropy gate is a hard-coded event count | no — use it, or drop it from the config |
 | F25 | `ramshield-protocol` declares a dependency on `ramshield-storage` it never uses | P3 (hygiene) | **FIXED** — on `master` as `1315236` (PR #63, the code commit `4fbf680`): the dependency is gone from `crates/ramshield-protocol/Cargo.toml`; the crate declares only `ramshield-types` | no |
 | F26 | `FAIL_SAFE_BEHAVIOR.md` claims a global fail-closed posture the dataplane does not have | P2 (doc) | **FIXED** — the document states each subsystem's own posture, and `tests/fail_safe_claims.rs` pins it to the source | no |
-| F27 | `scripts/prod_smoke.sh` claims checks it does not perform, and it deletes an env-overridable path | P1 (data loss) | OPEN — the unblock, CIDR and TTL checks are advertised and absent, and `rm -rf "$WAL_DIR"` runs on a path the environment can override | no — the cleanup needs a guard, the checks need to exist |
+| F27 | `scripts/prod_smoke.sh` claims checks it does not perform, and it deletes an env-overridable path | P1 (data loss) | **FIXED** — the script does what it claims and deletes only its own directory | no — the cleanup needs a guard, the checks need to exist |
 | F28 | The advanced CI workflow runs the benchmarks as tests and masks the benchmark build failure | P2 (CI) | **FIXED** — the benchmark build failure fails the job | no |
 | F29 | The Subnet Stress Pin gate asserts against a fixed four-second sleep | P2 (CI) | **FIXED** — the script now waits for the counters to settle | no |
 | F30 | `block_ip` trusts the caller to pass a blocked fallback; the only guard is a `debug_assert!` | P3 (hardening) | **FIXED** — a clean fallback is refused and publishes nothing | no |
@@ -52,7 +52,7 @@ are the ones used here.
 | F32 | The dashboard's auth counters go to a Metrics instance that is never exported | P1 (control-plane telemetry) | **FIXED** — the auth state shares the engine's metrics instance, so the CSRF and lockout counters reach the exporter | no |
 | F33 | The shipped server ConfigMap sets an ipc.max_connections the daemon refuses to start with | P1 (deployment) | **FIXED** — the ConfigMap sets 1,024, the value the validator accepts | no |
 | F34 | The Kubernetes probes target the pod IP while the daemon binds loopback | P1 (deployment) | **FIXED** — the probes address the loopback bind the daemon actually uses | no |
-| F35 | The ramshield-cli binary is a stub, yet the release ships it and the installer requires it | P1 (operator tooling) | OPEN — `ramshield-cli block 1.2.3.4 --reason manual --ttl 300` prints `RamShield CLI` and exits 0, so an operator believes a block was applied when nothing happened. | no |
+| F35 | The ramshield-cli binary is a stub, yet the release ships it and the installer requires it | P1 (operator tooling) | **FIXED** — the pre-deletion implementation is restored and works | no |
 | F36 | The 403 rejections are counted but never exported | P2 (metrics) | **FIXED** — the 403 rejections are exported | no |
 | F37 | The store-RAM refusals are counted but no surface exposes them | P2 (metrics) | **FIXED** — the store's RAM refusals are exported and shown | no |
 | F38 | The XDP-divergence stale flag is erased 250 ms after it is raised | P2 (health signal) | **FIXED** — the age tick no longer clears the flag a failed apply raised | no |
@@ -587,8 +587,10 @@ SHA and treat the audit's severity labels as hypotheses.
 
 ## F10 — The IPC server MACs a key-sorted payload, not the client's bytes
 
-**Status:** OPEN. The documentation is corrected; the server behaviour is
-not, because the fix is a wire-contract decision.
+**Status:** FIXED by the owner's decision (P1). The server's rule stands: the
+MAC covers the frame minus its `auth` object, re-serialized compact and
+key-sorted. The documentation already says so, and the restored CLI signs
+exactly that.
 
 **What the server does.** `verify_frame_auth`
 (`src/ipc/server/auth.rs:94-115`) parses the frame into a
@@ -1315,7 +1317,7 @@ No sentence in the document claims a behaviour the code does not have.
 
 ## F27 — `scripts/prod_smoke.sh` claims checks it does not perform, and it deletes an env-overridable path
 
-**Status:** OPEN
+**Status:** FIXED — the script does what it claims and deletes only its own directory
 **Files:** `scripts/prod_smoke.sh`
 **Severity:** P1 (data loss)
 
@@ -1486,7 +1488,7 @@ Both ConfigMaps set `[dashboard] http_addr = "127.0.0.1:9999"` (`configmap.yaml:
 
 ## F35 — The ramshield-cli binary is a stub, yet the release ships it and the installer requires it
 
-**Status:** OPEN
+**Status:** FIXED — the pre-deletion implementation is restored and works
 **Files:** `src/cli.rs`
 **Severity:** P1 (operator tooling)
 
