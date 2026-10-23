@@ -19,7 +19,7 @@ impl DetectionEngine {
     pub(crate) fn flush_batch(
         &self,
         ip_aggs: &[(IpAddr, IpAgg)],
-        subnet_counts: &HashMap<SubnetKey, (u32, Vec<IpAddr>)>,
+        subnet_counts: &HashMap<SubnetKey, batch::SubnetAgg>,
         networks: &HashMap<SubnetKey, IpNetwork>,
         total_events: u64,
         // F7: wall-clock ns span these events were collected over.
@@ -31,7 +31,7 @@ impl DetectionEngine {
         let now = now_ns();
 
         // Incremental counters for forecasting (no full-store scan).
-        let subnet_vals: Vec<u64> = subnet_counts.values().map(|&(ev, _)| ev as u64).collect();
+        let subnet_vals: Vec<u64> = subnet_counts.values().map(|subnet| subnet.events as u64).collect();
         // F7: events_last_second must be a RATE. Prod flushes every 100ms;
         // storing the raw per-flush count lied 10x low to the forecaster.
         let rate = total_events.saturating_mul(1_000_000_000) / window_ns;
@@ -49,7 +49,9 @@ impl DetectionEngine {
         let mut dual_gate_met: HashMap<SubnetKey, bool> =
             HashMap::with_capacity(subnet_counts.len());
 
-        for (&sk, &(count, ref members)) in subnet_counts.iter() {
+        for (&sk, subnet) in subnet_counts.iter() {
+            let count = subnet.events;
+            let members = &subnet.members;
             let net = networks.get(&sk).copied().unwrap_or_else(|| {
                 // pre-agg path passes no networks map — reconstruct the /24
                 // (v4) or /64 (v6) network from the subnet key itself.
@@ -173,7 +175,7 @@ impl DetectionEngine {
             // subnet_hot could never become true (circular cold-skip).
             let (in_batch_events, in_batch_hosts) = sk
                 .and_then(|k| subnet_counts.get(&k))
-                .map(|(ev, members)| (*ev as u64, members.len() as u64))
+                .map(|subnet| (subnet.events as u64, subnet.members.len() as u64))
                 .unwrap_or((0, 0));
 
             let store_dual_gate_met = sk
