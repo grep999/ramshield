@@ -1940,3 +1940,37 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod worker_start_tests {
+    use super::start_workers;
+
+    #[test]
+    fn start_workers_reports_partial_success() {
+        let result = start_workers(3, |worker| {
+            if worker == 1 {
+                Err(std::io::Error::other("simulated spawn failure"))
+            } else {
+                Ok(std::thread::spawn(|| {}))
+            }
+        });
+
+        assert_eq!(result.started, 2);
+        assert_eq!(result.failed, 1);
+        assert_eq!(result.handles.len(), 2);
+        for handle in result.handles {
+            assert!(handle.join().is_ok());
+        }
+    }
+
+    #[test]
+    fn start_workers_reports_total_failure() {
+        let result = start_workers(2, |_| {
+            Err(std::io::Error::other("simulated spawn failure"))
+        });
+
+        assert_eq!(result.started, 0);
+        assert_eq!(result.failed, 2);
+        assert!(result.handles.is_empty());
+    }
+}
