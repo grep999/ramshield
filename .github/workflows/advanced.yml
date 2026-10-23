@@ -34,8 +34,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-08-29
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Install bpf-linker
+        run: |
+          curl -fsSL -o /tmp/bpf-linker.tar.zst \
+            https://github.com/aya-rs/bpf-linker/releases/download/v0.11.1/bpf-linker-x86_64-unknown-linux-musl.tar.zst
+          tar --zstd -xf /tmp/bpf-linker.tar.zst -C /tmp
+          sudo mv /tmp/bpf-linker /usr/local/bin/
+          bpf-linker --version
       # The primary workflow's test-target policy (ci.yml:133): the test
       # step does not use --all-targets, because --all-targets also
       # executes [[bench]] harness=false binaries as tests (F28). The
@@ -62,7 +72,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-08-29
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install bpf-linker
+        run: |
+          curl -fsSL -o /tmp/bpf-linker.tar.zst \
+            https://github.com/aya-rs/bpf-linker/releases/download/v0.11.1/bpf-linker-x86_64-unknown-linux-musl.tar.zst
+          tar --zstd -xf /tmp/bpf-linker.tar.zst -C /tmp
+          sudo mv /tmp/bpf-linker /usr/local/bin/
+          bpf-linker --version
       - run: cargo doc --no-deps --document-private-items
       - uses: actions/upload-artifact@v4
         with:
@@ -74,7 +95,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-08-29
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install bpf-linker
+        run: |
+          curl -fsSL -o /tmp/bpf-linker.tar.zst \
+            https://github.com/aya-rs/bpf-linker/releases/download/v0.11.1/bpf-linker-x86_64-unknown-linux-musl.tar.zst
+          tar --zstd -xf /tmp/bpf-linker.tar.zst -C /tmp
+          sudo mv /tmp/bpf-linker /usr/local/bin/
+          bpf-linker --version
       # No `|| true`: a benchmark build failure must fail the job. The
       # build passes on this tree - verified locally with
       # `cargo bench --no-run` - so the mask only hid the failures it
