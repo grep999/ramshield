@@ -165,11 +165,21 @@ mod tests {
 // bursts just below the per-window detection threshold.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// One step of the pulse-wave tracker.
+/// State and decision produced by one pulse-wave tracker step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PulseTrackerStep {
+    /// Number of over-threshold samples in the active window.
+    pub count: u8,
+    /// Start time of the active window in nanoseconds.
+    pub window_start_ns: u64,
+    /// Whether the sample count reached the configured threshold.
+    pub fired: bool,
+}
+
+/// Advance the pulse-wave tracker.
 ///
-/// Returns (new_count, new_window_start_ns, fired).
-/// fired=true when count >= threshold (wasn't already ≥threshold).
-/// Resets window if expired (> window_secs seconds since window_start).
+/// The window resets when it expires (more than `window_secs` since its
+/// start). `fired` is true when the count reaches `threshold`.
 pub fn pulse_tracker_step(
     prev_count: u8,
     prev_window_start_ns: u64,
@@ -177,7 +187,7 @@ pub fn pulse_tracker_step(
     over_threshold: bool,
     window_secs: u64,
     threshold: u8,
-) -> (u8, u64, bool) {
+) -> PulseTrackerStep {
     let window_ns = window_secs.saturating_mul(1_000_000_000);
     let window_age_exceeded = now_ns.saturating_sub(prev_window_start_ns) > window_ns;
     let expired = prev_window_start_ns == 0 || window_age_exceeded;
@@ -195,7 +205,7 @@ pub fn pulse_tracker_step(
             fired = true;
         }
     }
-    (count, start, fired)
+    PulseTrackerStep { count, window_start_ns: start, fired }
 }
 
 #[cfg(test)]
