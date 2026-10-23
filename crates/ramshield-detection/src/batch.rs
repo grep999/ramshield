@@ -1,6 +1,6 @@
 use ahash::AHashMap as HashMap;
 use ramshield_types::events::ConnectionEvent;
-use ramshield_storage::subnet::{subnet_key as storage_subnet_key, subnet_key_v4, subnet_key_v6};
+use ramshield_storage::subnet::subnet_key as storage_subnet_key;
 use ramshield_types::{HttpMethod, IpNetwork};
 use std::net::IpAddr;
 
@@ -207,6 +207,7 @@ pub fn aggregate(events: &[ConnectionEvent]) -> FlushAggs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ramshield_storage::subnet::{subnet_key_v4, subnet_key_v6};
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     #[test]
