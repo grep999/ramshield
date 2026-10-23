@@ -57,8 +57,7 @@ pub struct BloomFilter {
 /// raw events. One pass, no second HashMap allocation.
 /// Events + distinct member IPs per /24 (aggs are already per-IP-distinct).
 fn subnet_counts_of(aggs: &[(IpAddr, IpAgg)]) -> HashMap<SubnetKey, SubnetAgg> {
-    let mut subnets: HashMap<SubnetKey, SubnetAgg> =
-        HashMap::with_capacity(aggs.len().min(512));
+    let mut subnets: HashMap<SubnetKey, SubnetAgg> = HashMap::with_capacity(aggs.len().min(512));
     for (ip, agg) in aggs {
         if let Some(sk) = subnet_key_u128(*ip) {
             let subnet = subnets.entry(sk).or_default();
