@@ -130,7 +130,7 @@ pub(crate) async fn handle_connection(
                 &event_tx,
                 &store,
                 &enforcement_tx,
-                dropped_events.clone(),
+                &dropped_events,
             );
             if timeout(config.write_timeout, write_resp(&mut socket, &resp))
                 .await
