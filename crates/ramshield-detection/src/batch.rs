@@ -1,6 +1,6 @@
 use ahash::AHashMap as HashMap;
-use ramshield_types::events::ConnectionEvent;
 use ramshield_storage::subnet::subnet_key as storage_subnet_key;
+use ramshield_types::events::ConnectionEvent;
 use ramshield_types::{HttpMethod, IpNetwork};
 use std::net::IpAddr;
 

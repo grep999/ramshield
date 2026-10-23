@@ -77,7 +77,7 @@ fn ipv6_single_64_swarm_aggregates() {
     let any_ip = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
     let sk = ramshield_storage::subnet_key_u128(any_ip).unwrap();
     assert_eq!(
-        agg.subnets.get(&sk).map(|x| x.0),
+        agg.subnets.get(&sk).map(|subnet| subnet.events),
         Some(6_000),
         "swarm signal must report total events (60 IPs × 100 each)"
     );
@@ -136,8 +136,8 @@ fn ipv6_random_64s_no_single_subnet_dual_gate() {
     );
     let agg = aggregate(&events);
     assert_eq!(agg.ips.len(), 10 * 50, "500 unique IPs aggregated");
-    for (_, members) in agg.subnets.values() {
-        assert_eq!(members.len(), 50, "50 unique hosts per /64");
+    for subnet in agg.subnets.values() {
+        assert_eq!(subnet.members.len(), 50, "50 unique hosts per /64");
     }
 }
 

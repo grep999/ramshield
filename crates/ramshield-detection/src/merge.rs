@@ -163,10 +163,8 @@ impl DetectionEngine {
                     && relative_breach
                     && rec.relative_breach_streak >= det.relative_min_breaches;
 
-                let block = hot
-                    || cusum_fired(rec.cusum_s, det_thr)
-                    || pulse_step.fired
-                    || relative_fired;
+                let block =
+                    hot || cusum_fired(rec.cusum_s, det_thr) || pulse_step.fired || relative_fired;
                 (threat, block)
             },
         );
