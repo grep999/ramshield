@@ -263,7 +263,11 @@ pub fn spawn(
         // counter records that the error was raised exactly once.
         let disconnect_log_emissions = Arc::new(AtomicU64::new(0));
         metrics.set_native_capture_workers_expected(workers as u64);
-        let WorkerStartResult { handles, started, failed } = start_workers(workers, |worker| {
+        let WorkerStartResult {
+            handles,
+            started,
+            failed,
+        } = start_workers(workers, |worker| {
             let iface = interface.clone();
             let txc = tx.clone();
             let stop = shutdown.clone();
