@@ -33,7 +33,7 @@ impl DetectionEngine {
         let window_ns = det.rate_window_secs * 1_000_000_000;
         let pulse_win = det.pulse_window_secs;
         let pulse_thr = det.pulse_threshold_samples;
-        let ((was_blocked, (ewma_rps, threat, block)), stored) = self.store.update_ip(
+        let ((_, (_, threat, block)), stored) = self.store.update_ip(
             ip,
             IpRecord {
                 ip,
