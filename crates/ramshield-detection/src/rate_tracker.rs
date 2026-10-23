@@ -240,7 +240,14 @@ mod pulse_tracker_tests {
         let mut s = 0u64;
         for i in 0..100u64 {
             let now = 1_000_000_000u64 + i * 1_000_000_000;
-            let step = pulse_tracker_step(PulseTrackerInput { prev_count: c, prev_window_start_ns: s, now_ns: now, over_threshold: false, window_secs: 6, threshold: 2 });
+            let step = pulse_tracker_step(PulseTrackerInput {
+                prev_count: c,
+                prev_window_start_ns: s,
+                now_ns: now,
+                over_threshold: false,
+                window_secs: 6,
+                threshold: 2,
+            });
             assert!(!step.fired, "no over-threshold samples must not fire");
             c = 0;
             s = now;
@@ -251,18 +258,39 @@ mod pulse_tracker_tests {
     fn pulse_tracker_two_of_three_fires() {
         let now0 = 1_000_000_000u64;
         // sample 1 — window opens
-        let step = pulse_tracker_step(PulseTrackerInput { prev_count: 0, prev_window_start_ns: 0, now_ns: now0, over_threshold: true, window_secs: 6, threshold: 2 });
+        let step = pulse_tracker_step(PulseTrackerInput {
+            prev_count: 0,
+            prev_window_start_ns: 0,
+            now_ns: now0,
+            over_threshold: true,
+            window_secs: 6,
+            threshold: 2,
+        });
         assert_eq!(step.count, 1);
         assert!(!step.fired);
         // sample 2 — 1.5s later, fires
-        let step = pulse_tracker_step(PulseTrackerInput { prev_count: step.count, prev_window_start_ns: now0, now_ns: now0 + 1_500_000_000, over_threshold: true, window_secs: 6, threshold: 2 });
+        let step = pulse_tracker_step(PulseTrackerInput {
+            prev_count: step.count,
+            prev_window_start_ns: now0,
+            now_ns: now0 + 1_500_000_000,
+            over_threshold: true,
+            window_secs: 6,
+            threshold: 2,
+        });
         assert_eq!(step.count, 2);
         assert!(
             step.fired,
             "second over-threshold inside 6s window must fire"
         );
         // sample 3 — 10s later, window expired, resets
-        let step = pulse_tracker_step(PulseTrackerInput { prev_count: step.count, prev_window_start_ns: now0, now_ns: now0 + 10_000_000_000, over_threshold: true, window_secs: 6, threshold: 2 });
+        let step = pulse_tracker_step(PulseTrackerInput {
+            prev_count: step.count,
+            prev_window_start_ns: now0,
+            now_ns: now0 + 10_000_000_000,
+            over_threshold: true,
+            window_secs: 6,
+            threshold: 2,
+        });
         assert_eq!(step.count, 1);
         assert!(!step.fired, "expired window must reset");
     }
@@ -277,7 +305,14 @@ mod pulse_tracker_tests {
 
         for burst in 0..4u64 {
             let t_burst = t0 + burst * 5_000_000_000; // 2s on + 3s gap
-            let step = pulse_tracker_step(PulseTrackerInput { prev_count: c, prev_window_start_ns: s, now_ns: t_burst, over_threshold: true, window_secs: 6, threshold: 2 });
+            let step = pulse_tracker_step(PulseTrackerInput {
+                prev_count: c,
+                prev_window_start_ns: s,
+                now_ns: t_burst,
+                over_threshold: true,
+                window_secs: 6,
+                threshold: 2,
+            });
             if step.fired {
                 fired_at.push(burst);
             }
