@@ -33,7 +33,7 @@ impl DetectionEngine {
         let window_ns = det.rate_window_secs * 1_000_000_000;
         let pulse_win = det.pulse_window_secs;
         let pulse_thr = det.pulse_threshold_samples;
-        let ((_, (_, threat, block)), stored) = self.store.update_ip(
+        let ((threat, block), stored) = self.store.update_ip(
             ip,
             IpRecord {
                 ip,
@@ -56,7 +56,6 @@ impl DetectionEngine {
             },
             ram_lim,
             |rec| {
-                let was_blocked = matches!(rec.block_state, BlockState::Blocked { .. });
                 rec.request_count = rec.request_count.saturating_add(ip_agg.count as u64);
                 rec.last_seen_ns = ip_agg.last_ts_ns;
                 rec.bytes_in = rec.bytes_in.saturating_add(ip_agg.bytes);
@@ -166,7 +165,7 @@ impl DetectionEngine {
 
                 let block =
                     hot || cusum_fired(rec.cusum_s, det_thr) || pulse_fired || relative_fired;
-                (was_blocked, (ewma_rps, threat, block))
+                (threat, block)
             },
         );
         // Only update subnet index when the record was actually stored.
