@@ -765,7 +765,6 @@ fn checked_tpacket_header_offset(
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TpacketPacketOffsets {
-    header_abs: usize,
     packet_abs: usize,
 }
 
@@ -779,7 +778,7 @@ fn checked_tpacket_packet_offsets(
     mac: usize,
     snaplen: usize,
 ) -> Option<TpacketPacketOffsets> {
-    let header_abs = checked_tpacket_header_offset(block_idx, block_size, ring_len, blk_len, off)?;
+    checked_tpacket_header_offset(block_idx, block_size, ring_len, blk_len, off)?;
     let packet_rel = off.checked_add(mac)?;
     let packet_rel_end = checked_range_end(packet_rel, snaplen, blk_len)?;
     checked_range_end(packet_rel, snaplen, block_size)?;
@@ -788,10 +787,7 @@ fn checked_tpacket_packet_offsets(
     let packet_abs = block_base.checked_add(packet_rel)?;
     let packet_abs_end = checked_range_end(packet_abs, snaplen, ring_len)?;
     (packet_abs >= block_base && packet_abs_end <= block_end && packet_rel_end <= blk_len)
-        .then_some(TpacketPacketOffsets {
-            header_abs,
-            packet_abs,
-        })
+        .then_some(TpacketPacketOffsets { packet_abs })
 }
 
 #[cfg(target_os = "linux")]
@@ -1309,10 +1305,7 @@ mod tpacket_tests {
         // Header [48, 96), packet [127, 128): the final byte is in bounds.
         assert_eq!(
             checked_tpacket_packet_offsets(0, 128, 128, 128, 48, 79, 1),
-            Some(TpacketPacketOffsets {
-                header_abs: 48,
-                packet_abs: 127,
-            })
+            Some(TpacketPacketOffsets { packet_abs: 127 })
         );
     }
 
