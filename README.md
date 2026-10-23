@@ -189,7 +189,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --features full -- -D warnings
 ```
 
-See [Development](docs/DEVELOPMENT.md).
+See [Development](docs/DEVELOPMENT.md) and the [Google-inspired Rust style and refactoring policy](docs/GOOGLE_RUST_STYLE.md).
 
 ## License
 

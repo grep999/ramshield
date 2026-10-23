@@ -188,30 +188,38 @@ pub(super) fn join_workers(handles: Vec<std::thread::JoinHandle<()>>) -> usize {
     panicked
 }
 
+/// Outcome of attempting to start the configured native capture workers.
+pub(super) struct WorkerStartResult {
+    /// Handles for workers that started successfully.
+    pub(super) handles: Vec<std::thread::JoinHandle<()>>,
+    /// Number of workers started successfully.
+    pub(super) started: usize,
+    /// Number of workers that failed to start.
+    pub(super) failed: usize,
+}
+
 /// Start the capture worker slots.
 ///
-/// Returns the handles of the workers that started, how many started and
-/// how many failed to start. The spawner is a parameter so a partial or
-/// total startup failure can be produced deterministically, without a
-/// NIC and without a race.
-pub(super) fn start_workers<F>(
-    expected: usize,
-    mut spawn_one: F,
-) -> (Vec<std::thread::JoinHandle<()>>, usize, usize)
+/// The spawner is a parameter so partial and total startup failures can be
+/// produced deterministically, without a NIC and without a race.
+pub(super) fn start_workers<F>(expected: usize, mut spawn_one: F) -> WorkerStartResult
 where
     F: FnMut(usize) -> std::io::Result<std::thread::JoinHandle<()>>,
 {
-    let mut handles = Vec::with_capacity(expected);
-    let mut started = 0usize;
-    let mut failed = 0usize;
+    let mut result = WorkerStartResult {
+        handles: Vec::with_capacity(expected),
+        started: 0,
+        failed: 0,
+    };
+
     for worker in 0..expected {
         match spawn_one(worker) {
             Ok(handle) => {
-                started += 1;
-                handles.push(handle);
+                result.started += 1;
+                result.handles.push(handle);
             }
             Err(err) => {
-                failed += 1;
+                result.failed += 1;
                 error!(
                     worker,
                     error = %err,
@@ -220,7 +228,8 @@ where
             }
         }
     }
-    (handles, started, failed)
+
+    result
 }
 
 pub fn spawn(
@@ -254,7 +263,11 @@ pub fn spawn(
         // counter records that the error was raised exactly once.
         let disconnect_log_emissions = Arc::new(AtomicU64::new(0));
         metrics.set_native_capture_workers_expected(workers as u64);
-        let (handles, started, failed) = start_workers(workers, |worker| {
+        let WorkerStartResult {
+            handles,
+            started,
+            failed,
+        } = start_workers(workers, |worker| {
             let iface = interface.clone();
             let txc = tx.clone();
             let stop = shutdown.clone();
@@ -461,9 +474,9 @@ fn run_socket(
     max_eps: u64,
     trusted_overlay_cidrs: &[IpNetwork],
     tx: &Sender<ConnectionEvent>,
-    shutdown: &Arc<AtomicBool>,
-    budget: &Arc<AtomicU64>,
-    epoch: &Arc<AtomicU64>,
+    shutdown: &AtomicBool,
+    budget: &AtomicU64,
+    epoch: &AtomicU64,
     epoch_base: std::time::Instant,
     worker: usize,
     metrics: &Metrics,
@@ -654,7 +667,7 @@ fn run_socket(
             // `tp_mac` is u16, which fits in `usize` on every supported Linux
             // target. The range check below validates the value against the ring.
             let mac = unsafe { (*hdr).tp_mac as usize };
-            let (_header_abs, packet_off) = match checked_tpacket_packet_offsets(
+            let packet_offsets = match checked_tpacket_packet_offsets(
                 block_idx, block_size, ring_len, blk_len, off, mac, snaplen,
             ) {
                 Some(value) if mac <= frame_size && snaplen <= frame_size => value,
@@ -674,8 +687,12 @@ fn run_socket(
             };
             // SAFETY: checked_tpacket_packet_offsets proves [packet_off,
             // packet_off + snaplen) lies in the current block and mapped ring.
-            let packet =
-                unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
+            let packet = unsafe {
+                std::slice::from_raw_parts(
+                    (map as *const u8).add(packet_offsets.packet_abs),
+                    snaplen,
+                )
+            };
             process_packet(
                 packet,
                 max_eps,
@@ -759,6 +776,12 @@ fn checked_tpacket_header_offset(
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TpacketPacketOffsets {
+    packet_abs: usize,
+}
+
+#[cfg(target_os = "linux")]
 fn checked_tpacket_packet_offsets(
     block_idx: usize,
     block_size: usize,
@@ -767,8 +790,8 @@ fn checked_tpacket_packet_offsets(
     off: usize,
     mac: usize,
     snaplen: usize,
-) -> Option<(usize, usize)> {
-    let header_abs = checked_tpacket_header_offset(block_idx, block_size, ring_len, blk_len, off)?;
+) -> Option<TpacketPacketOffsets> {
+    checked_tpacket_header_offset(block_idx, block_size, ring_len, blk_len, off)?;
     let packet_rel = off.checked_add(mac)?;
     let packet_rel_end = checked_range_end(packet_rel, snaplen, blk_len)?;
     checked_range_end(packet_rel, snaplen, block_size)?;
@@ -777,7 +800,7 @@ fn checked_tpacket_packet_offsets(
     let packet_abs = block_base.checked_add(packet_rel)?;
     let packet_abs_end = checked_range_end(packet_abs, snaplen, ring_len)?;
     (packet_abs >= block_base && packet_abs_end <= block_end && packet_rel_end <= blk_len)
-        .then_some((header_abs, packet_abs))
+        .then_some(TpacketPacketOffsets { packet_abs })
 }
 
 #[cfg(target_os = "linux")]
@@ -795,15 +818,14 @@ fn checked_next_tpacket_offset(
             Err("zero tp_next_offset before final packet")
         };
     }
-    let aligned = next
-        .checked_add(TPACKET_ALIGNMENT - 1)
-        .ok_or("tp_next_offset alignment overflow")?
-        & !(TPACKET_ALIGNMENT - 1);
-    if aligned < std::mem::size_of::<Tpacket3Hdr>() {
+    if !next.is_multiple_of(TPACKET_ALIGNMENT) {
+        return Err("tp_next_offset is not TPACKET-aligned");
+    }
+    if next < std::mem::size_of::<Tpacket3Hdr>() {
         return Err("tp_next_offset does not advance past the current header");
     }
     let next_off = off
-        .checked_add(aligned)
+        .checked_add(next)
         .ok_or("tp_next_offset addition overflow")?;
     checked_range_end(next_off, std::mem::size_of::<Tpacket3Hdr>(), blk_len)
         .ok_or("next packet header exceeds declared block")?;
@@ -837,8 +859,8 @@ fn process_packet(
     max_eps: u64,
     trusted_overlay_cidrs: &[IpNetwork],
     tx: &Sender<ConnectionEvent>,
-    budget: &Arc<AtomicU64>,
-    epoch: &Arc<AtomicU64>,
+    budget: &AtomicU64,
+    epoch: &AtomicU64,
     epoch_base: std::time::Instant,
     metrics: &Metrics,
     disconnect_log_emissions: &AtomicU64,
@@ -852,10 +874,14 @@ fn process_packet(
     {
         budget.store(0, Ordering::Relaxed);
     }
-    let (ip, proto, syn, _fragmented, overlay_identity) = match parse_l3(packet) {
-        Some(v) => v,
+    let parsed = match parse_l3(packet) {
+        Some(packet) => packet,
         None => return,
     };
+    let ip = parsed.ip;
+    let proto = parsed.protocol;
+    let syn = parsed.syn;
+    let overlay_identity = parsed.overlay_identity;
     if trusted_overlay_cidrs
         .iter()
         .any(|n| network_contains(n, ip))
@@ -931,7 +957,17 @@ fn process_packet(
 }
 
 #[cfg(target_os = "linux")]
-fn parse_l3(frame: &[u8]) -> Option<(std::net::IpAddr, u8, bool, bool, bool)> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParsedPacket {
+    ip: std::net::IpAddr,
+    protocol: u8,
+    syn: bool,
+    fragmented: bool,
+    overlay_identity: bool,
+}
+
+#[cfg(target_os = "linux")]
+fn parse_l3(frame: &[u8]) -> Option<ParsedPacket> {
     if frame.len() < 14 {
         return None;
     }
@@ -955,7 +991,7 @@ fn parse_l3(frame: &[u8]) -> Option<(std::net::IpAddr, u8, bool, bool, bool)> {
 }
 
 #[cfg(target_os = "linux")]
-fn parse_ipv4(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, bool, bool)> {
+fn parse_ipv4(frame: &[u8], off: usize) -> Option<ParsedPacket> {
     if frame.len() < off + 20 {
         return None;
     }
@@ -974,14 +1010,21 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
     );
     let l4 = off + ihl;
     if fragmented {
-        return Some((std::net::IpAddr::V4(ip), proto, false, true, false));
+        return Some(ParsedPacket {
+            ip: std::net::IpAddr::V4(ip),
+            protocol: proto,
+            syn: false,
+            fragmented: true,
+            overlay_identity: false,
+        });
     }
 
     // Native telemetry follows the same common overlay subset as XDP: IP-in-IP,
     // GRE without optional fields, VXLAN and Geneve with bounded option length.
     if proto == 4 && frame.len() >= l4 + 20 {
-        let (ip, next, syn, frag, _) = parse_ipv4(frame, l4)?;
-        return Some((ip, next, syn, frag, true));
+        let mut parsed = parse_ipv4(frame, l4)?;
+        parsed.overlay_identity = true;
+        return Some(parsed);
     }
     if proto == 47 && frame.len() >= l4 + 4 {
         let flags = u16::from_be_bytes([frame[l4], frame[l4 + 1]]);
@@ -998,11 +1041,13 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
                 inner += 4;
             }
             if inner_proto == 0x0800 {
-                let (ip, next, syn, frag, _) = parse_ipv4(frame, inner)?;
-                return Some((ip, next, syn, frag, true));
+                let mut parsed = parse_ipv4(frame, inner)?;
+                parsed.overlay_identity = true;
+                return Some(parsed);
             }
-            let (ip, next, syn, frag, _) = parse_ipv6(frame, inner)?;
-            return Some((ip, next, syn, frag, true));
+            let mut parsed = parse_ipv6(frame, inner)?;
+            parsed.overlay_identity = true;
+            return Some(parsed);
         }
     }
     if proto == 17 && frame.len() >= l4 + 8 {
@@ -1016,12 +1061,14 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
             if frame.len() >= inner_eth + 14 {
                 let inner_type = u16::from_be_bytes([frame[inner_eth + 12], frame[inner_eth + 13]]);
                 if inner_type == 0x0800 {
-                    let (ip, next, syn, frag, _) = parse_ipv4(frame, inner_eth + 14)?;
-                    return Some((ip, next, syn, frag, true));
+                    let mut parsed = parse_ipv4(frame, inner_eth + 14)?;
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 }
                 if inner_type == 0x86dd {
-                    let (ip, next, syn, frag, _) = parse_ipv6(frame, inner_eth + 14)?;
-                    return Some((ip, next, syn, frag, true));
+                    let mut parsed = parse_ipv6(frame, inner_eth + 14)?;
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 }
             }
         } else if sport == 6081 || dport == 6081 {
@@ -1036,12 +1083,14 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
             if frame.len() >= inner_eth + 14 {
                 let inner_type = u16::from_be_bytes([frame[inner_eth + 12], frame[inner_eth + 13]]);
                 if inner_type == 0x0800 {
-                    let (ip, next, syn, frag, _) = parse_ipv4(frame, inner_eth + 14)?;
-                    return Some((ip, next, syn, frag, true));
+                    let mut parsed = parse_ipv4(frame, inner_eth + 14)?;
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 }
                 if inner_type == 0x86dd {
-                    let (ip, next, syn, frag, _) = parse_ipv6(frame, inner_eth + 14)?;
-                    return Some((ip, next, syn, frag, true));
+                    let mut parsed = parse_ipv6(frame, inner_eth + 14)?;
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 }
             }
         }
@@ -1050,11 +1099,17 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
         && frame.len() >= l4 + 14
         && frame[l4 + 13] & 0x02 != 0
         && frame[l4 + 13] & 0x10 == 0;
-    Some((std::net::IpAddr::V4(ip), proto, syn, false, false))
+    Some(ParsedPacket {
+        ip: std::net::IpAddr::V4(ip),
+        protocol: proto,
+        syn,
+        fragmented: false,
+        overlay_identity: false,
+    })
 }
 
 #[cfg(target_os = "linux")]
-fn parse_ipv6(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, bool, bool)> {
+fn parse_ipv6(frame: &[u8], off: usize) -> Option<ParsedPacket> {
     if frame.len() < off + 40 {
         return None;
     }
@@ -1096,20 +1151,21 @@ fn parse_ipv6(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
                 }
             }
             50 => {
-                return Some((
-                    std::net::IpAddr::V6(std::net::Ipv6Addr::from(b)),
-                    next,
-                    false,
-                    true,
-                    false,
-                ));
+                return Some(ParsedPacket {
+                    ip: std::net::IpAddr::V6(std::net::Ipv6Addr::from(b)),
+                    protocol: next,
+                    syn: false,
+                    fragmented: true,
+                    overlay_identity: false,
+                });
             }
             _ => break,
         }
     }
     if !fragmented && next == 41 && frame.len() >= cursor + 40 {
-        let (ip, proto, syn, frag, _) = parse_ipv6(frame, cursor)?;
-        return Some((ip, proto, syn, frag, true));
+        let mut parsed = parse_ipv6(frame, cursor)?;
+        parsed.overlay_identity = true;
+        return Some(parsed);
     }
     if !fragmented && next == 47 && frame.len() >= cursor + 4 {
         let flags = u16::from_be_bytes([frame[cursor], frame[cursor + 1]]);
@@ -1125,8 +1181,9 @@ fn parse_ipv6(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
             if (flags & 0x1000) != 0 {
                 inner += 4;
             }
-            let (ip, proto, syn, frag, _) = parse_ipv6(frame, inner)?;
-            return Some((ip, proto, syn, frag, true));
+            let mut parsed = parse_ipv6(frame, inner)?;
+            parsed.overlay_identity = true;
+            return Some(parsed);
         }
     }
     if !fragmented && next == 17 && frame.len() >= cursor + 8 {
@@ -1140,11 +1197,13 @@ fn parse_ipv6(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
             if frame.len() >= inner_eth + 14 {
                 let et = u16::from_be_bytes([frame[inner_eth + 12], frame[inner_eth + 13]]);
                 if et == 0x86dd {
-                    let (ip, proto, syn, frag, _) = parse_ipv6(frame, inner_eth + 14)?;
-                    return Some((ip, proto, syn, frag, true));
+                    let mut parsed = parse_ipv6(frame, inner_eth + 14)?;
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 } else if et == 0x0800 {
-                    let (ip, proto, syn, frag, _) = parse_ipv4(frame, inner_eth + 14)?;
-                    return Some((ip, proto, syn, frag, true));
+                    let mut parsed = parse_ipv4(frame, inner_eth + 14)?;
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 }
             }
         } else if sport == 6081 || dport == 6081 {
@@ -1156,11 +1215,13 @@ fn parse_ipv6(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
             if frame.len() >= inner_eth + 14 {
                 let et = u16::from_be_bytes([frame[inner_eth + 12], frame[inner_eth + 13]]);
                 if et == 0x86dd {
-                    let (ip, proto, syn, frag, _) = parse_ipv6(frame, inner_eth + 14)?;
-                    return Some((ip, proto, syn, frag, true));
+                    let mut parsed = parse_ipv6(frame, inner_eth + 14)?;
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 } else if et == 0x0800 {
-                    let (ip, proto, syn, frag, _) = parse_ipv4(frame, inner_eth + 14)?;
-                    return Some((ip, proto, syn, frag, true));
+                    let mut parsed = parse_ipv4(frame, inner_eth + 14)?;
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 }
             }
         }
@@ -1170,13 +1231,13 @@ fn parse_ipv6(frame: &[u8], off: usize) -> Option<(std::net::IpAddr, u8, bool, b
         && frame.len() >= cursor + 14
         && frame[cursor + 13] & 0x02 != 0
         && frame[cursor + 13] & 0x10 == 0;
-    Some((
-        std::net::IpAddr::V6(std::net::Ipv6Addr::from(b)),
-        next,
+    Some(ParsedPacket {
+        ip: std::net::IpAddr::V6(std::net::Ipv6Addr::from(b)),
+        protocol: next,
         syn,
         fragmented,
-        false,
-    ))
+        overlay_identity: false,
+    })
 }
 
 fn network_contains(network: &IpNetwork, ip: std::net::IpAddr) -> bool {
@@ -1256,7 +1317,7 @@ mod tpacket_tests {
         // Header [48, 96), packet [127, 128): the final byte is in bounds.
         assert_eq!(
             checked_tpacket_packet_offsets(0, 128, 128, 128, 48, 79, 1),
-            Some((48, 127))
+            Some(TpacketPacketOffsets { packet_abs: 127 })
         );
     }
 
@@ -1264,6 +1325,7 @@ mod tpacket_tests {
     fn rejects_invalid_descriptor_chain_progress() {
         assert!(checked_next_tpacket_offset(48, 0, false, 128, 128).is_err());
         assert!(checked_next_tpacket_offset(48, 1, false, 128, 128).is_err());
+        assert!(checked_next_tpacket_offset(48, 49, false, 192, 192).is_err());
         assert_eq!(checked_next_tpacket_offset(48, 0, true, 128, 128), Ok(None));
         assert_eq!(
             checked_next_tpacket_offset(48, 48, false, 192, 192),
@@ -1510,7 +1572,12 @@ mod tests {
         ip[32] = 0x50;
         ip[33] = 0x02;
         let frame = eth(0x0800, &ip);
-        let (src, proto, syn, fragmented, overlay) = parse_l3(&frame).unwrap();
+        let parsed = parse_l3(&frame).unwrap();
+        let src = parsed.ip;
+        let proto = parsed.protocol;
+        let syn = parsed.syn;
+        let fragmented = parsed.fragmented;
+        let overlay = parsed.overlay_identity;
         assert_eq!(src, "198.51.100.7".parse::<std::net::IpAddr>().unwrap());
         assert_eq!(proto, 6);
         assert!(syn);
@@ -1583,7 +1650,9 @@ mod tests {
         ip[9] = 17;
         ip[12..16].copy_from_slice(&[198, 51, 100, 8]);
         let frame = eth(0x0800, &ip);
-        let (_, _, syn, fragmented, _) = parse_l3(&frame).unwrap();
+        let parsed = parse_l3(&frame).unwrap();
+        let syn = parsed.syn;
+        let fragmented = parsed.fragmented;
         assert!(!syn);
         assert!(fragmented);
     }
@@ -1597,7 +1666,12 @@ mod tests {
         ip[8..24].copy_from_slice(&std::net::Ipv6Addr::LOCALHOST.octets());
         ip[24..40].copy_from_slice(&std::net::Ipv6Addr::UNSPECIFIED.octets());
         let frame = eth(0x86dd, &ip);
-        let (src, proto, syn, fragmented, overlay) = parse_l3(&frame).unwrap();
+        let parsed = parse_l3(&frame).unwrap();
+        let src = parsed.ip;
+        let proto = parsed.protocol;
+        let syn = parsed.syn;
+        let fragmented = parsed.fragmented;
+        let overlay = parsed.overlay_identity;
         assert_eq!(src, std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST));
         assert_eq!(proto, 17);
         assert!(!syn);
@@ -1868,5 +1942,37 @@ mod tests {
             1,
             "exactly one thread may emit the error, however many notice the closed channel"
         );
+    }
+}
+
+#[cfg(test)]
+mod worker_start_tests {
+    use super::start_workers;
+
+    #[test]
+    fn start_workers_reports_partial_success() {
+        let result = start_workers(3, |worker| {
+            if worker == 1 {
+                Err(std::io::Error::other("simulated spawn failure"))
+            } else {
+                Ok(std::thread::spawn(|| {}))
+            }
+        });
+
+        assert_eq!(result.started, 2);
+        assert_eq!(result.failed, 1);
+        assert_eq!(result.handles.len(), 2);
+        for handle in result.handles {
+            assert!(handle.join().is_ok());
+        }
+    }
+
+    #[test]
+    fn start_workers_reports_total_failure() {
+        let result = start_workers(2, |_| Err(std::io::Error::other("simulated spawn failure")));
+
+        assert_eq!(result.started, 0);
+        assert_eq!(result.failed, 2);
+        assert!(result.handles.is_empty());
     }
 }

@@ -1,4 +1,5 @@
 use ahash::AHashMap as HashMap;
+use ramshield_storage::subnet::subnet_key as storage_subnet_key;
 use ramshield_types::events::ConnectionEvent;
 use ramshield_types::{HttpMethod, IpNetwork};
 use std::net::IpAddr;
@@ -149,45 +150,22 @@ impl IpAgg {
     }
 }
 
-/// Pack IPv4 /24 prefix into u32 for subnet-scale counters (no string keys).
-/// Network byte order (big-endian): octet[0] in highest bits.
-#[inline]
-fn subnet_key_v4(octets: [u8; 4]) -> u32 {
-    (octets[0] as u32) << 24 | (octets[1] as u32) << 16 | (octets[2] as u32) << 8
-}
-
-/// Pack IPv6 /64 prefix into u128 for subnet-scale counters.
-/// Network byte order: first 8 bytes in high bits, host bits zeroed.
-#[inline]
-fn subnet_key_v6(octets: [u8; 16]) -> u128 {
-    let full = u128::from_be_bytes(octets);
-    // Zero out the lower 64 bits (host part of /64)
-    full & 0xFFFF_FFFF_FFFF_FFFF_0000_0000_0000_0000
-}
-
-/// Get network key as u128 for both address families.
-/// IPv4 keys are in lower 32 bits; IPv6 keys use full 128 bits.
-#[inline]
-pub(crate) fn subnet_key(ip: IpAddr) -> Option<(u128, IpNetwork)> {
-    match ip {
-        IpAddr::V4(v4) => {
-            let net = IpNetwork::ipv4_subnet(v4);
-            Some((subnet_key_v4(v4.octets()) as u128, net))
-        }
-        IpAddr::V6(v6) => {
-            let net = IpNetwork::ipv6_subnet(v6);
-            Some((subnet_key_v6(v6.octets()), net))
-        }
-    }
-}
-
 /// Check if an IP is in the canonical subnet of `ref_ip` (v4 /24, v6 /64) —
 /// Task 1: was ip_in_subnet([u8;3]) + subnet_prefix(key), which could not
 /// express v6. IpNetwork::contains is the family-complete equivalent.
 #[cfg(test)]
 #[inline]
 pub(crate) fn same_subnet(ref_ip: IpAddr, ip: IpAddr) -> bool {
-    IpNetwork::of_ip(ref_ip).contains(ip)
+    ramshield_types::IpNetwork::of_ip(ref_ip).contains(ip)
+}
+
+/// Counts and distinct member IPs for one subnet in a flush window.
+#[derive(Debug, Default)]
+pub struct SubnetAgg {
+    /// Number of events observed for this subnet in the flush.
+    pub events: u32,
+    /// Distinct source IPs observed in this subnet during the flush.
+    pub members: Vec<IpAddr>,
 }
 
 /// Aggregate a slice of connection events into IP and subnet maps in one pass.
@@ -199,23 +177,23 @@ pub(crate) fn same_subnet(ref_ip: IpAddr, ip: IpAddr) -> bool {
 /// complex type under clippy's complexity threshold.)
 pub struct FlushAggs {
     pub ips: HashMap<IpAddr, IpAgg>,
-    pub subnets: HashMap<u128, (u32, Vec<IpAddr>)>, // (events, distinct member IPs)
+    pub subnets: HashMap<u128, SubnetAgg>,
     pub networks: HashMap<u128, IpNetwork>,
 }
 
 pub fn aggregate(events: &[ConnectionEvent]) -> FlushAggs {
     let mut ips: HashMap<IpAddr, IpAgg> = HashMap::with_capacity(events.len().min(4096));
-    let mut subnets = HashMap::new();
+    let mut subnets: HashMap<u128, SubnetAgg> = HashMap::new();
     let mut networks = HashMap::new();
     for ev in events {
         let entry = ips.entry(ev.ip).or_default();
         let first_for_ip = entry.count == 0;
         entry.absorb(ev);
-        if let Some((sk, net)) = subnet_key(ev.ip) {
-            let e = subnets.entry(sk).or_insert((0, Vec::new()));
-            e.0 += 1;
+        if let Some((sk, net)) = storage_subnet_key(ev.ip) {
+            let subnet = subnets.entry(sk).or_default();
+            subnet.events = subnet.events.saturating_add(1);
             if first_for_ip {
-                e.1.push(ev.ip); // once per distinct IP — bitmap input
+                subnet.members.push(ev.ip); // once per distinct IP — bitmap input
             }
             // Only store once per key (all IPs in same subnet → same network)
             networks.entry(sk).or_insert(net);
@@ -231,12 +209,13 @@ pub fn aggregate(events: &[ConnectionEvent]) -> FlushAggs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ramshield_storage::subnet::{subnet_key_v4, subnet_key_v6};
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     #[test]
     fn subnet_key_roundtrip() {
         let ip = IpAddr::V4(Ipv4Addr::new(10, 20, 30, 40));
-        let (key, net) = subnet_key(ip).unwrap();
+        let (key, net) = storage_subnet_key(ip).unwrap();
         assert_eq!(net.to_string(), "10.20.30.0/24");
         assert!(same_subnet(ip, ip));
         assert!(!same_subnet(ip, IpAddr::V4(Ipv4Addr::new(10, 20, 31, 1))));
@@ -259,7 +238,7 @@ mod tests {
     #[test]
     fn subnet_key_v6_roundtrip() {
         let ip = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 1, 2, 3, 4));
-        let (key, net) = subnet_key(ip).unwrap();
+        let (key, net) = storage_subnet_key(ip).unwrap();
         assert_eq!(net.prefix_len, 64);
         assert_eq!(net.family(), 6);
         // Verify network address has host bits zeroed
@@ -305,10 +284,10 @@ mod tests {
         };
         let a = aggregate(&[ev(1), ev(2), ev(3)]);
         assert_eq!(a.ips[&ip].count, 3);
-        let sk = subnet_key(ip).unwrap().0;
-        assert_eq!(a.subnets[&sk].0, 3, "3 events");
+        let sk = storage_subnet_key(ip).unwrap().0;
+        assert_eq!(a.subnets[&sk].events, 3, "3 events");
         assert_eq!(
-            a.subnets[&sk].1,
+            a.subnets[&sk].members,
             vec![ip],
             "distinct member captured for bitmap"
         );

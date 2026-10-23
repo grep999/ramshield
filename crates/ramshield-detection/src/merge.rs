@@ -1,9 +1,14 @@
 use super::*;
 
+/// Named outcome of updating one IP's detection state.
+pub(crate) struct MergeRecordOutcome {
+    pub(crate) threat_score: f32,
+    pub(crate) should_block: bool,
+    pub(crate) stored: bool,
+}
+
 impl DetectionEngine {
-    /// ponytail: returns the 5-tuple `(ewma_rps, threat, should_block, was_blocked, stored)`.
-    /// `was_blocked` is set true if the IP already had a BlockState, so callers can
-    /// skip the extra store.get() they used to do.
+    /// Update one IP and report its detection outcome without a positional tuple.
     /// `stored` is false when a net-new key was refused by the RAM budget —
     /// callers must NOT count the IP as promoted.
     /// `sk`: pre-computed subnet key (avoids redundant `subnet_key_u128` call).
@@ -15,7 +20,7 @@ impl DetectionEngine {
         ram_lim: usize,
         now: u64,
         sk: Option<SubnetKey>,
-    ) -> (f64, f32, bool, bool, bool) {
+    ) -> MergeRecordOutcome {
         // P0 fix (round-4 Q3): was get() -> clone -> mutate -> insert(),
         // spanning two shard locks. A block committed by the enforcement
         // actor between the read and the write was silently reverted by
@@ -28,7 +33,7 @@ impl DetectionEngine {
         let window_ns = det.rate_window_secs * 1_000_000_000;
         let pulse_win = det.pulse_window_secs;
         let pulse_thr = det.pulse_threshold_samples;
-        let ((was_blocked, (ewma_rps, threat, block)), stored) = self.store.update_ip(
+        let ((threat, block), stored) = self.store.update_ip(
             ip,
             IpRecord {
                 ip,
@@ -51,7 +56,6 @@ impl DetectionEngine {
             },
             ram_lim,
             |rec| {
-                let was_blocked = matches!(rec.block_state, BlockState::Blocked { .. });
                 rec.request_count = rec.request_count.saturating_add(ip_agg.count as u64);
                 rec.last_seen_ns = ip_agg.last_ts_ns;
                 rec.bytes_in = rec.bytes_in.saturating_add(ip_agg.bytes);
@@ -145,23 +149,23 @@ impl DetectionEngine {
                 // Pulse-wave correlation: catch 2s-on/3s-off patterns that the EWMA
                 // debounce misses (EWMA decays between bursts). Counts distinct
                 // over-threshold samples inside a sliding M-second window.
-                let (pulse_count, pulse_start, pulse_fired) = pulse_tracker_step(
-                    rec.pulse_samples_in_window,
-                    rec.pulse_window_start_ns,
-                    now,
+                let pulse_step = pulse_tracker_step(PulseTrackerInput {
+                    prev_count: rec.pulse_samples_in_window,
+                    prev_window_start_ns: rec.pulse_window_start_ns,
+                    now_ns: now,
                     over_threshold,
-                    pulse_win,
-                    pulse_thr,
-                );
-                rec.pulse_samples_in_window = pulse_count;
-                rec.pulse_window_start_ns = pulse_start;
+                    window_secs: pulse_win,
+                    threshold: pulse_thr,
+                });
+                rec.pulse_samples_in_window = pulse_step.count;
+                rec.pulse_window_start_ns = pulse_step.window_start_ns;
                 let relative_fired = det.relative_enabled
                     && relative_breach
                     && rec.relative_breach_streak >= det.relative_min_breaches;
 
                 let block =
-                    hot || cusum_fired(rec.cusum_s, det_thr) || pulse_fired || relative_fired;
-                (was_blocked, (ewma_rps, threat, block))
+                    hot || cusum_fired(rec.cusum_s, det_thr) || pulse_step.fired || relative_fired;
+                (threat, block)
             },
         );
         // Only update subnet index when the record was actually stored.
@@ -173,6 +177,10 @@ impl DetectionEngine {
         }
         // block emitted even when already blocked: caller relies on the
         // enforcement dedup to refresh TTL (semantics preserved from pre-fix).
-        (ewma_rps, threat, block, was_blocked, stored)
+        MergeRecordOutcome {
+            threat_score: threat,
+            should_block: block,
+            stored,
+        }
     }
 }

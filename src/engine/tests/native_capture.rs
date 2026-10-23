@@ -28,29 +28,39 @@ fn idle_worker() -> std::io::Result<std::thread::JoinHandle<()>> {
 
 #[test]
 fn a_partial_worker_startup_failure_is_counted_not_swallowed() {
-    let (handles, started, failed) = start_workers(4, |worker| {
+    let result = start_workers(4, |worker| {
         if worker == 2 {
             Err(std::io::Error::other("thread creation refused"))
         } else {
             idle_worker()
         }
     });
-    assert_eq!(started, 3, "three of the four workers must have started");
-    assert_eq!(failed, 1, "the failed spawn must be counted, not dropped");
-    assert_eq!(handles.len(), 3, "only the started workers have a handle");
-    for handle in handles {
+    assert_eq!(
+        result.started, 3,
+        "three of the four workers must have started"
+    );
+    assert_eq!(
+        result.failed, 1,
+        "the failed spawn must be counted, not dropped"
+    );
+    assert_eq!(
+        result.handles.len(),
+        3,
+        "only the started workers have a handle"
+    );
+    for handle in result.handles {
         handle.join().unwrap();
     }
 }
 
 #[test]
 fn a_total_worker_startup_failure_is_reported() {
-    let (handles, started, failed) = start_workers(4, |_worker| {
+    let result = start_workers(4, |_worker| {
         Err(std::io::Error::other("thread creation refused"))
     });
-    assert_eq!(started, 0, "no worker started");
-    assert_eq!(failed, 4, "every failed spawn is counted");
-    assert!(handles.is_empty(), "a failed spawn has no handle");
+    assert_eq!(result.started, 0, "no worker started");
+    assert_eq!(result.failed, 4, "every failed spawn is counted");
+    assert!(result.handles.is_empty(), "a failed spawn has no handle");
 }
 
 #[test]
