@@ -31,7 +31,10 @@ impl DetectionEngine {
         let now = now_ns();
 
         // Incremental counters for forecasting (no full-store scan).
-        let subnet_vals: Vec<u64> = subnet_counts.values().map(|subnet| subnet.events as u64).collect();
+        let subnet_vals: Vec<u64> = subnet_counts
+            .values()
+            .map(|subnet| subnet.events as u64)
+            .collect();
         // F7: events_last_second must be a RATE. Prod flushes every 100ms;
         // storing the raw per-flush count lied 10x low to the forecaster.
         let rate = total_events.saturating_mul(1_000_000_000) / window_ns;
