@@ -1,6 +1,5 @@
 use std::fs::OpenOptions;
 use std::io::{Seek, Write};
-use std::path::PathBuf;
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -9,7 +8,6 @@ use ramwal::lsn::Lsn;
 use ramwal::recovery::{recover_dir, repair_segment_tail};
 use ramwal::testkit::seg_path;
 use ramwal::testkit::{HEADER_SIZE, RecordHeader, encode_payload};
-use ramwal::{Error, Wal};
 
 fn make_dir() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -77,7 +75,7 @@ fn wal_cfg(d: &str) -> ramwal::config::Config {
     c
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────
+// ── Tests ────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn clean_single_segment() {
