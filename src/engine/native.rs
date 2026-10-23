@@ -654,7 +654,7 @@ fn run_socket(
             // `tp_mac` is u16, which fits in `usize` on every supported Linux
             // target. The range check below validates the value against the ring.
             let mac = unsafe { (*hdr).tp_mac as usize };
-            let (_header_abs, packet_off) = match checked_tpacket_packet_offsets(
+            let packet_offsets = match checked_tpacket_packet_offsets(
                 block_idx, block_size, ring_len, blk_len, off, mac, snaplen,
             ) {
                 Some(value) if mac <= frame_size && snaplen <= frame_size => value,
@@ -674,8 +674,12 @@ fn run_socket(
             };
             // SAFETY: checked_tpacket_packet_offsets proves [packet_off,
             // packet_off + snaplen) lies in the current block and mapped ring.
-            let packet =
-                unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
+            let packet = unsafe {
+                std::slice::from_raw_parts(
+                    (map as *const u8).add(packet_offsets.packet_abs),
+                    snaplen,
+                )
+            };
             process_packet(
                 packet,
                 max_eps,
@@ -759,6 +763,13 @@ fn checked_tpacket_header_offset(
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TpacketPacketOffsets {
+    header_abs: usize,
+    packet_abs: usize,
+}
+
+#[cfg(target_os = "linux")]
 fn checked_tpacket_packet_offsets(
     block_idx: usize,
     block_size: usize,
@@ -767,7 +778,7 @@ fn checked_tpacket_packet_offsets(
     off: usize,
     mac: usize,
     snaplen: usize,
-) -> Option<(usize, usize)> {
+) -> Option<TpacketPacketOffsets> {
     let header_abs = checked_tpacket_header_offset(block_idx, block_size, ring_len, blk_len, off)?;
     let packet_rel = off.checked_add(mac)?;
     let packet_rel_end = checked_range_end(packet_rel, snaplen, blk_len)?;
@@ -777,7 +788,10 @@ fn checked_tpacket_packet_offsets(
     let packet_abs = block_base.checked_add(packet_rel)?;
     let packet_abs_end = checked_range_end(packet_abs, snaplen, ring_len)?;
     (packet_abs >= block_base && packet_abs_end <= block_end && packet_rel_end <= blk_len)
-        .then_some((header_abs, packet_abs))
+        .then_some(TpacketPacketOffsets {
+            header_abs,
+            packet_abs,
+        })
 }
 
 #[cfg(target_os = "linux")]
@@ -837,8 +851,8 @@ fn process_packet(
     max_eps: u64,
     trusted_overlay_cidrs: &[IpNetwork],
     tx: &Sender<ConnectionEvent>,
-    budget: &Arc<AtomicU64>,
-    epoch: &Arc<AtomicU64>,
+    budget: &AtomicU64,
+    epoch: &AtomicU64,
     epoch_base: std::time::Instant,
     metrics: &Metrics,
     disconnect_log_emissions: &AtomicU64,
@@ -1295,7 +1309,10 @@ mod tpacket_tests {
         // Header [48, 96), packet [127, 128): the final byte is in bounds.
         assert_eq!(
             checked_tpacket_packet_offsets(0, 128, 128, 128, 48, 79, 1),
-            Some((48, 127))
+            Some(TpacketPacketOffsets {
+                header_abs: 48,
+                packet_abs: 127,
+            })
         );
     }
 
