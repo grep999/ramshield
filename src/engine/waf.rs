@@ -737,7 +737,7 @@ mod tests {
     #[test]
     fn rejects_an_oversized_trailer_value() {
         let mut req = b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nX-A: ".to_vec();
-        req.extend(std::iter::repeat(b'a').take(20 * 1024));
+        req.extend(std::iter::repeat_n(b'a', 20 * 1024));
         req.extend_from_slice(b"\r\n\r\n");
         assert_eq!(inspect(&req, 65536), Some(Finding::Malformed));
     }
