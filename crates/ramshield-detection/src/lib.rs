@@ -15,7 +15,7 @@ mod workers;
 
 use ahash::AHashMap as HashMap;
 use arc_swap::ArcSwap;
-use batch::{IpAgg, aggregate};
+use batch::{IpAgg, SubnetAgg, aggregate};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded};
 use dashmap::DashMap;
 use ramshield_config::{ConfigHandle, DetectionConfig};
@@ -56,14 +56,14 @@ pub struct BloomFilter {
 /// ponytail: derive /24 counts from already-aggregated IpAggs instead of re-scanning
 /// raw events. One pass, no second HashMap allocation.
 /// Events + distinct member IPs per /24 (aggs are already per-IP-distinct).
-fn subnet_counts_of(aggs: &[(IpAddr, IpAgg)]) -> HashMap<SubnetKey, (u32, Vec<IpAddr>)> {
-    let mut subnets: HashMap<SubnetKey, (u32, Vec<IpAddr>)> =
+fn subnet_counts_of(aggs: &[(IpAddr, IpAgg)]) -> HashMap<SubnetKey, SubnetAgg> {
+    let mut subnets: HashMap<SubnetKey, SubnetAgg> =
         HashMap::with_capacity(aggs.len().min(512));
     for (ip, agg) in aggs {
         if let Some(sk) = subnet_key_u128(*ip) {
-            let e = subnets.entry(sk).or_insert((0, Vec::new()));
-            e.0 += agg.count;
-            e.1.push(*ip);
+            let subnet = subnets.entry(sk).or_default();
+            subnet.events = subnet.events.saturating_add(agg.count);
+            subnet.members.push(*ip);
         }
     }
     subnets
