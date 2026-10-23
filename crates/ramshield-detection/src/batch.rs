@@ -1,7 +1,7 @@
 use ahash::AHashMap as HashMap;
 use ramshield_types::events::ConnectionEvent;
 use ramshield_storage::subnet::subnet_key as storage_subnet_key;
-use ramshield_types::{HttpMethod, IpNetwork};
+use ramshield_types::HttpMethod;
 use std::net::IpAddr;
 
 /// In-memory aggregation for one flush window — no store access until flush completes.
@@ -150,20 +150,13 @@ impl IpAgg {
     }
 }
 
-/// Use the storage crate's canonical network-key implementation so detection
-/// and persistence cannot silently diverge on address packing.
-#[inline]
-pub(crate) fn subnet_key(ip: IpAddr) -> Option<(u128, IpNetwork)> {
-    storage_subnet_key(ip)
-}
-
 /// Check if an IP is in the canonical subnet of `ref_ip` (v4 /24, v6 /64) —
 /// Task 1: was ip_in_subnet([u8;3]) + subnet_prefix(key), which could not
 /// express v6. IpNetwork::contains is the family-complete equivalent.
 #[cfg(test)]
 #[inline]
 pub(crate) fn same_subnet(ref_ip: IpAddr, ip: IpAddr) -> bool {
-    IpNetwork::of_ip(ref_ip).contains(ip)
+    ramshield_types::IpNetwork::of_ip(ref_ip).contains(ip)
 }
 
 /// Counts and distinct member IPs for one subnet in a flush window.
@@ -196,7 +189,7 @@ pub fn aggregate(events: &[ConnectionEvent]) -> FlushAggs {
         let entry = ips.entry(ev.ip).or_default();
         let first_for_ip = entry.count == 0;
         entry.absorb(ev);
-        if let Some((sk, net)) = subnet_key(ev.ip) {
+        if let Some((sk, net)) = storage_subnet_key(ev.ip) {
             let subnet = subnets.entry(sk).or_default();
             subnet.events = subnet.events.saturating_add(1);
             if first_for_ip {
@@ -222,7 +215,7 @@ mod tests {
     #[test]
     fn subnet_key_roundtrip() {
         let ip = IpAddr::V4(Ipv4Addr::new(10, 20, 30, 40));
-        let (key, net) = subnet_key(ip).unwrap();
+        let (key, net) = storage_subnet_key(ip).unwrap();
         assert_eq!(net.to_string(), "10.20.30.0/24");
         assert!(same_subnet(ip, ip));
         assert!(!same_subnet(ip, IpAddr::V4(Ipv4Addr::new(10, 20, 31, 1))));
