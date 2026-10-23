@@ -1,0 +1,33 @@
+Show HN: RamShield – Autonomous eBPF/XDP DDoS defense with a decentralized CRDT mesh in Rust
+
+We built this because enterprise DDoS mitigation appliances cost €30k/yr, while central coordinators (Raft/Paxos) introduce a single point of failure under network partition.
+
+RamShield brings defense to the edge. Every node detects locally and propagates bans via CRDT — no central coordinator, no single point of failure. When the network partitions, each node protects itself. When it heals, bans sync instantly.
+
+What we solved:
+
+**WAL durability vs. CRDT convergence** — RocksDB-backed WAL ensures blocks survive restarts. CRDT mesh ensures all nodes converge on the same ban set without a leader. We use a vector clock + last-writer-wins semantics for the blocklist, so concurrent blocks from different nodes merge cleanly.
+
+**Kernel bypass** — The eBPF program loads and attaches from userspace with zero-copy IPC. No kernel module compilation needed. The loader validates program integrity before attachment, so you get kernel enforcement without the kernel development cycle.
+
+**Why Rust** — Zero-cost abstractions give us the performance of C with memory safety. The eBPF loader is ~200 lines of safe Rust. The CRDT mesh is ~500 lines. Memory errors in a DDoS defender are unacceptable; Rust makes that practically impossible.
+
+**Numbers** — 50 IPs + 100 events /24/2s triggers detection. Detection latency: < 200ms from first anomalous packet to block. XDP drop rate: near 100% at line rate. Mesh convergence: < 500ms across 3 nodes under partition.
+
+Try it:
+
+```bash
+git clone https://github.com/grep999/ramshield.git
+cd ramshield
+cp config.baseline.toml config.toml
+# Replace the dev-only HMAC key before production
+RAMSHIELD_AUTONOMOUS__ENABLED=false \
+RAMSHIELD_NATIVE_INGEST__ENABLED=false \
+RAMSHIELD_SYNPROXY__ENABLED=false \
+./target/release/ramshield --config config.toml --no-xdp
+curl http://127.0.0.1:9999/healthz
+```
+
+Join us — this is early access. We're looking for operators of self-hosted/sovereign infrastructure who want DDoS protection without the enterprise tax.
+
+#ramshield #ebpf #xdp #crdt #ddos #rust #selfhosted

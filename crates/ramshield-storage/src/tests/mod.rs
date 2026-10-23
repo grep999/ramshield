@@ -863,3 +863,45 @@ fn threat_sample_queue_is_bounded() {
         s.threat_sample.len()
     );
 }
+
+/// Full-capacity boundary for the `update_ip` read-modify-write path.
+/// Unlike `insert` (which returns a `Result`), the `Vacant` branch of
+/// `update_ip` refuses a net-new key silently via `stored=false` when the
+/// CAS gate denies it. Contract: an entry that EXACTLY fits the remaining
+/// budget must be accepted, and the next net-new key must be refused with
+/// the store left consistent (no partial entry, no accounting drift).
+#[test]
+fn update_ip_capacity_gate_accepts_exact_fit_refuses_overflow() {
+    let store = Store::new(16);
+    // Budget for exactly one entry: fixed-size IpRecord, heap 0 (Clean).
+    let one_entry = std::mem::size_of::<IpAddr>() + std::mem::size_of::<Entry>();
+    let first: IpAddr = "10.200.0.1".parse().unwrap();
+    let (out1, stored1) = store.update_ip(first, blank_record(first), one_entry, |_| ());
+    assert!(stored1, "an entry that exactly fits must be stored");
+    assert_eq!(
+        store.ram_bytes(),
+        one_entry,
+        "accounting must match the exact-fit entry"
+    );
+
+    // The budget is now exactly full: a different net-new key must be
+    // refused, with no partial state.
+    let second: IpAddr = "10.200.0.2".parse().unwrap();
+    let (out2, stored2) = store.update_ip(second, blank_record(second), one_entry, |_| ());
+    assert!(!stored2, "a net-new key at a full budget must be refused");
+    assert!(
+        !store.inner().contains_key(&second),
+        "refused update_ip must not leave a phantom entry"
+    );
+    assert_eq!(
+        store.ram_bytes(),
+        one_entry,
+        "refused update_ip must not perturb accounting"
+    );
+
+    // Replacement of the existing key is NOT gated (limit only gates
+    // net-new growth): the same key must still succeed at the full budget.
+    let (out3, stored3) = store.update_ip(first, blank_record(first), one_entry, |_| ());
+    assert!(stored3, "replacement of an existing key must not be gated");
+    assert_eq!(store.ram_bytes(), one_entry);
+}
