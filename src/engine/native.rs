@@ -1969,9 +1969,7 @@ mod worker_start_tests {
 
     #[test]
     fn start_workers_reports_total_failure() {
-        let result = start_workers(2, |_| {
-            Err(std::io::Error::other("simulated spawn failure"))
-        });
+        let result = start_workers(2, |_| Err(std::io::Error::other("simulated spawn failure")));
 
         assert_eq!(result.started, 0);
         assert_eq!(result.failed, 2);
