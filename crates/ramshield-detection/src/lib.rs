@@ -27,7 +27,7 @@ use ramshield_types::BlockReason;
 use ramshield_types::{ConnectionEvent, EnforceAction, EnforceCommand, IpNetwork};
 use rate_tracker::{
     CUSUM_WARMUP_SAMPLES, cusum_allowance, cusum_fired, cusum_step_capped, ewma, ewma_alpha_slow,
-    is_exceeded, pulse_tracker_step,
+    is_exceeded, pulse_tracker_step, PulseTrackerInput,
 };
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
