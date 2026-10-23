@@ -988,15 +988,21 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<ParsedPacket> {
     );
     let l4 = off + ihl;
     if fragmented {
-        return Some(ParsedPacket { ip: std::net::IpAddr::V4(ip), protocol: proto, syn: false, fragmented: true, overlay_identity: false });
+        return Some(ParsedPacket {
+            ip: std::net::IpAddr::V4(ip),
+            protocol: proto,
+            syn: false,
+            fragmented: true,
+            overlay_identity: false,
+        });
     }
 
     // Native telemetry follows the same common overlay subset as XDP: IP-in-IP,
     // GRE without optional fields, VXLAN and Geneve with bounded option length.
     if proto == 4 && frame.len() >= l4 + 20 {
         let mut parsed = parse_ipv4(frame, l4)?;
-            parsed.overlay_identity = true;
-            return Some(parsed);
+        parsed.overlay_identity = true;
+        return Some(parsed);
     }
     if proto == 47 && frame.len() >= l4 + 4 {
         let flags = u16::from_be_bytes([frame[l4], frame[l4 + 1]]);
@@ -1014,8 +1020,8 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<ParsedPacket> {
             }
             if inner_proto == 0x0800 {
                 let mut parsed = parse_ipv4(frame, inner)?;
-            parsed.overlay_identity = true;
-            return Some(parsed);
+                parsed.overlay_identity = true;
+                return Some(parsed);
             }
             let mut parsed = parse_ipv6(frame, inner)?;
             parsed.overlay_identity = true;
@@ -1034,13 +1040,13 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<ParsedPacket> {
                 let inner_type = u16::from_be_bytes([frame[inner_eth + 12], frame[inner_eth + 13]]);
                 if inner_type == 0x0800 {
                     let mut parsed = parse_ipv4(frame, inner_eth + 14)?;
-            parsed.overlay_identity = true;
-            return Some(parsed);
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 }
                 if inner_type == 0x86dd {
                     let mut parsed = parse_ipv6(frame, inner_eth + 14)?;
-            parsed.overlay_identity = true;
-            return Some(parsed);
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 }
             }
         } else if sport == 6081 || dport == 6081 {
@@ -1056,13 +1062,13 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<ParsedPacket> {
                 let inner_type = u16::from_be_bytes([frame[inner_eth + 12], frame[inner_eth + 13]]);
                 if inner_type == 0x0800 {
                     let mut parsed = parse_ipv4(frame, inner_eth + 14)?;
-            parsed.overlay_identity = true;
-            return Some(parsed);
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 }
                 if inner_type == 0x86dd {
                     let mut parsed = parse_ipv6(frame, inner_eth + 14)?;
-            parsed.overlay_identity = true;
-            return Some(parsed);
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 }
             }
         }
@@ -1071,7 +1077,13 @@ fn parse_ipv4(frame: &[u8], off: usize) -> Option<ParsedPacket> {
         && frame.len() >= l4 + 14
         && frame[l4 + 13] & 0x02 != 0
         && frame[l4 + 13] & 0x10 == 0;
-    Some(ParsedPacket { ip: std::net::IpAddr::V4(ip), protocol: proto, syn, fragmented: false, overlay_identity: false })
+    Some(ParsedPacket {
+        ip: std::net::IpAddr::V4(ip),
+        protocol: proto,
+        syn,
+        fragmented: false,
+        overlay_identity: false,
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -1117,15 +1129,21 @@ fn parse_ipv6(frame: &[u8], off: usize) -> Option<ParsedPacket> {
                 }
             }
             50 => {
-                return Some(ParsedPacket { ip: std::net::IpAddr::V6(std::net::Ipv6Addr::from(b)), protocol: next, syn: false, fragmented: true, overlay_identity: false });
+                return Some(ParsedPacket {
+                    ip: std::net::IpAddr::V6(std::net::Ipv6Addr::from(b)),
+                    protocol: next,
+                    syn: false,
+                    fragmented: true,
+                    overlay_identity: false,
+                });
             }
             _ => break,
         }
     }
     if !fragmented && next == 41 && frame.len() >= cursor + 40 {
         let mut parsed = parse_ipv6(frame, cursor)?;
-            parsed.overlay_identity = true;
-            return Some(parsed);
+        parsed.overlay_identity = true;
+        return Some(parsed);
     }
     if !fragmented && next == 47 && frame.len() >= cursor + 4 {
         let flags = u16::from_be_bytes([frame[cursor], frame[cursor + 1]]);
@@ -1158,12 +1176,12 @@ fn parse_ipv6(frame: &[u8], off: usize) -> Option<ParsedPacket> {
                 let et = u16::from_be_bytes([frame[inner_eth + 12], frame[inner_eth + 13]]);
                 if et == 0x86dd {
                     let mut parsed = parse_ipv6(frame, inner_eth + 14)?;
-            parsed.overlay_identity = true;
-            return Some(parsed);
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 } else if et == 0x0800 {
                     let mut parsed = parse_ipv4(frame, inner_eth + 14)?;
-            parsed.overlay_identity = true;
-            return Some(parsed);
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 }
             }
         } else if sport == 6081 || dport == 6081 {
@@ -1176,12 +1194,12 @@ fn parse_ipv6(frame: &[u8], off: usize) -> Option<ParsedPacket> {
                 let et = u16::from_be_bytes([frame[inner_eth + 12], frame[inner_eth + 13]]);
                 if et == 0x86dd {
                     let mut parsed = parse_ipv6(frame, inner_eth + 14)?;
-            parsed.overlay_identity = true;
-            return Some(parsed);
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 } else if et == 0x0800 {
                     let mut parsed = parse_ipv4(frame, inner_eth + 14)?;
-            parsed.overlay_identity = true;
-            return Some(parsed);
+                    parsed.overlay_identity = true;
+                    return Some(parsed);
                 }
             }
         }
@@ -1191,7 +1209,13 @@ fn parse_ipv6(frame: &[u8], off: usize) -> Option<ParsedPacket> {
         && frame.len() >= cursor + 14
         && frame[cursor + 13] & 0x02 != 0
         && frame[cursor + 13] & 0x10 == 0;
-    Some(ParsedPacket { ip: std::net::IpAddr::V6(std::net::Ipv6Addr::from(b)), protocol: next, syn, fragmented, overlay_identity: false })
+    Some(ParsedPacket {
+        ip: std::net::IpAddr::V6(std::net::Ipv6Addr::from(b)),
+        protocol: next,
+        syn,
+        fragmented,
+        overlay_identity: false,
+    })
 }
 
 fn network_contains(network: &IpNetwork, ip: std::net::IpAddr) -> bool {
