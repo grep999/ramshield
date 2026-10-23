@@ -474,7 +474,7 @@ fn run_socket(
     max_eps: u64,
     trusted_overlay_cidrs: &[IpNetwork],
     tx: &Sender<ConnectionEvent>,
-    shutdown: &Arc<AtomicBool>,
+    shutdown: &AtomicBool,
     budget: &AtomicU64,
     epoch: &AtomicU64,
     epoch_base: std::time::Instant,
