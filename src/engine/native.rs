@@ -805,15 +805,14 @@ fn checked_next_tpacket_offset(
             Err("zero tp_next_offset before final packet")
         };
     }
-    let aligned = next
-        .checked_add(TPACKET_ALIGNMENT - 1)
-        .ok_or("tp_next_offset alignment overflow")?
-        & !(TPACKET_ALIGNMENT - 1);
-    if aligned < std::mem::size_of::<Tpacket3Hdr>() {
+    if !next.is_multiple_of(TPACKET_ALIGNMENT) {
+        return Err("tp_next_offset is not TPACKET-aligned");
+    }
+    if next < std::mem::size_of::<Tpacket3Hdr>() {
         return Err("tp_next_offset does not advance past the current header");
     }
     let next_off = off
-        .checked_add(aligned)
+        .checked_add(next)
         .ok_or("tp_next_offset addition overflow")?;
     checked_range_end(next_off, std::mem::size_of::<Tpacket3Hdr>(), blk_len)
         .ok_or("next packet header exceeds declared block")?;
@@ -1313,6 +1312,7 @@ mod tpacket_tests {
     fn rejects_invalid_descriptor_chain_progress() {
         assert!(checked_next_tpacket_offset(48, 0, false, 128, 128).is_err());
         assert!(checked_next_tpacket_offset(48, 1, false, 128, 128).is_err());
+        assert!(checked_next_tpacket_offset(48, 49, false, 192, 192).is_err());
         assert_eq!(checked_next_tpacket_offset(48, 0, true, 128, 128), Ok(None));
         assert_eq!(
             checked_next_tpacket_offset(48, 48, false, 192, 192),
