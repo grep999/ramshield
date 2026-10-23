@@ -218,8 +218,8 @@ mod pulse_tracker_tests {
         let mut s = 0u64;
         for i in 0..100u64 {
             let now = 1_000_000_000u64 + i * 1_000_000_000;
-            let (_, _, fired) = pulse_tracker_step(c, s, now, false, 6, 2);
-            assert!(!fired, "no over-threshold samples must not fire");
+            let step = pulse_tracker_step(c, s, now, false, 6, 2);
+            assert!(!step.fired, "no over-threshold samples must not fire");
             c = 0;
             s = now;
         }
@@ -229,17 +229,17 @@ mod pulse_tracker_tests {
     fn pulse_tracker_two_of_three_fires() {
         let now0 = 1_000_000_000u64;
         // sample 1 — window opens
-        let (c, _, fired) = pulse_tracker_step(0, 0, now0, true, 6, 2);
-        assert_eq!(c, 1);
-        assert!(!fired);
+        let step = pulse_tracker_step(0, 0, now0, true, 6, 2);
+        assert_eq!(step.count, 1);
+        assert!(!step.fired);
         // sample 2 — 1.5s later, fires
-        let (c, _, fired) = pulse_tracker_step(c, now0, now0 + 1_500_000_000, true, 6, 2);
-        assert_eq!(c, 2);
-        assert!(fired, "second over-threshold inside 6s window must fire");
+        let step = pulse_tracker_step(step.count, now0, now0 + 1_500_000_000, true, 6, 2);
+        assert_eq!(step.count, 2);
+        assert!(step.fired, "second over-threshold inside 6s window must fire");
         // sample 3 — 10s later, window expired, resets
-        let (c, _, fired) = pulse_tracker_step(c, now0, now0 + 10_000_000_000, true, 6, 2);
-        assert_eq!(c, 1);
-        assert!(!fired, "expired window must reset");
+        let step = pulse_tracker_step(step.count, now0, now0 + 10_000_000_000, true, 6, 2);
+        assert_eq!(step.count, 1);
+        assert!(!step.fired, "expired window must reset");
     }
 
     #[test]
@@ -252,8 +252,8 @@ mod pulse_tracker_tests {
 
         for burst in 0..4u64 {
             let t_burst = t0 + burst * 5_000_000_000; // 2s on + 3s gap
-            let (_, _, fired) = pulse_tracker_step(c, s, t_burst, true, 6, 2);
-            if fired {
+            let step = pulse_tracker_step(c, s, t_burst, true, 6, 2);
+            if step.fired {
                 fired_at.push(burst);
             }
             c = 1; // simplified: one sample per burst
