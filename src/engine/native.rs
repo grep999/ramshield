@@ -188,30 +188,38 @@ pub(super) fn join_workers(handles: Vec<std::thread::JoinHandle<()>>) -> usize {
     panicked
 }
 
+/// Outcome of attempting to start the configured native capture workers.
+pub(super) struct WorkerStartResult {
+    /// Handles for workers that started successfully.
+    pub(super) handles: Vec<std::thread::JoinHandle<()>>,
+    /// Number of workers started successfully.
+    pub(super) started: usize,
+    /// Number of workers that failed to start.
+    pub(super) failed: usize,
+}
+
 /// Start the capture worker slots.
 ///
-/// Returns the handles of the workers that started, how many started and
-/// how many failed to start. The spawner is a parameter so a partial or
-/// total startup failure can be produced deterministically, without a
-/// NIC and without a race.
-pub(super) fn start_workers<F>(
-    expected: usize,
-    mut spawn_one: F,
-) -> (Vec<std::thread::JoinHandle<()>>, usize, usize)
+/// The spawner is a parameter so partial and total startup failures can be
+/// produced deterministically, without a NIC and without a race.
+pub(super) fn start_workers<F>(expected: usize, mut spawn_one: F) -> WorkerStartResult
 where
     F: FnMut(usize) -> std::io::Result<std::thread::JoinHandle<()>>,
 {
-    let mut handles = Vec::with_capacity(expected);
-    let mut started = 0usize;
-    let mut failed = 0usize;
+    let mut result = WorkerStartResult {
+        handles: Vec::with_capacity(expected),
+        started: 0,
+        failed: 0,
+    };
+
     for worker in 0..expected {
         match spawn_one(worker) {
             Ok(handle) => {
-                started += 1;
-                handles.push(handle);
+                result.started += 1;
+                result.handles.push(handle);
             }
             Err(err) => {
-                failed += 1;
+                result.failed += 1;
                 error!(
                     worker,
                     error = %err,
@@ -220,7 +228,8 @@ where
             }
         }
     }
-    (handles, started, failed)
+
+    result
 }
 
 pub fn spawn(
@@ -254,7 +263,7 @@ pub fn spawn(
         // counter records that the error was raised exactly once.
         let disconnect_log_emissions = Arc::new(AtomicU64::new(0));
         metrics.set_native_capture_workers_expected(workers as u64);
-        let (handles, started, failed) = start_workers(workers, |worker| {
+        let WorkerStartResult { handles, started, failed } = start_workers(workers, |worker| {
             let iface = interface.clone();
             let txc = tx.clone();
             let stop = shutdown.clone();
