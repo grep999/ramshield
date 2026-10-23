@@ -166,6 +166,15 @@ pub(crate) fn same_subnet(ref_ip: IpAddr, ip: IpAddr) -> bool {
     IpNetwork::of_ip(ref_ip).contains(ip)
 }
 
+/// Counts and distinct member IPs for one subnet in a flush window.
+#[derive(Debug, Default)]
+pub struct SubnetAgg {
+    /// Number of events observed for this subnet in the flush.
+    pub events: u32,
+    /// Distinct source IPs observed in this subnet during the flush.
+    pub members: Vec<IpAddr>,
+}
+
 /// Aggregate a slice of connection events into IP and subnet maps in one pass.
 /// Returns:
 /// Per-flush aggregates: per-IP stats, per-/24 event + distinct-member counts,
@@ -175,7 +184,7 @@ pub(crate) fn same_subnet(ref_ip: IpAddr, ip: IpAddr) -> bool {
 /// complex type under clippy's complexity threshold.)
 pub struct FlushAggs {
     pub ips: HashMap<IpAddr, IpAgg>,
-    pub subnets: HashMap<u128, (u32, Vec<IpAddr>)>, // (events, distinct member IPs)
+    pub subnets: HashMap<u128, SubnetAgg>,
     pub networks: HashMap<u128, IpNetwork>,
 }
 
@@ -188,10 +197,10 @@ pub fn aggregate(events: &[ConnectionEvent]) -> FlushAggs {
         let first_for_ip = entry.count == 0;
         entry.absorb(ev);
         if let Some((sk, net)) = subnet_key(ev.ip) {
-            let e = subnets.entry(sk).or_insert((0, Vec::new()));
-            e.0 += 1;
+            let subnet = subnets.entry(sk).or_default();
+            subnet.events = subnet.events.saturating_add(1);
             if first_for_ip {
-                e.1.push(ev.ip); // once per distinct IP — bitmap input
+                subnet.members.push(ev.ip); // once per distinct IP — bitmap input
             }
             // Only store once per key (all IPs in same subnet → same network)
             networks.entry(sk).or_insert(net);
@@ -283,9 +292,9 @@ mod tests {
         let a = aggregate(&[ev(1), ev(2), ev(3)]);
         assert_eq!(a.ips[&ip].count, 3);
         let sk = subnet_key(ip).unwrap().0;
-        assert_eq!(a.subnets[&sk].0, 3, "3 events");
+        assert_eq!(a.subnets[&sk].events, 3, "3 events");
         assert_eq!(
-            a.subnets[&sk].1,
+            a.subnets[&sk].members,
             vec![ip],
             "distinct member captured for bitmap"
         );
