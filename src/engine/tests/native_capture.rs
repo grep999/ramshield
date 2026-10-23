@@ -35,9 +35,19 @@ fn a_partial_worker_startup_failure_is_counted_not_swallowed() {
             idle_worker()
         }
     });
-    assert_eq!(result.started, 3, "three of the four workers must have started");
-    assert_eq!(result.failed, 1, "the failed spawn must be counted, not dropped");
-    assert_eq!(result.handles.len(), 3, "only the started workers have a handle");
+    assert_eq!(
+        result.started, 3,
+        "three of the four workers must have started"
+    );
+    assert_eq!(
+        result.failed, 1,
+        "the failed spawn must be counted, not dropped"
+    );
+    assert_eq!(
+        result.handles.len(),
+        3,
+        "only the started workers have a handle"
+    );
     for handle in result.handles {
         handle.join().unwrap();
     }
