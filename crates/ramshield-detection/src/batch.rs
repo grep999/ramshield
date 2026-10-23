@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn subnet_key_v6_roundtrip() {
         let ip = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 1, 2, 3, 4));
-        let (key, net) = subnet_key(ip).unwrap();
+        let (key, net) = storage_subnet_key(ip).unwrap();
         assert_eq!(net.prefix_len, 64);
         assert_eq!(net.family(), 6);
         // Verify network address has host bits zeroed
@@ -284,7 +284,7 @@ mod tests {
         };
         let a = aggregate(&[ev(1), ev(2), ev(3)]);
         assert_eq!(a.ips[&ip].count, 3);
-        let sk = subnet_key(ip).unwrap().0;
+        let sk = storage_subnet_key(ip).unwrap().0;
         assert_eq!(a.subnets[&sk].events, 3, "3 events");
         assert_eq!(
             a.subnets[&sk].members,
