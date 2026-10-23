@@ -213,8 +213,10 @@ impl DetectionEngine {
 
             // ponytail: merge_record does the single store lookup (is_blocked check
             // was a second DashMap hit on the same key).
-            let (_ewma_rps, threat, should_block, _was_blocked, stored) =
-                self.merge_record(ip, agg, det, ram_lim, now, sk);
+            let outcome = self.merge_record(ip, agg, det, ram_lim, now, sk);
+            let threat = outcome.threat_score;
+            let should_block = outcome.should_block;
+            let stored = outcome.stored;
             if !stored {
                 let exceeded = self
                     .metrics
