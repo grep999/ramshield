@@ -149,7 +149,7 @@ impl DetectionEngine {
                 // Pulse-wave correlation: catch 2s-on/3s-off patterns that the EWMA
                 // debounce misses (EWMA decays between bursts). Counts distinct
                 // over-threshold samples inside a sliding M-second window.
-                let (pulse_count, pulse_start, pulse_fired) = pulse_tracker_step(
+                let pulse_step = pulse_tracker_step(
                     rec.pulse_samples_in_window,
                     rec.pulse_window_start_ns,
                     now,
@@ -157,14 +157,14 @@ impl DetectionEngine {
                     pulse_win,
                     pulse_thr,
                 );
-                rec.pulse_samples_in_window = pulse_count;
-                rec.pulse_window_start_ns = pulse_start;
+                rec.pulse_samples_in_window = pulse_step.count;
+                rec.pulse_window_start_ns = pulse_step.window_start_ns;
                 let relative_fired = det.relative_enabled
                     && relative_breach
                     && rec.relative_breach_streak >= det.relative_min_breaches;
 
                 let block =
-                    hot || cusum_fired(rec.cusum_s, det_thr) || pulse_fired || relative_fired;
+                    hot || cusum_fired(rec.cusum_s, det_thr) || pulse_step.fired || relative_fired;
                 (threat, block)
             },
         );
