@@ -4,154 +4,78 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RamShield // Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" onload="this.rel='stylesheet'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"></noscript>
 <style>
-
 :root {
-  color-scheme: dark;
-  --bg-base: #080b10;
-  --bg-surface: #10151d;
-  --bg-elevated: #161e29;
+  --bg-app: #080B10;
+  --bg-surface: #10151D;
+  --bg-elevated: #161E29;
+  --bg-hover: #1C2633;
   --border-subtle: #273241;
-  --border-strong: #344254;
-  --text-primary: #e8eef5;
-  --text-secondary: #a0adbd;
-  --text-muted: #7b899c;
-  --brand: #67f5b3;
-  --cyan: #55d9f2;
-  --danger: #ff6b78;
-  --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --border-focus: #344254;
+  --text-primary: #E8EEF5;
+  --text-secondary: #A0ADBD;
+  --text-muted: #718096;
+  --brand-mint: #67F5B3;
+  --brand-cyan: #55D9F2;
+  --brand-violet: #A69BFF;
+  --status-healthy: #67F5B3;
+  --status-warning: #F6C66A;
+  --status-critical: #FF6B78;
+  --status-info: #70B8FF;
 }
-*, *::before, *::after { box-sizing: border-box; }
-html { min-width: 320px; min-height: 100%; background: var(--bg-base); }
+html { color-scheme: dark; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 100vh;
-  margin: 0;
-  padding: 24px;
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: var(--bg-app);
   color: var(--text-primary);
-  background:
-    radial-gradient(ellipse at 50% 0%, rgba(85,217,242,.075), transparent 34rem),
-    radial-gradient(ellipse at 100% 100%, rgba(103,245,179,.035), transparent 32rem),
-    var(--bg-base);
-  font-family: var(--sans);
-  font-size: 14px;
-  line-height: 1.55;
-  -webkit-font-smoothing: antialiased;
-}
-button, input { font: inherit; }
-button:focus-visible, input:focus-visible, a:focus-visible {
-  outline: 2px solid var(--cyan);
-  outline-offset: 3px;
+  min-height: 100vh;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
 }
 .card {
-  width: 100%;
-  max-width: 410px;
-  padding: 34px;
-  background: linear-gradient(155deg, rgba(22,30,41,.98), rgba(16,21,29,.99));
-  border: 1px solid var(--border-strong);
-  border-radius: 14px;
-  box-shadow: 0 28px 90px rgba(0,0,0,.36);
-  animation: enter .32s ease-out both;
+  width: 100%; max-width: 360px;
+  background: #10131a;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 36px 30px 30px;
+  box-shadow: 0 24px 48px rgba(0,0,0,.55), 0 0 0 1px rgba(0,0,0,.2);
 }
-@keyframes enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-.brand { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 8px; }
-.brand svg { width: 30px; height: 30px; flex: 0 0 auto; }
-.brand svg path { fill: none; stroke: url(#g); stroke-width: 1.6; }
-h1 {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 18px;
-  font-weight: 750;
-  letter-spacing: .075em;
+.brand {
+  display: flex; align-items: center; gap: 10px; justify-content: center; margin-bottom: 16px;
 }
-.sub {
-  margin: 0 0 30px;
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .13em;
-  text-align: center;
-  text-transform: uppercase;
-}
-label {
-  display: block;
-  margin-bottom: 8px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .055em;
-}
+.brand svg { width: 24px; height: 24px; }
+.brand svg path { fill: none; stroke: var(--brand-mint); stroke-width: 1.6; }
+h1 { font-size: 14px; font-weight: 600; letter-spacing: 1px; color: var(--text-primary); }
+.sub { text-align: center; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 20px; }
+label { display: block; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; }
 input {
-  display: block;
-  width: 100%;
-  min-height: 44px;
-  margin: 0 0 16px;
-  padding: 11px 13px;
-  color: var(--text-primary);
-  background: #0b1017;
-  border: 1px solid var(--border-strong);
-  border-radius: 7px;
-  font-size: 14px;
-  letter-spacing: .025em;
-  transition: border-color .15s ease, box-shadow .15s ease;
+  width: 100%; padding: 12px 14px; margin-bottom: 16px;
+  background: #08090d; color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px; font-family: inherit; font-size: 14px; letter-spacing: 1px;
+  transition: border-color .18s, box-shadow .18s;
 }
-input::placeholder { color: #68778b; }
-input:focus { border-color: var(--cyan); outline: none; box-shadow: 0 0 0 3px rgba(85,217,242,.1); }
+input:focus { outline: none; border-color: var(--brand-cyan); box-shadow: 0 0 0 3px rgba(87, 245, 179, .08); }
 button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  min-height: 43px;
-  padding: 10px 14px;
-  color: #07130e;
-  background: var(--brand);
-  border: 1px solid transparent;
-  border-radius: 7px;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: .035em;
-  cursor: pointer;
-  transition: background .15s ease, transform .15s ease;
+  width: 100%; padding: 12px; border: none; border-radius: 6px; cursor: pointer;
+  font-family: inherit; font-size: 13px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase;
+  color: #080B10;
+  background: var(--brand-cyan); transition: background .12s ease;
 }
-button:hover { background: #8affc6; }
+button:hover { background: var(--brand-mint); }
 button:active { transform: translateY(1px); }
-.err {
-  margin: 0 0 16px;
-  padding: 10px 12px;
-  color: var(--danger);
-  background: rgba(255,107,120,.07);
-  border: 1px solid rgba(255,107,120,.22);
-  border-radius: 7px;
-  font-size: 12px;
-  text-align: center;
-}
-.foot {
-  margin-top: 24px;
-  padding-top: 16px;
-  color: var(--text-muted);
-  border-top: 1px solid var(--border-subtle);
-  font-size: 10px;
-  line-height: 1.6;
-  text-align: center;
-}
-@media (max-width: 480px) {
-  body { padding: 16px; }
-  .card { padding: 27px 22px 23px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .card { animation: none; }
-  *, *::before, *::after { transition-duration: .01ms !important; }
-}
-
+.err { font-size: 12px; color: var(--status-critical); text-align: center; margin-bottom: 14px; }
+.foot { margin-top: 20px; text-align: center; font-size: 10px; color: var(--text-muted); letter-spacing: 1px; }
+@media (prefers-reduced-motion: reduce) { .card { animation: none; } }
 </style>
 </head>
 <body>
 <div class="card">
   <div class="brand">
-    <svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#67f5b3"/><stop offset="1" stop-color="#55d9f2"/></linearGradient></defs><path d="M12 2l8 3.5v5.2c0 5-3.2 9.3-8 11.3-4.8-2-8-6.3-8-11.3V5.5L12 2z"/><path d="M8.2 12.2l2.6 2.6 5-5.4"/></svg>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8 3.5v5.2c0 5-3.2 9.3-8 11.3-4.8-2-8-6.3-8-11.3V5.5L12 2z"/><path d="M8.2 12.2l2.6 2.6 5-5.4"/></svg>
     <h1>RamShield</h1>
   </div>
   <div class="sub">Operations Console</div>
