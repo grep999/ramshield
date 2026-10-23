@@ -2,10 +2,8 @@ use super::*;
 
 /// Named outcome of updating one IP's detection state.
 pub(crate) struct MergeRecordOutcome {
-    pub(crate) ewma_rps: f64,
     pub(crate) threat_score: f32,
     pub(crate) should_block: bool,
-    pub(crate) was_blocked: bool,
     pub(crate) stored: bool,
 }
 
@@ -183,10 +181,8 @@ impl DetectionEngine {
         // block emitted even when already blocked: caller relies on the
         // enforcement dedup to refresh TTL (semantics preserved from pre-fix).
         MergeRecordOutcome {
-            ewma_rps,
             threat_score: threat,
             should_block: block,
-            was_blocked,
             stored,
         }
     }
