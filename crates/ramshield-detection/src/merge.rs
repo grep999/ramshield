@@ -1,7 +1,16 @@
 use super::*;
 
+/// Named outcome of updating one IP's detection state.
+pub(crate) struct MergeRecordOutcome {
+    pub(crate) ewma_rps: f64,
+    pub(crate) threat_score: f32,
+    pub(crate) should_block: bool,
+    pub(crate) was_blocked: bool,
+    pub(crate) stored: bool,
+}
+
 impl DetectionEngine {
-    /// ponytail: returns the 5-tuple `(ewma_rps, threat, should_block, was_blocked, stored)`.
+    /// Update one IP and report its detection outcome without a positional tuple.
     /// `was_blocked` is set true if the IP already had a BlockState, so callers can
     /// skip the extra store.get() they used to do.
     /// `stored` is false when a net-new key was refused by the RAM budget —
@@ -15,7 +24,7 @@ impl DetectionEngine {
         ram_lim: usize,
         now: u64,
         sk: Option<SubnetKey>,
-    ) -> (f64, f32, bool, bool, bool) {
+    ) -> MergeRecordOutcome {
         // P0 fix (round-4 Q3): was get() -> clone -> mutate -> insert(),
         // spanning two shard locks. A block committed by the enforcement
         // actor between the read and the write was silently reverted by
@@ -173,6 +182,12 @@ impl DetectionEngine {
         }
         // block emitted even when already blocked: caller relies on the
         // enforcement dedup to refresh TTL (semantics preserved from pre-fix).
-        (ewma_rps, threat, block, was_blocked, stored)
+        MergeRecordOutcome {
+            ewma_rps,
+            threat_score: threat,
+            should_block: block,
+            was_blocked,
+            stored,
+        }
     }
 }
