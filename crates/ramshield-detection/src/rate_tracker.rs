@@ -205,7 +205,11 @@ pub fn pulse_tracker_step(
             fired = true;
         }
     }
-    PulseTrackerStep { count, window_start_ns: start, fired }
+    PulseTrackerStep {
+        count,
+        window_start_ns: start,
+        fired,
+    }
 }
 
 #[cfg(test)]
@@ -235,7 +239,10 @@ mod pulse_tracker_tests {
         // sample 2 — 1.5s later, fires
         let step = pulse_tracker_step(step.count, now0, now0 + 1_500_000_000, true, 6, 2);
         assert_eq!(step.count, 2);
-        assert!(step.fired, "second over-threshold inside 6s window must fire");
+        assert!(
+            step.fired,
+            "second over-threshold inside 6s window must fire"
+        );
         // sample 3 — 10s later, window expired, resets
         let step = pulse_tracker_step(step.count, now0, now0 + 10_000_000_000, true, 6, 2);
         assert_eq!(step.count, 1);
