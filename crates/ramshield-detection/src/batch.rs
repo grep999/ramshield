@@ -1,7 +1,7 @@
 use ahash::AHashMap as HashMap;
 use ramshield_types::events::ConnectionEvent;
 use ramshield_storage::subnet::subnet_key as storage_subnet_key;
-use ramshield_types::HttpMethod;
+use ramshield_types::{HttpMethod, IpNetwork};
 use std::net::IpAddr;
 
 /// In-memory aggregation for one flush window — no store access until flush completes.
@@ -183,7 +183,7 @@ pub struct FlushAggs {
 
 pub fn aggregate(events: &[ConnectionEvent]) -> FlushAggs {
     let mut ips: HashMap<IpAddr, IpAgg> = HashMap::with_capacity(events.len().min(4096));
-    let mut subnets = HashMap::new();
+    let mut subnets: HashMap<u128, SubnetAgg> = HashMap::new();
     let mut networks = HashMap::new();
     for ev in events {
         let entry = ips.entry(ev.ip).or_default();
