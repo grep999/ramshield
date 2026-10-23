@@ -153,7 +153,7 @@ impl DetectionEngine {
                     prev_count: rec.pulse_samples_in_window,
                     prev_window_start_ns: rec.pulse_window_start_ns,
                     now_ns: now,
-                    over_threshold: over_threshold,
+                    over_threshold,
                     window_secs: pulse_win,
                     threshold: pulse_thr,
                 });

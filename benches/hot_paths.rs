@@ -81,14 +81,16 @@ fn bench_pulse(n: usize) -> f64 {
     let mut count = 0u8;
     let t0 = Instant::now();
     for i in 0..n {
-        let step = ramshield_detection::rate_tracker::pulse_tracker_step(ramshield_detection::rate_tracker::PulseTrackerInput {
-            prev_count: count,
-            prev_window_start_ns: prev_start,
-            now_ns: i as u64 * 1_000_000,
-            over_threshold: true,
-            window_secs: 2,
-            threshold: 50,
-        });
+        let step = ramshield_detection::rate_tracker::pulse_tracker_step(
+            ramshield_detection::rate_tracker::PulseTrackerInput {
+                prev_count: count,
+                prev_window_start_ns: prev_start,
+                now_ns: i as u64 * 1_000_000,
+                over_threshold: true,
+                window_secs: 2,
+                threshold: 50,
+            },
+        );
         count = step.count;
         prev_start = step.window_start_ns;
     }
