@@ -130,7 +130,7 @@ http_addr = "127.0.0.1:9999"
 block_log_size = 1_000
 # Argon2 PHC hash of admin password. Generate with argon2 CLI.
 # Set before exposing beyond loopback.
-admin_password_hash = ""
+admin_password_hash = "$argon2id$v=19$m=65536,t=3,p=4$y4pwwR3t9KAhG407+IM7bg$2io7C02ET4ea+L/Zb7dLQn+IrsX7yppU2OX4fwLHWoI"
 require_auth_for_config = true
 session_ttl_secs = 28_800
 max_login_attempts = 50
@@ -139,7 +139,7 @@ trusted_proxies = []
 # Set true only when behind HTTPS terminator. No built-in TLS stack.
 tls_enabled = false
 # Force/disable Secure flag on session cookies. None = derive from bind addr.
-cookie_secure = ""
+cookie_secure = false
 
 # ─────────────────────────────────────────────────────────────────────────────
 # [wal] — Crash-durable persistence
