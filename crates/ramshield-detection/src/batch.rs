@@ -1,5 +1,6 @@
 use ahash::AHashMap as HashMap;
 use ramshield_types::events::ConnectionEvent;
+use ramshield_storage::subnet::{subnet_key as storage_subnet_key, subnet_key_v4, subnet_key_v6};
 use ramshield_types::{HttpMethod, IpNetwork};
 use std::net::IpAddr;
 
@@ -149,36 +150,11 @@ impl IpAgg {
     }
 }
 
-/// Pack IPv4 /24 prefix into u32 for subnet-scale counters (no string keys).
-/// Network byte order (big-endian): octet[0] in highest bits.
-#[inline]
-fn subnet_key_v4(octets: [u8; 4]) -> u32 {
-    (octets[0] as u32) << 24 | (octets[1] as u32) << 16 | (octets[2] as u32) << 8
-}
-
-/// Pack IPv6 /64 prefix into u128 for subnet-scale counters.
-/// Network byte order: first 8 bytes in high bits, host bits zeroed.
-#[inline]
-fn subnet_key_v6(octets: [u8; 16]) -> u128 {
-    let full = u128::from_be_bytes(octets);
-    // Zero out the lower 64 bits (host part of /64)
-    full & 0xFFFF_FFFF_FFFF_FFFF_0000_0000_0000_0000
-}
-
-/// Get network key as u128 for both address families.
-/// IPv4 keys are in lower 32 bits; IPv6 keys use full 128 bits.
+/// Use the storage crate's canonical network-key implementation so detection
+/// and persistence cannot silently diverge on address packing.
 #[inline]
 pub(crate) fn subnet_key(ip: IpAddr) -> Option<(u128, IpNetwork)> {
-    match ip {
-        IpAddr::V4(v4) => {
-            let net = IpNetwork::ipv4_subnet(v4);
-            Some((subnet_key_v4(v4.octets()) as u128, net))
-        }
-        IpAddr::V6(v6) => {
-            let net = IpNetwork::ipv6_subnet(v6);
-            Some((subnet_key_v6(v6.octets()), net))
-        }
-    }
+    storage_subnet_key(ip)
 }
 
 /// Check if an IP is in the canonical subnet of `ref_ip` (v4 /24, v6 /64) —
