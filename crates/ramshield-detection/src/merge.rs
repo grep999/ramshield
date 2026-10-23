@@ -9,8 +9,6 @@ pub(crate) struct MergeRecordOutcome {
 
 impl DetectionEngine {
     /// Update one IP and report its detection outcome without a positional tuple.
-    /// `was_blocked` is set true if the IP already had a BlockState, so callers can
-    /// skip the extra store.get() they used to do.
     /// `stored` is false when a net-new key was refused by the RAM budget —
     /// callers must NOT count the IP as promoted.
     /// `sk`: pre-computed subnet key (avoids redundant `subnet_key_u128` call).
