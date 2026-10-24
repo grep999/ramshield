@@ -1,0 +1,251 @@
+{
+  "audit_id": "enterprise_readiness_audit_v1",
+  "generated_at": "2026-10-24T21:31:43Z",
+  "commit": "0f238da",
+  "branch": "audit/enterprise-readiness",
+  "status": "complete",
+  "overall_readiness_score": 78,
+  "go_no_go": "CONDITIONAL GO for self-hosted production; CONDITIONAL GO for managed service with caveats",
+  "executive_summary": {
+    "overall_score": 78,
+    "go_no_go": "Conditional: proceed with self-hosted deployment after audit remediations; managed service requires P0/P1 remediations before GA",
+    "top_5_blockers": [
+      "1. XDP map failure \u2192 FAIL-OPEN (operators unaware)",
+      "2. setcap not automated on build",
+      "3. No SBOM / dependency vulnerability gate in CI",
+      "4. Subnet Stress Pin test flakiness on CI runners",
+      "5. Missing WAL fsync boundary / corruption recovery tests"
+    ],
+    "top_5_strengths": [
+      "1. Fail-closed config validation (public bind + auth)",
+      "2. Single-writer enforcement invariant",
+      "3. Bounded resource usage (ram_limit, pre_aggs_max_size)",
+      "4. WAL + recovery test coverage",
+      "5. Comprehensive detection + shedding invariants"
+    ]
+  },
+  "mandatory_deep_checks": {
+    "security_fail_closed": {
+      "score": 85,
+      "summary": "Most public binds fail-closed; IPC auth + dashboard TLS enforced. XDP map failure defaults to open \u2014 P0 remediate.",
+      "p0_findings": 3
+    },
+    "concurrency_state": {
+      "score": 75,
+      "summary": "ArcSwap + DashMap + mpsc usage correct; mutex only in boot/IPC; single-writer invariant maintained; poison recovery tested."
+    },
+    "resource_performance": {
+      "score": 70,
+      "summary": "Bounded collections enforced; watermark dynamic from Engine capacity; bottleneck catalogue identified; chaos experiments not yet implemented.",
+      "p0_findings": 0
+    },
+    "config_operability": {
+      "score": 80,
+      "summary": "Hot-reload fields documented; immutable fields enforced at boot; env override test passes; api_set_config immutability check needed.",
+      "p0_findings": 1
+    },
+    "testing_quality": {
+      "score": 65,
+      "summary": "Integration test coverage good for core paths; unit test gaps in fuzz/property; flaky CI test; mutation testing absent; coverage estimated ~65% \u2192 target 80%+",
+      "p0_findings": 0
+    }
+  },
+  "cross_cutting_findings": [
+    {
+      "id": "P0-1",
+      "title": "XDP map update failure \u2192 FAIL-OPEN",
+      "severity": "P0",
+      "mechanism": "XDP map update failure in handlers.rs returns continue-without-blocking; operators believe they are protected.",
+      "risk": "Unauthorized traffic continues through dataplane",
+      "remediation": "Add runtime metrics for map failure; document fail-open design; add health check to detect degradation"
+    },
+    {
+      "id": "P0-2",
+      "title": "setcap not enforced on build",
+      "severity": "P0",
+      "mechanism": "setcap command is manual step after cargo build; file capabilities dropped on binary rebuild.",
+      "risk": "XDP silently degraded; operator thinks kernel protection active.",
+      "remediation": "Add setcap to CI pipeline + postinstall script; verify capability at startup"
+    },
+    {
+      "id": "P0-3",
+      "title": "No SBOM / dep vulnerability gate",
+      "severity": "P0",
+      "mechanism": "cargo-deny not in CI; no SBOM generation; advisories not blocked.",
+      "risk": "Undiscovered vulnerable dependencies in production.",
+      "remediation": "Add cargo-deny check to CI gate; generate SBOM; fail build on high/critical advisories"
+    }
+  ],
+  "hot_path_bottleneck_analysis": {
+    "junctions_that_can_spike": [
+      {
+        "junction": "pre_aggs_merge_dashmap_lock",
+        "current_mitigation": "DashMap merge lock; contention > 64 workers \u2192 re-shard",
+        "recommended": "Per-worker shard count; eventual consistency on merge results"
+      },
+      {
+        "junction": "xdp_map_per_packet_write",
+        "current_mitigation": "Kernel BPF map; rate-limited under flood",
+        "recommended": "Batch writes where possible; monitor dropped_events metric"
+      },
+      {
+        "junction": "wal_segment_fsync",
+        "current_mitigation": "fsync per 67MB segment; latency spike on rotation",
+        "recommended": "background fsync; segment pre-advisory; accept slightly stale durability"
+      },
+      {
+        "junction": "bloom_epoch_clear_every_8s",
+        "current_mitigation": "O(n) scan over bloom_bits",
+        "recommended": "background thread; reduce pause via larger word size"
+      },
+      {
+        "junction": "subnet_scan_window",
+        "current_mitigation": "O(n) over unique IPs per window; n >= 64 thresholds",
+        "recommended": "select_nth_unstable; keep top-100; O(n) avoided"
+      }
+    ],
+    "recommended_go_arounds": "Configure pre_aggs_max_size warning alerts; setcap in CI; add metrics for map failures; add chaos experiments iteratively."
+  },
+  "production_configuration_baseline": {
+    "detection": {
+      "channel_capacity": "64_000 (from RAMSHIELD_DETECTION__BATCH_CHANNEL_CAPACITY)",
+      "rps_threshold": "500 (per-IP rate gate)",
+      "pre_aggs_max_size": "1_000_000",
+      "batch_window_ms": "25",
+      "subnet_batch_threshold": "64",
+      "subnet_burst_ttl_secs": "60",
+      "allow_volatile_fallback": "false (production default)"
+    },
+    "engine": {
+      "ram_limit_mb": "2048 (production); 1024 acceptable for small VMs",
+      "worker_threads": "0 (all cores auto-detected)",
+      "shard_count": "256",
+      "allow_inband_fallback": "true (graceful degradation)"
+    },
+    "wal": {
+      "durability": "GroupCommit",
+      "seg_max_bytes": "67_108_864 (64MB)",
+      "retention_max_bytes": "1_073_741_824 (1GB)",
+      "allow_volatile_fallback": "false"
+    },
+    "xdp": {
+      "enabled": "true (production)",
+      "mode": "drv (native driver)",
+      "interface": "eth0 (set at deployment)",
+      "require_native_for_autonomous": "true",
+      "require_rss_rebalance": "true"
+    },
+    "ipc_dashboard": {
+      "ipc_auth": "false (loopback-only, no auth in self-hosted); true for multi-tenant",
+      "dashboard_tls": "false (terminated externally); true recommended for production",
+      "cookie_secure": "depends on external TLS termination"
+    },
+    "optional_features": {
+      "mesh": "off by default for enterprise; on for multi-node fleets",
+      "forecasting": "on (default); CUSUM + Holt-Winters",
+      "relative_detector": "off by default; opt-in after qualification",
+      "l7_http2": "off by default"
+    }
+  },
+  "verification_plan": {
+    "clippy_fmt_test": "cargo clippy --workspace --all-targets --locked -- -D warnings && cargo fmt --all -- --check",
+    "test_matrix": "cargo test -p ramshield-config -p ramshield-detection --locked; cargo test --test queue_under_attack --features full --locked; cargo test --test ipc_wiring --features full --locked",
+    "stress_flood": "cargo test --test queue_under_attack; python3 scripts/subnet_stress.py",
+    "wal_recovery": "cargo test -p ramwal --test recovery_test",
+    "capability_check": "getcap ./target/release/ramshield; verify cap_net_admin, cap_perfmon, cap_bpf",
+    "restart_drill": "./target/release/ramshield --config config.stress.toml --no-xdp &\n  python3 scripts/subnet_stress.py\n  kill $!  # simulate crash\n  ./target/release/ramshield --config config.stress.toml --no-xdp &\n  python3 scripts/subnet_stress.py",
+    "post_restart_checks": "verify WAL replay; verify ips_tracked >= 800; verify no duplicate blocks"
+  },
+  "per_module_scorecard": {
+    "ramshield-config": {
+      "overall": 85,
+      "strengths": [
+        "validation integrity",
+        "env override isolation",
+        "immutable defaults"
+      ],
+      "risks": [
+        "missing SBOM",
+        "cargo-deny not in CI"
+      ]
+    },
+    "ramshield-detection": {
+      "overall": 80,
+      "strengths": [
+        "bounded collections",
+        "subnet key dedup",
+        "shed invariants"
+      ],
+      "risks": [
+        "no fuzz",
+        "no property tests"
+      ]
+    },
+    "ramshield-enforcement": {
+      "overall": 75,
+      "strengths": [
+        "WAL recovery",
+        "CIDR seed",
+        "mesh sync"
+      ],
+      "risks": [
+        "WAL corruption edge cases"
+      ]
+    },
+    "ramshield-storage": {
+      "overall": 82,
+      "strengths": [
+        "segment management",
+        "snapshot integrity",
+        "concurrent read"
+      ],
+      "risks": [
+        "corruption under OOM"
+      ]
+    },
+    "ramshield-types": {
+      "overall": 88,
+      "strengths": [
+        "IP network math",
+        "event struct",
+        "no panics"
+      ],
+      "risks": [
+        "none significant"
+      ]
+    },
+    "ramshield-xdp": {
+      "overall": 70,
+      "strengths": [
+        "kernel bypass",
+        "deterministic latency"
+      ],
+      "risks": [
+        "FAIL-OPEN map issue",
+        "setcap lifecycle"
+      ]
+    },
+    "ramshield-mesh": {
+      "overall": 72,
+      "strengths": [
+        "CRDT convergence",
+        "origin provenance"
+      ],
+      "risks": [
+        "partition heal time",
+        "mesh not GA"
+      ]
+    },
+    "ramshield-metrics": {
+      "overall": 80,
+      "strengths": [
+        "RED metrics",
+        "health model",
+        "audit fields"
+      ],
+      "risks": [
+        "none significant"
+      ]
+    }
+  }
+}

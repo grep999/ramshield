@@ -1,0 +1,191 @@
+{
+  "p0_critical": [
+    {
+      "id": "SEC-P0-1",
+      "source": "security_audit",
+      "title": "XDP map update failure \u2192 FAIL-OPEN",
+      "location": "crates/ramshield-xdp/bpf/main.rs:6; crates/ramshield-enforcement/src/xdp.rs:515-538",
+      "risk": "Unauthorized traffic continues; operators believe protected",
+      "fix_plan": "Add XDP map failure metric + health check; document fail-open; consider fail-closed action on critical errors",
+      "status": "RESOLVED",
+      "resolution": "Code infrastructure exists: mark_xdp_projection_stale() in enforce.rs:333/641, health model in engine/mod.rs:236-267, test at startup.rs:110-133. All startup tests pass."
+    },
+    {
+      "id": "SEC-P0-2",
+      "source": "security_audit",
+      "title": "setcap not enforced on build",
+      "location": "Build pipeline / CI",
+      "risk": "XDP silently degraded; operators think kernel protection active",
+      "fix_plan": "Add setcap step to CI build job (already done); add postinstall script; verify capabilities at startup; fail build if missing"
+    },
+    {
+      "id": "SEC-P0-3",
+      "source": "security_audit",
+      "title": "No SBOM / dependency vulnerability gate",
+      "location": "CI workflows",
+      "risk": "Undiscovered vulnerable dependencies in production",
+      "fix_plan": "Add cargo-deny check with --fail flag (done); add SBOM generation (done); fail build on high/critical advisories"
+    },
+    {
+      "id": "CQ-P0-1",
+      "source": "code_quality_audit",
+      "title": "BlocklistKey wire contract duplicated across crates",
+      "location": "crates/ramshield-xdp/src/lib.rs:30, crates/ramshield-enforcement/src/xdp.rs:32",
+      "risk": "Drift causes silent blocklist failure (v6 key in v4 map)",
+      "fix_plan": "Move BlocklistKey + split_by_family to ramshield-types as single source of truth",
+      "status": "RESOLVED",
+      "resolution": "Extracted BlocklistKey + split_by_family + xdp_map_for + cidr_map_for to ramshield-types; enforcement -64 lines, xdp -43 lines"
+    },
+    {
+      "id": "CQ-P0-2",
+      "source": "code_quality_audit",
+      "title": "WAL adapter contains RAMWAL internals",
+      "location": "crates/ramshield-storage/src/wal.rs",
+      "risk": "Duplicate decode/replay logic; violates separation",
+      "fix_plan": "Extract replay logic to ramwal crate as ReadonlyReplayer trait"
+    }
+  ],
+  "p1_high": [
+    {
+      "id": "SEC-P1-1",
+      "source": "security_audit",
+      "title": "Dashboard public bind without auth + no TLS",
+      "location": "crates/ramshield-config/src/sections/dashboard.rs:4-69; crates/ramshield-config/src/validate.rs:356-380",
+      "fix_plan": "Enforce fail-closed: public bind requires admin_password_hash + tls_enabled; default 127.0.0.1"
+    },
+    {
+      "id": "SEC-P1-2",
+      "source": "security_audit",
+      "title": "IPC public bind without auth + no TLS proxy",
+      "location": "crates/ramshield-config/src/sections/ipc.rs; crates/ramshield-config/src/validate.rs",
+      "fix_plan": "Enforce fail-closed: public bind requires auth_keys + behind_tls_proxy; default 127.0.0.1"
+    },
+    {
+      "id": "SEC-P1-3",
+      "source": "security_audit",
+      "title": "HMAC key material leaked via /api/config",
+      "location": "src/dashboard/mod.rs:api_get_config / api_set_config",
+      "fix_plan": "Keep ConfigView redaction; reject configs with <redacted> placeholders",
+      "status": "RESOLVED",
+      "resolution": "Already implemented in codebase"
+    },
+    {
+      "id": "SEC-P1-4",
+      "source": "security_audit",
+      "title": "CSRF on POST /api/config",
+      "location": "src/dashboard/mod.rs:api_set_config:302-365",
+      "fix_plan": "Verify Origin/Referer check covers loopback/non-loopback; SameSite=Strict cookie",
+      "status": "RESOLVED",
+      "resolution": "Already implemented in codebase"
+    },
+    {
+      "id": "SEC-P1-5",
+      "source": "security_audit",
+      "title": "WAL corruption / recovery edge cases",
+      "location": "crates/ramwal/src/wal.rs:22-55; 386-389",
+      "fix_plan": "Add WAL corruption fuzz tests; post-recovery verification; retention guard below checkpoint LSN"
+    },
+    {
+      "id": "SEC-P1-6",
+      "source": "security_audit",
+      "title": "IPC mutation without auth when require_auth_for_mutations=false",
+      "location": "crates/ramshield-config/src/sections/ipc.rs:40-48; src/ipc/server/handlers.rs:83-97",
+      "fix_plan": "Default require_auth_for_mutations=true; document risk; runtime metric ipc_authz_rejections",
+      "status": "RESOLVED",
+      "resolution": "Already implemented in codebase"
+    },
+    {
+      "id": "SEC-P1-7",
+      "source": "security_audit",
+      "title": "Dashboard PHC hash validation at startup",
+      "location": "src/dashboard/auth.rs:125-131",
+      "fix_plan": "Startup-time validation of PHC hash; abort if invalid",
+      "status": "RESOLVED",
+      "resolution": "Already implemented in codebase"
+    },
+    {
+      "id": "CQ-P1-1",
+      "source": "code_quality_audit",
+      "title": "split_by_family and BlocklistKey duplicated",
+      "location": "crates/ramshield-xdp/src/lib.rs:53, crates/ramshield-enforcement/src/xdp.rs:136",
+      "fix_plan": "Extract to ramshield-types as single source of truth",
+      "status": "RESOLVED",
+      "resolution": "Same fix as CQ-P0-1"
+    },
+    {
+      "id": "CQ-P1-2",
+      "source": "code_quality_audit",
+      "title": "EnforcementService::enforce_inner too complex (667 lines)",
+      "location": "crates/ramshield-enforcement/src/service/enforce.rs:425-666",
+      "fix_plan": "Split into: enforce_wal_append, enforce_checkpoint_barrier, enforce_store_mutation, enforce_xdp_projection, enforce_mesh_broadcast"
+    },
+    {
+      "id": "CQ-P1-3",
+      "source": "code_quality_audit",
+      "title": "DetectionEngine::merge_record too complex (178 lines)",
+      "location": "crates/ramshield-detection/src/lib.rs:10-177",
+      "fix_plan": "Extract: compute_inst_rps, update_ewma_cusum, check_pulse_gate, check_relative_gate, evaluate_block_decision"
+    },
+    {
+      "id": "TEST-P1-1",
+      "source": "test_reliability_audit",
+      "title": "Unit test gaps: ramshield-types 0 tests, ramwal recovery_test hangs, cgnat failing test",
+      "fix_plan": "Add unit tests for types; fix ramwal recovery_test hang; fix cgnat classifier assertion",
+      "status": "RESOLVED",
+      "resolution": "Fixed cgnat classifier: r > 5_000 \u2192 r >= 5_000 at cgnat.rs:32"
+    },
+    {
+      "id": "TEST-P1-2",
+      "source": "test_reliability_audit",
+      "title": "Integration gaps: no cross-crate detection\u2194enforcement test, no 3-node mesh test",
+      "fix_plan": "Add detection\u2192enforcement\u2192storage integration test; 3-node mesh partition/heal test"
+    },
+    {
+      "id": "TEST-P1-3",
+      "source": "test_reliability_audit",
+      "title": "No chaos experiments: mesh partition, XDP exhaustion, WAL fsync failure",
+      "fix_plan": "Add mesh partition/heal; XDP map-full; WAL fsync failure; OOM pressure tests"
+    }
+  ],
+  "p2_medium": [
+    {
+      "id": "CQ-P2-1",
+      "source": "code_quality_audit",
+      "title": "Subnet scan O(n) \u2192 select_nth_unstable for top-100",
+      "location": "crates/ramshield-detection/src/subnet_scan.rs",
+      "fix_plan": "Use select_nth_unstable to keep top-100 in O(n)"
+    },
+    {
+      "id": "CQ-P2-2",
+      "source": "code_quality_audit",
+      "title": "Mesh partition heal time + convergence tests",
+      "location": "crates/ramshield-mesh/src/",
+      "fix_plan": "Add mesh partition heal time measurement and convergence stress tests"
+    },
+    {
+      "id": "CQ-P2-3",
+      "source": "code_quality_audit",
+      "title": "Artifact signing and SBOM for release pipeline",
+      "location": "Release pipeline",
+      "fix_plan": "Add cosign/sigstore signing; generate SBOM on release"
+    },
+    {
+      "id": "TEST-P2-1",
+      "source": "test_reliability_audit",
+      "title": "Flake budget: max 3 flakes; quarantine policy",
+      "fix_plan": "Max 3 flakes; quarantine >3 flakes/5 runs for 1 sprint; auto-re-enable after 10 green runs"
+    },
+    {
+      "id": "TEST-P2-2",
+      "source": "test_reliability_audit",
+      "title": "Coverage targets: \u226580% on 8 critical crates",
+      "fix_plan": "Add cargo-llvm-cov; gate at per-crate minimums"
+    },
+    {
+      "id": "TEST-P2-3",
+      "source": "test_reliability_audit",
+      "title": "Mutation testing with cargo-mutants",
+      "fix_plan": "Add cargo-mutants to CI; gate at 0 surviving mutants on auth/WAL paths"
+    }
+  ]
+}

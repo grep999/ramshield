@@ -428,6 +428,11 @@ impl EnforcementService {
         incoming_mesh_mutation: Option<PendingMeshMutation>,
         wal_durability: WalDurability,
     ) -> Result<EnforceResult, EnforcementError> {
+        // ┌──────────────────────────────────────────────────────────────────────┐
+        // │ Section 0: Idempotent replay guard — return cached result if        │
+        // │ already processed. A fabricated `xdp_applied: true` would hide a    │
+        // │ dataplane failure from every retry consumer.                        │
+        // └──────────────────────────────────────────────────────────────────────┘
         // Idempotent replay: return what actually happened the first time —
         // a fabricated `xdp_applied: true` would hide a dataplane failure
         // from every retry consumer.
@@ -446,6 +451,12 @@ impl EnforcementService {
             ));
         }
 
+        // ┌──────────────────────────────────────────────────────────────────────┐
+        // │ Section 1: Checkpoint barrier — serialize WAL append + store        │
+        // │ mutation against checkpoint loop. Prevents silent block loss on     │
+        // │ crash recovery. Steps 1-2 hold no await; XDP (step 3) stays outside │
+        // │ barrier.                                                            │
+        // └──────────────────────────────────────────────────────────────────────┘
         // Checkpoint barrier: serialize [WAL append + store mutation] against
         // the checkpoint loop's [begin_checkpoint + store capture]. Without it
         // an entry can be durable BELOW the checkpoint boundary while its store

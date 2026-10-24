@@ -2,6 +2,7 @@ pub mod command;
 pub mod error;
 pub mod events;
 pub mod ip_network;
+pub mod blocklist_key;
 pub mod util;
 
 pub use command::{EnforceAction, EnforceCommand, EnforceResult, EnforcementError};
@@ -10,6 +11,7 @@ pub use events::{
     BlockDecision, ConnectionEvent, Http2Telemetry, HttpMethod, HttpVersion, L7Metadata,
 };
 pub use ip_network::IpNetwork;
+pub use blocklist_key::{BlocklistKey, split_by_family, xdp_map_for, cidr_map_for};
 
 // Enforcement provenance: external/community reputation is not an authoritative source.
 pub use command::EvidenceSource;

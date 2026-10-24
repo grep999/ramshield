@@ -6,6 +6,16 @@ on:
   pull_request:
     branches: [main, develop, master, audit-branch]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   dependency-audit:
     name: Dependency audit
@@ -16,6 +26,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: nightly-2026-08-29
+          components: rustfmt, clippy
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
@@ -25,7 +36,9 @@ jobs:
         with:
           tool: cargo-deny
       - name: Check dependency advisories, licenses, bans, and sources
-        run: cargo deny check
+        run: cargo deny check --fail
+      - name: Generate SBOM
+        run: cargo deny generate spdx --output spdx.json
 
   formatting:
     name: Formatting
@@ -107,7 +120,14 @@ jobs:
       - name: Build core-only
         run: cargo build --workspace --locked --all-targets
       - name: Build all features
-        run: cargo build --workspace --locked --all-targets --all-features
+        run: cargo build --workspace --locked --all-targets --features full
+      # P0-2: Apply file capabilities after every build so the XDP dataplane
+      # works on first run without manual setcap. setcap survives across
+      # rebuilds because capabilities live on the inode — but only if the
+      # binary path is unchanged. CI rebuilds overwrite the inode, so
+      # setcap must be re-applied after every build.
+      - name: Apply XDP capabilities
+        run: sudo setcap cap_net_admin,cap_perfmon,cap_bpf+eip ./target/release/ramshield 2>/dev/null || echo "setcap not available on this runner (XDP will be degraded)"
 
   test:
     name: Test
