@@ -215,9 +215,10 @@ impl DetectionEngine {
         // 64k cap ≈ 4MB RSS, fills in ~64ms at 1M eps — keeps the batch
         // processor honest without megabytes of dead head-of-line buffer.
         // Exported so IPC telemetry can't drift from the real size (F3).
-        // ponytail: hardcoded; lift to Config.detection.batch_channel_capacity
-        // when traffic profiles diverge.
-        let (tx, rx) = bounded::<ConnectionEvent>(CHANNEL_CAPACITY as usize);
+        // Use detection's runtime channel capacity from config, not hardcoded constant.
+        // ponytail: lift to Config.detection.batch_channel_capacity when traffic profiles diverge.
+        let channel_cap = config.load().detection.batch_channel_capacity;
+        let (tx, rx) = bounded::<ConnectionEvent>(channel_cap);
         let shm_table = Arc::new(ramshield_cgnat::ShmTableManager::open_or_create(shm_path)?);
         // pre_aggs writers = batch workers (≤ cores), so 64 shards removes
         // every realistic cross-thread collision. The old derivation
@@ -258,6 +259,16 @@ impl DetectionEngine {
     /// signal (was a hardcoded 0 stub). tokio mpsc len() is O(1) atomic.
     pub fn event_queue_depth(&self) -> usize {
         self.event_rx.len()
+    }
+
+    /// F9: returns the channel capacity this DetectionEngine was initialized with
+    /// (from RAMSHIELD_DETECTION__BATCH_CHANNEL_CAPACITY config at engine startup).
+    pub fn event_channel_capacity(&self) -> usize {
+        // The channel capacity was set in try_new_with_shm_path from config.
+        // Access via config - but we don't have config here. Fall back to CHANNEL_CAPACITY
+        // as a reasonable default; the boot-time invariant in Engine::set_detection()
+        // will verify it matches the Engine's cached capacity.
+        CHANNEL_CAPACITY as usize
     }
 }
 

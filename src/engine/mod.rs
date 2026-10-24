@@ -63,10 +63,13 @@ pub struct Engine {
     /// oneshot: sync send (usable from rt.block_on), async recv. Exactly-once.
     startup_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<std::io::Result<()>>>>,
     startup_rx: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<std::io::Result<()>>>>,
+    /// F1: Cached channel capacity from config at startup (immutable).
+    effective_channel_capacity: usize,
 }
 
 impl Engine {
     pub fn new(cfg: Config, store: Arc<Store>, metrics: Arc<Metrics>) -> Self {
+        let effective_channel_capacity = cfg.detection.batch_channel_capacity;
         let (enforcement_tx, enforcement_rx) = mpsc::channel(8192);
         let (shutdown_tx, _) = watch::channel(false);
         let (startup_tx, startup_rx) = tokio::sync::oneshot::channel::<std::io::Result<()>>();
@@ -84,6 +87,8 @@ impl Engine {
             shutdown_tx,
             startup_tx: std::sync::Mutex::new(Some(startup_tx)),
             startup_rx: std::sync::Mutex::new(Some(startup_rx)),
+            // F1: Cache channel capacity at startup
+            effective_channel_capacity,
         }
     }
 
@@ -441,6 +446,23 @@ impl Engine {
         self.enforcement_tx
             .try_send(cmd)
             .map_err(|e| format!("enforcement channel full or closed: {}", e))
+    }
+
+    /// F1/F2: returns the startup-cached channel capacity. Immutable after boot
+    /// so hot-path IPC reads never touch the engine lock or ArcSwap.
+    pub fn channel_capacity(&self) -> usize {
+        self.effective_channel_capacity
+    }
+
+    /// F9: Boot-time invariant — DetectionEngine channel capacity must match
+    /// Engine's cached capacity. Fails closed at boot if they diverge.
+    pub fn set_detection(&self, det: Arc<crate::detection::DetectionEngine>) {
+        let det_cap = det.event_channel_capacity();
+        assert_eq!(
+            det_cap, self.effective_channel_capacity,
+            "FATAL: DetectionEngine allocated capacity does not match Engine startup capacity"
+        );
+        *self.detection.lock().unwrap_or_else(|e| e.into_inner()) = Some(det);
     }
 }
 

@@ -89,6 +89,9 @@ impl Config {
         if let Some(v) = parse_env::<bool>("RAMSHIELD_DETECTION__L7_ENABLED")? {
             self.detection.l7_enabled = v;
         }
+        if let Some(v) = parse_env::<usize>("RAMSHIELD_DETECTION__BATCH_CHANNEL_CAPACITY")? {
+            self.detection.batch_channel_capacity = v;
+        }
         if let Some(v) = parse_env::<u64>("RAMSHIELD_DETECTION__L7_RPS_THRESHOLD")? {
             self.detection.l7_rps_threshold = v;
         }

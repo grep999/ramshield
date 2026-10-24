@@ -7,8 +7,11 @@ pub fn is_low_signal(status_code: u16, proto_fp: u32, bytes: u64) -> bool {
     status_code < 400 && proto_fp == 0 && bytes <= 65_536
 }
 
-/// IPC channel high-water mark: 75% of CHANNEL_CAPACITY (64k).
-const SHED_WATERMARK: usize = (CHANNEL_CAPACITY as usize * 3) / 4;
+/// IPC channel high-water mark: 75% of per-engine capacity.
+#[inline]
+fn shed_watermark(capacity: usize) -> usize {
+    capacity.saturating_mul(3) / 4
+}
 
 /// Maximum accepted length of a client-supplied block reason, in bytes.
 ///
@@ -569,7 +572,8 @@ fn handle_report_connection(req: Request, ctx: &RequestContext<'_>) -> Response 
             // (routine 200 OK / benign fingerprint) to preserve space for
             // attack telemetry (401/429/500, anomalous fp, >64 KiB).
             let is_low_signal = is_low_signal(status_code, proto_fp, bytes);
-            if event_tx.len() >= SHED_WATERMARK && is_low_signal {
+            let watermark = shed_watermark(engine.channel_capacity());
+            if event_tx.len() >= watermark && is_low_signal {
                 engine.metrics.inc_shed(1);
                 trace!(
                     ip = %ip,
@@ -636,7 +640,8 @@ fn handle_report_connections(req: Request, ctx: &RequestContext<'_>) -> Response
                 // STAGE 1: Semantic shedding — at >=75% occupancy, shed low-signal
                 // (routine 200 OK / benign fingerprint) to preserve space for
                 // attack telemetry (401/429/500, anomalous fp, >64 KiB).
-                if event_tx.len() >= SHED_WATERMARK
+                let watermark = shed_watermark(engine.channel_capacity());
+                if event_tx.len() >= watermark
                     && is_low_signal(cr.status_code, cr.proto_fp, cr.bytes)
                 {
                     engine.metrics.inc_shed(1);

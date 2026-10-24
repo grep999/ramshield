@@ -317,7 +317,7 @@ impl IpcServer {
             rejected_connections: self.rejected_connections.load(Ordering::Relaxed),
             max_connections: self.max_connections as u64,
             dropped_events: self.dropped_events.load(Ordering::Relaxed),
-            channel_capacity: CHANNEL_CAPACITY,
+            channel_capacity: self.engine.channel_capacity() as u64,
         }
     }
 }

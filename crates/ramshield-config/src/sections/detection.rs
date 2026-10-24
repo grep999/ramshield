@@ -4,6 +4,10 @@ use crate::*;
 pub struct DetectionConfig {
     pub rps_threshold: u64,
     pub rate_window_secs: u64,
+    /// Queue capacity for the per-worker event channel (Crossbeam bounded).
+    /// Controls buffer memory and queue depth — latency is drain-rate dependent.
+    #[serde(default = "default_batch_channel_capacity")]
+    pub batch_channel_capacity: usize,
     /// Unique IPs per /24 in one window required for a subnet batch block.
     /// Keyed on unique IPs (not raw events): one abuser at 500 events is a
     /// single offender; 50 IPs × 12 events is a swarm. Old default of 5 events
@@ -115,6 +119,9 @@ pub struct L7Rule {
     pub max_effective_rps: Option<u64>,
 }
 
+pub fn default_batch_channel_capacity() -> usize {
+    64_000
+}
 pub fn default_batch_max_events() -> usize {
     4096
 }
@@ -210,6 +217,7 @@ impl Default for DetectionConfig {
             l7_http2_reset_ratio_pct: default_l7_http2_reset_ratio_pct(),
             l7_block_ttl_secs: default_l7_block_ttl_secs(),
             l7_rules: Vec::new(),
+            batch_channel_capacity: default_batch_channel_capacity(),
         }
     }
 }

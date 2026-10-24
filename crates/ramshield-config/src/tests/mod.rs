@@ -524,3 +524,17 @@ fn env_override_non_unicode_synproxy_ports_is_rejected() {
     assert!(message.contains("not valid UTF-8"), "{message}");
     clear_env_vars();
 }
+
+#[test]
+#[serial]
+fn test_batch_channel_capacity_env_override_and_validation() {
+    clear_env_vars();
+    unsafe {
+        std::env::set_var("RAMSHIELD_DETECTION__BATCH_CHANNEL_CAPACITY", "4096");
+    }
+    let tmpfile = "/tmp/ramshield_test_config.toml";
+    std::fs::write(tmpfile, "").unwrap();
+    let cfg = Config::load(tmpfile).unwrap();
+    assert_eq!(cfg.detection.batch_channel_capacity, 4096);
+    clear_env_vars();
+}
