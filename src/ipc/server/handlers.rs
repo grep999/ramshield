@@ -51,7 +51,7 @@ pub(crate) fn process_request(
     event_tx: &Sender<ConnectionEvent>,
     store: &Store,
     enforcement_tx: &mpsc::Sender<EnforceCommand>,
-    dropped_events: Arc<AtomicU64>,
+    dropped_events: &AtomicU64,
 ) -> Response {
     // P2: centralized authorization before request dispatch.
     // Authentication answers "which key?"; Authorization answers "what may it do?".
@@ -105,7 +105,7 @@ pub(crate) fn process_request(
         event_tx,
         store,
         enforcement_tx,
-        dropped_events: &dropped_events,
+        dropped_events,
         actor: principal
             .map(|p| p.key_id.clone())
             .unwrap_or_else(|| "admin".to_string()),
@@ -131,7 +131,7 @@ struct RequestContext<'a> {
     event_tx: &'a Sender<ConnectionEvent>,
     store: &'a Store,
     enforcement_tx: &'a mpsc::Sender<EnforceCommand>,
-    dropped_events: &'a Arc<AtomicU64>,
+    dropped_events: &'a AtomicU64,
     actor: String,
 }
 

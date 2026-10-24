@@ -15,7 +15,7 @@ mod workers;
 
 use ahash::AHashMap as HashMap;
 use arc_swap::ArcSwap;
-use batch::{IpAgg, aggregate};
+use batch::{IpAgg, SubnetAgg, aggregate};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded};
 use dashmap::DashMap;
 use ramshield_config::{ConfigHandle, DetectionConfig};
@@ -27,7 +27,7 @@ use ramshield_types::BlockReason;
 use ramshield_types::{ConnectionEvent, EnforceAction, EnforceCommand, IpNetwork};
 use rate_tracker::{
     CUSUM_WARMUP_SAMPLES, cusum_allowance, cusum_fired, cusum_step_capped, ewma, ewma_alpha_slow,
-    is_exceeded, pulse_tracker_step,
+    is_exceeded, pulse_tracker_step, PulseTrackerInput,
 };
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
@@ -56,14 +56,13 @@ pub struct BloomFilter {
 /// ponytail: derive /24 counts from already-aggregated IpAggs instead of re-scanning
 /// raw events. One pass, no second HashMap allocation.
 /// Events + distinct member IPs per /24 (aggs are already per-IP-distinct).
-fn subnet_counts_of(aggs: &[(IpAddr, IpAgg)]) -> HashMap<SubnetKey, (u32, Vec<IpAddr>)> {
-    let mut subnets: HashMap<SubnetKey, (u32, Vec<IpAddr>)> =
-        HashMap::with_capacity(aggs.len().min(512));
+fn subnet_counts_of(aggs: &[(IpAddr, IpAgg)]) -> HashMap<SubnetKey, SubnetAgg> {
+    let mut subnets: HashMap<SubnetKey, SubnetAgg> = HashMap::with_capacity(aggs.len().min(512));
     for (ip, agg) in aggs {
         if let Some(sk) = subnet_key_u128(*ip) {
-            let e = subnets.entry(sk).or_insert((0, Vec::new()));
-            e.0 += agg.count;
-            e.1.push(*ip);
+            let subnet = subnets.entry(sk).or_default();
+            subnet.events = subnet.events.saturating_add(agg.count);
+            subnet.members.push(*ip);
         }
     }
     subnets

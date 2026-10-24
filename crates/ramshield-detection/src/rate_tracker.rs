@@ -165,19 +165,47 @@ mod tests {
 // bursts just below the per-window detection threshold.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// One step of the pulse-wave tracker.
+/// State and decision produced by one pulse-wave tracker step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PulseTrackerStep {
+    /// Number of over-threshold samples in the active window.
+    pub count: u8,
+    /// Start time of the active window in nanoseconds.
+    pub window_start_ns: u64,
+    /// Whether the sample count reached the configured threshold.
+    pub fired: bool,
+}
+
+/// Inputs for one pulse-wave tracker step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PulseTrackerInput {
+    /// Number of over-threshold samples in the previous window.
+    pub prev_count: u8,
+    /// Start time of the previous window in nanoseconds.
+    pub prev_window_start_ns: u64,
+    /// Timestamp of the current sample in nanoseconds.
+    pub now_ns: u64,
+    /// Whether the current sample exceeds the rate threshold.
+    pub over_threshold: bool,
+    /// Sliding-window duration in seconds.
+    pub window_secs: u64,
+    /// Number of over-threshold samples required to fire.
+    pub threshold: u8,
+}
+
+/// Advance the pulse-wave tracker.
 ///
-/// Returns (new_count, new_window_start_ns, fired).
-/// fired=true when count >= threshold (wasn't already ≥threshold).
-/// Resets window if expired (> window_secs seconds since window_start).
-pub fn pulse_tracker_step(
-    prev_count: u8,
-    prev_window_start_ns: u64,
-    now_ns: u64,
-    over_threshold: bool,
-    window_secs: u64,
-    threshold: u8,
-) -> (u8, u64, bool) {
+/// The window resets when it expires (more than `window_secs` since its
+/// start). `fired` is true when the count reaches `threshold`.
+pub fn pulse_tracker_step(input: PulseTrackerInput) -> PulseTrackerStep {
+    let PulseTrackerInput {
+        prev_count,
+        prev_window_start_ns,
+        now_ns,
+        over_threshold,
+        window_secs,
+        threshold,
+    } = input;
     let window_ns = window_secs.saturating_mul(1_000_000_000);
     let window_age_exceeded = now_ns.saturating_sub(prev_window_start_ns) > window_ns;
     let expired = prev_window_start_ns == 0 || window_age_exceeded;
@@ -195,7 +223,11 @@ pub fn pulse_tracker_step(
             fired = true;
         }
     }
-    (count, start, fired)
+    PulseTrackerStep {
+        count,
+        window_start_ns: start,
+        fired,
+    }
 }
 
 #[cfg(test)]
@@ -208,8 +240,15 @@ mod pulse_tracker_tests {
         let mut s = 0u64;
         for i in 0..100u64 {
             let now = 1_000_000_000u64 + i * 1_000_000_000;
-            let (_, _, fired) = pulse_tracker_step(c, s, now, false, 6, 2);
-            assert!(!fired, "no over-threshold samples must not fire");
+            let step = pulse_tracker_step(PulseTrackerInput {
+                prev_count: c,
+                prev_window_start_ns: s,
+                now_ns: now,
+                over_threshold: false,
+                window_secs: 6,
+                threshold: 2,
+            });
+            assert!(!step.fired, "no over-threshold samples must not fire");
             c = 0;
             s = now;
         }
@@ -219,17 +258,41 @@ mod pulse_tracker_tests {
     fn pulse_tracker_two_of_three_fires() {
         let now0 = 1_000_000_000u64;
         // sample 1 — window opens
-        let (c, _, fired) = pulse_tracker_step(0, 0, now0, true, 6, 2);
-        assert_eq!(c, 1);
-        assert!(!fired);
+        let step = pulse_tracker_step(PulseTrackerInput {
+            prev_count: 0,
+            prev_window_start_ns: 0,
+            now_ns: now0,
+            over_threshold: true,
+            window_secs: 6,
+            threshold: 2,
+        });
+        assert_eq!(step.count, 1);
+        assert!(!step.fired);
         // sample 2 — 1.5s later, fires
-        let (c, _, fired) = pulse_tracker_step(c, now0, now0 + 1_500_000_000, true, 6, 2);
-        assert_eq!(c, 2);
-        assert!(fired, "second over-threshold inside 6s window must fire");
+        let step = pulse_tracker_step(PulseTrackerInput {
+            prev_count: step.count,
+            prev_window_start_ns: now0,
+            now_ns: now0 + 1_500_000_000,
+            over_threshold: true,
+            window_secs: 6,
+            threshold: 2,
+        });
+        assert_eq!(step.count, 2);
+        assert!(
+            step.fired,
+            "second over-threshold inside 6s window must fire"
+        );
         // sample 3 — 10s later, window expired, resets
-        let (c, _, fired) = pulse_tracker_step(c, now0, now0 + 10_000_000_000, true, 6, 2);
-        assert_eq!(c, 1);
-        assert!(!fired, "expired window must reset");
+        let step = pulse_tracker_step(PulseTrackerInput {
+            prev_count: step.count,
+            prev_window_start_ns: now0,
+            now_ns: now0 + 10_000_000_000,
+            over_threshold: true,
+            window_secs: 6,
+            threshold: 2,
+        });
+        assert_eq!(step.count, 1);
+        assert!(!step.fired, "expired window must reset");
     }
 
     #[test]
@@ -242,8 +305,15 @@ mod pulse_tracker_tests {
 
         for burst in 0..4u64 {
             let t_burst = t0 + burst * 5_000_000_000; // 2s on + 3s gap
-            let (_, _, fired) = pulse_tracker_step(c, s, t_burst, true, 6, 2);
-            if fired {
+            let step = pulse_tracker_step(PulseTrackerInput {
+                prev_count: c,
+                prev_window_start_ns: s,
+                now_ns: t_burst,
+                over_threshold: true,
+                window_secs: 6,
+                threshold: 2,
+            });
+            if step.fired {
                 fired_at.push(burst);
             }
             c = 1; // simplified: one sample per burst
