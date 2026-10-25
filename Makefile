@@ -1,7 +1,7 @@
 .PHONY: test bench
 
 test:
-	cargo test
+	cargo test --workspace
 
 bench:
-	cargo bench
+	cargo bench --workspace

@@ -19,48 +19,13 @@ pub static BPF_ELF: &[u8] = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"),
 #[cfg(test)]
 mod tests {
     use aya::Ebpf;
+    use ramshield_types::{BlocklistKey, split_by_family, xdp_map_for};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     // --- mirror types (must stay 1:1 with ramshield-enforcement/src/xdp.rs) ---
-
-    /// Raw 16-byte map key. IPv4 occupies the first four wire-order bytes;
-    /// IPv6 occupies all sixteen. Mirror of enforcement::BlocklistKey.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    #[repr(C, align(8))]
-    struct BlocklistKey([u8; 16]);
-
-    impl BlocklistKey {
-        fn from_ip(ip: IpAddr) -> Self {
-            let mut bytes = [0u8; 16];
-            match ip {
-                IpAddr::V4(v4) => bytes[..4].copy_from_slice(&v4.octets()),
-                IpAddr::V6(v6) => bytes.copy_from_slice(&v6.octets()),
-            }
-            Self(bytes)
-        }
-    }
-
-    /// Map name routing — v4 → BLOCKLIST, v6 → BLOCKLIST6 (D2 isolation).
-    fn xdp_map_for(ip: IpAddr) -> &'static str {
-        match ip {
-            IpAddr::V4(_) => "BLOCKLIST",
-            IpAddr::V6(_) => "BLOCKLIST6",
-        }
-    }
-
-    /// Family-based split used by reconcile() to keep each map's keys
-    /// independent — a v6 key must never enter the v4 map (D2).
-    fn split_by_family(blocks: &[IpAddr]) -> (Vec<BlocklistKey>, Vec<BlocklistKey>) {
-        let mut v4 = Vec::new();
-        let mut v6 = Vec::new();
-        for ip in blocks {
-            match ip {
-                IpAddr::V4(_) => v4.push(BlocklistKey::from_ip(*ip)),
-                IpAddr::V6(_) => v6.push(BlocklistKey::from_ip(*ip)),
-            }
-        }
-        (v4, v6)
-    }
+    // NOTE: BlocklistKey is now defined in ramshield_types (shared across
+    // enforcement + xdp crates). Tests import it directly rather than
+    // re-deriving — no drift possible between consumers.
 
     // ===== v4 edge-case tests =====
 

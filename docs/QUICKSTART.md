@@ -68,6 +68,6 @@ curl http://127.0.0.1:9999/metrics
 - Do not expose IPC or dashboard publicly without authentication and TLS boundary
 - Keep control plane on loopback or behind authenticated TLS boundary
 - XDP qualification requires actual kernel, driver, and capability verification
-- WAL must be enabled for production enforcement
+- Enable WAL (`wal.enabled=true`) for production enforcement if blocks must survive restart; WAL is optional and off by default in code defaults.
 - See [TUNING.md] for detection threshold tuning
 - See [ARCHITECTURE.md] for runtime topology and data flow

@@ -12,6 +12,7 @@ build = "build.rs"
 aya = { version = "0.14", default-features = false }
 
 [dev-dependencies]
+ramshield-types = { path = "../ramshield-types" }
 libc = "0.2"
 
 [features]

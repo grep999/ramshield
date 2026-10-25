@@ -1,0 +1,66 @@
+[engine]
+worker_threads = 0
+ram_limit_mb = 1024
+shard_count = 256
+
+[detection]
+rps_threshold = 500
+rate_window_secs = 10
+promote_min_events = 4
+subnet_batch_threshold = 64
+subnet_batch_min_events = 500
+batch_block_enabled = true
+block_ttl_secs = 60
+pulse_window_secs = 5
+pulse_threshold_samples = 3
+subnet_burst_ttl_secs = 30
+bloom_bits = 1000000
+batch_max_events = 1024
+batch_window_ms = 25
+pre_aggs_flush_interval_ms = 250
+subnet_window_threshold = 12
+emergency_burst_threshold = 500
+pre_aggs_max_size = 100000
+
+[ipc]
+tcp_addr = "127.0.0.1:7890"
+max_connections = 1000
+max_line_length = 1048576
+require_auth = false
+auth_keys = []
+key_roles = []
+
+[dashboard]
+enabled = true
+http_addr = "127.0.0.1:9999"
+block_log_size = 1000
+max_login_attempts = 5
+max_password_length = 1024
+
+[wal]
+enabled = true
+dir = "/tmp/rs-simple-wal"
+durability = "GroupCommit"
+compress = false
+seg_max_bytes = 1048576
+retention_max_bytes = 10485760
+
+[forecasting]
+enabled = false
+ewma_alpha = 0.3
+hw_beta = 0.5
+hw_gamma = 0.7
+seasonality_period = 30
+anomaly_zscore = 2.0
+min_entropy = 0.5
+
+[cgnat]
+enabled = true
+
+[xdp]
+enabled = false
+interface = "lo"
+mode = "skb"
+
+[cidr]
+enabled = true

@@ -1,0 +1,114 @@
+# config-test.toml — Test config for crash investigation.
+# mesh disabled, auth disabled, production detection thresholds.
+
+[engine]
+worker_threads = 0
+ram_limit_mb = 1024
+shard_count = 256
+
+[detection]
+rps_threshold = 500
+rate_window_secs = 10
+promote_min_events = 4
+relative_enabled = false
+relative_factor = 5.0
+relative_floor_rps = 3.0
+relative_min_samples = 8
+relative_min_breaches = 3
+emergency_burst_threshold = 500
+batch_window_ms = 25
+batch_max_events = 4096
+pre_aggs_flush_interval_ms = 250
+pre_aggs_max_size = 1_000_000
+bloom_bits = 8_000_000
+subnet_batch_threshold = 64
+subnet_batch_min_events = 500
+subnet_window_threshold = 12
+batch_block_enabled = true
+block_ttl_secs = 300
+subnet_burst_ttl_secs = 60
+pulse_window_secs = 5
+pulse_threshold_samples = 3
+l7_enabled = false
+l7_rps_threshold = 500
+l7_http2_min_streams = 32
+l7_http2_reset_ratio_pct = 80
+l7_block_ttl_secs = 300
+
+[ipc]
+tcp_addr = "127.0.0.1:7890"
+max_connections = 1000
+max_line_length = 262_144
+require_auth = false
+auth_keys = []
+key_roles = []
+
+[dashboard]
+enabled = true
+http_addr = "127.0.0.1:9999"
+block_log_size = 1_000
+max_login_attempts = 50
+max_password_length = 1024
+trusted_proxies = []
+tls_enabled = false
+
+[wal]
+enabled = true
+dir = "/tmp/ramshield-wal-test"
+durability = "GroupCommit"
+compress = true
+seg_max_bytes = 67_108_864
+retention_max_bytes = 1_073_741_824
+
+[forecasting]
+enabled = true
+ewma_alpha = 0.3
+hw_beta = 0.1
+hw_gamma = 0.1
+seasonality_period = 60
+anomaly_zscore = 3.0
+min_entropy = 4.5
+
+[xdp]
+enabled = false
+interface = "eth0"
+mode = "skb"
+
+[mesh]
+enabled = false
+node_id = 1
+listen_addr = "127.0.0.1:7900"
+peers = []
+peer_node_ids = []
+peer_auth_keys = []
+auth_key = ""
+
+[upstream]
+enabled = false
+interface = "eth0"
+link_capacity_mbps = 0
+saturation_pct = 90
+poll_ms = 1000
+webhook_url = ""
+cooldown_secs = 60
+bgp_mode = "none"
+bgp_fifo = ""
+protected_prefix = ""
+bgp_community = ""
+
+[native_ingest]
+enabled = false
+interface = "eth0"
+max_events_per_sec = 20000
+
+[synproxy]
+enabled = false
+ports = [22, 53, 80, 443]
+mss = 1460
+wscale = 7
+max_connections_per_source = 128
+max_connections_total = 16384
+new_connections_per_second = 50
+new_connection_burst = 100
+new_connections_total_per_second = 2000
+new_connection_total_burst = 4000

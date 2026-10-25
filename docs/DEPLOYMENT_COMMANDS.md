@@ -130,29 +130,81 @@ For production: WAL **must** be enabled with durable sync. The baseline uses `Gr
 
 ```ini
 [Unit]
-Description=RamShield DDoS/Detection Service
-After=network.target
+Description=RamShield Autonomous Ingress Defense Daemon
+Documentation=https://github.com/grep999/ramshield
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
+ExecStart=/usr/local/bin/ramshield --config /etc/ramshield/config.toml
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65535
+
 User=ramshield
 Group=ramshield
-WorkingDirectory=/opt/ramshield
-ExecStart=/opt/ramshield/target/release/ramshield --config /opt/ramshield/config.toml
-Restart=always
-RestartSec=5
 
-# Security hardening
+AmbientCapabilities=CAP_NET_ADMIN CAP_BPF CAP_PERFMON CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_BPF CAP_PERFMON CAP_NET_RAW
+
+NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=yes
-NoNewPrivileges=yes
-MemoryDenyWriteExecute=yes
-
-# XDP capability needed (if XDP enabled)
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ReadWritePaths=/var/lib/ramshield /dev/shm /sys/fs/bpf
 
 [Install]
 WantedBy=multi-user.target
+```
+
+### Install (production)
+
+```bash
+# 1. Build
+cargo build --release --locked --features full
+
+# 2. Install binary
+sudo install -m 0755 target/release/ramshield /usr/local/bin/ramshield
+
+# 3. Apply file capabilities (required for XDP attach)
+sudo setcap cap_net_admin,cap_perfmon,cap_bpf=eip /usr/local/bin/ramshield
+
+# 4. Install sysctl tunables (default path: /etc/sysctl.d/99-ramshield.conf)
+sudo cp deploy/sysctl.d/99-ramshield.conf /etc/sysctl.d/99-ramshield.conf
+sudo sysctl --system
+
+# 5. Install systemd unit
+sudo cp deploy/systemd/ramshield.service /etc/systemd/system/ramshield.service
+
+# 6. Install config
+sudo mkdir -p /etc/ramshield /var/lib/ramshield/wal
+sudo cp config.baseline.toml /etc/ramshield/config.toml
+sudo chown -R ramshield:ramshield /var/lib/ramshield /etc/ramshield
+
+# 7. Enable and start
+sudo systemctl daemon-reload
+sudo systemctl enable --now ramshield
+```
+
+### Verify
+
+```bash
+# Health check
+curl -fsS http://127.0.0.1:9999/healthz
+
+# Systemd status
+systemctl status ramshield
+
+# Capabilities verified
+getcap /usr/local/bin/ramshield
+
+# Sysctl applied
+sysctl net.ipv4.tcp_syncookies net.core.bpf_jit_enable
 ```
 
 ## Log Rotation

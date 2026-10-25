@@ -66,7 +66,7 @@ NC=$(grep -rhE "fn .*cidr" "$ROOT"/crates/*/tests/ "$ROOT"/tests/ 2>/dev/null | 
 
 # ── 6. WAL ───────────────────────────────────────────────────────────────
 echo "--- #6 WAL ---"
-if cargo test -p ramwal --locked --test recovery_test 2>&1 | grep -q "ramwal tests.*ok"; then
+if cargo test -p ramwal --locked --test recovery_test 2>&1 | grep -q "test result: ok"; then
     pass "WAL tests pass"
 elif $QUICK; then
     warn2 "WAL tests skipped (--quick)"

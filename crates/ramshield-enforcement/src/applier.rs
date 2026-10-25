@@ -94,6 +94,21 @@ impl XdpApplier for StubXdpApplier {
         trace!(%ip, "XDP unblock (stub)");
         Ok(())
     }
+    fn apply_cidr_block(
+        &mut self,
+        _network: IpNetwork,
+        _decision_id: Uuid,
+        _ttl_seconds: u64,
+    ) -> Result<(), EnforcementError> {
+        Ok(())
+    }
+    fn apply_cidr_unblock(
+        &mut self,
+        _network: IpNetwork,
+        _decision_id: Uuid,
+    ) -> Result<(), EnforcementError> {
+        Ok(())
+    }
     fn configure_trusted_overlay(&mut self, _cidrs: &[IpNetwork]) -> Result<(), EnforcementError> {
         Ok(())
     }

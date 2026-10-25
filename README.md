@@ -1,4 +1,5 @@
 # RamShield — self-hosted Linux ingress defense in Rust
+
 Detects and blocks abusive traffic at the kernel (XDP/eBPF) level.
 For self-hosted/sovereign infra operators who can't afford enterprise DDoS mitigation.
 Run it locally or behind your reverse proxy.
@@ -141,22 +142,24 @@ Dashboard and API are available from the same local service.
 
 ## Performance & Benchmarks
 
-> Measured on **Intel Core i7-3687U CPU @ 2.10GHz**, **4 cores / 8 threads**, **15 GB RAM**, **Linux 6.8.0-147-generic**, **Rust 1.100.0-nightly (17fd5b8a3 2026-08-28)**. Methodology follows **RFC 9411** (Benchmarking Methodology for Network Security Devices).
+> Measured on **Intel Core i7-3687U CPU @ 2.10GHz**, **4 cores / 8 threads**, **15 GB RAM**, **Linux 6.8.0-147-generic**, **Rust 1.100.0-nightly (17fd5b8a3 2026-08-28)**. Benchmarks are from `cargo bench --bench hot_paths --features full` and `cargo bench --bench field_day --features full`; see [`BENCHMARKS.md`](../BENCHMARKS.md) for full results and methodology caveats (single-run, no statistical repetition).
 
 ### Measured Pipeline Latency & Throughput
+
 | Pipeline Stage | Measured Latency | Throughput | Workload Context |
 | :--- | :---: | :---: | :--- |
-| **Detection Flush (Warm)** | **222400 ns/op** | **4496 ops/s** | 4096 events / 128 IPs (all promoted) |
-| **Detection Flush (Cold Skip)** | **2606343 ns/op** | **384 ops/s** | 4096 events / 4096 IPs (Bloom rejection) |
-| **Enforcement Commit (WAL)** | **3955 ns/op** | **252873 ops/s** | `GroupCommit` durability |
-| **Idempotent Decision Cache** | **130 ns/op** | **7702531 ops/s** | Re-block deduplication |
-| **Reverse-Proxy SHM Lookup** | **1.3 ns** | **761 M ops/s** | C11 Seqlock table (probe dist 0–3) |
+| **Detection Flush — 4096 ev / 128 IPs (all promoted, RMW + detectors)** | **185648 ns/op** | **5387 ops/s** | 4096 events / 128 IPs (all promoted) |
+| **Detection Flush — 4096 ev / 4096 IPs (cold-skip: gate + bloom)** | **1310948 ns/op** | **763 ops/s** | 4096 events / 4096 IPs (Bloom rejection) |
+| **Enforce block — WAL off, full transition** | **1643 ns/op** | **608836 ops/s** | `GroupCommit` durability |
+| **Enforce block — WAL GroupCommit, fsync ≤10Hz** | **2800 ns/op** | **357101 ops/s** | |
+| **Idempotent Decision Cache** | **106 ns/op** | **9467337 ops/s** | Re-block deduplication |
 | **Ingested Event Throughput** | — | **95653 eps** | Sustained multi-subnet flood (5 s, 1000 IPs) |
 
 ### Resource Footprint
+
 - **Idle Memory:** `~266 KB` heap footprint (`14 MB` total process RSS)
-- **Memory Under Attack:** Bounded by `engine.ram_limit_mb` (default `1024 MB`)
-- **WAL Recovery Time:** `<60 ms` to restore state across restarts
+- **Memory Under Attack:** Bounded by `engine.ram_limit_mb` (default `512 MB`)
+- **WAL Recovery Time:** `<60 ms` to restore state across restarts (WAL off by default; enable `wal.enabled=true` for persistence across restarts)
 
 ---
 
@@ -174,6 +177,7 @@ Dashboard and API are available from the same local service.
 | **Deployment Model** | **Single Binary / Node-Guard** | Daemon | Daemon + Bouncers | Webserver Module | DNS / BGP Proxy |
 
 ### Where RamShield Wins & Where It Loses
+
 - **Where It Wins:** Sovereign, zero-subscription infrastructure; kernel-level packet drops before socket allocations; crash-durable WAL persistence; deterministic microsecond CUSUM drift detection; zero external feed dependencies.
 - **Where It Loses (Stated Plainly):** Cannot defeat attacks that physically saturate the ISP uplink (requires BGP FlowSpec/RTBH upstream escalation); does not provide a community threat-intelligence database; not an HTTP/2 or WAF application-logic rules engine.
 
@@ -194,12 +198,12 @@ See [Development](docs/DEVELOPMENT.md).
 ## License
 
 MIT
+
 ## Threat-intelligence independence
 
 RamShield does not depend on community IP reputation or a shared public ban feed. Enforcement decisions are derived from first-party local telemetry, trusted RamShield fleet signals, or explicit operator action. Community reputation is intentionally excluded from the authoritative enforcement vocabulary, so a feed outage cannot disable detection and an external reputation score cannot silently become a block decision.
 
 This is deliberate: RamShield learns from the protected system and its trusted fleet rather than outsourcing the security boundary to a global reputation service.
-
 
 ## Security Gateway Architecture
 

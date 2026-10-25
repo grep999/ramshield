@@ -20,63 +20,13 @@ use aya::maps::{
 };
 use aya::programs::Xdp;
 use aya::programs::xdp::XdpMode;
-use ramshield_types::IpNetwork;
+use ramshield_types::{BlocklistKey, IpNetwork, cidr_map_for, split_by_family, xdp_map_for};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsFd, AsRawFd};
-use uuid::Uuid;
-
-/// XDP blocklist key — must stay byte-compatible with the C program's
-/// `__u64[2]` map key. IPv4 occupies the low 32 bits of the first u64.
-#[repr(C, align(8))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct BlocklistKey(pub [u8; 16]);
 
 // SAFETY: BlocklistKey is `#[repr(C, align(8))]` and contains only a
 // `[u8; 16]`; it has no uninitialized bytes or invalid bit patterns.
 unsafe impl aya::Pod for BlocklistKey {}
-
-impl BlocklistKey {
-    /// Creates a zeroed key.
-    #[inline(always)]
-    pub const fn zeroed() -> Self {
-        Self([0u8; 16])
-    }
-
-    /// Access the underlying raw byte slice.
-    #[inline(always)]
-    pub fn as_bytes(&self) -> &[u8; 16] {
-        &self.0
-    }
-}
-
-impl From<Ipv4Addr> for BlocklistKey {
-    #[inline(always)]
-    fn from(v4: Ipv4Addr) -> Self {
-        let mut bytes = [0u8; 16];
-        // Directly copy the 4 wire octets into the first 4 bytes.
-        // Trailing 12 bytes remain 0.
-        bytes[0..4].copy_from_slice(&v4.octets());
-        Self(bytes)
-    }
-}
-
-impl From<Ipv6Addr> for BlocklistKey {
-    #[inline(always)]
-    fn from(v6: Ipv6Addr) -> Self {
-        // Full 16 wire octets.
-        Self(v6.octets())
-    }
-}
-
-impl From<IpAddr> for BlocklistKey {
-    #[inline(always)]
-    fn from(ip: IpAddr) -> Self {
-        match ip {
-            IpAddr::V4(v4) => Self::from(v4),
-            IpAddr::V6(v6) => Self::from(v6),
-        }
-    }
-}
 
 /// Map value = absolute expiry ns on the monotonic clock (same clock as BPF's
 /// bpf_ktime_get_ns; on Linux std::time::Instant is CLOCK_MONOTONIC since
@@ -93,29 +43,13 @@ fn blocklist_value(now_ns: u64, ttl_seconds: u64) -> u64 {
     now_ns.saturating_add(ttl_seconds.saturating_mul(1_000_000_000))
 }
 
-// Compatibility: old call sites use `BlocklistKey::from_ip(ip)`.
-impl BlocklistKey {
-    pub fn from_ip(ip: IpAddr) -> Self {
-        Self::from(ip)
-    }
-}
-
 /// Map a v6 address must never share with a v4 key: the 16-byte v6 layout
 /// can collide numerically with a v4-shaped key (D2), so isolation is by
 /// map, not bytes. Single source of truth for routing (apply + reconcile).
-fn xdp_map_for(ip: IpAddr) -> &'static str {
-    match ip {
-        IpAddr::V4(_) => "BLOCKLIST",
-        IpAddr::V6(_) => "BLOCKLIST6",
-    }
-}
-
-fn cidr_map_for(network: IpNetwork) -> &'static str {
-    match network.addr {
-        IpAddr::V4(_) => "BLOCKCIDR",
-        IpAddr::V6(_) => "BLOCKCIDR6",
-    }
-}
+///
+/// Note: Shared route functions (xdp_map_for, cidr_map_for, split_by_family)
+/// live in ramshield-types to prevent drift between enforcement and xdp crates.
+/// This module uses them via `use ramshield_types::...`.
 
 fn cidr_key(network: IpNetwork) -> LpmKey<[u64; 2]> {
     let bytes = BlocklistKey::from_ip(network.addr).0;
@@ -128,21 +62,6 @@ fn cidr_key(network: IpNetwork) -> LpmKey<[u64; 2]> {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), data.as_mut_ptr() as *mut u8, 16);
     }
     LpmKey::new(u32::from(network.prefix_len), data)
-}
-
-/// Task 5: split expected blocks per map, keyed. Pure — reconcile() keeps
-/// only the map IO; the family routing (the part that leaked v6 keys into
-/// the v4 sweep pre-fix) is unit-testable here.
-fn split_by_family(expected_blocks: &[IpAddr]) -> (Vec<BlocklistKey>, Vec<BlocklistKey>) {
-    let mut v4 = Vec::new();
-    let mut v6 = Vec::new();
-    for ip in expected_blocks {
-        match ip {
-            IpAddr::V4(_) => v4.push(BlocklistKey::from_ip(*ip)),
-            IpAddr::V6(_) => v6.push(BlocklistKey::from_ip(*ip)),
-        }
-    }
-    (v4, v6)
 }
 
 fn map_err(e: impl std::fmt::Display) -> EnforcementError {

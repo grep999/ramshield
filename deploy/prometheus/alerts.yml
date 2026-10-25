@@ -63,7 +63,7 @@ groups:
     rules:
       - alert: RamShieldAuthLoginFailures
         expr: |
-          rate(ramshield_dashboard_auth_login_failures_total[5m]) > 5
+          rate(ramshield_auth_login_failures_total[5m]) > 5
         for: 30s
         labels:
           severity: warning
@@ -76,7 +76,7 @@ groups:
 
       - alert: RamShieldCsrfBlocked
         expr: |
-          rate(ramshield_dashboard_csrf_blocked_total[5m]) > 0
+          rate(ramshield_csrf_blocked_total[5m]) > 0
         for: 0s
         labels:
           severity: info

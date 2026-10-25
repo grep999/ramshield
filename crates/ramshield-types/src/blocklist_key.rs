@@ -102,8 +102,16 @@ mod tests {
     #[test]
     fn v4_key_bytes_match_dataplane_layout() {
         let key = BlocklistKey::from_ip(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)));
-        assert_eq!(&key.0[0..4], &[1, 2, 3, 4], "Octet order must match C wire order");
-        assert_eq!(&key.0[4..16], &[0u8; 12], "Trailing 12 bytes must be zeroed padding for IPv4");
+        assert_eq!(
+            &key.0[0..4],
+            &[1, 2, 3, 4],
+            "Octet order must match C wire order"
+        );
+        assert_eq!(
+            &key.0[4..16],
+            &[0u8; 12],
+            "Trailing 12 bytes must be zeroed padding for IPv4"
+        );
     }
 
     #[test]
@@ -117,7 +125,10 @@ mod tests {
     #[test]
     fn family_routes_to_dedicated_map() {
         assert_eq!(super::xdp_map_for("1.2.3.4".parse().unwrap()), "BLOCKLIST");
-        assert_eq!(super::xdp_map_for("2001:db8::1".parse().unwrap()), "BLOCKLIST6");
+        assert_eq!(
+            super::xdp_map_for("2001:db8::1".parse().unwrap()),
+            "BLOCKLIST6"
+        );
     }
 
     #[test]
@@ -129,6 +140,9 @@ mod tests {
         assert_eq!(v6.len(), 2);
         assert_eq!(v6[0].0, BlocklistKey::from_ip(ips[1]).0);
         assert_eq!(v6[1].0, BlocklistKey::from_ip(ips[3]).0);
-        assert!(!v4.iter().any(|k| v6.contains(k)), "a key must not appear in both sweeps");
+        assert!(
+            !v4.iter().any(|k| v6.contains(k)),
+            "a key must not appear in both sweeps"
+        );
     }
 }

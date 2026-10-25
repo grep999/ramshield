@@ -15,4 +15,4 @@ target/
 config.prod.toml
 EOF
 docker build --build-arg RAMSHIELD_VERSION="$VERSION" --build-arg XDP_ENABLED="$XDP_ENABLED" -t "ghcr.io/grep999/ramshield:$TAG" "$CTX"
-[[ "${PUSH:-0}" == 1 ]] && docker push "ghcr.io/grep999/ramshield:$TAG"
+if [[ "${PUSH:-0}" == 1 ]]; then docker push "ghcr.io/grep999/ramshield:$TAG"; fi
