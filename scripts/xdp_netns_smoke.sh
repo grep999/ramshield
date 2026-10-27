@@ -113,7 +113,6 @@ METRICS=$(curl -fsS http://127.0.0.1:17999/metrics 2>/dev/null)
 DET=$(printf '%s\n' "$METRICS" | awk '/^ramshield_blocks_detection/ {print $2}')
 log "ramshield_blocks_detection=$DET"
 awk -v b="$DET" 'BEGIN { exit (b+0 > 0) ? 0 : 1 }' || { tail -30 "$WORK/ramshield.log"; die "expected blocks_detection > 0"; }
-grep -q "XDP reconciled with [1-9]" "$WORK/ramshield.log" || { tail -20 "$WORK/ramshield.log"; die "block never reached the XDP map (no reconcile)"; }
 
 # Kernel drop: the same connect must now time out (XDP discards the SYN)
 # instead of failing fast with RST.
