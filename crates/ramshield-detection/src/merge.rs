@@ -75,25 +75,56 @@ impl DetectionEngine {
                 };
                 rec.ewma_rps = ewma(rec.ewma_rps, inst_rps);
 
-                // CUSUM baseline is evaluated from the PREVIOUS slow baseline,
-                // then updated. Relative detection uses exactly the same prior
-                // baseline, so the current sample cannot move its own threshold.
+                // The adaptive detector is now part of the real per-IP flush path.
+                // Persist its variance, timestamp, recovery streak and mode in IpRecord;
+                // this avoids a side-map with a separate eviction/lifetime policy.
+                // Relative detection still compares against the PREVIOUS baseline so the
+                // current sample cannot move its own threshold.
                 let prior_baseline = rec.baseline_rps;
-                let baseline_for_cusum = if prior_baseline > 0.0 && prior_baseline.is_finite() {
+                let initial_rate = if rec.sample_count == 0 {
+                    inst_rps
+                } else if prior_baseline.is_finite() && prior_baseline >= 0.0 {
                     prior_baseline
                 } else {
-                    rec.ewma_rps
+                    0.0
                 };
-
-                rec.sample_count = rec.sample_count.saturating_add(1);
-                if rec.sample_count >= CUSUM_WARMUP_SAMPLES {
-                    let k = cusum_allowance(det_thr);
-                    rec.cusum_s = cusum_step_capped(
-                        rec.cusum_s,
-                        inst_rps,
-                        baseline_for_cusum + k,
-                        det_thr as f64,
-                    );
+                let mut adaptive_breach = false;
+                if let Ok(mut adaptive) = PerIpRecord::new(initial_rate, DetectorProfile::default()) {
+                    if rec.sample_count > 0 {
+                        adaptive.baseline_rate = prior_baseline.max(0.0);
+                        adaptive.cusum_s = rec.cusum_s.max(0.0);
+                        adaptive.sample_count = u64::from(rec.sample_count);
+                        if rec.adaptive_variance.is_finite() && rec.adaptive_variance > 0.0 {
+                            adaptive.variance = rec.adaptive_variance;
+                        }
+                        adaptive.last_bucket_ns = rec.adaptive_last_bucket_ns;
+                        adaptive.recovery_count = rec.adaptive_recovery_count;
+                        adaptive.mode = match rec.adaptive_mode {
+                            1 => DetectorMode::Monitoring,
+                            2 => DetectorMode::Breached,
+                            _ => DetectorMode::WarmingUp,
+                        };
+                    }
+                    if let Ok(outcome) = adaptive.update(inst_rps, now, None) {
+                        adaptive_breach = outcome.is_breached;
+                        rec.baseline_rps = adaptive.baseline_rate;
+                        rec.cusum_s = adaptive.cusum_s;
+                        rec.sample_count = adaptive.sample_count.min(u64::from(u8::MAX)) as u8;
+                        rec.adaptive_variance = adaptive.variance;
+                        rec.adaptive_last_bucket_ns = adaptive.last_bucket_ns;
+                        rec.adaptive_recovery_count = adaptive.recovery_count;
+                        rec.adaptive_mode = match adaptive.mode {
+                            DetectorMode::WarmingUp => 0,
+                            DetectorMode::Monitoring => 1,
+                            DetectorMode::Breached => 2,
+                        };
+                    } else {
+                        // Invalid/replayed timestamps or numerical errors must not partially
+                        // mutate adaptive state. Existing EWMA/pulse/relative detectors still run.
+                        rec.sample_count = rec.sample_count.saturating_add(1);
+                    }
+                } else {
+                    rec.sample_count = rec.sample_count.saturating_add(1);
                 }
 
                 let relative_breach = if det.relative_enabled
@@ -112,22 +143,9 @@ impl DetectionEngine {
                     rec.relative_breach_streak = 0;
                 }
 
-                // Freeze the slow reference while a relative breach is being
-                // established. Otherwise the detector learns the attack rate
-                // into its own baseline and can outrun its breach hysteresis.
-                // A non-breach resumes normal adaptation.
-                if !relative_breach {
-                    rec.baseline_rps = if prior_baseline > 0.0 && prior_baseline.is_finite() {
-                        ewma_alpha_slow() * rec.ewma_rps
-                            + (1.0 - ewma_alpha_slow()) * prior_baseline
-                    } else {
-                        // Seed from the observed batch rate, not the cold-start fast
-                        // EWMA. Otherwise the first few samples can create an
-                        // artificially low baseline and trip the relative detector
-                        // during perfectly steady startup traffic.
-                        inst_rps
-                    };
-                }
+                // The adaptive detector owns baseline_rps and updates it atomically.
+                // Do not run a second EWMA baseline update here; that would desynchronize
+                // the persisted adaptive variance/CUSUM state from its baseline.
 
                 let rps_score = (rec.ewma_rps / det_thr as f64).min(1.0);
                 let total: u32 = rec.status_dist.iter().sum();
@@ -164,7 +182,7 @@ impl DetectionEngine {
                     && rec.relative_breach_streak >= det.relative_min_breaches;
 
                 let block =
-                    hot || cusum_fired(rec.cusum_s, det_thr) || pulse_fired || relative_fired;
+                    hot || adaptive_breach || pulse_fired || relative_fired;
                 (was_blocked, (ewma_rps, threat, block))
             },
         );
