@@ -119,6 +119,8 @@ RamShield exposes the XDP state so you can see whether the kernel dataplane is a
 | `ramshield-mesh` | CRDT Aworset sync (disabled in production) |
 | `ramshield-xdp` | eBPF XDP engine (kernel dataplane) |
 | `ramshield-protocol` | IPC JSON framing, HMAC auth, replay store |
+| `ramshield-cgnat` | CGNAT deployment with shm tables and classification |
+| `ramwal` | WAL persistence: append-only log, checkpoints, snapshots |
 
 ## Configuration
 
