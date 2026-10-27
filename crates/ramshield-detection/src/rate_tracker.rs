@@ -799,7 +799,14 @@ impl PerIpRecord {
 
         let mut h = (self.baseline_rate * 1.5).max(self.profile.min_threshold_h);
 
-        // Apply advisory context if fresh and confident
+        // Apply advisory context if fresh and confident. A FlashCrowd classification
+        // also suppresses the breach transition while it remains fresh; otherwise a
+        // static per-IP spike would override the classifier's legitimate-surge decision.
+        let flash_crowd_context = context.is_some_and(|ctx| {
+            ctx.is_fresh(timestamp_ns, 2_000_000_000)
+                && ctx.confidence >= 0.6
+                && ctx.hypothesis == Hypothesis::FlashCrowd
+        });
         if let Some(ctx) = context
             && ctx.is_fresh(timestamp_ns, 2_000_000_000)
             && ctx.confidence >= 0.6
@@ -860,7 +867,7 @@ impl PerIpRecord {
             new_mode = DetectorMode::Monitoring;
         }
 
-        if new_mode == DetectorMode::Monitoring && new_cusum > h {
+        if new_mode == DetectorMode::Monitoring && new_cusum > h && !flash_crowd_context {
             new_mode = DetectorMode::Breached;
             new_recovery_count = 0;
         } else if new_mode == DetectorMode::Breached {
@@ -1292,4 +1299,18 @@ mod adaptive_tests {
         );
         assert_eq!(record, before);
     }
+    #[test]
+    fn fresh_flash_crowd_context_suppresses_adaptive_breach_transition() {
+        let profile = DetectorProfile::default();
+        let mut record = PerIpRecord::new(100.0, profile).unwrap();
+        let context = TrafficContext {
+            hypothesis: Hypothesis::FlashCrowd,
+            observed_at_ns: 1_000_000_000,
+            confidence: 0.95,
+        };
+        let outcome = record.update(15_000.0, 1_000_000_000, Some(&context)).unwrap();
+        assert!(!outcome.is_breached);
+        assert_ne!(outcome.mode, DetectorMode::Breached);
+    }
+
 }
