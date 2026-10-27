@@ -9,6 +9,8 @@ Run it locally or behind your reverse proxy. No cloud dependency. No subscriptio
 
 ## One-Command Install
 
+**Requires:** root (XDP/eBPF maps, systemd service, /usr/local, /etc/ramshield, /var/lib/ramshield)
+
 ```bash
 curl -fsSL https://github.com/grep999/ramshield/raw/master/scripts/install.sh | bash
 ```
