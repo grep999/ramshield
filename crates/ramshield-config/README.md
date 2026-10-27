@@ -120,6 +120,10 @@ read_timeout_ms = 5000
 write_timeout_ms = 5000
 connection_idle_timeout_ms = 30_000
 auth_keys = ["k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]
+# Generate a 128-bit hex key (32 hex chars):
+#   openssl rand -hex 16
+#   or: python3 -c 'import secrets; print(secrets.token_hex(16))'
+# Each entry is "key_id:hex_key"; hex must be even-length, at least 32 chars.
 key_roles = [{ key_id = "k1", role = "Admin" }]
 require_auth = true
 
