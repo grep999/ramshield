@@ -1,8 +1,10 @@
 //! Month-4 gate: memory bounds.
 //!   - Exhausted RAM budget: net-new keys are REFUSED (never evict live
 //!     records), and the refusal is observable via capacity_exceeded_count.
+//!
 //! High-cardinality bound test lives in the detection crate's lib tests
 //! (merge_local/pre_aggs are crate-internal by design).
+//!
 //! Bounded soak: concurrent_flush_never_loses_events churns the same
 //! structures; a wall-clock 24h soak is a scheduled job, not a unit test.
 

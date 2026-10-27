@@ -875,10 +875,8 @@ fn process_packet(
                 libc::SOL_PACKET,
                 20, // PACKET_STATISTICS
                 (&mut stats as *mut TpacketStats).cast(),
-                &mut {
-                    let mut len = std::mem::size_of::<TpacketStats>() as libc::socklen_t;
-                    len
-                } as *mut libc::socklen_t,
+                &mut { std::mem::size_of::<TpacketStats>() as libc::socklen_t }
+                    as *mut libc::socklen_t,
             )
         };
         if rc == 0 {
@@ -1599,6 +1597,7 @@ mod tests {
             let start = std::time::Instant::now();
             for _ in 0..PACKETS_PER_SAMPLE {
                 process_packet(
+                    0,
                     &frame,
                     PACKETS_PER_SAMPLE as u64,
                     &[],
@@ -1697,6 +1696,7 @@ mod tests {
         let disconnect_log_emissions = AtomicU64::new(0);
 
         process_packet(
+            0,
             &sample_frame(),
             1000,
             &[],
@@ -1744,6 +1744,7 @@ mod tests {
         let disconnect_log_emissions = AtomicU64::new(0);
 
         process_packet(
+            0,
             &sample_frame(),
             1000,
             &[],
@@ -1790,6 +1791,7 @@ mod tests {
 
         for _ in 0..5 {
             process_packet(
+                0,
                 &sample_frame(),
                 1000,
                 &[],
@@ -1833,6 +1835,7 @@ mod tests {
         let disconnect_log_emissions = AtomicU64::new(0);
 
         process_packet(
+            0,
             &sample_frame(),
             1000,
             &[],
@@ -1883,6 +1886,7 @@ mod tests {
             threads.push(std::thread::spawn(move || {
                 for _ in 0..100 {
                     process_packet(
+                        0,
                         &sample_frame(),
                         1_000_000,
                         &[],

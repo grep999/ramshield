@@ -398,24 +398,6 @@ fn bench_cgnat_classify(n: usize) -> f64 {
     t0.elapsed().as_nanos() as f64 / n as f64
 }
 
-fn bench_cms_update(n: usize) -> f64 {
-    let cms = ramshield_analytics::cms::DecayingCountMinSketch::new();
-    let t0 = Instant::now();
-    for i in 0..n {
-        cms.increment(i as u64);
-    }
-    t0.elapsed().as_nanos() as f64 / n as f64
-}
-
-fn bench_hll_insert(n: usize) -> f64 {
-    let mut hll = ramshield_analytics::hll::SubnetHll::new();
-    let t0 = Instant::now();
-    for i in 0..n {
-        hll.insert((i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
-    }
-    t0.elapsed().as_nanos() as f64 / n as f64
-}
-
 #[cfg(feature = "mesh")]
 fn bench_mesh_record_ban(n: usize) -> f64 {
     use std::net::IpAddr;
@@ -567,11 +549,9 @@ fn main() {
         n_medium
     );
 
-    println!("\n── P2/P3: CGNAT SHM + Analytics + Mesh ─────────────────────────────");
+    println!("\n── P2/P3: CGNAT SHM ─────────────────────────────");
     bench!("SHM rule lookup (hit)", bench_shm_in_cache_hit, n_fast);
     bench!("CGNAT classify (entropy)", bench_cgnat_classify, n_medium);
-    bench!("CMS::increment", bench_cms_update, n_fast);
-    bench!("HLL::insert", bench_hll_insert, n_fast);
     #[cfg(feature = "mesh")]
     bench!("Mesh record_ban", bench_mesh_record_ban, n_medium);
 

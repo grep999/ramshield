@@ -388,7 +388,7 @@ mod cli_tests {
     #[test]
     fn no_xdp_flag_is_recognized() {
         // prod_smoke.sh boots with --no-xdp; the parser must not reject it.
-        let (path, no_xdp, _doctor) =
+        let (path, no_xdp, _doctor, _something) =
             parse_args(&args(&["--no-xdp", "--config", "a.toml"])).unwrap();
         assert!(no_xdp);
         assert_eq!(path, Some("a.toml".into()));

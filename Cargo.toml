@@ -11,7 +11,6 @@ members = [
     "crates/ramshield-types",
     "crates/ramshield-xdp",
     "crates/ramshield-cgnat",
-    "crates/ramshield-analytics",
     "crates/ramshield-mesh",
     "crates/ramwal",
 ]
@@ -99,7 +98,6 @@ ramshield-enforcement = { path = "crates/ramshield-enforcement", version = "0.1.
 ramshield-forecasting = { path = "crates/ramshield-forecasting", version = "0.1.0" }
 ramshield-protocol = { path = "crates/ramshield-protocol", version = "0.1.0" }
 ramshield-cgnat = { path = "crates/ramshield-cgnat", version = "0.1.0" }
-ramshield-analytics = { path = "crates/ramshield-analytics", version = "0.1.0" }
 ramshield-mesh = { path = "crates/ramshield-mesh", version = "0.3.0", optional = true }
 
 [dev-dependencies]

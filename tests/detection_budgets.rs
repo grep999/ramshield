@@ -10,7 +10,6 @@
 use ramshield_config::Config;
 use ramshield_storage::Store;
 use ramshield_types::ConnectionEvent;
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

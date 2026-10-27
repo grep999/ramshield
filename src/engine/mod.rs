@@ -9,7 +9,6 @@ pub mod native;
 pub mod rss;
 pub mod synproxy;
 pub mod upstream;
-pub mod waf;
 
 mod boot;
 

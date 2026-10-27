@@ -197,7 +197,8 @@ The crate emits the wire string reason `"forecast_anomaly"`, not a
 the injected `mpsc::Sender<EnforceCommand>`.
 
 **Read by:** the root `ramshield` package, which re-exports `Forecaster`
-and constructs one in `boot_pipeline()` when `forecasting.enabled` is set.
+and constructs one in `boot_pipeline()` when `forecasting.enabled` is set,
+and `ramshield-detection`, which uses the forecaster for anomaly scoring.
 
 ## Configuration
 
