@@ -306,6 +306,67 @@ fn emergency_threshold_is_per_worker_and_split_traffic_still_aggregates() {
     );
 }
 
+/// Month-4 gate: 100k distinct IPs through the production merge path with a
+/// small pre_aggs_max_size. The shared map must respect its bound at all
+/// times and lose zero events (overflow flushes, never drops).
+#[test]
+fn high_cardinality_100k_ips_respects_pre_aggs_bound_and_loses_nothing() {
+    let mut config = Config::default();
+    config.detection.pre_aggs_max_size = 1000;
+    let cfg = config.into_handle();
+    let store = Arc::new(Store::new(16));
+    let metrics = Arc::new(Metrics::new());
+    let (etx, _erx) = mpsc::channel(4096);
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            store,
+            cfg,
+            etx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
+
+    const TOTAL: u64 = 100_000;
+    const BATCH: usize = 500;
+    for chunk in (0..TOTAL).collect::<Vec<_>>().chunks(BATCH) {
+        let mut local: HashMap<IpAddr, IpAgg> = HashMap::new();
+        for &i in chunk {
+            let ip = IpAddr::V4(Ipv4Addr::new(
+                10,
+                ((i >> 16) & 0xff) as u8,
+                ((i >> 8) & 0xff) as u8,
+                (i & 0xff) as u8,
+            ));
+            let a = local.entry(ip).or_default();
+            a.absorb(&ConnectionEvent {
+                ip,
+                timestamp_ns: i,
+                bytes: 64,
+                status_code: 200,
+                proto_fingerprint: 0,
+                l7: None,
+            });
+        }
+        eng.merge_local(&mut local);
+    }
+    // Final drain.
+    while !eng.pre_aggs.is_empty() {
+        eng.flush_pre_aggs_to_store();
+    }
+
+    assert!(
+        eng.pre_aggs.len() <= 1000,
+        "pre_aggs must respect its configured bound"
+    );
+    assert_eq!(
+        metrics.events_ingested.load(Ordering::Relaxed),
+        TOTAL,
+        "no event may be lost to the bound — overflow must flush, not drop"
+    );
+}
+
 /// P1 regression (F1): with N workers, the old iter_mut+take+clear flush
 /// silently erased events inserted during the walk. Invariant:
 /// ingested + left-in-pre_aggs == sent, exactly, under concurrent flush.
