@@ -76,7 +76,13 @@ PID=$!
 sleep 3
 kill -0 "$PID" 2>/dev/null || { cat "$WORK/ramshield.log"; die "ramshield did not stay up"; }
 
-bpftool prog show 2>/dev/null | grep -qi ramshield || { cat "$WORK/ramshield.log"; die "no XDP program attached"; }
+if ! bpftool prog show 2>&1 | grep -qi ramshield; then
+  echo "=== bpftool prog show ==="; bpftool prog show 2>&1 | head -20
+  echo "=== link xdp ==="; ip -d link show "$HOST_VETH" 2>&1 | grep -iE "xdp|prog" || true
+  echo "=== engine log (xdp/attach lines) ==="; grep -iE "xdp|attach|active" "$WORK/ramshield.log" || true
+  echo "=== engine log (tail) ==="; tail -20 "$WORK/ramshield.log"
+  die "no XDP program attached"
+fi
 log "XDP program attached"
 
 log "flooding from namespace (400 connection attempts)"
