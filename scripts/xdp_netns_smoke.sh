@@ -89,10 +89,9 @@ if ! ip -d link show "$HOST_VETH" 2>&1 | grep -qiE "prog/xdp"; then
 fi
 log "XDP program attached"
 
-log "flooding from namespace (3 x 400 connection attempts, 1s apart)"
-for round in 1 2 3; do
-  ip netns exec "$NS" sh -c 'for i in $(seq 1 400); do (echo > /dev/tcp/10.200.0.1/9) 2>/dev/null & done; wait' || true
-  sleep 1
+log "flooding from namespace (10 rounds x 300 serial connects)"
+for round in $(seq 1 10); do
+  ip netns exec "$NS" sh -c 'for i in $(seq 1 300); do echo > /dev/tcp/10.200.0.1/9 2>/dev/null || true; done' || true
 done
 sleep 2
 
