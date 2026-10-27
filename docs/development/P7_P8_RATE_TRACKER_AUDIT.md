@@ -28,6 +28,7 @@
 - Forecasting publishes its Bayesian classification through an optional callback. The daemon wires that callback to an `ArcSwapOption<TrafficContext>` on `DetectionEngine`; the per-IP hot path reads a snapshot without a forecasting mutex. Both sides use the shared process-local monotonic clock in `ramshield-types`.
 - During a fresh, confident `FlashCrowd` classification, the adaptive detector's context-scaled decision takes precedence over static legacy gates. The adaptive breach signal remains authoritative.
 - The variance Serde default is positive (`0.5`, matching the default detector profile floor); the migration regression test removes all adaptive fields from a serialized legacy record and checks safe defaults.
+- The review's original 56-byte estimate covers the seven core detector fields. One-second quantization adds `adaptive_bucket_id`, `adaptive_bucket_packets`, and `adaptive_bucket_initialized`; expect roughly 24 additional bytes per record on a 64-bit target (verify with `size_of::<IpRecord>()` and the admission-budget accounting before release).
 - All known Rust struct literals in storage, detection, enforcement, checkpoint tests, and benchmarks were updated for both adaptive detector and bucket state.
 - Review exhaustive matches on `DetectorError` in downstream code.
 - Confirm that the detector's `Breached -> Monitoring` transition and CUSUM reset match enforcement expectations before merge.
