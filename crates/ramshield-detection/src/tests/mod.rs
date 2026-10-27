@@ -247,6 +247,65 @@ fn emergency_burst_fires_once_before_flush() {
     );
 }
 
+/// Emergency burst gate is deliberately PER-WORKER (see DetectionConfig doc
+/// comment): each worker's unflushed local count crosses the threshold
+/// independently. An IP whose traffic is split across workers so that no
+/// single worker reaches the threshold does NOT trigger the fast path — its
+/// aggregate detection belongs to the flush path (merged cross-worker batch
+/// counts + rate records). If two workers DO cross simultaneously,
+/// enforcement dedupes by (ip, reason).
+#[test]
+fn emergency_threshold_is_per_worker_and_split_traffic_still_aggregates() {
+    let config = Config::default().into_handle();
+    let store = Arc::new(Store::new(16));
+    let metrics = Arc::new(Metrics::new());
+    let (etx, mut erx) = mpsc::channel(64);
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            store,
+            config,
+            etx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
+
+    let ip: IpAddr = "9.9.9.9".parse().unwrap();
+    let ev = |n: u64| ConnectionEvent {
+        ip,
+        timestamp_ns: n,
+        bytes: 10,
+        status_code: 200,
+        proto_fingerprint: 0,
+        l7: None,
+    };
+    // Same IP, 8 events total, split 4/4 across two workers; threshold 5.
+    let mut w1: HashMap<IpAddr, IpAgg> = HashMap::new();
+    let mut w2: HashMap<IpAddr, IpAgg> = HashMap::new();
+    for n in 0..4 {
+        eng.absorb_or_emergency(&mut w1, &ev(n), 5);
+    }
+    for n in 0..4 {
+        eng.absorb_or_emergency(&mut w2, &ev(n), 5);
+    }
+    assert!(
+        erx.try_recv().is_err(),
+        "no worker reached 5: the per-worker fast path must stay silent"
+    );
+
+    // The aggregate is not lost: both workers merge into the shared pre-agg
+    // map and the flush path sees the full cross-worker count.
+    eng.merge_local(&mut w1);
+    eng.merge_local(&mut w2);
+    let agg = eng.pre_aggs.get(&ip).expect("split IP must be merged");
+    assert_eq!(
+        agg.value().count,
+        8,
+        "cross-worker split traffic must aggregate exactly"
+    );
+}
+
 /// P1 regression (F1): with N workers, the old iter_mut+take+clear flush
 /// silently erased events inserted during the walk. Invariant:
 /// ingested + left-in-pre_aggs == sent, exactly, under concurrent flush.
@@ -321,6 +380,42 @@ fn concurrent_flush_never_loses_events() {
         ingested + left,
         sent,
         "F1 loss: ingested={ingested} left={left} sent={sent}"
+    );
+}
+
+/// Rate observation window semantics (P1): empty flush attempts advance the
+/// timeout scheduler but must NOT widen the rate window. The window is the
+/// span since the batch's FIRST event, so idle/bursty flush scheduling cannot
+/// dilute the measured rate (and pre-batch idle time is excluded).
+#[test]
+fn empty_flushes_do_not_distort_rate_window() {
+    let eng = engine();
+    // Idle attempt: advances last_pre_aggs_flush_ns only.
+    eng.flush_pre_aggs_to_store();
+    std::thread::sleep(std::time::Duration::from_millis(120));
+
+    let ip: IpAddr = "10.77.0.1".parse().unwrap();
+    let mut local: HashMap<IpAddr, IpAgg> = HashMap::new();
+    let mut a = IpAgg::default();
+    a.absorb(&ConnectionEvent {
+        ip,
+        timestamp_ns: 0,
+        bytes: 10,
+        status_code: 200,
+        proto_fingerprint: 0,
+        l7: None,
+    });
+    local.insert(ip, a);
+    eng.merge_local(&mut local);
+
+    // Flush immediately: the batch window is ~0ms since the first event.
+    // The old semantics divided by the ~120ms since the last (empty) flush,
+    // diluting the rate ~100x.
+    eng.flush_pre_aggs_to_store();
+    let rate = eng.store.traffic.events_last_second.load(Ordering::Relaxed);
+    assert!(
+        rate >= 10_000,
+        "rate must be measured from the batch's first event, not from idle flush scheduling; got {rate}"
     );
 }
 

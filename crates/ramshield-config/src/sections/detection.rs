@@ -54,6 +54,11 @@ pub struct DetectionConfig {
     /// worker emits an in-flight block immediately instead of waiting for
     /// the periodic flush (50-1000ms of uninhibited traffic otherwise).
     /// 0 disables the fast path (flush-only detection).
+    /// Deliberately PER-WORKER: traffic from one IP split across workers so
+    /// that no single worker reaches this count does not fire the fast path;
+    /// the aggregate guarantee comes from the flush path (merged cross-worker
+    /// batch counts + rate records). Simultaneous crossings dedupe downstream
+    /// by (ip, reason).
     #[serde(default = "default_emergency_burst_threshold")]
     pub emergency_burst_threshold: u32,
     /// Max unique IPs in the pre-aggregation buffer before flushing to main store.

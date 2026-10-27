@@ -123,6 +123,12 @@ pub struct DetectionEngine {
     /// pre-aggregation entry limit is a hard bound, not a racy trigger.
     pre_aggs_merge_lock: std::sync::Mutex<()>,
     last_pre_aggs_flush_ns: AtomicU64,
+    /// Rate observation window: ns timestamp of the FIRST event inserted into
+    /// the (previously empty) shared pre-agg map. 0 = no open batch. The rate
+    /// passed to flush_batch is measured from this instant, NOT from the last
+    /// flush attempt — empty flush attempts only advance the timeout scheduler
+    /// (`last_pre_aggs_flush_ns`), never the measurement window.
+    pre_aggs_batch_start_ns: AtomicU64,
     /// F9: batch/subnet threads, joined at shutdown (was: detached + blind
     /// 5s sleep in main). Each does a final flush before exit.
     worker_handles: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
@@ -236,6 +242,7 @@ impl DetectionEngine {
             pre_aggs: DashMap::with_hasher_and_shard_amount(ahash::RandomState::new(), 64),
             pre_aggs_merge_lock: std::sync::Mutex::new(()),
             last_pre_aggs_flush_ns: AtomicU64::new(now_ns()),
+            pre_aggs_batch_start_ns: AtomicU64::new(0),
             worker_handles: std::sync::Mutex::new(Vec::new()),
             // P2: one SHM open shared by proxy and CGNAT guard.
             shm_table: shm_table.clone(),
