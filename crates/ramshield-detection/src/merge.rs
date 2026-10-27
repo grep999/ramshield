@@ -99,56 +99,11 @@ impl DetectionEngine {
                     );
                 }
 
-                // Adaptive detector is wired into the actual per-IP flush path. All its
-                // mutable state is persisted in IpRecord; no unbounded side map is used.
-                // It receives completed per-IP batch-rate samples and the same monotonic
-                // timestamp as the flush. Context is absent here, so no forecast modulation
-                // is applied unless a caller supplies context through the detector API.
-                let adaptive_initial_rate = if rec.adaptive_sample_count == 0 {
-                    inst_rps
-                } else if rec.adaptive_baseline_rps.is_finite()
-                    && rec.adaptive_baseline_rps >= 0.0
-                {
-                    rec.adaptive_baseline_rps
-                } else {
-                    0.0
-                };
-                let mut adaptive_breach = false;
-                if let Ok(mut adaptive) =
-                    PerIpRecord::new(adaptive_initial_rate, DetectorProfile::default())
-                {
-                    if rec.adaptive_sample_count > 0 {
-                        adaptive.baseline_rate = rec.adaptive_baseline_rps.max(0.0);
-                        adaptive.cusum_s = rec.adaptive_cusum_s.max(0.0);
-                        adaptive.sample_count = rec.adaptive_sample_count;
-                        if rec.adaptive_variance.is_finite() && rec.adaptive_variance > 0.0 {
-                            adaptive.variance = rec.adaptive_variance;
-                        }
-                        adaptive.last_bucket_ns = rec.adaptive_last_bucket_ns;
-                        adaptive.recovery_count = rec.adaptive_recovery_count;
-                        adaptive.mode = match rec.adaptive_mode {
-                            1 => DetectorMode::Monitoring,
-                            2 => DetectorMode::Breached,
-                            _ => DetectorMode::WarmingUp,
-                        };
-                    }
-                    if let Ok(outcome) = adaptive.update(inst_rps, now, None) {
-                        adaptive_breach = outcome.is_breached;
-                        rec.adaptive_baseline_rps = adaptive.baseline_rate;
-                        rec.adaptive_cusum_s = adaptive.cusum_s;
-                        rec.adaptive_sample_count = adaptive.sample_count;
-                        rec.adaptive_variance = adaptive.variance;
-                        rec.adaptive_last_bucket_ns = adaptive.last_bucket_ns;
-                        rec.adaptive_recovery_count = adaptive.recovery_count;
-                        rec.adaptive_mode = match adaptive.mode {
-                            DetectorMode::WarmingUp => 0,
-                            DetectorMode::Monitoring => 1,
-                            DetectorMode::Breached => 2,
-                        };
-                    }
-                    // On error the detector guarantees atomicity; retain all persisted
-                    // adaptive fields and let the established detectors continue.
-                }
+                // Adaptive detector is part of the per-IP flush path. Its persisted state
+                // is updated atomically by this helper; no unbounded side map is used.
+                // The current pipeline has no forecast context at this call site, so context
+                // modulation remains optional and is not fabricated here.
+                let adaptive_breach = update_adaptive_detector(rec, inst_rps, now);
 
                 let relative_breach = if det.relative_enabled
                     && prior_baseline.is_finite()
@@ -229,5 +184,158 @@ impl DetectionEngine {
         // block emitted even when already blocked: caller relies on the
         // enforcement dedup to refresh TTL (semantics preserved from pre-fix).
         (ewma_rps, threat, block, was_blocked, stored)
+    }
+}
+
+/// Update the adaptive detector while preserving atomic state on rejected samples.
+/// Returns true only when the accepted sample leaves the detector in Breached mode.
+fn update_adaptive_detector(rec: &mut IpRecord, inst_rps: f64, now_ns: u64) -> bool {
+    let initial_rate = if rec.adaptive_sample_count == 0 {
+        inst_rps
+    } else if rec.adaptive_baseline_rps.is_finite() && rec.adaptive_baseline_rps >= 0.0 {
+        rec.adaptive_baseline_rps
+    } else {
+        0.0
+    };
+    let Ok(mut adaptive) = PerIpRecord::new(initial_rate, DetectorProfile::default()) else {
+        return false;
+    };
+
+    if rec.adaptive_sample_count > 0 {
+        adaptive.baseline_rate = rec.adaptive_baseline_rps.max(0.0);
+        adaptive.cusum_s = rec.adaptive_cusum_s.max(0.0);
+        adaptive.sample_count = rec.adaptive_sample_count;
+        if rec.adaptive_variance.is_finite() && rec.adaptive_variance > 0.0 {
+            adaptive.variance = rec.adaptive_variance;
+        }
+        adaptive.last_bucket_ns = rec.adaptive_last_bucket_ns;
+        adaptive.recovery_count = rec.adaptive_recovery_count;
+        adaptive.mode = match rec.adaptive_mode {
+            1 => DetectorMode::Monitoring,
+            2 => DetectorMode::Breached,
+            _ => DetectorMode::WarmingUp,
+        };
+    }
+
+    let Ok(outcome) = adaptive.update(inst_rps, now_ns, None) else {
+        // PerIpRecord::update validates and calculates before committing. Do not copy
+        // anything back on failure; the caller's persisted adaptive fields stay intact.
+        return false;
+    };
+
+    rec.adaptive_baseline_rps = adaptive.baseline_rate;
+    rec.adaptive_cusum_s = adaptive.cusum_s;
+    rec.adaptive_sample_count = adaptive.sample_count;
+    rec.adaptive_variance = adaptive.variance;
+    rec.adaptive_last_bucket_ns = adaptive.last_bucket_ns;
+    rec.adaptive_recovery_count = adaptive.recovery_count;
+    rec.adaptive_mode = match adaptive.mode {
+        DetectorMode::WarmingUp => 0,
+        DetectorMode::Monitoring => 1,
+        DetectorMode::Breached => 2,
+    };
+    outcome.is_breached
+}
+
+#[cfg(test)]
+mod adaptive_integration_tests {
+    use super::*;
+
+    fn record() -> IpRecord {
+        IpRecord {
+            ip: "192.0.2.10".parse().unwrap(),
+            request_count: 0,
+            ewma_rps: 0.0,
+            cusum_s: 0.0,
+            baseline_rps: 0.0,
+            prev_sample_hot: false,
+            sample_count: 0,
+            relative_breach_streak: 0,
+            pulse_samples_in_window: 0,
+            pulse_window_start_ns: 0,
+            adaptive_baseline_rps: 0.0,
+            adaptive_cusum_s: 0.0,
+            adaptive_sample_count: 0,
+            adaptive_variance: 0.0,
+            adaptive_last_bucket_ns: 0,
+            adaptive_recovery_count: 0,
+            adaptive_mode: 0,
+            first_seen_ns: 0,
+            last_seen_ns: 0,
+            bytes_in: 0,
+            status_dist: [0; 5],
+            proto_fingerprint: 0,
+            threat_score: 0.0,
+            block_state: BlockState::Clean,
+        }
+    }
+
+    #[test]
+    fn adaptive_state_persists_across_flush_updates() {
+        let mut rec = record();
+        assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000));
+        assert_eq!(rec.adaptive_sample_count, 1);
+        assert!(rec.adaptive_variance.is_finite() && rec.adaptive_variance > 0.0);
+        let baseline = rec.adaptive_baseline_rps;
+        let variance = rec.adaptive_variance;
+
+        assert!(!update_adaptive_detector(&mut rec, 105.0, 2_000_000_000));
+        assert_eq!(rec.adaptive_sample_count, 2);
+        assert!(rec.adaptive_last_bucket_ns == 2_000_000_000);
+        assert!(rec.adaptive_variance.is_finite() && rec.adaptive_variance > 0.0);
+        assert_ne!(rec.adaptive_baseline_rps, baseline);
+        assert_ne!(rec.adaptive_variance, variance);
+    }
+
+    #[test]
+    fn rejected_adaptive_sample_leaves_persisted_state_unchanged() {
+        let mut rec = record();
+        assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000));
+        let before = (
+            rec.adaptive_baseline_rps,
+            rec.adaptive_cusum_s,
+            rec.adaptive_sample_count,
+            rec.adaptive_variance,
+            rec.adaptive_last_bucket_ns,
+            rec.adaptive_recovery_count,
+            rec.adaptive_mode,
+        );
+        assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000));
+        let after = (
+            rec.adaptive_baseline_rps,
+            rec.adaptive_cusum_s,
+            rec.adaptive_sample_count,
+            rec.adaptive_variance,
+            rec.adaptive_last_bucket_ns,
+            rec.adaptive_recovery_count,
+            rec.adaptive_mode,
+        );
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn invalid_rate_does_not_mutate_adaptive_state() {
+        let mut rec = record();
+        assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000));
+        let before = (
+            rec.adaptive_baseline_rps,
+            rec.adaptive_cusum_s,
+            rec.adaptive_sample_count,
+            rec.adaptive_variance,
+            rec.adaptive_last_bucket_ns,
+            rec.adaptive_recovery_count,
+            rec.adaptive_mode,
+        );
+        assert!(!update_adaptive_detector(&mut rec, f64::NAN, 2_000_000_000));
+        let after = (
+            rec.adaptive_baseline_rps,
+            rec.adaptive_cusum_s,
+            rec.adaptive_sample_count,
+            rec.adaptive_variance,
+            rec.adaptive_last_bucket_ns,
+            rec.adaptive_recovery_count,
+            rec.adaptive_mode,
+        );
+        assert_eq!(before, after);
     }
 }
