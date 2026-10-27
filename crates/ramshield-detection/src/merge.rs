@@ -386,7 +386,10 @@ mod adaptive_integration_tests {
             let now = (i + 1) * 1_000_000_000;
             breached |= update_adaptive_detector(&mut rec, 300.0, now);
         }
-        assert!(breached, "sustained upward drift must reach the runtime breach signal");
+        assert!(
+            breached,
+            "sustained upward drift must reach the runtime breach signal"
+        );
         assert_eq!(rec.adaptive_mode, 2);
     }
 
