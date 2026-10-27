@@ -26,7 +26,8 @@ use ramshield_storage::{
 use ramshield_types::BlockReason;
 use ramshield_types::{ConnectionEvent, EnforceAction, EnforceCommand, IpNetwork};
 use rate_tracker::{
-    DetectorMode, DetectorProfile, PerIpRecord, ewma, is_exceeded, pulse_tracker_step,
+    CUSUM_WARMUP_SAMPLES, DetectorMode, DetectorProfile, PerIpRecord, cusum_allowance,
+    cusum_fired, cusum_step_capped, ewma, ewma_alpha_slow, is_exceeded, pulse_tracker_step,
 };
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
