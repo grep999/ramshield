@@ -250,3 +250,65 @@ impl Entry {
         self.expires_at.is_some_and(|e| Instant::now() > e)
     }
 }
+
+#[cfg(test)]
+mod adaptive_migration_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_record_deserializes_with_safe_adaptive_defaults() {
+        let record = IpRecord {
+            ip: "192.0.2.1".parse().unwrap(),
+            request_count: 0,
+            ewma_rps: 0.0,
+            cusum_s: 0.0,
+            baseline_rps: 0.0,
+            prev_sample_hot: false,
+            sample_count: 0,
+            relative_breach_streak: 0,
+            pulse_samples_in_window: 0,
+            pulse_window_start_ns: 0,
+            adaptive_baseline_rps: 0.0,
+            adaptive_cusum_s: 0.0,
+            adaptive_sample_count: 0,
+            adaptive_variance: default_adaptive_variance(),
+            adaptive_last_bucket_ns: 0,
+            adaptive_recovery_count: 0,
+            adaptive_mode: 0,
+            adaptive_bucket_id: 0,
+            adaptive_bucket_packets: 0,
+            adaptive_bucket_initialized: false,
+            first_seen_ns: 0,
+            last_seen_ns: 0,
+            bytes_in: 0,
+            status_dist: [0; 5],
+            proto_fingerprint: 0,
+            threat_score: 0.0,
+            block_state: BlockState::Clean,
+        };
+        let mut legacy = serde_json::to_value(record).unwrap();
+        let object = legacy.as_object_mut().unwrap();
+        for field in [
+            "adaptive_baseline_rps",
+            "adaptive_cusum_s",
+            "adaptive_sample_count",
+            "adaptive_variance",
+            "adaptive_last_bucket_ns",
+            "adaptive_recovery_count",
+            "adaptive_mode",
+            "adaptive_bucket_id",
+            "adaptive_bucket_packets",
+            "adaptive_bucket_initialized",
+        ] {
+            object.remove(field);
+        }
+
+        let restored: IpRecord = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.adaptive_variance, default_adaptive_variance());
+        assert!(restored.adaptive_variance.is_finite());
+        assert!(restored.adaptive_variance > 0.0);
+        assert_eq!(restored.adaptive_sample_count, 0);
+        assert_eq!(restored.adaptive_mode, 0);
+        assert!(!restored.adaptive_bucket_initialized);
+    }
+}
