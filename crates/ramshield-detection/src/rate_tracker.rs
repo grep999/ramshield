@@ -889,8 +889,10 @@ impl PerIpRecord {
         let mut new_baseline = self.baseline_rate;
         let mut new_variance = self.variance;
 
-        // Baseline adaptation freezes during breach to protect reference statistics
-        if new_mode != DetectorMode::Breached {
+        // Freeze baseline and variance during a breach or a fresh, confident
+        // FlashCrowd classification. Neither an attack nor a classified surge should
+        // train the reference statistics while contextual suppression is active.
+        if new_mode != DetectorMode::Breached && !flash_crowd_context {
             let alpha = self.profile.alpha;
             let old_b = new_baseline;
             new_baseline += alpha * (current_rate - old_b);
