@@ -18,6 +18,9 @@ spec:
         app.kubernetes.io/component: node-guard
     spec:
       serviceAccountName: ramshield
+      # hostNetwork: required so XDP attaches to the host interface and so
+      # liveness/readiness probes to 127.0.0.1 reach the daemon's loopback bind.
+      # See deploy/k8s/CAPS.md (I-012).
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       # XDP attaches to the host interface; the daemon must see the host
@@ -39,15 +42,14 @@ spec:
               drop: ["ALL"]
               add:
                 # Capability rationale (I-012) — each retained capability is
-                # required by the XDP path and nothing else:
+                # required by the XDP / capture path and nothing else.
+                # Full write-up: deploy/k8s/CAPS.md
                 # - NET_ADMIN: attaching the XDP program to the interface
                 #   (netlink IFLA_XDP) requires it; unprivileged attach is refused.
                 # - BPF: bpf() syscalls that create/update the pinned maps
-                #   under /sys/fs/bpf (the unprivileged bpf() syscall is
-                #   restricted to a fixed allow-list that excludes map
-                #   creation and program load).
-                # - PERFMON: the packet path is traced via perf_event_open
-                #   probes used by the capture/telemetry path.
+                #   under /sys/fs/bpf (unprivileged bpf() cannot create maps).
+                # - PERFMON: packet path tracing via perf_event_open.
+                # - NET_RAW: AF_PACKET / TPACKET_V3 native_ingest sockets.
                 # Filesystem access comes from the explicit hostPath mounts
                 # below; no other capability is granted.
                 - NET_ADMIN
