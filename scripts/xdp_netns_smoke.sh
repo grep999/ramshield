@@ -45,6 +45,7 @@ subnet_batch_threshold = 64
 batch_block_enabled = true
 block_ttl_secs = 60
 bloom_bits = 100000
+emergency_burst_threshold = 50
 
 [xdp]
 enabled = true
@@ -88,16 +89,17 @@ if ! ip -d link show "$HOST_VETH" 2>&1 | grep -qiE "prog/xdp"; then
 fi
 log "XDP program attached"
 
-log "flooding from namespace (400 connection attempts)"
-# No listener on purpose: refused connects still cross the veth (SYN each),
-# which is what the XDP hook counts.
-ip netns exec "$NS" sh -c 'for i in $(seq 1 400); do (echo > /dev/tcp/10.200.0.1/9) 2>/dev/null & done; wait' || true
+log "flooding from namespace (3 x 400 connection attempts, 1s apart)"
+for round in 1 2 3; do
+  ip netns exec "$NS" sh -c 'for i in $(seq 1 400); do (echo > /dev/tcp/10.200.0.1/9) 2>/dev/null & done; wait' || true
+  sleep 1
+done
 sleep 2
 
 BLOCKS=$(curl -fsS http://127.0.0.1:17999/metrics 2>/dev/null | awk '/^ramshield_blocks_total/ {print $2}')
 [ -n "$BLOCKS" ] || { cat "$WORK/ramshield.log"; die "metrics endpoint unreachable"; }
 log "ramshield_blocks_total=$BLOCKS"
-awk -v b="$BLOCKS" 'BEGIN { exit (b+0 > 0) ? 0 : 1 }' || die "expected blocks_total > 0 after flood"
+awk -v b="$BLOCKS" 'BEGIN { exit (b+0 > 0) ? 0 : 1 }' || { tail -30 "$WORK/ramshield.log"; die "expected blocks_total > 0 after flood"; }
 # Kernel leg: the decision must reach the XDP blocklist map (reconcile logs it).
 grep -q "XDP reconciled with [1-9]" "$WORK/ramshield.log" || { tail -20 "$WORK/ramshield.log"; die "block never reached the XDP map (no reconcile)"; }
 
