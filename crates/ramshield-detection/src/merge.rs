@@ -27,6 +27,7 @@ impl DetectionEngine {
         // One lock-free snapshot per flush; the bucket helper validates freshness at
         // the completed bucket timestamp and never takes a forecast mutex.
         let traffic_context = self.traffic_context();
+        let adaptive_now_ns = ramshield_types::monotonic_now_ns();
         let det_thr = det.rps_threshold;
         let window_ns = det.rate_window_secs * 1_000_000_000;
         let pulse_win = det.pulse_window_secs;
@@ -109,7 +110,7 @@ impl DetectionEngine {
                 // Sub-second flushes accumulate packet counts in IpRecord; only a bucket
                 // transition can submit the previous full bucket to the detector.
                 let adaptive_breach =
-                    update_adaptive_bucket(rec, ip_agg.count as u64, now, traffic_context);
+                    update_adaptive_bucket(rec, ip_agg.count as u64, adaptive_now_ns, traffic_context);
 
                 let relative_breach = if det.relative_enabled
                     && prior_baseline.is_finite()
@@ -175,7 +176,7 @@ impl DetectionEngine {
                 let flash_crowd = traffic_context.is_some_and(|ctx| {
                     ctx.hypothesis == ramshield_forecasting::Hypothesis::FlashCrowd
                         && ctx.confidence >= 0.6
-                        && ctx.is_fresh(now, 2_000_000_000)
+                        && ctx.is_fresh(adaptive_now_ns, 2_000_000_000)
                 });
                 let block = adaptive_block_gate(
                     hot,
