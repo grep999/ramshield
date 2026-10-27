@@ -172,11 +172,19 @@ impl DetectionEngine {
                     && relative_breach
                     && rec.relative_breach_streak >= det.relative_min_breaches;
 
-                let block = hot
-                    || adaptive_breach
-                    || cusum_fired(rec.cusum_s, det_thr)
-                    || pulse_fired
-                    || relative_fired;
+                let flash_crowd = traffic_context.is_some_and(|ctx| {
+                    ctx.hypothesis == ramshield_forecasting::Hypothesis::FlashCrowd
+                        && ctx.confidence >= 0.6
+                        && ctx.is_fresh(now, 2_000_000_000)
+                });
+                let block = adaptive_block_gate(
+                    hot,
+                    adaptive_breach,
+                    cusum_fired(rec.cusum_s, det_thr),
+                    pulse_fired,
+                    relative_fired,
+                    flash_crowd,
+                );
                 (was_blocked, (ewma_rps, threat, block))
             },
         );
@@ -191,6 +199,21 @@ impl DetectionEngine {
         // enforcement dedup to refresh TTL (semantics preserved from pre-fix).
         (ewma_rps, threat, block, was_blocked, stored)
     }
+}
+
+/// The adaptive detector owns contextual sensitivity. During a fresh, confident
+/// FlashCrowd classification, static legacy gates must not override that decision;
+/// the adaptive breach remains authoritative.
+fn adaptive_block_gate(
+    hot: bool,
+    adaptive_breach: bool,
+    legacy_cusum: bool,
+    pulse: bool,
+    relative: bool,
+    flash_crowd: bool,
+) -> bool {
+    adaptive_breach
+        || (!flash_crowd && (hot || legacy_cusum || pulse || relative))
 }
 
 /// Accumulate per-IP events into discrete one-second buckets. A completed bucket
@@ -462,4 +485,11 @@ mod adaptive_integration_tests {
         );
         assert_eq!(rec.adaptive_mode, 2);
     }
+    #[test]
+    fn flash_crowd_suppresses_static_legacy_gates_but_not_adaptive_breach() {
+        assert!(!adaptive_block_gate(true, false, true, true, true, true));
+        assert!(adaptive_block_gate(false, true, false, false, false, true));
+        assert!(adaptive_block_gate(true, false, false, false, false, false));
+    }
+
 }
