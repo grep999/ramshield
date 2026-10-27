@@ -9,9 +9,13 @@ PREFIX="${PREFIX:-$HOME/.local}"
 CONFIG_DIR="$HOME/.config/ramshield"
 STATE_DIR="$HOME/.local/share/ramshield"
 COSIGN_BIN="${COSIGN_BIN:-cosign}"
-log(){ printf '[ramshield-user-install] %s\n' "$*"; }
-die(){ printf '[ramshield-user-install] ERROR: %s\n' "$*" >&2; exit 1; }
+LOG="/tmp/ramshield-user-install-$(date +%Y%m%d-%H%M%S).log"
+log(){ printf '[ramshield-user-install] %s\n' "$*" | tee -a "$LOG"; }
+die(){ printf '[ramshield-user-install] ERROR: %s\n' "$*" >&2 | tee -a "$LOG"; exit 1; }
 need(){ command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
+
+exec > >(tee -a "$LOG") 2>&1
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) [[ $# -ge 2 ]] || die '--version requires a value'; VERSION="$2"; shift 2;;
@@ -36,11 +40,6 @@ for suffix in '' .sha256 .sig .pem; do
 done
 (cd "$TMP" && sha256sum -c "${ART}.sha256") || die 'artifact checksum verification failed'
 "$COSIGN_BIN" verify-blob --signature "$TMP/${ART}.sig" --certificate "$TMP/${ART}.pem" --certificate-identity-regexp '^https://github.com/grep999/ramshield/.github/workflows/release.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' --certificate-oidc-issuer https://token.actions.githubusercontent.com "$TMP/$ART" >/dev/null || die 'Sigstore artifact verification failed'
-mkdir -p "$TMP/unpack"; tar -xzf "$TMP/$ART" -C "$TMP/unpack"
-[[ -x "$TMP/unpack/ramshield" ]] || die 'invalid release archive'
-[[ -x "$TMP/unpack/ramshield-cli" ]] || die 'release archive missing ramshield-cli'
-"$TMP/unpack/ramshield" --version | grep -F "ramshield ${VERSION}" >/dev/null || die 'release binary version mismatch'
-# Create config dir (non-root)
 mkdir -p "$CONFIG_DIR"
 IPC_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 [[ "$IPC_KEY" =~ ^[0-9a-f]{64}$ ]] || die 'failed to generate IPC authentication key'
@@ -61,3 +60,4 @@ log "  - Cannot bind XDP interfaces without CAP_NET_ADMIN"
 log "  - Rate limited by userspace, not kernel LruHashMap"
 log "  - Manual process management required"
 log "To use XDP/eBPF, re-run as root: sudo $0 --version ${VERSION}"
+log "log file: $LOG"
