@@ -202,18 +202,29 @@ fn update_adaptive_detector(rec: &mut IpRecord, inst_rps: f64, now_ns: u64) -> b
     };
 
     if rec.adaptive_sample_count > 0 {
-        adaptive.baseline_rate = rec.adaptive_baseline_rps.max(0.0);
-        adaptive.cusum_s = rec.adaptive_cusum_s.max(0.0);
-        adaptive.sample_count = rec.adaptive_sample_count;
-        if rec.adaptive_variance.is_finite() && rec.adaptive_variance > 0.0 {
-            adaptive.variance = rec.adaptive_variance;
+        // Do not silently repair corrupt persisted state: reject this update without
+        // changing any adaptive fields, so the caller can observe the failure boundary.
+        if !rec.adaptive_baseline_rps.is_finite()
+            || rec.adaptive_baseline_rps < 0.0
+            || !rec.adaptive_cusum_s.is_finite()
+            || rec.adaptive_cusum_s < 0.0
+            || !rec.adaptive_variance.is_finite()
+            || rec.adaptive_variance <= 0.0
+            || rec.adaptive_mode > 2
+        {
+            return false;
         }
+        adaptive.baseline_rate = rec.adaptive_baseline_rps;
+        adaptive.cusum_s = rec.adaptive_cusum_s;
+        adaptive.sample_count = rec.adaptive_sample_count;
+        adaptive.variance = rec.adaptive_variance;
         adaptive.last_bucket_ns = rec.adaptive_last_bucket_ns;
         adaptive.recovery_count = rec.adaptive_recovery_count;
         adaptive.mode = match rec.adaptive_mode {
+            0 => DetectorMode::WarmingUp,
             1 => DetectorMode::Monitoring,
             2 => DetectorMode::Breached,
-            _ => DetectorMode::WarmingUp,
+            _ => unreachable!("mode was validated above"),
         };
     }
 
