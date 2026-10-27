@@ -145,6 +145,31 @@ echo "independent tap packets in 2s: $(cat "$WORK/tap_count.txt" | tail -1)"
 command -v tcpdump >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq tcpdump) || true
 timeout 4 tcpdump -i "$HOST_VETH" -c 100 -nn 2>&1 | tail -3 || true
 
+# Control: the same plain-recv tap machinery on `lo` (no XDP attached).
+# ~100 => tap machinery works; the starvation is veth/xdpgeneric-specific.
+# ~0 => taps are broken machine-wide on this kernel.
+python3 - > "$WORK/lo_count.txt" 2>&1 <<'PY' &
+import socket, time
+s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
+s.bind(("lo", 0))
+s.settimeout(0.5)
+end = time.time() + 2.0
+n = 0
+while time.time() < end:
+    try:
+        s.recvfrom(65535)
+        n += 1
+    except socket.timeout:
+        pass
+    except OSError:
+        break
+print(n)
+PY
+LO_PID=$!
+ping -c 50 -i 0.02 127.0.0.1 >/dev/null 2>&1 || true
+wait $LO_PID || true
+echo "control tap on lo during ping: $(cat "$WORK/lo_count.txt" | tail -1)"
+
 # Block the namespace IP via the real IPC wire (proxy/sidecar deployment path).
 python3 - "$NS_IP" > "$WORK/frame.jsonl" <<'PY'
 import json, sys
