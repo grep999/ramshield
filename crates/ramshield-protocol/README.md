@@ -226,4 +226,4 @@ No standalone benchmarks — message parsing is measured implicitly through the 
 
 ## Testing
 
-34 tests covering: message serialization round-trip, HMAC sign+verify with valid and expired timestamps, replay detection (same nonce sent twice), version rejection (version=2 returns error), and malformed JSON handling.
+25 tests covering: message serialization round-trip, HMAC sign+verify with valid and expired timestamps, replay detection (same nonce sent twice), version rejection (version=2 returns error), and malformed JSON handling.
