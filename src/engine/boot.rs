@@ -192,18 +192,25 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
                             )));
                         }
                     }
-                    if let Err(e) = applier.configure_autonomous(
-                        cfg_snapshot.autonomous.enabled,
-                        cfg_snapshot.autonomous.syn_pps_per_cpu,
-                        cfg_snapshot.autonomous.udp_pps_per_cpu,
-                        cfg_snapshot.autonomous.packet_pps_per_cpu,
-                        cfg_snapshot.autonomous.window_ms,
-                    ) {
-                        tracing::error!(error = %e, "failed to configure autonomous XDP guard");
-                        if hard_xdp {
-                            return Err(std::io::Error::other(format!(
-                                "autonomous XDP configuration failed: {e}"
-                            )));
+                    // The shipped XDP program does not define AUTONOMOUS_CONFIG
+                    // (the cold-start PPS guard is not yet implemented in the
+                    // kernel-side program). Configure the map only when the
+                    // autonomous guard is actually enabled, so a disabled
+                    // guard cannot fail XDP startup.
+                    if cfg_snapshot.autonomous.enabled {
+                        if let Err(e) = applier.configure_autonomous(
+                            cfg_snapshot.autonomous.enabled,
+                            cfg_snapshot.autonomous.syn_pps_per_cpu,
+                            cfg_snapshot.autonomous.udp_pps_per_cpu,
+                            cfg_snapshot.autonomous.packet_pps_per_cpu,
+                            cfg_snapshot.autonomous.window_ms,
+                        ) {
+                            tracing::error!(error = %e, "failed to configure autonomous XDP guard");
+                            if hard_xdp {
+                                return Err(std::io::Error::other(format!(
+                                    "autonomous XDP configuration failed: {e}"
+                                )));
+                            }
                         }
                     }
                     tracing::info!(iface = %cfg_snapshot.xdp.interface, mode = %cfg_snapshot.xdp.mode, autonomous = cfg_snapshot.autonomous.enabled, "XDP dataplane active");
