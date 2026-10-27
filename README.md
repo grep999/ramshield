@@ -12,7 +12,7 @@ Run it locally or behind your reverse proxy. No cloud dependency. No subscriptio
 **Requires:** root (XDP/eBPF maps, systemd service, /usr/local, /etc/ramshield, /var/lib/ramshield)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/grep999/ramshield/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/grep999/ramshield/master/scripts/install.sh | sudo bash -s -- --version 0.6.0
 ```
 
 ### Userspace (non-root)
@@ -22,7 +22,7 @@ Downloads binary to `$HOME/.local/bin`, stores config/state in
 XDP/eBPF blocking — only a userspace proxy.  Run as a normal user.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/grep999/ramshield/master/scripts/install-user.sh | bash
+curl -fsSL https://raw.githubusercontent.com/grep999/ramshield/master/scripts/install-user.sh | bash -s -- --version 0.6.0
 ```
 
 ## Quick Start
