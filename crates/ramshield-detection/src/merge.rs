@@ -377,4 +377,17 @@ mod adaptive_integration_tests {
         assert_eq!(before, after);
     }
 
+    #[test]
+    fn adaptive_breach_signal_reaches_the_runtime_gate() {
+        let mut rec = record();
+        assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000));
+        let mut breached = false;
+        for i in 1..=8 {
+            let now = (i + 1) * 1_000_000_000;
+            breached |= update_adaptive_detector(&mut rec, 300.0, now);
+        }
+        assert!(breached, "sustained upward drift must reach the runtime breach signal");
+        assert_eq!(rec.adaptive_mode, 2);
+    }
+
 }
