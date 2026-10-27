@@ -69,10 +69,9 @@ Also inspect downstream `DetectorProfile` struct literals and exhaustive `Detect
 - [x] One-second bucket accumulation and completed-bucket-only adaptive updates.
 - [x] Lock-free forecasting context snapshot bridge wired in daemon boot.
 - [x] FlashCrowd contextual decision is not overridden by static legacy gates.
-- [ ] Criterion measurement proving zero heap allocations per steady-state IP evaluation.
-- [ ] Macro replay suite with labeled benign, FlashCrowd, volumetric, slow-ramp, and pulsing traces.
+- [ ] Criterion or allocator-instrumented evidence proving zero heap allocations per steady-state IP evaluation.
+- [x] Labeled macro replay suite added for benign, FlashCrowd, volumetric, slow-ramp, and pulsing traces (execution result still pending CI).
 - [ ] Full CI green, including workspace Clippy and tests.
 - [ ] Miri run for the detector unit tests (if supported by the configured toolchain).
 
-The first five items are implemented in source, but the last four are explicit merge gates.
-Do not promote this PR to merge-ready until those gates are evidenced by CI/bench results.
+The source changes and deterministic replay tests are present, but replay results still need to be observed in CI. Allocation evidence, green full CI, and Miri remain explicit merge gates. Do not promote this PR to merge-ready until those gates are evidenced by CI/bench results.
