@@ -47,10 +47,9 @@ fn restore_mesh_crdt_from_wal(
     use ramshield_mesh::aworset::{ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
     use ramshield_storage::wal::{MeshMutationAction, WalEntry};
 
-    let replay = if min_lsn > 0 {
-        wal.replay_from(min_lsn)
-    } else {
-        wal.replay()
+    let replay = match min_lsn {
+        0 => wal.replay(),
+        n => wal.replay_from(n),
     };
     let entries = replay
         .map_err(|error| std::io::Error::other(format!("mesh WAL replay failed: {error}")))?;
