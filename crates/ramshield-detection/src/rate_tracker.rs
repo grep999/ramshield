@@ -800,9 +800,11 @@ impl PerIpRecord {
         let mut h = (self.baseline_rate * 1.5).max(self.profile.min_threshold_h);
 
         // Apply advisory context if fresh and confident
-        if let Some(ctx) = context {
-            if ctx.is_fresh(timestamp_ns, 2_000_000_000) && ctx.confidence >= 0.6 {
-                match ctx.hypothesis {
+        if let Some(ctx) = context
+            && ctx.is_fresh(timestamp_ns, 2_000_000_000)
+            && ctx.confidence >= 0.6
+        {
+            match ctx.hypothesis {
                     Hypothesis::FlashCrowd => {
                         k *= 1.5;
                         h *= 2.0;
@@ -814,7 +816,6 @@ impl PerIpRecord {
                         k *= 0.5;
                     }
                     Hypothesis::Normal => {}
-                }
             }
         }
 
@@ -825,8 +826,12 @@ impl PerIpRecord {
         // --- STEP 4: CUSUM ACCUMULATION ---
         let delta = current_rate - self.baseline_rate - k;
         let windup_ceiling = h * 3.0;
-        if !k.is_finite() || k <= 0.0 || !h.is_finite() || h <= 0.0
-            || !delta.is_finite() || !windup_ceiling.is_finite()
+        if !k.is_finite()
+            || k <= 0.0
+            || !h.is_finite()
+            || h <= 0.0
+            || !delta.is_finite()
+            || !windup_ceiling.is_finite()
         {
             return Err(DetectorError::NumericalCalculationFailure);
         }
@@ -840,7 +845,10 @@ impl PerIpRecord {
         }
 
         // --- STEP 5: STATE TRANSITIONS & HYSTERESIS ---
-        let new_sample_count = self.sample_count.checked_add(1).ok_or(DetectorError::InvalidInternalSampleCount)?;
+        let new_sample_count = self
+            .sample_count
+            .checked_add(1)
+            .ok_or(DetectorError::InvalidInternalSampleCount)?;
         let mut new_mode = self.mode;
         let mut new_recovery_count = if new_mode == DetectorMode::Breached && !gap_detected {
             self.recovery_count
@@ -1007,7 +1015,10 @@ mod adaptive_tests {
             }
         }
 
-        assert!(breached, "Zero-baseline record must trigger breach on sustained burst");
+        assert!(
+            breached,
+            "Zero-baseline record must trigger breach on sustained burst"
+        );
         assert_eq!(record.mode, DetectorMode::Breached);
     }
 
@@ -1073,7 +1084,10 @@ mod adaptive_tests {
         // Advance time by 10s (gap > 3s tolerance)
         t += 10 * SECOND_NS;
         let o2 = record.update(50.0, t, None).unwrap();
-        assert_eq!(o2.cusum_score, 0.0, "CUSUM must reset after gap exceeding tolerance");
+        assert_eq!(
+            o2.cusum_score, 0.0,
+            "CUSUM must reset after gap exceeding tolerance"
+        );
     }
 
     #[test]
@@ -1107,11 +1121,18 @@ mod adaptive_tests {
 
         t += SECOND_NS;
         record.update(500.0, t, None).unwrap();
-        assert_eq!(record.baseline_rate, frozen_baseline, "Baseline must remain frozen during breach");
+        assert_eq!(
+            record.baseline_rate, frozen_baseline,
+            "Baseline must remain frozen during breach"
+        );
 
         t += SECOND_NS;
         record.update(100.0, t, None).unwrap();
-        assert_eq!(record.mode, DetectorMode::Breached, "Brief dip must not cause premature recovery");
+        assert_eq!(
+            record.mode,
+            DetectorMode::Breached,
+            "Brief dip must not cause premature recovery"
+        );
         assert_eq!(record.baseline_rate, frozen_baseline);
 
         let mut recovered = false;
@@ -1124,13 +1145,19 @@ mod adaptive_tests {
             }
         }
 
-        assert!(recovered, "Sustained normal traffic must clear breach via hysteresis");
+        assert!(
+            recovered,
+            "Sustained normal traffic must clear breach via hysteresis"
+        );
         assert_eq!(record.mode, DetectorMode::Monitoring);
         assert_eq!(record.cusum_s, 0.0);
 
         t += SECOND_NS;
         record.update(20.0, t, None).unwrap();
-        assert!(record.baseline_rate < frozen_baseline, "Baseline must resume adapting after recovery");
+        assert!(
+            record.baseline_rate < frozen_baseline,
+            "Baseline must resume adapting after recovery"
+        );
     }
 
     #[test]
