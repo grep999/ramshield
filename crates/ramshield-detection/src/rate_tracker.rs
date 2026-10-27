@@ -1303,6 +1303,9 @@ mod adaptive_tests {
     fn fresh_flash_crowd_context_suppresses_adaptive_breach_transition() {
         let profile = DetectorProfile::default();
         let mut record = PerIpRecord::new(100.0, profile).unwrap();
+        record.sample_count = profile.warmup_samples;
+        record.mode = DetectorMode::Monitoring;
+        record.last_bucket_ns = 999_000_000;
         let context = TrafficContext {
             hypothesis: Hypothesis::FlashCrowd,
             observed_at_ns: 1_000_000_000,
