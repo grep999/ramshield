@@ -746,6 +746,19 @@ impl PerIpRecord {
         timestamp_ns: u64,
         context: Option<&TrafficContext>,
     ) -> Result<DetectionOutcome, DetectorError> {
+        self.update_with_context_at(current_rate, timestamp_ns, context, timestamp_ns)
+    }
+
+    /// Update a completed sample at its bucket timestamp while evaluating advisory
+    /// context freshness against the current processing timestamp. These timestamps
+    /// differ when a flush finalizes the previous one-second bucket.
+    pub fn update_with_context_at(
+        &mut self,
+        current_rate: f64,
+        timestamp_ns: u64,
+        context: Option<&TrafficContext>,
+        context_now_ns: u64,
+    ) -> Result<DetectionOutcome, DetectorError> {
         // --- STEP 1: ATOMIC PRE-VALIDATION ---
         if !current_rate.is_finite() || current_rate < 0.0 {
             return Err(DetectorError::InvalidCurrentRate);
@@ -803,12 +816,12 @@ impl PerIpRecord {
         // also suppresses the breach transition while it remains fresh; otherwise a
         // static per-IP spike would override the classifier's legitimate-surge decision.
         let flash_crowd_context = context.is_some_and(|ctx| {
-            ctx.is_fresh(timestamp_ns, 2_000_000_000)
+            ctx.is_fresh(context_now_ns, 2_000_000_000)
                 && ctx.confidence >= 0.6
                 && ctx.hypothesis == Hypothesis::FlashCrowd
         });
         if let Some(ctx) = context
-            && ctx.is_fresh(timestamp_ns, 2_000_000_000)
+            && ctx.is_fresh(context_now_ns, 2_000_000_000)
             && ctx.confidence >= 0.6
         {
             match ctx.hypothesis {
