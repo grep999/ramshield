@@ -6,7 +6,7 @@ Pick the **first row with status `TODO`**, implement **one bounded fix**, mark i
 |------:|----|-------|------|------|--------|
 | 1 | E01 | yes | CI | Collapse nested `if autonomous` in `src/engine/boot.rs` (clippy collapsible_if under full) | DONE (batch-0) |
 | 2 | E02 | yes | CI | `tests/e2e_telemetry_block.rs`: ephemeral IPC port (no fixed 17897) + unique wal dir | DONE (batch-0) |
-| 3 | E03 | yes | process | Fix ACCEPTANCE_REPORT.md workflow table to match real Actions conclusions on cited SHAs | TODO |
+| 3 | E03 | yes | process | Fix ACCEPTANCE_REPORT.md workflow table to match real Actions conclusions on cited SHAs | DONE (aligned table to real failure/success on 13d7a40; commit 54e2d1e) |
 | 4 | E04 | yes | deploy | I-012: document hostNetwork/NET_ADMIN in `deploy/k8s/daemonset.yaml` + short CAPS note | TODO |
 | 5 | E05 | yes | protocol | I-024: pin HMAC golden vector / README facts if still drift on tip | TODO |
 | 6 | E06 | med | detection | Unit test for pre_aggs rate-window / batch start invariant | TODO |
@@ -26,3 +26,4 @@ Pick the **first row with status `TODO`**, implement **one bounded fix**, mark i
 
 ## Run log
 - batch-0: branch created; E01 boot.rs collapsible_if; E02 e2e ephemeral port.
+- 2026-10-27T22:34Z: E03 DONE — aligned ACCEPTANCE_REPORT.md workflow table/conclusions to real Actions (CI/Review/Subnet failure, lint success) on 13d7a40; commit 54e2d1e3f8c752916453015b6be142a3bf10f71f.
