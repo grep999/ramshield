@@ -155,6 +155,15 @@ pub struct IpRecord {
     /// 0 = window not yet opened. Resets on expiry or block.
     #[serde(default)]
     pub pulse_window_start_ns: u64,
+    /// Adaptive detector's independent baseline (legacy baseline remains unchanged).
+    #[serde(default)]
+    pub adaptive_baseline_rps: f64,
+    /// Adaptive detector's independent CUSUM accumulator.
+    #[serde(default)]
+    pub adaptive_cusum_s: f64,
+    /// Adaptive detector's accepted-sample count, independent of legacy detector state.
+    #[serde(default)]
+    pub adaptive_sample_count: u64,
     /// Adaptive CUSUM variance, persisted with the IP record.
     #[serde(default)]
     pub adaptive_variance: f64,
