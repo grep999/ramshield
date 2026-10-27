@@ -18,7 +18,9 @@ const SECOND_NS: u64 = 1_000_000_000;
 fn default_profile() -> DetectorProfile {
     DetectorProfile {
         min_threshold_h: 1000.0,
-        min_slack_k: 500.0,
+        // min_slack_k must be well below the pulsing attack's 500pps delta so the
+        // CUSUM can accumulate; the h-floor (1000) still guards false positives.
+        min_slack_k: 50.0,
         min_variance: 0.1,
         alpha: 0.3,
         clear_ratio: 0.35,
@@ -181,9 +183,11 @@ fn replay_pulsing_attack_recovers_with_hysteresis() {
     // Baseline must remain frozen during burst.
     let frozen_baseline = record.baseline_rate;
 
-    // Drop to 20 pps for 10 seconds → recovery requires 3 consecutive clean ticks.
+    // Drop to 20 pps → recovery. cusum peaks at 1750 (5 burst ticks × 350) and
+    // decays 130/tick, so the clear gate (350 = 0.35 × h) is reached at tick 11,
+    // then 3 hysteresis ticks → recovery at ~tick 13.
     let mut recovered = false;
-    for i in 15..25u64 {
+    for i in 15..40u64 {
         record.update(20.0, t0 + i * SECOND_NS, None).unwrap();
         if record.mode == DetectorMode::Monitoring {
             recovered = true;

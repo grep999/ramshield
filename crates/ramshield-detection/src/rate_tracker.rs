@@ -801,12 +801,18 @@ impl PerIpRecord {
         let mut h = (self.baseline_rate * 1.5).max(self.profile.min_threshold_h);
 
         // Apply advisory context if fresh and confident
+        let mut ctx_applied = false;
+        let mut flash_crowd_tagged = false;
         if let Some(ctx) = context {
             if ctx.is_fresh(timestamp_ns, 2_000_000_000) && ctx.confidence >= 0.6 {
+                ctx_applied = true;
                 match ctx.hypothesis {
                     Hypothesis::FlashCrowd => {
+                        // FlashCrowd is treated as legitimate traffic (OWNER_DECISION_PACKAGE):
+                        // hypothesized flash crowds are never escalated to Breached.
                         k *= 1.5;
                         h *= 2.0;
+                        flash_crowd_tagged = true;
                     }
                     Hypothesis::VolumetricDoS => {
                         h *= 0.8;
@@ -856,11 +862,11 @@ impl PerIpRecord {
             0
         };
 
-        if new_mode == DetectorMode::WarmingUp && new_sample_count >= self.profile.warmup_samples {
+        if new_mode == DetectorMode::WarmingUp && new_sample_count > self.profile.warmup_samples {
             new_mode = DetectorMode::Monitoring;
         }
 
-        if new_mode == DetectorMode::Monitoring && new_cusum > h {
+        if new_mode == DetectorMode::Monitoring && new_cusum > h && !flash_crowd_tagged {
             new_mode = DetectorMode::Breached;
             new_recovery_count = 0;
         } else if new_mode == DetectorMode::Breached {
@@ -882,24 +888,32 @@ impl PerIpRecord {
         let mut new_baseline = self.baseline_rate;
         let mut new_variance = self.variance;
 
-        // Baseline adaptation freezes during breach to protect reference statistics
-        if new_mode != DetectorMode::Breached {
-            let alpha = self.profile.alpha;
-            let old_b = new_baseline;
-            new_baseline += alpha * (current_rate - old_b);
+        // Compute the proposed adaptation unconditionally: pathological input
+        // (e.g. f64::MAX rate) must be rejected atomically even when adaptation
+        // is frozen, so the proposal is always evaluated and validated.
+        let alpha = self.profile.alpha;
+        let old_b = new_baseline;
+        let prop_baseline = new_baseline + alpha * (current_rate - old_b);
+        let diff1 = current_rate - old_b;
+        let diff2 = current_rate - prop_baseline;
+        let prop_variance =
+            ((1.0 - alpha) * new_variance + alpha * (diff1 * diff2)).max(self.profile.min_variance);
 
-            let diff1 = current_rate - old_b;
-            let diff2 = current_rate - new_baseline;
-            new_variance = ((1.0 - alpha) * new_variance + alpha * (diff1 * diff2))
-                .max(self.profile.min_variance);
+        if !prop_baseline.is_finite()
+            || prop_baseline < 0.0
+            || !prop_variance.is_finite()
+            || prop_variance <= 0.0
+        {
+            return Err(DetectorError::NumericalCalculationFailure);
+        }
 
-            if !new_baseline.is_finite()
-                || new_baseline < 0.0
-                || !new_variance.is_finite()
-                || new_variance <= 0.0
-            {
-                return Err(DetectorError::NumericalCalculationFailure);
-            }
+        // Baseline adaptation freezes during breach to protect reference statistics.
+        // It also freezes while an advisory hypothesis is applied (hypothesized traffic
+        // must not poison the reference) and while CUSUM evidence is accumulating —
+        // otherwise the baseline chases the attack and the detector absorbs it.
+        if new_mode != DetectorMode::Breached && !ctx_applied && new_cusum == 0.0 {
+            new_baseline = prop_baseline;
+            new_variance = prop_variance;
         }
 
         // --- STEP 7: COMMIT STATE ---
