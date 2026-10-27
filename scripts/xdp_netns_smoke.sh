@@ -90,9 +90,13 @@ fi
 log "XDP program attached"
 
 log "flooding from namespace (10 rounds x 300 serial connects, bash /dev/tcp)"
+FAILS=0
 for round in $(seq 1 10); do
-  ip netns exec "$NS" bash -c 'for i in $(seq 1 300); do echo > /dev/tcp/10.200.0.1/9 2>/dev/null || true; done' || true
+  F=$(ip netns exec "$NS" bash -c 'f=0; for i in $(seq 1 300); do echo > /dev/tcp/10.200.0.1/9 2>/dev/null || f=$((f+1)); done; echo $f')
+  FAILS=$((FAILS + F))
 done
+echo "flood connect-failures (ECONNREFUSED expected): $FAILS"
+ip -s link show "$HOST_VETH" | sed -n '3,6p'
 sleep 2
 
 BLOCKS=$(curl -fsS http://127.0.0.1:17999/metrics 2>/dev/null)
