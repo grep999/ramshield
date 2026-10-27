@@ -119,12 +119,9 @@ impl DetectionEngine {
                             DetectorMode::Breached => 2,
                         };
                     } else {
-                        // Invalid/replayed timestamps or numerical errors must not partially
-                        // mutate adaptive state. Existing EWMA/pulse/relative detectors still run.
-                        rec.sample_count = rec.sample_count.saturating_add(1);
+                        // Invalid/replayed timestamps or numerical errors leave the adaptive
+                        // state untouched. Other detectors still process the current batch.
                     }
-                } else {
-                    rec.sample_count = rec.sample_count.saturating_add(1);
                 }
 
                 let relative_breach = if det.relative_enabled
