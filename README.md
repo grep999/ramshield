@@ -1,17 +1,19 @@
-# RamShield — self-hosted Linux ingress defense in Rust
+# RamShield — Self-Hosted Linux Ingress Defense
+
 Detects and blocks abusive traffic at the kernel (XDP/eBPF) level.
 For self-hosted/sovereign infra operators who can't afford enterprise DDoS mitigation.
-Run it locally or behind your reverse proxy.
-No cloud dependency. No subscription. Just Rust.
+Run it locally or behind your reverse proxy. No cloud dependency. No subscription. Just Rust.
 
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/grep999/ramshield?label=release&color=0A0)](https://github.com/grep999/ramshield/releases/latest)
+[![GitHub release](https://img.shields.io/github/v/release/grep999/ramshield?label=release)](https://github.com/grep999/ramshield/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
+## One-Command Install
 
-**Linux-native traffic protection with eBPF/XDP.**
+```bash
+curl -fsSL https://ramshield.io/install.sh | bash
+```
 
-RamShield watches traffic from your proxy, spots abusive patterns, and can block offending IPs or networks directly at the kernel level.
-
-The basic loop is simple:
+## Quick Start
 
 **observe → detect → decide → block → expire**
 
@@ -108,6 +110,19 @@ XDP
 ```
 
 RamShield exposes the XDP state so you can see whether the kernel dataplane is actually active.
+
+## Modules Overview
+
+| Module | Responsibility |
+|--------|---------------|
+| `ramshield-config` | TOML config, validation, env overrides |
+| `ramshield-types` | IP networks, ConnectionEvent, IpRecord, CGNAT tiers |
+| `ramshield-detection` | EWMA + CUSUM + Pulse + Subnet/swarm detection |
+| `ramshield-enforcement` | XDP projection, reconcile, block-state transition |
+| `ramshield-storage` | WAL, checkpoint, snapshots, recovery |
+| `ramshield-mesh` | CRDT Aworset sync (disabled in production) |
+| `ramshield-xdp` | eBPF XDP engine (kernel dataplane) |
+| `ramshield-protocol` | IPC JSON framing, HMAC auth, replay store |
 
 ## Configuration
 
