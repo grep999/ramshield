@@ -10,7 +10,7 @@ Run it locally or behind your reverse proxy. No cloud dependency. No subscriptio
 ## One-Command Install
 
 ```bash
-curl -fsSL https://github.com/grep999/ramshield/raw/master/scripts/install.sh | sh
+curl -fsSL https://github.com/grep999/ramshield/raw/master/scripts/install.sh | bash
 ```
 
 ## Quick Start
