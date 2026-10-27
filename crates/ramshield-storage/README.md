@@ -77,6 +77,13 @@ pub struct IpRecord {
     pub relative_breach_streak: u8,
     pub pulse_samples_in_window: u8,
     pub pulse_window_start_ns: u64,
+    pub adaptive_baseline_rps: f64,
+    pub adaptive_cusum_s: f64,
+    pub adaptive_sample_count: u64,
+    pub adaptive_variance: f64,
+    pub adaptive_last_bucket_ns: u64,
+    pub adaptive_recovery_count: u64,
+    pub adaptive_mode: u8,
     pub first_seen_ns: u64,
     pub last_seen_ns: u64,
     pub bytes_in: u64,
@@ -259,3 +266,18 @@ appends.
 `crates/ramshield-storage/tests/readme_claims.rs` checks this file
 against the crate: the dependency list, the list of crates that read it,
 the types documented here, and the test count above.
+
+
+### Adaptive detector state
+
+The adaptive CUSUM detector runs alongside the existing EWMA, debounce, pulse, and
+relative-baseline gates. Its state is stored directly in each `IpRecord` so updates
+survive successive flushes without a separate unbounded map. The legacy CUSUM fields
+remain independent to preserve existing detection semantics during this prototype.
+
+`adaptive_mode` is persisted as `0 = WarmingUp`, `1 = Monitoring`, and
+`2 = Breached`. Adaptive updates are accepted only when the sample rate and
+monotonic timestamp are valid and all derived arithmetic remains finite. Rejected
+updates leave the adaptive fields unchanged. Forecast-context modulation is exposed
+by the detector API, but the current `merge_record` call site does not yet provide
+a forecast context, so the runtime path uses the conservative default profile.
