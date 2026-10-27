@@ -112,6 +112,33 @@ ip -s link show "$HOST_VETH" | sed -n '1,8p'
 echo "=== /proc/net/packet (per-socket: sk, received, dropped) ==="
 cat /proc/net/packet
 
+# #90 discriminator: an independent AF_PACKET tap (plain recv, no ring) on
+# the same veth during a second flood. ~3000 => kernel tap delivery is fine
+# and the loss is in the RX ring or the walk; ~60 => the tap itself is
+# starved (fanout/kernel config).
+echo "=== independent AF_PACKET recv tap (2s during flood) ==="
+python3 - > "$WORK/tap_count.txt" 2>&1 <<'PY' &
+import socket, struct, sys, time
+s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
+s.bind(("rs-smoke-h", 0))
+s.settimeout(0.5)
+end = time.time() + 2.0
+n = 0
+while time.time() < end:
+    try:
+        s.recvfrom(65535)
+        n += 1
+    except socket.timeout:
+        pass
+    except OSError:
+        break
+print(n)
+PY
+TAP_PID=$!
+ip netns exec "$NS" bash -c 'for i in $(seq 1 300); do echo > /dev/tcp/10.200.0.1/9 2>/dev/null || true; done' || true
+wait $TAP_PID || true
+echo "independent tap packets in 2s: $(cat "$WORK/tap_count.txt" | tail -1)"
+
 # Block the namespace IP via the real IPC wire (proxy/sidecar deployment path).
 python3 - "$NS_IP" > "$WORK/frame.jsonl" <<'PY'
 import json, sys
