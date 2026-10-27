@@ -155,6 +155,18 @@ pub struct IpRecord {
     /// 0 = window not yet opened. Resets on expiry or block.
     #[serde(default)]
     pub pulse_window_start_ns: u64,
+    /// Adaptive CUSUM variance, persisted with the IP record.
+    #[serde(default)]
+    pub adaptive_variance: f64,
+    /// Last monotonic timestamp accepted by the adaptive detector.
+    #[serde(default)]
+    pub adaptive_last_bucket_ns: u64,
+    /// Consecutive recovery evidence for the adaptive detector.
+    #[serde(default)]
+    pub adaptive_recovery_count: u64,
+    /// Persisted adaptive mode: 0 = warming up, 1 = monitoring, 2 = breached.
+    #[serde(default)]
+    pub adaptive_mode: u8,
     pub first_seen_ns: u64,
     pub last_seen_ns: u64,
     pub bytes_in: u64,
