@@ -1292,5 +1292,4 @@ mod adaptive_tests {
         );
         assert_eq!(record, before);
     }
-
 }
