@@ -16,9 +16,18 @@ use std::time::{Duration, Instant};
 #[test]
 fn report_connections_burst_blocks_the_ip_end_to_end() {
     let mut cfg = Config::default();
-    cfg.ipc.tcp_addr = "127.0.0.1:17897".into();
+    // Ephemeral port: fixed 17897 collides when the full workspace suite runs
+    // other IPC tests concurrently (suite flake, not product defect).
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+    let ipc_addr = probe.local_addr().expect("local_addr");
+    drop(probe);
+    cfg.ipc.tcp_addr = ipc_addr.to_string();
     cfg.xdp.enabled = false; // safe mode: in-band enforcement, no kernel attach
-    let wal_dir = std::env::temp_dir().join(format!("rs_e2e_wal_{}", std::process::id()));
+    let wal_dir = std::env::temp_dir().join(format!(
+        "rs_e2e_wal_{}_{}",
+        std::process::id(),
+        ipc_addr.port()
+    ));
     let _ = std::fs::remove_dir_all(&wal_dir);
     std::fs::create_dir_all(&wal_dir).unwrap();
     cfg.wal.dir = wal_dir.to_str().unwrap().into();
@@ -38,7 +47,7 @@ fn report_connections_burst_blocks_the_ip_end_to_end() {
         vec![event; 200].join(",")
     );
 
-    let mut stream = TcpStream::connect("127.0.0.1:17897").expect("TCP connect to IPC");
+    let mut stream = TcpStream::connect(ipc_addr).expect("TCP connect to IPC");
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
