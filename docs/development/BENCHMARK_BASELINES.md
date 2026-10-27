@@ -72,3 +72,11 @@ capture, kernel scheduling, TPACKET_V3 ring traversal, packet loss, or NIC load;
 those require a separately controlled privileged host test. The memory value
 from `/usr/bin/time -v` is a whole-process peak-RSS observation and is not an
 isolated allocation budget. Mesh merge/gossip remains outside this core suite.
+
+## Deferred measurements and threshold policy
+
+- **Kernel capture / TPACKET_V3 ring traversal and packet loss under load**: not measured. Requires a privileged host, controlled NIC, and isolation from other traffic. Deferred until such an environment is available and variance is characterized.
+- **Isolated memory allocation budgets**: not measured. The recorded RSS is whole-process peak only. An isolated budget would require instrumented allocation tracking or a dedicated memory-stress harness.
+- **Regression thresholds**: none set. The single elevated observation in the promoted-flush range on this host demonstrates variance too high to justify a numeric gate from the current data set. Thresholds will be introduced only after repeated multi-runner observations with documented variance on a stable runner class.
+
+These deferrals keep A-037 evidence-based. The recorded baselines remain useful for same-machine regression comparison.
