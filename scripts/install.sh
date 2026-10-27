@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Canonical enterprise Linux installer. Explicit VERSION is mandatory.
-set -euo pipefail
+set -eu
 umask 027
 REPO="grep999/ramshield"
 VERSION="${VERSION:-}"
