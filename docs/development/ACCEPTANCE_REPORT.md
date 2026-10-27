@@ -25,12 +25,12 @@ All workflows run on the candidate SHA `13d7a40`:
 
 | Workflow | Job | Conclusion | Run URL |
 |----------|-----|------------|---------|
-| CI | build / test / clippy / fmt | **success** | `gh run list --commit 13d7a40d5cc6d32ea01cb4ea288df767ebcea899` |
-| Review Pipeline | scan / gate | **success** | (same) |
-| lint-no-unwrap | lint check | **success** | (same) |
-| Subnet Stress Pin | stress test | **success** | (same) |
+| CI | build / test / clippy / fmt | **failure** | https://github.com/grep999/ramshield/actions/runs/40576989112 |
+| Review Pipeline | scan / gate | **failure** | https://github.com/grep999/ramshield/actions/runs/40576988779 |
+| lint-no-unwrap | lint check | **success** | https://github.com/grep999/ramshield/actions/runs/40576989083 |
+| Subnet Stress Pin | stress test | **failure** | https://github.com/grep999/ramshield/actions/runs/40576988973 |
 
-**All four GitHub Actions workflows: GREEN** on candidate SHA `13d7a40`.
+**Note:** CI, Review Pipeline, and Subnet Stress Pin failed on candidate SHA `13d7a40`. lint-no-unwrap succeeded. Additional workflows: XDP netns smoke gate (success), Installer Clean-Room Verification (success).
 
 ---
 
@@ -120,7 +120,7 @@ $ cargo test --workspace --locked --features full
 |------|--------|----------|
 | All P0/P1 closed with evidence | ✅ | F1-F6, F9-F14, F16-F54 closed per OPEN_FINDINGS.md |
 | P2s closed or justified | ✅ | 43 P2 findings fixed; remaining justified (I-003 blocked by design, F7/F8 process) |
-| Core acceptance gates pass on SHA | ✅ | CI, clippy, fmt, tests (126/127) green on `13d7a40` |
+| Core acceptance gates pass on SHA | ⚠️ | CI and Review Pipeline failed on `13d7a40` (see workflow table); local clippy/fmt/tests partially green |
 | Two independent reviewers | ⚠️ Partial | Second reviewer (Hermes) approved; first reviewer pending |
 | Final acceptance report | ✅ | This document |
 
@@ -139,10 +139,10 @@ $ cargo test --workspace --locked --features full
 ## 8. Appendices
 
 ### A. CI Run IDs (candidate SHA `13d7a40`)
-- CI: `gh run list --commit 13d7a40d5cc6d32ea01cb4ea288df767ebcea899`
-- Review Pipeline: (same commit)
-- lint-no-unwrap: (same commit)
-- Subnet Stress Pin: (same commit)
+- CI: https://github.com/grep999/ramshield/actions/runs/40576989112 (failure)
+- Review Pipeline: https://github.com/grep999/ramshield/actions/runs/40576988779 (failure)
+- lint-no-unwrap: https://github.com/grep999/ramshield/actions/runs/40576989083 (success)
+- Subnet Stress Pin: https://github.com/grep999/ramshield/actions/runs/40576988973 (failure)
 
 ### B. Gate Ledger (from OWNER_DECISION_PACKAGE.md)
 Per-SHA gate ledger in `docs/development/OWNER_DECISION_PACKAGE.md` rows 293-372 covers all 33 gate runs on prior SHAs.
@@ -155,6 +155,6 @@ Current backlog at `BACKLOG.md` with 14 pending rows (1 P0, 4 P1, 9 P2) and comp
 
 ---
 
-**Final verdict:** The candidate SHA `13d7a40` meets all code-quality gates (clippy, fmt, tests) and all applicable P0/P1 findings are closed with evidence. The only test failure is a pre-existing flaky e2e test unrelated to code changes. A-038 second reviewer approval recorded. A-039 acceptance report complete. Remaining gap: first reviewer explicit sign-off on SHA `ba43513`.
+**Final verdict:** The candidate SHA `13d7a40` meets local code-quality gates (clippy, fmt, tests with one flaky) and all applicable P0/P1 findings are closed with evidence. However, GitHub Actions CI, Review Pipeline, and Subnet Stress Pin failed on this SHA. The only local test failure is a pre-existing flaky e2e test unrelated to code changes. A-038 second reviewer approval recorded. A-039 acceptance report complete. Remaining gap: first reviewer explicit sign-off on SHA `ba43513` and CI green.
 
-**Recommendation:** Candidate SHA `13d7a40` is **ACCEPTABLE** for production release pending first reviewer sign-off and test environment fix for e2e flakiness.
+**Recommendation:** Candidate SHA `13d7a40` is **NOT ACCEPTABLE** for production release pending CI green, first reviewer sign-off, and test environment fix for e2e flakiness.
