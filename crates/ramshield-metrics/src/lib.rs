@@ -73,6 +73,12 @@ pub struct Metrics {
     pub native_parse_rejects: Arc<AtomicU64>,
     /// #90: events actually handed to the downstream channel.
     pub native_ingest_emitted: Arc<AtomicU64>,
+    /// #90: frames the kernel reports delivered to each capture socket
+    /// (PACKET_STATISTICS.tp_packets, accumulated per epoch). Compare with
+    /// native_frames_walked to separate kernel-side loss from walk loss.
+    pub native_socket_packets: Arc<AtomicU64>,
+    /// #90: frames the ring had no room for (PACKET_STATISTICS.tp_drops).
+    pub native_socket_drops: Arc<AtomicU64>,
     /// The subset of `native_ingest_drops` caused by the downstream channel
     /// being **closed** rather than full. A closed channel means the
     /// detection pipeline is gone, not merely busy — a strictly more serious
@@ -262,6 +268,8 @@ impl Metrics {
             native_frames_walked: Arc::new(AtomicU64::new(0)),
             native_parse_rejects: Arc::new(AtomicU64::new(0)),
             native_ingest_emitted: Arc::new(AtomicU64::new(0)),
+            native_socket_packets: Arc::new(AtomicU64::new(0)),
+            native_socket_drops: Arc::new(AtomicU64::new(0)),
             native_ingest_drops_disconnected: Arc::new(AtomicU64::new(0)),
             native_capture_workers_expected: Arc::new(AtomicU64::new(0)),
             native_capture_workers_started: Arc::new(AtomicU64::new(0)),

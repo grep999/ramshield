@@ -110,6 +110,18 @@ impl Metrics {
             "counter"
         ));
         out.push_str(&emit!(
+            "ramshield_native_socket_packets_total",
+            self.native_socket_packets.load(Ordering::Relaxed),
+            "#90: frames the kernel delivered to the capture sockets (PACKET_STATISTICS).",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_native_socket_drops_total",
+            self.native_socket_drops.load(Ordering::Relaxed),
+            "#90: frames the capture ring had no room for (PACKET_STATISTICS drops).",
+            "counter"
+        ));
+        out.push_str(&emit!(
             "ramshield_native_ingest_drops_disconnected_total",
             self.native_ingest_drops_disconnected.load(Ordering::Relaxed),
             "Subset of native ingest drops caused by the downstream channel being closed rather than full.",
