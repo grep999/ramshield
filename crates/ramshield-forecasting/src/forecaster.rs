@@ -190,11 +190,7 @@ impl Forecaster {
             return; // not enough data for any decision
         }
         if let Some(publish) = &self.context_publisher {
-            let observed_at_ns = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-                .min(u64::MAX as u128) as u64;
+            let observed_at_ns = ramshield_types::monotonic_now_ns();
             publish(hypothesis, observed_at_ns);
         }
 
