@@ -22,8 +22,7 @@ by. It is not the whole boundary vocabulary - `ConnectionReport` lives in
      ┌──────┴──────┐   ┌──────┴──────┐
      │  detection   │   │  enforcement  │
      │  storage     │   │  protocol     │
-     │  forecasting │   │  analytics    │
-     │  config      │   │  root package │
+     │  forecasting │   │  root package │
      └─────────────┘   └─────────────┘
 ```
 
@@ -226,14 +225,6 @@ WAL - and `Result<T>` is its alias. The other crates use their own
 used by the enforcement crate: it separates a WAL failure from a storage
 failure from an XDP failure, and it says whether a command was rejected
 (`InvalidCommand`) or simply arrived twice (`Duplicate`).
-
-### BoundedVecDeque - a fixed-capacity ring buffer
-
-`ramshield_types::util::BoundedVecDeque<T>` is a `VecDeque` with a
-fixed capacity: `push` evicts the oldest element when it is full. It is
-public and tested in the crate's own source, but **no crate in the
-workspace uses it today** - the `status_history` field the storage
-crate's README describes is not in the storage crate's code.
 
 ## Uniqueness
 
