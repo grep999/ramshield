@@ -139,6 +139,12 @@ ip netns exec "$NS" bash -c 'for i in $(seq 1 300); do echo > /dev/tcp/10.200.0.
 wait $TAP_PID || true
 echo "independent tap packets in 2s: $(cat "$WORK/tap_count.txt" | tail -1)"
 
+# Cross-check with tcpdump (battle-tested AF_PACKET tap). If tcpdump sees the
+# flood but our sockets don't, the defect is in our socket configuration
+# (fanout/ignore_outgoing/ring). If tcpdump also sees ~0, it is kernel-side.
+command -v tcpdump >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq tcpdump) || true
+timeout 4 tcpdump -i "$HOST_VETH" -c 100 -nn 2>&1 | tail -3 || true
+
 # Block the namespace IP via the real IPC wire (proxy/sidecar deployment path).
 python3 - "$NS_IP" > "$WORK/frame.jsonl" <<'PY'
 import json, sys
