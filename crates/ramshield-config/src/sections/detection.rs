@@ -144,10 +144,12 @@ pub fn default_pulse_threshold_samples() -> u8 {
     3
 }
 pub fn default_subnet_burst_ttl_secs() -> u64 {
-    120
+    // Must match config.baseline.toml (60) — shorter than block_ttl to avoid CGNAT lockout.
+    60
 }
 pub fn default_subnet_window_threshold() -> u64 {
-    500
+    // Must match config.baseline.toml (12); floor 10, see validate.rs.
+    12
 }
 pub fn default_pre_aggs_max_size() -> usize {
     1_000_000
