@@ -16,7 +16,6 @@ use ramshield_types::events::ConnectionEvent;
 const CHANNEL_CAPACITY: usize = 64_000;
 const DEFAULT_BATCH_WINDOW_MS: u64 = 250;
 const DEFAULT_FLUSH_INTERVAL_MS: u64 = 250;
-const LOCAL_MERGE_SOFT_CAP: usize = 8_192;
 
 /// Build a detection engine wrapped in Arc for spawn_workers API.
 fn build_engine() -> Arc<DetectionEngine> {
@@ -104,37 +103,6 @@ impl LoadMetrics {
 
     fn record_rejected(&self, n: u64) {
         self.events_rejected.fetch_add(n, Ordering::Relaxed);
-    }
-
-    fn record_merge_wait(&self, ns: u64) {
-        self.merge_lock_wait_ns.fetch_max(ns, Ordering::Relaxed);
-    }
-
-    fn record_merge_hold(&self, ns: u64) {
-        self.merge_lock_hold_ns.fetch_max(ns, Ordering::Relaxed);
-    }
-
-    fn record_flush_latency(&self, ns: u64) {
-        self.flush_latency_ns.fetch_max(ns, Ordering::Relaxed);
-    }
-
-    fn update_queue_depth(&self, depth: usize) {
-        let d = depth as u64;
-        loop {
-            let current = self.peak_queue_depth.load(Ordering::Relaxed);
-            if current >= d {
-                break;
-            }
-            match self.peak_queue_depth.compare_exchange_weak(
-                current,
-                d,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(_) => continue,
-            }
-        }
     }
 
     fn report(&self, label: &str) {
@@ -315,7 +283,6 @@ fn burst_overload_rejection() {
 
     metrics.report("burst_overload_rejection");
 
-    let rejected = metrics.events_rejected.load(Ordering::Relaxed);
     let accepted = metrics.events_accepted.load(Ordering::Relaxed);
     // In fast-consumer environments, 0 rejections is valid - system handles the load
     // Just ensure accepted events are bounded by channel capacity + some headroom
