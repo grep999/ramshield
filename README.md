@@ -15,6 +15,16 @@ Run it locally or behind your reverse proxy. No cloud dependency. No subscriptio
 curl -fsSL https://github.com/grep999/ramshield/raw/master/scripts/install.sh | bash
 ```
 
+### Userspace (non-root)
+
+Downloads binary to `$HOME/.local/bin`, stores config/state in
+`$HOME/.config/ramshield` / `$HOME/.local/share/ramshield`.  No kernel
+XDP/eBPF blocking — only a userspace proxy.  Run as a normal user.
+
+```bash
+curl -fsSL https://github.com/grep999/ramshield/raw/master/scripts/install-user.sh | bash
+```
+
 ## Quick Start
 
 ### Build
