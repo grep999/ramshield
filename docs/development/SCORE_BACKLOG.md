@@ -10,8 +10,8 @@ Pick the **first row with status `TODO`**, implement **one bounded fix**, mark i
 | 3 | E03 | yes | process | ACCEPTANCE_REPORT vs Actions | DONE `54e2d1e` |
 | 4 | E04 | yes | deploy | I-012 CAPS.md + DaemonSet rationale | DONE `597f604` / `529e987` |
 | 5 | E05 | yes | protocol | I-024 HMAC pin | VERIFIED on master; restore auth.rs on branch first | BLOCKED |
-| 6 | E06 | med | detection | pre_aggs rate-window unit test | DONE `4d75d44` (`batch_start_stamps_on_first_shared_insert_and_clears_on_flush` + existing `empty_flushes_do_not_distort_rate_window`) |
-| 7 | E07 | med | metrics | keystore validate+export parity | TODO |
+| 6 | E06 | med | detection | pre_aggs rate-window unit test | DONE `4d75d44` |
+| 7 | E07 | med | metrics | keystore validate+export parity | DONE `23f9285` (`tests/bloom_keystore_parity.rs`) |
 | 8 | E08 | med | xdp | autonomous map skip/implement | TODO |
 | 9 | E09 | med | native | drop counters + #90 | TODO |
 | 10 | E10 | hard | mesh | out of scope | SKIP |
@@ -25,5 +25,6 @@ Pick the **first row with status `TODO`**, implement **one bounded fix**, mark i
 
 ## Run log
 - E02/E03/E04 DONE.
-- E06 DONE `4d75d44`: restored master `pre_aggs` body + test `batch_start_stamps_on_first_shared_insert_and_clears_on_flush`.
+- E06 DONE `4d75d44`.
+- E07 DONE `23f9285`: bloom KEYSTORE ↔ Prometheus export + value parity tests.
 - E01/E05-restore still required before merge (`boot.rs` / `auth.rs`).
