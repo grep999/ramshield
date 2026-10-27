@@ -888,6 +888,9 @@ fn process_packet(
             metrics
                 .native_socket_drops
                 .fetch_add(stats.tp_drops as u64, Ordering::Relaxed);
+        } else {
+            let err = std::io::Error::last_os_error();
+            warn!(fd, rc, %err, "#90: PACKET_STATISTICS getsockopt failed");
         }
     }
     let (ip, proto, syn, _fragmented, overlay_identity) = match parse_l3(packet) {
