@@ -1,5 +1,11 @@
 use super::*;
 
+/// Positive migration default for adaptive CUSUM variance.
+/// Keep this in storage to avoid a dependency cycle on ramshield-detection.
+fn default_adaptive_variance() -> f64 {
+    0.5
+}
+
 /// Incremental traffic counters — updated on batch flush, read by forecasting
 /// without scanning the full store (Kafka-style consumer lag / Prometheus counters).
 #[derive(Debug)]
@@ -165,7 +171,7 @@ pub struct IpRecord {
     #[serde(default)]
     pub adaptive_sample_count: u64,
     /// Adaptive CUSUM variance, persisted with the IP record.
-    #[serde(default)]
+    #[serde(default = "default_adaptive_variance")]
     pub adaptive_variance: f64,
     /// Last monotonic timestamp accepted by the adaptive detector.
     #[serde(default)]
@@ -176,6 +182,15 @@ pub struct IpRecord {
     /// Persisted adaptive mode: 0 = warming up, 1 = monitoring, 2 = breached.
     #[serde(default)]
     pub adaptive_mode: u8,
+    /// Persisted one-second quantization bucket for adaptive CUSUM.
+    #[serde(default)]
+    pub adaptive_bucket_id: u64,
+    /// Packet/event count accumulated in the current adaptive bucket.
+    #[serde(default)]
+    pub adaptive_bucket_packets: u64,
+    /// Distinguishes a real bucket zero from an uninitialized record.
+    #[serde(default)]
+    pub adaptive_bucket_initialized: bool,
     pub first_seen_ns: u64,
     pub last_seen_ns: u64,
     pub bytes_in: u64,
