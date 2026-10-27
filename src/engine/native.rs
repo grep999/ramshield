@@ -620,6 +620,7 @@ fn run_socket(
         let first = unsafe { (*block_ptr).hdr.offset_to_first_pkt as usize };
         let mut off = first;
         for packet_idx in 0..num {
+            metrics.native_frames_walked.fetch_add(1, Ordering::Relaxed);
             let header_abs = match checked_tpacket_header_offset(
                 block_idx, block_size, ring_len, blk_len, off,
             ) {
@@ -854,7 +855,10 @@ fn process_packet(
     }
     let (ip, proto, syn, _fragmented, overlay_identity) = match parse_l3(packet) {
         Some(v) => v,
-        None => return,
+        None => {
+            metrics.native_parse_rejects.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
     };
     if trusted_overlay_cidrs
         .iter()
@@ -901,7 +905,11 @@ fn process_packet(
     // outright, so no counter moved and the loss was invisible both to the
     // operator and to the metrics export.
     match tx.try_send(ev) {
-        Ok(()) => {}
+        Ok(()) => {
+            metrics
+                .native_ingest_emitted
+                .fetch_add(1, Ordering::Relaxed);
+        }
         Err(crossbeam_channel::TrySendError::Full(_)) => {
             // Backpressure: the downstream queue is saturated.
             metrics.inc_native_ingest_drop(1);

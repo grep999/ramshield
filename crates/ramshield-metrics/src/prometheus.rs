@@ -92,6 +92,24 @@ impl Metrics {
             "counter"
         ));
         out.push_str(&emit!(
+            "ramshield_native_frames_walked_total",
+            self.native_frames_walked.load(Ordering::Relaxed),
+            "#90: frames the TPACKET_V3 drain loop walked out of completed blocks.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_native_parse_rejects_total",
+            self.native_parse_rejects.load(Ordering::Relaxed),
+            "#90: frames received by the capture path but rejected by L3 parsing.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_native_ingest_emitted_total",
+            self.native_ingest_emitted.load(Ordering::Relaxed),
+            "#90: observation events actually handed to the downstream channel.",
+            "counter"
+        ));
+        out.push_str(&emit!(
             "ramshield_native_ingest_drops_disconnected_total",
             self.native_ingest_drops_disconnected.load(Ordering::Relaxed),
             "Subset of native ingest drops caused by the downstream channel being closed rather than full.",

@@ -62,6 +62,17 @@ pub struct Metrics {
     /// per-second admission budget — is not counted here, because no event
     /// was built to deliver.
     pub native_ingest_drops: Arc<AtomicU64>,
+    /// #90: raw frames the V3 drain loop walked out of completed blocks.
+    /// Compare against packets on the wire and against
+    /// `native_ingest_emitted` to locate under-capture: walked << wire means
+    /// the walk aborts early; walked ~= wire but emitted << walked means
+    /// events are lost between parse and send.
+    pub native_frames_walked: Arc<AtomicU64>,
+    /// #90: frames process_packet received but parse_l3 rejected (non-IP,
+    /// truncated, trusted-overlay skip). These are intentionally not events.
+    pub native_parse_rejects: Arc<AtomicU64>,
+    /// #90: events actually handed to the downstream channel.
+    pub native_ingest_emitted: Arc<AtomicU64>,
     /// The subset of `native_ingest_drops` caused by the downstream channel
     /// being **closed** rather than full. A closed channel means the
     /// detection pipeline is gone, not merely busy — a strictly more serious
@@ -248,6 +259,9 @@ impl Metrics {
             frames_rejected: Arc::new(AtomicU64::new(0)),
             events_shed: Arc::new(AtomicU64::new(0)),
             native_ingest_drops: Arc::new(AtomicU64::new(0)),
+            native_frames_walked: Arc::new(AtomicU64::new(0)),
+            native_parse_rejects: Arc::new(AtomicU64::new(0)),
+            native_ingest_emitted: Arc::new(AtomicU64::new(0)),
             native_ingest_drops_disconnected: Arc::new(AtomicU64::new(0)),
             native_capture_workers_expected: Arc::new(AtomicU64::new(0)),
             native_capture_workers_started: Arc::new(AtomicU64::new(0)),
