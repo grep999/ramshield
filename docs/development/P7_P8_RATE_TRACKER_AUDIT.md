@@ -24,9 +24,9 @@
 
 ## Operational/integration caveats
 
-- The tracker consumes completed rate samples; it does not enforce the upstream bucket cadence. The aggregator must define and maintain that cadence.
-- `TrafficContext::observed_at_ns` and the sample timestamp must use the same monotonic clock domain.
-- Adding `recovery_samples` to `DetectorProfile` can require updates to downstream struct literals that do not use `..Default::default()`.
+- The tracker consumes completed per-IP batch-rate samples; it does not enforce the upstream bucket cadence. The flush pipeline supplies `now` as the timestamp, so cadence is the configured flush cadence rather than a guaranteed one-second bucket.
+- `TrafficContext::observed_at_ns` and the sample timestamp must use the same monotonic clock domain. The current `merge_record` call site passes no forecast context; contextual modulation is covered by detector-level tests but is not activated in this runtime path.
+- The new `IpRecord` fields use `#[serde(default)]` for old serialized records. All known Rust struct literals in storage, detection, enforcement, checkpoint tests, and benchmarks were updated to initialize the fields.
 - Review exhaustive matches on `DetectorError` in downstream code.
 - Confirm that the detector's `Breached -> Monitoring` transition and CUSUM reset match enforcement expectations before merge.
 
@@ -38,7 +38,7 @@
 4. `docs: record P7/P8 rate tracker integration audit`
 5. `build: keep lockfile dependencies in canonical order`
 
-The implementation is currently **additive**: the existing detector helpers remain intact, and the new `PerIpRecord` API has its own regression tests. It is not yet wired into `DetectionEngine::merge_record`; that runtime integration is a separate step and must not be implied by this patch. This audit document records that boundary explicitly.
+The adaptive detector is now wired into `DetectionEngine::merge_record` through `update_adaptive_detector`. Its state is persisted in `IpRecord` using independent fields for adaptive baseline, CUSUM, accepted sample count, variance, timestamp, recovery count, and mode. The pre-existing detector fields and gates remain independent and continue to run, so the prototype adds an adaptive breach signal without reinterpreting legacy CUSUM state. Runtime integration regression tests cover persistence across updates and atomic rejection of repeated timestamps / invalid rates.
 
 ## Verification status
 
