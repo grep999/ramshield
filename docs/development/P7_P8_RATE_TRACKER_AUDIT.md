@@ -24,9 +24,11 @@
 
 ## Operational/integration caveats
 
-- The tracker consumes completed per-IP batch-rate samples; it does not enforce the upstream bucket cadence. The flush pipeline supplies `now` as the timestamp, so cadence is the configured flush cadence rather than a guaranteed one-second bucket.
-- `TrafficContext::observed_at_ns` and the sample timestamp must use the same monotonic clock domain. The current `merge_record` call site passes no forecast context; contextual modulation is covered by detector-level tests but is not activated in this runtime path.
-- The new `IpRecord` fields use `#[serde(default)]` for old serialized records. All known Rust struct literals in storage, detection, enforcement, checkpoint tests, and benchmarks were updated to initialize the fields.
+- Adaptive CUSUM now receives only completed one-second buckets. Per-IP counts from sub-second flushes are accumulated in `IpRecord`; the previous bucket is submitted when the next bucket begins. Empty buckets are not synthesized when an IP has no flushes, so the gap policy—not fabricated zero samples—governs long inactivity.
+- Forecasting publishes its Bayesian classification through an optional callback. The daemon wires that callback to an `ArcSwapOption<TrafficContext>` on `DetectionEngine`; the per-IP hot path reads a snapshot without a forecasting mutex. Both sides use the shared process-local monotonic clock in `ramshield-types`.
+- During a fresh, confident `FlashCrowd` classification, the adaptive detector's context-scaled decision takes precedence over static legacy gates. The adaptive breach signal remains authoritative.
+- The variance Serde default is positive (`0.5`, matching the default detector profile floor); the migration regression test removes all adaptive fields from a serialized legacy record and checks safe defaults.
+- All known Rust struct literals in storage, detection, enforcement, checkpoint tests, and benchmarks were updated for both adaptive detector and bucket state.
 - Review exhaustive matches on `DetectorError` in downstream code.
 - Confirm that the detector's `Breached -> Monitoring` transition and CUSUM reset match enforcement expectations before merge.
 
@@ -43,7 +45,7 @@
 9. `test(detection): verify adaptive runtime state persistence and atomic rejection`
 10. Follow-up commits initialize adaptive fields in all known record literals, preserve the legacy detector alongside the new signal, and document persisted state.
 
-The adaptive detector is now wired into `DetectionEngine::merge_record` through `update_adaptive_detector`. Its state is persisted in `IpRecord` using independent fields for adaptive baseline, CUSUM, accepted sample count, variance, timestamp, recovery count, and mode. The pre-existing detector fields and gates remain independent and continue to run, so the prototype adds an adaptive breach signal without reinterpreting legacy CUSUM state. Runtime integration regression tests cover persistence across updates and atomic rejection of repeated timestamps / invalid rates.
+The adaptive detector is wired into `DetectionEngine::merge_record` through a one-second quantization gate and `update_adaptive_detector`. Its baseline, CUSUM, sample count, variance, timestamp, recovery count, mode, and pending bucket are persisted in `IpRecord`; the legacy detector state remains independent. The forecasting-to-detection bridge is connected in daemon boot. Integration tests cover state persistence, rejected updates, runtime breach signaling, one-second quantization, clock regression, and FlashCrowd precedence.
 
 ## Verification status
 
@@ -58,3 +60,19 @@ cargo test --workspace
 ```
 
 Also inspect downstream `DetectorProfile` struct literals and exhaustive `DetectorError` matches, then review the final diff and CI results.
+
+
+## Acceptance checklist from the architectural review
+
+- [x] D-01 through D-06 detector invariants (unit tests in `rate_tracker.rs`).
+- [x] Positive Serde migration default and legacy-record migration regression.
+- [x] One-second bucket accumulation and completed-bucket-only adaptive updates.
+- [x] Lock-free forecasting context snapshot bridge wired in daemon boot.
+- [x] FlashCrowd contextual decision is not overridden by static legacy gates.
+- [ ] Criterion measurement proving zero heap allocations per steady-state IP evaluation.
+- [ ] Macro replay suite with labeled benign, FlashCrowd, volumetric, slow-ramp, and pulsing traces.
+- [ ] Full CI green, including workspace Clippy and tests.
+- [ ] Miri run for the detector unit tests (if supported by the configured toolchain).
+
+The first five items are implemented in source, but the last four are explicit merge gates.
+Do not promote this PR to merge-ready until those gates are evidenced by CI/bench results.
