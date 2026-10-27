@@ -492,4 +492,41 @@ mod adaptive_integration_tests {
         assert!(adaptive_block_gate(true, false, false, false, false, false));
     }
 
+    #[test]
+    fn adaptive_detector_only_consumes_completed_one_second_buckets() {
+        let mut rec = record();
+        assert!(!update_adaptive_bucket(&mut rec, 10, 100_000_000, None));
+        assert!(!update_adaptive_bucket(&mut rec, 20, 800_000_000, None));
+        assert_eq!(rec.adaptive_sample_count, 0);
+        assert_eq!(rec.adaptive_bucket_packets, 30);
+
+        assert!(!update_adaptive_bucket(&mut rec, 5, 1_100_000_000, None));
+        assert_eq!(rec.adaptive_sample_count, 1);
+        assert_eq!(rec.adaptive_last_bucket_ns, 1_000_000_000);
+        assert_eq!(rec.adaptive_bucket_id, 1);
+        assert_eq!(rec.adaptive_bucket_packets, 5);
+    }
+
+    #[test]
+    fn adaptive_bucket_rejects_backward_clock_without_mutation() {
+        let mut rec = record();
+        assert!(!update_adaptive_bucket(&mut rec, 10, 1_100_000_000, None));
+        let before = (
+            rec.adaptive_bucket_id,
+            rec.adaptive_bucket_packets,
+            rec.adaptive_bucket_initialized,
+            rec.adaptive_sample_count,
+            rec.adaptive_last_bucket_ns,
+        );
+        assert!(!update_adaptive_bucket(&mut rec, 5, 900_000_000, None));
+        let after = (
+            rec.adaptive_bucket_id,
+            rec.adaptive_bucket_packets,
+            rec.adaptive_bucket_initialized,
+            rec.adaptive_sample_count,
+            rec.adaptive_last_bucket_ns,
+        );
+        assert_eq!(before, after);
+    }
+
 }
