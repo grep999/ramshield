@@ -15,10 +15,6 @@ curl -fsSL https://ramshield.io/install.sh | bash
 
 ## Quick Start
 
-**observe → detect → decide → block → expire**
-
-## Quick Start
-
 ### Build
 
 ```bash
