@@ -25,7 +25,7 @@ jobs:
       - name: Build with XDP
         run: cargo build --release --locked --features full
       - name: Run netns XDP smoke
-        run: sudo scripts/xdp_netns_smoke.sh target/release/ramshield
+        run: sudo bash scripts/xdp_netns_smoke.sh target/release/ramshield
       - name: Diagnose on failure
         if: failure()
         run: |
