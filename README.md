@@ -9,10 +9,6 @@ Run it locally or behind your reverse proxy. No cloud dependency. No subscriptio
 
 ## One-Command Install
 
-```bash
-curl -fsSL https://ramshield.io/install.sh | bash
-```
-
 ## Quick Start
 
 ### Build
