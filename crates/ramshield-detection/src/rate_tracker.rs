@@ -1331,4 +1331,28 @@ mod adaptive_tests {
         assert_ne!(outcome.mode, DetectorMode::Breached);
     }
 
+    #[test]
+    fn completed_bucket_can_use_context_observed_after_bucket_boundary() {
+        let profile = DetectorProfile::default();
+        let mut record = PerIpRecord::new(100.0, profile).unwrap();
+        record.sample_count = profile.warmup_samples;
+        record.mode = DetectorMode::Monitoring;
+        record.last_bucket_ns = 999_000_000;
+        let context = TrafficContext {
+            hypothesis: Hypothesis::FlashCrowd,
+            observed_at_ns: 1_050_000_000,
+            confidence: 0.95,
+        };
+        let outcome = record
+            .update_with_context_at(
+                15_000.0,
+                1_000_000_000,
+                Some(&context),
+                1_100_000_000,
+            )
+            .unwrap();
+        assert_ne!(outcome.mode, DetectorMode::Breached);
+        assert_eq!(record.baseline_rate, 100.0, "FlashCrowd must freeze baseline");
+    }
+
 }
