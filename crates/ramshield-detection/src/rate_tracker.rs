@@ -767,10 +767,10 @@ impl PerIpRecord {
         if !self.cusum_s.is_finite() || self.cusum_s < 0.0 {
             return Err(DetectorError::InvalidInternalCusum);
         }
-        if let Some(ctx) = context {
-            if !ctx.is_valid() {
-                return Err(DetectorError::InvalidContextConfidence);
-            }
+        if let Some(ctx) = context
+            && !ctx.is_valid()
+        {
+            return Err(DetectorError::InvalidContextConfidence);
         }
         // Defensive validation also protects records created through deserialization
         // or future internal constructors that might bypass `new`.
@@ -805,17 +805,17 @@ impl PerIpRecord {
             && ctx.confidence >= 0.6
         {
             match ctx.hypothesis {
-                    Hypothesis::FlashCrowd => {
-                        k *= 1.5;
-                        h *= 2.0;
-                    }
-                    Hypothesis::VolumetricDoS => {
-                        h *= 0.8;
-                    }
-                    Hypothesis::SlowRampDoS => {
-                        k *= 0.5;
-                    }
-                    Hypothesis::Normal => {}
+                Hypothesis::FlashCrowd => {
+                    k *= 1.5;
+                    h *= 2.0;
+                }
+                Hypothesis::VolumetricDoS => {
+                    h *= 0.8;
+                }
+                Hypothesis::SlowRampDoS => {
+                    k *= 0.5;
+                }
+                Hypothesis::Normal => {}
             }
         }
 
