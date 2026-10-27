@@ -76,9 +76,8 @@ PID=$!
 sleep 3
 kill -0 "$PID" 2>/dev/null || { cat "$WORK/ramshield.log"; die "ramshield did not stay up"; }
 
-if ! bpftool prog show 2>&1 | grep -qi ramshield; then
-  echo "=== bpftool prog show ==="; bpftool prog show 2>&1 | head -20
-  echo "=== link xdp ==="; ip -d link show "$HOST_VETH" 2>&1 | grep -iE "xdp|prog" || true
+if ! ip -d link show "$HOST_VETH" 2>&1 | grep -qiE "prog/xdp"; then
+  echo "=== ip -d link ==="; ip -d link show "$HOST_VETH" 2>&1
   echo "=== engine log (xdp/attach lines) ==="; grep -iE "xdp|attach|active" "$WORK/ramshield.log" || true
   echo "=== engine log (tail) ==="; tail -20 "$WORK/ramshield.log"
   die "no XDP program attached"
