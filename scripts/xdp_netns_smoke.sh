@@ -61,6 +61,10 @@ seg_max_bytes = 67108864
 retention_max_bytes = 1073741824
 allow_volatile_fallback = true
 
+[native_ingest]
+enabled = true
+interface = "$HOST_VETH"
+
 [ipc]
 tcp_addr = "127.0.0.1:17899"
 max_connections = 64
@@ -94,6 +98,8 @@ BLOCKS=$(curl -fsS http://127.0.0.1:17999/metrics 2>/dev/null | awk '/^ramshield
 [ -n "$BLOCKS" ] || { cat "$WORK/ramshield.log"; die "metrics endpoint unreachable"; }
 log "ramshield_blocks_total=$BLOCKS"
 awk -v b="$BLOCKS" 'BEGIN { exit (b+0 > 0) ? 0 : 1 }' || die "expected blocks_total > 0 after flood"
+# Kernel leg: the decision must reach the XDP blocklist map (reconcile logs it).
+grep -q "XDP reconciled with [1-9]" "$WORK/ramshield.log" || { tail -20 "$WORK/ramshield.log"; die "block never reached the XDP map (no reconcile)"; }
 
 kill "$PID" 2>/dev/null || true
 log "netns XDP smoke: PASS"
