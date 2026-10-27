@@ -349,4 +349,32 @@ mod adaptive_integration_tests {
         );
         assert_eq!(before, after);
     }
+    #[test]
+    fn corrupt_persisted_adaptive_state_is_not_silently_repaired() {
+        let mut rec = record();
+        assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000));
+        rec.adaptive_variance = f64::NAN;
+        let before = (
+            rec.adaptive_baseline_rps,
+            rec.adaptive_cusum_s,
+            rec.adaptive_sample_count,
+            rec.adaptive_variance.to_bits(),
+            rec.adaptive_last_bucket_ns,
+            rec.adaptive_recovery_count,
+            rec.adaptive_mode,
+        );
+
+        assert!(!update_adaptive_detector(&mut rec, 105.0, 2_000_000_000));
+        let after = (
+            rec.adaptive_baseline_rps,
+            rec.adaptive_cusum_s,
+            rec.adaptive_sample_count,
+            rec.adaptive_variance.to_bits(),
+            rec.adaptive_last_bucket_ns,
+            rec.adaptive_recovery_count,
+            rec.adaptive_mode,
+        );
+        assert_eq!(before, after);
+    }
+
 }
