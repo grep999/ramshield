@@ -78,7 +78,9 @@ impl Config {
             anyhow::bail!("detection.subnet_window_threshold should be at least 10");
         }
         if self.detection.subnet_batch_threshold > 254 {
-            anyhow::bail!("detection.subnet_batch_threshold must be <= 254 for IPv4 /24 (max unique IPs)");
+            anyhow::bail!(
+                "detection.subnet_batch_threshold must be <= 254 for IPv4 /24 (max unique IPs)"
+            );
         }
         if self.detection.subnet_batch_min_events > 10_000 {
             anyhow::bail!("detection.subnet_batch_min_events must be <= 10,000");
@@ -86,7 +88,9 @@ impl Config {
         if self.detection.emergency_burst_threshold > 10_000 {
             anyhow::bail!("detection.emergency_burst_threshold must be <= 10,000");
         }
-        if self.detection.pre_aggs_flush_interval_ms == 0 || self.detection.pre_aggs_flush_interval_ms > 60_000 {
+        if self.detection.pre_aggs_flush_interval_ms == 0
+            || self.detection.pre_aggs_flush_interval_ms > 60_000
+        {
             anyhow::bail!("detection.pre_aggs_flush_interval_ms must be between 1 and 60,000 ms");
         }
         if self.detection.pre_aggs_max_size == 0
