@@ -622,12 +622,27 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
     // hypothesis tracker and the entropy signal - never ran in
     // production (I-034).
     if cfg_snapshot.forecasting.enabled {
-        let forecaster = Arc::new(ramshield_forecasting::Forecaster::new(
+        let mut forecaster = ramshield_forecasting::Forecaster::new(
             store.clone(),
             cfg_snapshot.forecasting.clone(),
             engine.enforcement_tx.clone(),
             metrics.clone(),
-        ));
+        );
+        // Bridge the Bayesian result into detection through ArcSwap-backed publication.
+        // The callback only stores an immutable snapshot; merge_record never takes a
+        // forecasting mutex and never calls back into the forecaster.
+        let detection_context = detection.clone();
+        forecaster.set_context_publisher(Arc::new(move |hypothesis, observed_at_ns| {
+            let context = hypothesis.map(|(hypothesis, confidence)| {
+                ramshield_detection::rate_tracker::TrafficContext {
+                    hypothesis,
+                    observed_at_ns,
+                    confidence,
+                }
+            });
+            detection_context.set_traffic_context(context);
+        }));
+        let forecaster = Arc::new(forecaster);
         tokio::spawn(async move {
             forecaster.run().await;
         });
