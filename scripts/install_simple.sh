@@ -3,8 +3,21 @@
 # curl -fsSL https://ramshield.io/install.sh | bash
 # Installs safe-mode (no XDP) runtime; sets up systemd service.
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")" && pwd)"
-cd "$ROOT"
+
+# POSIX helpers (A3): log/warn/die must exist before any early path uses them.
+log()  { printf '\033[0;32m[INFO]\033[0m %s\n' "$*"; }
+warn() { printf '\033[0;33m[WARN]\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[0;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# A2 (curl | bash): when piped, $0 is "bash" and dirname "$0" is meaningless.
+# Resolve the repo root only when running from a checkout; otherwise assets
+# are fetched from the release below.
+if [ -f "$0" ] && [ -f "$(dirname "$0")/config-min.toml" ]; then
+  ROOT="$(cd "$(dirname "$0")" && pwd)"
+else
+  ROOT=""
+fi
+[ -n "$ROOT" ] && cd "$ROOT"
 
 # Detect platform
 ARCH=$(uname -m)
@@ -17,7 +30,7 @@ esac
 # Fetch latest release info from GitHub API (no VERSION pin required)
 REPO="grep999/ramshield"
 API="https://api.github.com/repos/$REPO/releases/latest"
-LATEST=$(curl -fsSL --retry 5 -H "Accept: application/vnd.github.v3+json" "$API" | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))" 2>/dev/null || echo "0.1.0")
+LATEST=$(curl -fsSL --retry 5 -H "Accept: application/vnd.github.v3+json" "$API" | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))" 2>/dev/null || echo "0.6.0")
 VERSION="${VERSION:-$LATEST}"
 
 if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
@@ -37,14 +50,21 @@ BIN="$TMP/ramshield"
 
 PREFIX="${PREFIX:-/usr/local}"
 mkdir -p "$PREFIX/bin"
-cp "$BIN" "$PREFIX/bin/ramshield"
-chmod 0755 "$PREFIX/bin/ramshield"
+# A4 (transactional boundary): stage the binary, verify it runs, then move
+# atomically into place.
+install -m 0755 "$BIN" "$PREFIX/bin/ramshield.new"
+"$PREFIX/bin/ramshield.new" --version >/dev/null || die "staged binary failed --version"
+mv -f "$PREFIX/bin/ramshield.new" "$PREFIX/bin/ramshield"
 
-# Safe-mode config (no XDP, userspace only)
-CONFIG_DIR=/etc/ramshield
-STATE_DIR=/var/lib/ramshield
-mkdir -p "$CONFIG_DIR" "$STATE_DIR" "$STATE_DIR/wal" "$STATE_DIR/snapshots"
-cp "$ROOT/config-min.toml" "$CONFIG_DIR/config.toml"
+# Safe-mode config (no XDP, userspace only). Under curl|bash there is no
+# checkout: fetch config-min.toml from the release tag instead (A2).
+CONFIG_SRC="$ROOT/config-min.toml"
+if [ -z "$ROOT" ]; then
+  CONFIG_SRC="$TMP/config-min.toml"
+  curl -fsSL --retry 5 "$BASE/config-min.toml" -o "$CONFIG_SRC" \
+    || die "failed to download config-min.toml from release v$VERSION"
+fi
+cp "$CONFIG_SRC" "$CONFIG_DIR/config.toml"
 chown root:ramshield "$CONFIG_DIR/config.toml"; chmod 0640 "$CONFIG_DIR/config.toml"
 
 # Create systemd service (userspace only, no XDP)
@@ -86,12 +106,13 @@ ReadWritePaths=/var/lib/ramshield /dev/shm /sys/fs/bpf
 WantedBy=multi-user.target
 UNIT
 
-# Create user/group if needed
-if ! id -u ramshield >/dev/null 2>&1; then
-  useradd --system --home /nonexistent --shell /usr/sbin/nologin ramshield
-fi
+# A1: create group and user BEFORE any chown/install that references them.
 getent group ramshield >/dev/null 2>&1 || groupadd --system ramshield
-usermod -g ramshield ramshield
+if ! id -u ramshield >/dev/null 2>&1; then
+  useradd --system --gid ramshield --home /nonexistent --shell /usr/sbin/nologin ramshield
+else
+  usermod -g ramshield ramshield
+fi
 
 # Set permissions
 install -d -o root -g ramshield -m 0750 "$CONFIG_DIR"

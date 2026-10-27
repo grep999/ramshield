@@ -9,7 +9,7 @@
               "match": [{"host": ["*"]}],
               "handle": [{
                 "handler": "reverse_proxy",
-                "upstreams": [{"dial": "127.0.0.1:7890"}],
+                "upstreams": [{"dial": "127.0.0.1:8080"}],
                 "headers": {
                   "request": {
                     "set": {

@@ -6,6 +6,10 @@ PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf 'PASS %s\n' "$*"; }
 bad(){ FAIL=$((FAIL+1)); printf 'FAIL %s\n' "$*"; }
 V="$(scripts/release_version.sh)"; [[ -n "$V" ]] && ok "version $V" || bad version
+# Version identity (Part 1 #4): debian/control and the installer fallback tag
+# must match Cargo.toml — Cargo.toml is the single source of truth.
+grep -q "^Version: $V$" debian/control && ok 'debian/control version matches Cargo' || bad 'debian/control version drift'
+grep -q 'echo "'"$V"'")' scripts/install_simple.sh && ok 'installer fallback tag matches Cargo' || bad 'installer fallback tag drift'
 grep -q "$V" deploy/k8s/deployment.yaml && ok 'Kubernetes deployment version' || bad 'Kubernetes deployment version'
 grep -q "$V" deploy/k8s/daemonset.yaml && ok 'Kubernetes daemonset version' || bad 'Kubernetes daemonset version'
 grep -q 'RAMSHIELD_VERSION' docker/Dockerfile Containerfile scripts/build_docker.sh && ok 'container builds consume authoritative version' || bad 'container version plumbing'

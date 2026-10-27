@@ -40,7 +40,10 @@ static_resources:
             address:
               socket_address:
                 address: 127.0.0.1
-                port_value: 7890
+                # Your APPLICATION backend (edit host/port). RamShield is an
+                # out-of-band observer/enforcer — never route HTTP to its
+                # IPC port (7890, newline-delimited JSON).
+                port_value: 8080
     health_checks:
     - timeout: 5s
       interval: 10s

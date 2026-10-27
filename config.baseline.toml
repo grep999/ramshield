@@ -138,8 +138,8 @@ max_password_length = 1024
 trusted_proxies = []
 # Set true only when behind HTTPS terminator. No built-in TLS stack.
 tls_enabled = false
-# Force/disable Secure flag on session cookies. None = derive from bind addr.
-cookie_secure = ""
+# Force/disable Secure flag on session cookies. Omit (= None) to derive from
+# bind address (https:// → true).
 
 # ─────────────────────────────────────────────────────────────────────────────
 # [wal] — Crash-durable persistence

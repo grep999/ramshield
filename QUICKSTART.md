@@ -61,27 +61,33 @@ You should see startup logs confirming:
 - Listening on IPC port 7890
 - Listening on dashboard port 9999 (optional)
 
-## Step 4: Send Traffic Through RamShield (5 minutes)
+## Step 4: Send Traffic Through Your Reverse Proxy (5 minutes)
 
-Route traffic through RamShield using a reverse proxy in front of your app.
-Templates for Nginx, Caddy, HAProxy, and Envoy live in `configs/templates/`.
+RamShield is an out-of-band observer/enforcer — it is NOT an HTTP reverse
+proxy. Route application traffic through your reverse proxy to YOUR
+APPLICATION backend (e.g. `127.0.0.1:8080`), never to RamShield's IPC port
+(7890, which speaks newline-delimited JSON and rejects HTTP).
+
+Templates for Nginx, Caddy, HAProxy, and Envoy live in `configs/templates/`;
+each points at an application-backend placeholder you must edit.
 
 ### Nginx example
 
 ```nginx
 location / {
-    proxy_pass http://127.0.0.1:7890;
+    proxy_pass http://127.0.0.1:8080;  # your application backend
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
 ```
 
-Then test that traffic flows:
+### Feeding telemetry to RamShield
 
-```bash
-curl -s -o /dev/null -w "%{http_code}" http://localhost/your-app
-# Should return 200 (RamShield proxying successfully)
-```
+The proxy (or a sidecar/agent) reports connections to RamShield's IPC port
+(7890) using `ramshield_protocol::Message` frames — newline-delimited JSON,
+e.g. `report_connections`. Alternatively enable native capture with
+`native_ingest.enabled = true` in your config. See `docs/OPERATIONS.md` and
+`crates/ramshield-protocol` for the message schema.
 
 ## Step 5: Trigger a Block and Verify It Works (10 minutes)
 
@@ -109,11 +115,11 @@ curl -s -o /dev/null -w "%{http_code}" http://target-host/
 
 ## Step 6: Verify Observability (5 minutes)
 
-RamShield exposes metrics on port 9090 (Prometheus format) if enabled in
-config. Check:
+RamShield exposes metrics on the dashboard port (default 9999) at `/metrics`
+(Prometheus format). Check:
 
 ```bash
-curl -s http://localhost:9090/metrics | grep -E "adaptive_breach|numerical_calculation_failure|out_of_order_sample"
+curl -s http://localhost:9999/metrics | grep -E "adaptive_breach|numerical_calculation_failure|out_of_order_sample"
 ```
 
 You should see counters for:
@@ -186,5 +192,5 @@ Before going to production:
 
 - Read `AGENTS.md` for architecture details
 - Review `config.baseline.toml` for all tunable parameters
-- Set up Prometheus scraping on port 9090
+- Set up Prometheus scraping on the dashboard port (default 9999, `/metrics`)
 - Subscribe to the security mailing list for CVE notifications

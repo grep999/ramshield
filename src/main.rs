@@ -8,10 +8,11 @@ use tracing_subscriber::EnvFilter;
 /// the config file. Unknown flags and missing values are FATAL — the old
 /// parser silently dropped unrecognized arguments, so `./ramshield config.toml`
 /// (positional) booted on compiled-in defaults with the file ignored.
-fn parse_args(args: &[String]) -> Result<(Option<String>, bool, bool)> {
+fn parse_args(args: &[String]) -> Result<(Option<String>, bool, bool, bool)> {
     let mut config_path: Option<String> = None;
     let mut no_xdp = false;
     let mut doctor = false;
+    let mut validate = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -33,6 +34,10 @@ fn parse_args(args: &[String]) -> Result<(Option<String>, bool, bool)> {
                 doctor = true;
                 i += 1;
             }
+            "--validate" => {
+                validate = true;
+                i += 1;
+            }
             s if s.starts_with('-') && s.len() > 1 => {
                 anyhow::bail!("unknown argument: {s}");
             }
@@ -45,7 +50,7 @@ fn parse_args(args: &[String]) -> Result<(Option<String>, bool, bool)> {
             }
         }
     }
-    Ok((config_path, no_xdp, doctor))
+    Ok((config_path, no_xdp, doctor, validate))
 }
 
 /// Doctor defaults to the canonical baseline profile. An explicit CLI config
@@ -73,8 +78,42 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
-    let (config_path, no_xdp, doctor) = parse_args(&args)?;
+    let (config_path, no_xdp, doctor, validate) = parse_args(&args)?;
     let config_path = doctor_config_path(config_path, doctor);
+
+    // --validate: pre-flight hook for systemd `ExecStartPre`. Load + validate
+    // the service config, print the verdict, exit 0/1. Does not start the engine.
+    if validate {
+        let path = match config_path.clone() {
+            Some(p) => p,
+            None => {
+                if std::path::Path::new("/etc/ramshield/config.toml").exists() {
+                    "/etc/ramshield/config.toml".into()
+                } else {
+                    eprintln!(
+                        "config validation failed: no config path given and /etc/ramshield/config.toml not found"
+                    );
+                    std::process::exit(1);
+                }
+            }
+        };
+        match Config::load(&path) {
+            Ok(cfg) => match cfg.validate() {
+                Ok(()) => {
+                    println!("config validation passed: {path}");
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!("config validation failed: {e:#}");
+                    std::process::exit(1);
+                }
+            },
+            Err(e) => {
+                eprintln!("config load failed: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     let mut config = match config_path {
         Some(path) => {
