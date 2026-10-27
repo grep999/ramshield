@@ -84,6 +84,9 @@ pub struct IpRecord {
     pub adaptive_last_bucket_ns: u64,
     pub adaptive_recovery_count: u64,
     pub adaptive_mode: u8,
+    pub adaptive_bucket_id: u64,
+    pub adaptive_bucket_packets: u64,
+    pub adaptive_bucket_initialized: bool,
     pub first_seen_ns: u64,
     pub last_seen_ns: u64,
     pub bytes_in: u64,
@@ -281,3 +284,10 @@ monotonic timestamp are valid and all derived arithmetic remains finite. Rejecte
 updates leave the adaptive fields unchanged. Forecast-context modulation is exposed
 by the detector API, but the current `merge_record` call site does not yet provide
 a forecast context, so the runtime path uses the conservative default profile.
+
+
+The adaptive variance field has a positive Serde migration default (`0.5`, matching
+the default detector profile's variance floor). Older serialized records also start
+with an uninitialized adaptive bucket. The first observed second is accumulated and
+submitted only when the next bucket begins; partial flushes are not fed directly to
+adaptive CUSUM.
