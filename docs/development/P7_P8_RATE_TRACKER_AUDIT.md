@@ -37,6 +37,11 @@
 3. `build: update lockfile for detection forecasting dependency`
 4. `docs: record P7/P8 rate tracker integration audit`
 5. `build: keep lockfile dependencies in canonical order`
+6. `feat(storage): persist adaptive detector state per IP`
+7. `feat(detection): wire adaptive CUSUM into per-IP runtime decisions`
+8. `fix(storage): isolate adaptive state from legacy detector counters`
+9. `test(detection): verify adaptive runtime state persistence and atomic rejection`
+10. Follow-up commits initialize adaptive fields in all known record literals, preserve the legacy detector alongside the new signal, and document persisted state.
 
 The adaptive detector is now wired into `DetectionEngine::merge_record` through `update_adaptive_detector`. Its state is persisted in `IpRecord` using independent fields for adaptive baseline, CUSUM, accepted sample count, variance, timestamp, recovery count, and mode. The pre-existing detector fields and gates remain independent and continue to run, so the prototype adds an adaptive breach signal without reinterpreting legacy CUSUM state. Runtime integration regression tests cover persistence across updates and atomic rejection of repeated timestamps / invalid rates.
 
@@ -47,6 +52,7 @@ The adaptive detector is now wired into `DetectionEngine::merge_record` through 
 ```sh
 cargo fmt --check
 cargo test -p ramshield-detection --lib rate_tracker::adaptive_tests
+cargo test -p ramshield-detection --lib adaptive_integration_tests
 cargo clippy -p ramshield-detection --all-targets --all-features -- -D warnings
 cargo test --workspace
 ```
