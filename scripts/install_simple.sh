@@ -9,6 +9,16 @@ log()  { printf '\033[0;32m[INFO]\033[0m %s\n' "$*"; }
 warn() { printf '\033[0;33m[WARN]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[0;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 
+# --dry-run: verify argument/platform/version resolution and print the plan
+# without touching the system. Used by the clean-room CI gate and by
+# operators checking pipe-mode works before installing.
+DRY_RUN=0
+for a in "$@"; do
+  case "$a" in
+    --dry-run) DRY_RUN=1 ;;
+  esac
+done
+
 # A2 (curl | bash): when piped, $0 is "bash" and dirname "$0" is meaningless.
 # Resolve the repo root only when running from a checkout; otherwise assets
 # are fetched from the release below.
@@ -40,6 +50,17 @@ fi
 # Download binary
 BINARY="ramshield-${VERSION}-${TARGET}.tar.gz"
 BASE="https://github.com/grep999/ramshield/releases/download/v${VERSION}"
+
+if [ "$DRY_RUN" = "1" ]; then
+  # ponytail: dry-run validates resolution only; full plan simulation when
+  # the release workflow needs a rehearsal mode.
+  log "dry-run: target=$TARGET version=$VERSION"
+  log "dry-run: would download $BASE/$BINARY"
+  log "dry-run: would install ${PREFIX:-/usr/local}/bin/ramshield + /etc/ramshield/config.toml + systemd unit"
+  log "dry-run: OK (no system changes)"
+  exit 0
+fi
+
 curl -fsSL --retry 5 "$BASE/$BINARY" -o /tmp/ramshield.tar.gz || die "failed to download binary"
 
 # Extract and install
