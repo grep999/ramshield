@@ -49,14 +49,24 @@ bloom_bits = 100000
 [xdp]
 enabled = true
 interface = "$HOST_VETH"
+mode = "skb"
+allow_inband_fallback = false
 
 [wal]
+enabled = true
 dir = "$WALD"
+durability = "None"
+compress = false
+seg_max_bytes = 67108864
+retention_max_bytes = 1073741824
+allow_volatile_fallback = true
 
 [ipc]
 tcp_addr = "127.0.0.1:17899"
+max_connections = 64
 
 [dashboard]
+enabled = true
 http_addr = "127.0.0.1:17999"
 EOF
 
