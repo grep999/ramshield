@@ -99,6 +99,19 @@ base_ms=$(ip netns exec "$NS" bash -c '
 echo "baseline connect: ${base_ms}ms (expect fast refuse)"
 [ "$base_ms" -lt 1000 ] || die "baseline connect took ${base_ms}ms — expected a fast RST"
 
+# #90 under-capture probe: serial flood; kernel-side counters tell whether
+# the AF_PACKET taps even received the SYNs.
+FAILS=0
+for round in $(seq 1 10); do
+  F=$(ip netns exec "$NS" bash -c 'f=0; for i in $(seq 1 300); do echo > /dev/tcp/10.200.0.1/9 2>/dev/null || f=$((f+1)); done; echo $f')
+  FAILS=$((FAILS + F))
+done
+echo "flood connect-failures (ECONNREFUSED expected): $FAILS"
+echo "=== ip -s link $HOST_VETH ==="
+ip -s link show "$HOST_VETH" | sed -n '1,8p'
+echo "=== /proc/net/packet (per-socket: sk, received, dropped) ==="
+cat /proc/net/packet
+
 # Block the namespace IP via the real IPC wire (proxy/sidecar deployment path).
 python3 - "$NS_IP" > "$WORK/frame.jsonl" <<'PY'
 import json, sys
