@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Month 5/6 gate: netns XDP smoke. Requires CAP_NET_ADMIN/CAP_BPF (sudo).
-# 1. veth pair + namespace, 2. ramshield with XDP on the host veth,
-# 3. flood from the namespace, 4. assert the XDP program is attached and
-# ramshield_blocks_total advanced.
+# End-to-end kernel enforcement:
+#   1. veth pair + namespace; ramshield with XDP (skb) on the host veth.
+#   2. Telemetry over the real IPC wire blocks the namespace IP.
+#   3. Assert the block reconciled into the XDP blocklist map.
+#   4. Assert the KERNEL actually drops the blocked IP's packets: before the
+#      block a connect from the ns fails fast (ECONNREFUSED); after the block
+#      the same connect times out because XDP discards the SYN.
 # Usage: sudo scripts/xdp_netns_smoke.sh <path-to-ramshield-bin>
 set -euo pipefail
 log()  { printf '[INFO] %s\n' "$*"; }
@@ -15,7 +19,6 @@ BIN="${1:-/usr/local/bin/ramshield}"
 NS=rs-smoke
 HOST_VETH=rs-smoke-h
 NS_VETH=rs-smoke-n
-HOST_IP=10.200.0.1/30
 NS_IP=10.200.0.2
 WORK=$(mktemp -d)
 trap 'ip netns del "$NS" 2>/dev/null || true; ip link del "$HOST_VETH" 2>/dev/null || true; kill %1 2>/dev/null || true; rm -rf "$WORK"' EXIT
@@ -24,13 +27,13 @@ log "creating netns $NS + veth pair"
 ip netns add "$NS"
 ip link add "$HOST_VETH" type veth peer name "$NS_VETH"
 ip link set "$NS_VETH" netns "$NS"
-ip addr add "$HOST_IP" dev "$HOST_VETH"
+ip addr add 10.200.0.1/30 dev "$HOST_VETH"
 ip link set "$HOST_VETH" up
 ip netns exec "$NS" ip addr add "${NS_IP}/30" dev "$NS_VETH"
 ip netns exec "$NS" ip link set "$NS_VETH" up
 ip netns exec "$NS" ip link set lo up
 
-log "writing smoke config (xdp on $HOST_VETH, low thresholds)"
+log "writing smoke config (xdp skb on $HOST_VETH, IPC telemetry feed)"
 WALD="$WORK/wal"; mkdir -p "$WALD"
 cat > "$WORK/config.toml" <<EOF
 [engine]
@@ -62,10 +65,6 @@ seg_max_bytes = 67108864
 retention_max_bytes = 1073741824
 allow_volatile_fallback = true
 
-[native_ingest]
-enabled = true
-interface = "$HOST_VETH"
-
 [ipc]
 tcp_addr = "127.0.0.1:17899"
 max_connections = 64
@@ -75,7 +74,7 @@ enabled = true
 http_addr = "127.0.0.1:17999"
 EOF
 
-log "starting ramshield (safe userspace + XDP attach)"
+log "starting ramshield"
 "$BIN" --config "$WORK/config.toml" >"$WORK/ramshield.log" 2>&1 &
 PID=$!
 sleep 3
@@ -83,30 +82,47 @@ kill -0 "$PID" 2>/dev/null || { cat "$WORK/ramshield.log"; die "ramshield did no
 
 if ! ip -d link show "$HOST_VETH" 2>&1 | grep -qiE "prog/xdp"; then
   echo "=== ip -d link ==="; ip -d link show "$HOST_VETH" 2>&1
-  echo "=== engine log (xdp/attach lines) ==="; grep -iE "xdp|attach|active" "$WORK/ramshield.log" || true
-  echo "=== engine log (tail) ==="; tail -20 "$WORK/ramshield.log"
+  echo "=== engine log (tail) ==="; tail -30 "$WORK/ramshield.log"
   die "no XDP program attached"
 fi
 log "XDP program attached"
 
-log "flooding from namespace (10 rounds x 300 serial connects, bash /dev/tcp)"
-FAILS=0
-for round in $(seq 1 10); do
-  F=$(ip netns exec "$NS" bash -c 'f=0; for i in $(seq 1 300); do echo > /dev/tcp/10.200.0.1/9 2>/dev/null || f=$((f+1)); done; echo $f')
-  FAILS=$((FAILS + F))
+# Baseline kernel behavior: connect must fail FAST (host RST, no listener).
+base_ms=$(ip netns exec "$NS" bash -c '
+  s=$(date +%s%N)
+  timeout 3 bash -c "echo > /dev/tcp/10.200.0.1/9" 2>/dev/null
+  e=$(date +%s%N); echo $(( (e - s) / 1000000 ))')
+echo "baseline connect: ${base_ms}ms (expect fast refuse)"
+[ "$base_ms" -lt 1000 ] || die "baseline connect took ${base_ms}ms — expected a fast RST"
+
+# Block the namespace IP via the real IPC wire (proxy/sidecar deployment path).
+python3 - "$NS_IP" > "$WORK/frame.jsonl" <<'PY'
+import json, sys
+ip = sys.argv[1]
+print(json.dumps({"type": "report_connections",
+                  "events": [{"ip": ip, "bytes": 512, "status_code": 404,
+                              "proto_fp": 42} for _ in range(200)]}))
+PY
+for i in 1 2 3; do
+  timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/17899 && cat '"$WORK"'/frame.jsonl >&3 && head -1 <&3' || true
 done
-echo "flood connect-failures (ECONNREFUSED expected): $FAILS"
-ip -s link show "$HOST_VETH" | sed -n '3,6p'
 sleep 2
 
-BLOCKS=$(curl -fsS http://127.0.0.1:17999/metrics 2>/dev/null)
-[ -n "$BLOCKS" ] || { cat "$WORK/ramshield.log"; die "metrics endpoint unreachable"; }
-DET=$(printf '%s\n' "$BLOCKS" | awk '/^ramshield_blocks_detection/ {print $2}')
-log "ramshield_blocks_detection=$DET (blocks_total=$(printf '%s\n' "$BLOCKS" | awk '/^ramshield_blocks_total/ {print $2}'))"
-printf '%s\n' "$BLOCKS" | grep -E "ingested|shed|native_ingest_drops|emergency|blocks" | head -12
-awk -v b="$DET" 'BEGIN { exit (b+0 > 0) ? 0 : 1 }' || { tail -30 "$WORK/ramshield.log"; die "expected blocks_detection > 0 after flood"; }
-# Kernel leg: the decision must reach the XDP blocklist map (reconcile logs it).
+METRICS=$(curl -fsS http://127.0.0.1:17999/metrics 2>/dev/null)
+[ -n "$METRICS" ] || { cat "$WORK/ramshield.log"; die "metrics endpoint unreachable"; }
+DET=$(printf '%s\n' "$METRICS" | awk '/^ramshield_blocks_detection/ {print $2}')
+log "ramshield_blocks_detection=$DET"
+awk -v b="$DET" 'BEGIN { exit (b+0 > 0) ? 0 : 1 }' || { tail -30 "$WORK/ramshield.log"; die "expected blocks_detection > 0"; }
 grep -q "XDP reconciled with [1-9]" "$WORK/ramshield.log" || { tail -20 "$WORK/ramshield.log"; die "block never reached the XDP map (no reconcile)"; }
 
+# Kernel drop: the same connect must now time out (XDP discards the SYN)
+# instead of failing fast with RST.
+drop_ms=$(ip netns exec "$NS" bash -c '
+  s=$(date +%s%N)
+  timeout 3 bash -c "echo > /dev/tcp/10.200.0.1/9" 2>/dev/null
+  e=$(date +%s%N); echo $(( (e - s) / 1000000 ))')
+echo "post-block connect: ${drop_ms}ms (expect >=1000ms: SYN silently dropped)"
+[ "$drop_ms" -ge 1000 ] || die "connect still failed in ${drop_ms}ms — XDP map is not dropping the blocked IP"
+
 kill "$PID" 2>/dev/null || true
-log "netns XDP smoke: PASS"
+log "netns XDP smoke: PASS (attach, telemetry block, XDP map reconcile, kernel drop)"
