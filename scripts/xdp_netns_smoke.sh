@@ -129,7 +129,7 @@ METRICS=$(curl -fsS http://127.0.0.1:17999/metrics 2>/dev/null)
 [ -n "$METRICS" ] || { cat "$WORK/ramshield.log"; die "metrics endpoint unreachable"; }
 DET=$(printf '%s\n' "$METRICS" | awk '/^ramshield_blocks_detection/ {print $2}')
 log "ramshield_blocks_detection=$DET"
-printf '%s\n' "$METRICS" | grep -E "native_frames_walked|native_parse_rejects|native_ingest_emitted|native_ingest_drops_total|events_ingested_total" 
+printf '%s\n' "$METRICS" | grep -E "native_frames_walked|native_socket_packets|native_socket_drops|native_parse_rejects|native_ingest_emitted|native_ingest_drops_total|events_ingested_total"
 awk -v b="$DET" 'BEGIN { exit (b+0 > 0) ? 0 : 1 }' || { tail -30 "$WORK/ramshield.log"; die "expected blocks_detection > 0"; }
 
 # Kernel drop: the same connect must now time out (XDP discards the SYN)
