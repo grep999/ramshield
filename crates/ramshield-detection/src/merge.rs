@@ -102,11 +102,11 @@ impl DetectionEngine {
                     );
                 }
 
-                // Adaptive detector is part of the per-IP flush path. Its persisted state
-                // is updated atomically by this helper; no unbounded side map is used.
-                // The current pipeline has no forecast context at this call site, so context
-                // modulation remains optional and is not fabricated here.
-                let adaptive_breach = update_adaptive_detector(rec, inst_rps, now);
+                // Quantize adaptive CUSUM input to completed one-second buckets.
+                // Sub-second flushes accumulate packet counts in IpRecord; only a bucket
+                // transition can submit the previous full bucket to the detector.
+                let adaptive_breach =
+                    update_adaptive_bucket(rec, ip_agg.count as u64, now);
 
                 let relative_breach = if det.relative_enabled
                     && prior_baseline.is_finite()
@@ -188,6 +188,57 @@ impl DetectionEngine {
         // enforcement dedup to refresh TTL (semantics preserved from pre-fix).
         (ewma_rps, threat, block, was_blocked, stored)
     }
+}
+
+/// Accumulate per-IP events into discrete one-second buckets. A completed bucket
+/// is submitted exactly once, at its end timestamp. State is copied first so an
+/// invalid detector sample cannot partially advance the bucket or adaptive record.
+fn update_adaptive_bucket(rec: &mut IpRecord, packet_count: u64, now_ns: u64) -> bool {
+    const BUCKET_NS: u64 = 1_000_000_000;
+    let current_bucket = now_ns / BUCKET_NS;
+    let mut candidate = rec.clone();
+
+    if !candidate.adaptive_bucket_initialized {
+        candidate.adaptive_bucket_initialized = true;
+        candidate.adaptive_bucket_id = current_bucket;
+        candidate.adaptive_bucket_packets = packet_count;
+        *rec = candidate;
+        return false;
+    }
+
+    if current_bucket < candidate.adaptive_bucket_id {
+        // Clock moved backwards or caller supplied a different clock domain.
+        return false;
+    }
+
+    if current_bucket == candidate.adaptive_bucket_id {
+        candidate.adaptive_bucket_packets =
+            candidate.adaptive_bucket_packets.saturating_add(packet_count);
+        *rec = candidate;
+        return false;
+    }
+
+    // Finalize the last observed bucket. If one or more whole buckets were skipped,
+    // do not synthesize zero traffic; the detector's gap policy handles the elapsed time.
+    let Some(end_bucket) = candidate.adaptive_bucket_id.checked_add(1) else {
+        return false;
+    };
+    let Some(end_ns) = end_bucket.checked_mul(BUCKET_NS) else {
+        return false;
+    };
+    let completed_rate = candidate.adaptive_bucket_packets as f64;
+    let breached = update_adaptive_detector(&mut candidate, completed_rate, end_ns);
+
+    // Begin collecting the current bucket only after the completed bucket was
+    // accepted. On a rejected sample, preserve all state including the pending bucket.
+    if candidate.adaptive_last_bucket_ns != end_ns {
+        return false;
+    }
+    candidate.adaptive_bucket_id = current_bucket;
+    candidate.adaptive_bucket_packets = packet_count;
+    candidate.adaptive_bucket_initialized = true;
+    *rec = candidate;
+    breached
 }
 
 /// Update the adaptive detector while preserving atomic state on rejected samples.
