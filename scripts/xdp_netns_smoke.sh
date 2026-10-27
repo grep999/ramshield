@@ -100,6 +100,7 @@ BLOCKS=$(curl -fsS http://127.0.0.1:17999/metrics 2>/dev/null)
 [ -n "$BLOCKS" ] || { cat "$WORK/ramshield.log"; die "metrics endpoint unreachable"; }
 DET=$(printf '%s\n' "$BLOCKS" | awk '/^ramshield_blocks_detection/ {print $2}')
 log "ramshield_blocks_detection=$DET (blocks_total=$(printf '%s\n' "$BLOCKS" | awk '/^ramshield_blocks_total/ {print $2}'))"
+printf '%s\n' "$BLOCKS" | grep -E "ingested|shed|native_ingest_drops|emergency|blocks" | head -12
 awk -v b="$DET" 'BEGIN { exit (b+0 > 0) ? 0 : 1 }' || { tail -30 "$WORK/ramshield.log"; die "expected blocks_detection > 0 after flood"; }
 # Kernel leg: the decision must reach the XDP blocklist map (reconcile logs it).
 grep -q "XDP reconciled with [1-9]" "$WORK/ramshield.log" || { tail -20 "$WORK/ramshield.log"; die "block never reached the XDP map (no reconcile)"; }
