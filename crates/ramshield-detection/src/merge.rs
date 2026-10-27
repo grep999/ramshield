@@ -392,5 +392,4 @@ mod adaptive_integration_tests {
         );
         assert_eq!(rec.adaptive_mode, 2);
     }
-
 }
