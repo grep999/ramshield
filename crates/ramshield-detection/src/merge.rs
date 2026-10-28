@@ -264,7 +264,7 @@ fn update_adaptive_bucket(
 
     // Begin collecting the current bucket only after the completed bucket was
     // accepted. On a rejected sample, preserve all state including the pending bucket.
-    if candidate.last_bucket_ns != end_ns {
+    if candidate.adaptive_model_last_bucket_ns != end_ns {
         return false;
     }
     candidate.adaptive_bucket_id = current_bucket;
