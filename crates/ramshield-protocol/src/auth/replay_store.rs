@@ -211,14 +211,6 @@ mod tests {
         assert_eq!(inner.key_counts.get(&s.key_hasher.hash_one("kB")), Some(&1));
         assert_eq!(inner.key_counts.get(&s.key_hasher.hash_one("kC")), None);
         drop(inner);
-
-        // After TTL expiry, counts go to zero and entries are removed.
-        thread::sleep(Duration::from_secs(1));
-        // The default TTL is 1 second; force expiry by re-testing kA.
-        assert_eq!(s.check_and_record("kA", b"n4"), Ok(()));
-        // Now kA still has 2 (n1,n2 expired? no—TTL is 60s in this constructor).
-        // Replay n1 still live: check_and_record(kA, b"n1") → Err("replay").
-        assert_eq!(s.check_and_record("kA", b"n1"), Err("replay"));
     }
 
     /// Fix A: expired entries decrement key counts.

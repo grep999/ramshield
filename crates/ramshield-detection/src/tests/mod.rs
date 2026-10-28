@@ -1872,9 +1872,8 @@ fn threat_samples_are_not_collected_when_forecasting_disabled() {
         .collect();
     eng.flush_events(&events);
 
-    // With forecasting disabled, the threat_sample queue must stay empty
-    // (no sorting, no enqueue). Normal detection and enforcement behavior
-    // is unchanged — blocks are still emitted.
+    // With forecasting disabled, no forecast-only samples are collected,
+// sorted, or enqueued. Normal detection promotion still runs unchanged.
     assert_eq!(
         eng.store.traffic.threat_sample.len(),
         0,
@@ -1968,16 +1967,8 @@ fn threat_sample_gate_tracks_worker_lifecycle_not_hot_config() {
             .expect("detection try_new"),
     );
 
-    // Forecasting_worker_enabled was captured at startup = true.
-    let sample_len_1 = eng.store.traffic.threat_sample.len();
-
-    // Now toggle the mutable config field off — but the engine's startup
-    // decision remains fixed at true. Hot config does not retroactively change
-    // whether forecast samples were collected.
-    cfg.forecasting.enabled = false;
-
-    // Emit events after the config toggle.
-    let ip: IpAddr = "192.0.2.78".parse().unwrap();
+    // Flush events to populate the threat sample queue and drain it.
+    let ip: IpAddr = "192.0.2.77".parse().unwrap();
     let events: Vec<_> = (0..30u64)
         .map(|i| ConnectionEvent {
             ip,
@@ -1990,16 +1981,40 @@ fn threat_sample_gate_tracks_worker_lifecycle_not_hot_config() {
         .collect();
     eng.flush_events(&events);
 
-    // The engine's startup decision was true, so samples should still be
-    // collected despite the mutable config now being false.
+    // Drain the queue so the next observation is isolated.
+    let sample_len_1 = eng.store.traffic.drain_threat_sample().len();
+
+    // The engine's startup decision was forecasting enabled, so sample
+    // collection was active. Now toggle the mutable config field off — but
+    // the engine's startup decision remains fixed at true. Hot config does
+    // not retroactively change whether forecast samples were collected.
+    cfg.forecasting.enabled = false;
+
+    // Emit more events after the config toggle.
+    let ip2: IpAddr = "192.0.2.78".parse().unwrap();
+    let events2: Vec<_> = (0..30u64)
+        .map(|i| ConnectionEvent {
+            ip: ip2,
+            timestamp_ns: i,
+            bytes: 64,
+            status_code: 200,
+            proto_fingerprint: 0,
+            l7: None,
+        })
+        .collect();
+    eng.flush_events(&events2);
+
+    // Because the engine's internal decision was captured at startup = true,
+    // forecast samples should still be collected despite the mutable config
+    // now being false.
     let sample_len_2 = eng.store.traffic.threat_sample.len();
     assert!(
         sample_len_2 >= sample_len_1,
         "engine startup decision must persist; samples should not decrease after hot config change"
     );
 
-    // IP must still be promoted.
-    assert!(eng.store.get(&ip).is_some(), "IP must still be promoted by detection");
+    // IP must still be promoted by detection.
+    assert!(eng.store.get(&ip2).is_some(), "IP must still be promoted by detection");
 }
 
 mod macro_replay;
