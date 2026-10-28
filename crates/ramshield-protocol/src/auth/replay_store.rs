@@ -34,6 +34,7 @@ pub struct ReplayStore {
 struct StoreInner {
     order: VecDeque<NonceKey>,
     map: AHashMap<NonceKey, Instant>,
+    key_counts: AHashMap<u64, usize>,
 }
 
 impl ReplayStore {
@@ -47,6 +48,7 @@ impl ReplayStore {
             inner: Mutex::new(StoreInner {
                 order: VecDeque::with_capacity(capacity),
                 map: AHashMap::with_capacity(capacity),
+                key_counts: AHashMap::with_capacity(capacity),
             }),
         }
     }
@@ -64,6 +66,7 @@ impl ReplayStore {
             inner: Mutex::new(StoreInner {
                 order: VecDeque::with_capacity(capacity),
                 map: AHashMap::with_capacity(capacity),
+                key_counts: AHashMap::with_capacity(capacity),
             }),
         }
     }
@@ -89,6 +92,13 @@ impl ReplayStore {
         {
             if let Some(expired) = g.order.pop_front() {
                 g.map.remove(&expired);
+                let count = g.key_counts.get_mut(&expired.key_id_hash);
+                if let Some(c) = count {
+                    *c = c.saturating_sub(1);
+                    if *c == 0 {
+                        g.key_counts.remove(&expired.key_id_hash);
+                    }
+                }
             }
         }
 
@@ -99,16 +109,14 @@ impl ReplayStore {
             return Err("replay");
         }
 
-        let own_key_count = g
-            .order
-            .iter()
-            .filter(|existing| existing.key_id_hash == key.key_id_hash)
-            .count();
+        // O(1) per-key count lookup instead of scanning the full queue.
+        let own_key_count = g.key_counts.get(&key.key_id_hash).copied().unwrap_or(0);
         if g.map.len() >= self.cap || own_key_count >= self.per_key_cap {
             return Err("capacity");
         }
 
         g.map.insert(key.clone(), now);
+        *g.key_counts.entry(key.key_id_hash).or_default() += 1;
         g.order.push_back(key);
         Ok(())
     }
@@ -186,5 +194,86 @@ mod tests {
             s.check_and_record("k1", b"nonce"),
             Err("replay store poisoned")
         );
+    }
+
+    /// Fix A invariant: per-key counter matches live queue entries.
+    #[test]
+    fn per_key_counter_matches_queue_live_entries() {
+        let s = ReplayStore::with_per_key_cap(256, 10, Duration::from_secs(60));
+        assert!(s.check_and_record("kA", b"n1").is_ok());
+        assert!(s.check_and_record("kA", b"n2").is_ok());
+        assert!(s.check_and_record("kB", b"n3").is_ok());
+        assert_eq!(s.len(), 3);
+
+        // kA has 2 live entries, kB has 1.
+        let inner = s.inner.lock().unwrap();
+        assert_eq!(inner.key_counts.get(&s.key_hasher.hash_one("kA")), Some(&2));
+        assert_eq!(inner.key_counts.get(&s.key_hasher.hash_one("kB")), Some(&1));
+        assert_eq!(inner.key_counts.get(&s.key_hasher.hash_one("kC")), None);
+        drop(inner);
+    }
+
+    /// Fix A: expired entries decrement key counts.
+    #[test]
+    fn expiration_decrements_key_count() {
+        let s = ReplayStore::new(16, Duration::from_millis(30));
+        assert!(s.check_and_record("kA", &[1u8; 32]).is_ok());
+        assert!(s.check_and_record("kA", &[2u8; 32]).is_ok());
+        assert_eq!(s.len(), 2);
+
+        let inner = s.inner.lock().unwrap();
+        assert_eq!(inner.key_counts.values().sum::<usize>(), 2);
+        drop(inner);
+
+        thread::sleep(Duration::from_millis(50));
+
+        // Reinsertion triggers expiration sweep: both kA entries expire,
+        // key_counts for kA goes to 0 → removed.
+        assert!(s.check_and_record("kA", &[3u8; 32]).is_ok());
+        let inner = s.inner.lock().unwrap();
+        assert_eq!(inner.key_counts.get(&s.key_hasher.hash_one("kA")), Some(&1));
+    }
+
+    /// Fix A: reinsert after expiration restores correct count.
+    #[test]
+    fn reinsert_after_expiration_restores_count() {
+        let s = ReplayStore::new(16, Duration::from_millis(30));
+        assert!(s.check_and_record("kA", &[1u8; 32]).is_ok());
+        assert_eq!(s.len(), 1);
+
+        thread::sleep(Duration::from_millis(50));
+
+        assert!(s.check_and_record("kA", &[2u8; 32]).is_ok());
+        assert_eq!(s.len(), 1);
+
+        let inner = s.inner.lock().unwrap();
+        assert_eq!(inner.key_counts.get(&s.key_hasher.hash_one("kA")), Some(&1));
+    }
+
+    /// Fix A: counter map matches actual queue contents (invariant test).
+    #[test]
+    fn key_count_invariant_matches_queue() {
+        let s = ReplayStore::with_per_key_cap(256, 10, Duration::from_secs(60));
+        // Insert: kA x3, kB x2
+        for n in 0..3u8 {
+            assert!(s.check_and_record("kA", &[n]).is_ok());
+        }
+        for n in 0..2u8 {
+            assert!(s.check_and_record("kB", &[n]).is_ok());
+        }
+        assert_eq!(s.len(), 5);
+
+        let inner = s.inner.lock().unwrap();
+        let kh_a = s.key_hasher.hash_one("kA");
+        let kh_b = s.key_hasher.hash_one("kB");
+        assert_eq!(inner.key_counts.get(&kh_a), Some(&3));
+        assert_eq!(inner.key_counts.get(&kh_b), Some(&2));
+        // Verify against actual queue contents.
+        let actual_a = inner.order.iter().filter(|k| k.key_id_hash == kh_a).count();
+        let actual_b = inner.order.iter().filter(|k| k.key_id_hash == kh_b).count();
+        assert_eq!(actual_a, 3);
+        assert_eq!(actual_b, 2);
+        assert_eq!(inner.key_counts.get(&kh_a), Some(&actual_a));
+        assert_eq!(inner.key_counts.get(&kh_b), Some(&actual_b));
     }
 }
