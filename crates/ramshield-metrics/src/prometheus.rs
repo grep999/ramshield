@@ -104,6 +104,12 @@ impl Metrics {
             "counter"
         ));
         out.push_str(&emit!(
+            "ramshield_native_tpacket_rejects_total",
+            self.native_tpacket_rejects.load(Ordering::Relaxed),
+            "TPACKET_V3 descriptors rejected before L3 parsing due to invalid packet metadata or descriptor chains.",
+            "counter"
+        ));
+        out.push_str(&emit!(
             "ramshield_native_ingest_emitted_total",
             self.native_ingest_emitted.load(Ordering::Relaxed),
             "#90: observation events actually handed to the downstream channel.",
