@@ -346,11 +346,7 @@ pub fn check_xdp_and_interface(config: &Config) -> Vec<CheckResult> {
     {
         Ok(output) if output.status.success() => {
             let text = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
-            if text.contains("prog/xdp")
-                || text.contains("xdp id")
-                || text.contains("xdpdrv")
-                || text.contains("xdpgeneric")
-            {
+            if text.contains("prog/xdp") || text.contains("xdp id") {
                 out.push(CheckResult::pass(
                     "xdp",
                     "XDP attachment",
