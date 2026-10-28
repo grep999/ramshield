@@ -69,7 +69,14 @@ impl Forecaster {
             bayesian: tokio::sync::Mutex::new(HypothesisTracker::new()),
             prev_entropy: tokio::sync::Mutex::new(0.0),
             last_slow_ramp_warn_ms: std::sync::atomic::AtomicU64::new(0),
+            context_publisher: None,
         }
+    }
+
+    /// Attach a non-blocking publisher for the current Bayesian classification.
+    /// The callback should only publish an atomic snapshot; it must not perform I/O.
+    pub fn set_context_publisher(&mut self, publisher: ContextPublisher) {
+        self.context_publisher = Some(publisher);
     }
 
     pub async fn run(self: Arc<Self>) {
@@ -179,6 +186,11 @@ impl Forecaster {
             );
             return; // not enough data for any decision
         }
+        if let Some(publish) = &self.context_publisher {
+            let observed_at_ns = ramshield_types::monotonic_now_ns();
+            publish(hypothesis, observed_at_ns);
+        }
+
         match hypothesis {
             Some((Hypothesis::VolumetricDoS, conf)) => {
                 warn!(

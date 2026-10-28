@@ -14,7 +14,7 @@ mod subnet_scan;
 mod workers;
 
 use ahash::AHashMap as HashMap;
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use batch::{IpAgg, aggregate};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded};
 use dashmap::DashMap;
@@ -25,7 +25,9 @@ use ramshield_storage::{
 };
 use ramshield_types::BlockReason;
 use ramshield_types::{ConnectionEvent, EnforceAction, EnforceCommand, IpNetwork};
-use rate_tracker::{CUSUM_WARMUP_SAMPLES, ewma, ewma_alpha_slow, is_exceeded, pulse_tracker_step};
+use rate_tracker::{
+    CUSUM_WARMUP_SAMPLES, TrafficContext, ewma, ewma_alpha_slow, is_exceeded, pulse_tracker_step,
+};
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
 use std::sync::{
@@ -115,6 +117,9 @@ pub struct DetectionEngine {
     event_rx: Arc<Receiver<ConnectionEvent>>,
     enforcement_tx: mpsc::Sender<EnforceCommand>,
     bloom: ArcSwap<BloomFilter>,
+    /// Lock-free advisory snapshot consumed by the adaptive detector.
+    /// Forecasting updates this through set_traffic_context; the hot path only loads it.
+    traffic_context: ArcSwapOption<TrafficContext>,
     shutdown: Arc<AtomicBool>,
     /// Pre-aggregation buffer — DashMap is internally thread-safe, no Arc needed.
     /// ahash (item 1): every event hashes its IP here under attacker volume.
@@ -245,6 +250,7 @@ impl DetectionEngine {
             event_rx: Arc::new(rx),
             enforcement_tx,
             bloom: ArcSwap::from_pointee(BloomFilter::new(bloom_bits)),
+            traffic_context: ArcSwapOption::empty(),
             shutdown,
             pre_aggs: DashMap::with_hasher_and_shard_amount(ahash::RandomState::new(), 64),
             pre_aggs_merge_lock: std::sync::Mutex::new(()),
@@ -261,6 +267,17 @@ impl DetectionEngine {
             pending_mitigation_lock: std::sync::Mutex::new(()),
             forecasting_worker_enabled,
         })
+    }
+
+    /// Publish a lock-free advisory traffic classification for the adaptive detector.
+    /// Callers should use the same nanosecond clock domain as event timestamps.
+    pub fn set_traffic_context(&self, context: Option<TrafficContext>) {
+        self.traffic_context.store(context.map(Arc::new));
+    }
+
+    /// Read the current advisory context without taking a mutex.
+    pub fn traffic_context(&self) -> Option<TrafficContext> {
+        self.traffic_context.load_full().as_deref().copied()
     }
 
     pub fn event_sender(&self) -> Sender<ConnectionEvent> {

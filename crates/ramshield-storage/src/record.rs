@@ -155,6 +155,37 @@ pub struct IpRecord {
     /// 0 = window not yet opened. Resets on expiry or block.
     #[serde(default)]
     pub pulse_window_start_ns: u64,
+    /// Independent adaptive baseline; legacy baseline_rps remains unchanged.
+    #[serde(default)]
+    pub adaptive_baseline_rps: f64,
+    /// Independent adaptive CUSUM; legacy cusum_s remains unchanged.
+    #[serde(default)]
+    pub adaptive_cusum_s: f64,
+    /// Accepted sample count for the independent detector. Kept separate from
+    /// adaptive_sample_count, which belongs to the older persisted detector state.
+    #[serde(default)]
+    pub adaptive_model_sample_count: u64,
+    /// Independent adaptive model variance; does not alias legacy detector variance.
+    #[serde(default = "default_variance")]
+    pub adaptive_model_variance: f64,
+    /// Last accepted sample timestamp for the independent adaptive model.
+    #[serde(default)]
+    pub adaptive_model_last_bucket_ns: u64,
+    /// Recovery counter for the independent adaptive model.
+    #[serde(default)]
+    pub adaptive_model_recovery_count: u64,
+    /// Mode for the independent adaptive model: 0=WarmingUp, 1=Monitoring, 2=Breached.
+    #[serde(default)]
+    pub adaptive_model_mode: u8,
+    /// Current one-second bucket id for the independent adaptive detector.
+    #[serde(default)]
+    pub adaptive_bucket_id: u64,
+    /// Event count accumulated in the current adaptive bucket.
+    #[serde(default)]
+    pub adaptive_bucket_packets: u64,
+    /// Distinguishes an initialized bucket 0 from an uninitialized record.
+    #[serde(default)]
+    pub adaptive_bucket_initialized: bool,
     pub first_seen_ns: u64,
     pub last_seen_ns: u64,
     pub bytes_in: u64,
@@ -236,5 +267,79 @@ pub struct Entry {
 impl Entry {
     pub fn is_expired(&self) -> bool {
         self.expires_at.is_some_and(|e| Instant::now() > e)
+    }
+}
+
+#[cfg(test)]
+mod adaptive_migration_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_record_deserializes_with_safe_adaptive_defaults() {
+        let record = IpRecord {
+            ip: "192.0.2.1".parse().unwrap(),
+            request_count: 0,
+            ewma_rps: 0.0,
+            cusum_s: 0.0,
+            baseline_rps: 0.0,
+            prev_sample_hot: false,
+            sample_count: 0,
+            relative_breach_streak: 0,
+            pulse_samples_in_window: 0,
+            pulse_window_start_ns: 0,
+            adaptive_baseline_rps: 0.0,
+            adaptive_cusum_s: 0.0,
+            adaptive_model_sample_count: 0,
+            adaptive_model_variance: default_variance(),
+            adaptive_model_last_bucket_ns: 0,
+            adaptive_model_recovery_count: 0,
+            adaptive_model_mode: 0,
+            adaptive_bucket_id: 0,
+            adaptive_bucket_packets: 0,
+            adaptive_bucket_initialized: false,
+            first_seen_ns: 0,
+            last_seen_ns: 0,
+            bytes_in: 0,
+            status_dist: [0; 5],
+            proto_fingerprint: 0,
+            threat_score: 0.0,
+            block_state: BlockState::Clean,
+            variance: default_variance(),
+            last_bucket_ns: 0,
+            adaptive_sample_count: 5,
+            recovery_count: 0,
+            bucket_accum_pps: 0.0,
+            detector_mode: 0,
+        };
+        let mut legacy = serde_json::to_value(record).unwrap();
+        let object = legacy.as_object_mut().unwrap();
+        for field in [
+            "adaptive_baseline_rps",
+            "adaptive_cusum_s",
+            "adaptive_model_sample_count",
+            "adaptive_model_variance",
+            "adaptive_model_last_bucket_ns",
+            "adaptive_model_recovery_count",
+            "adaptive_model_mode",
+            "adaptive_bucket_id",
+            "adaptive_bucket_packets",
+            "adaptive_bucket_initialized",
+        ] {
+            object.remove(field);
+        }
+
+        let restored: IpRecord = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.variance, default_variance());
+        assert!(restored.variance.is_finite() && restored.variance > 0.0);
+        assert_eq!(restored.adaptive_baseline_rps, 0.0);
+        assert_eq!(restored.adaptive_cusum_s, 0.0);
+        assert_eq!(restored.adaptive_sample_count, 5);
+        assert_eq!(restored.adaptive_model_sample_count, 0);
+        assert_eq!(restored.adaptive_model_variance, default_variance());
+        assert_eq!(restored.adaptive_model_last_bucket_ns, 0);
+        assert_eq!(restored.adaptive_model_recovery_count, 0);
+        assert_eq!(restored.adaptive_model_mode, 0);
+        assert_eq!(restored.detector_mode, 0);
+        assert!(!restored.adaptive_bucket_initialized);
     }
 }
