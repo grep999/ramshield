@@ -1,5 +1,5 @@
 use super::*;
-use crate::rate_tracker::{DetectorMode, DetectorProfile, PerIpRecord};
+use crate::rate_tracker::{DetectorMode, DetectorProfile, PerIpRecord, TrafficContext, cusum_fired};
 
 impl DetectionEngine {
     /// ponytail: returns the 5-tuple `(ewma_rps, threat, should_block, was_blocked, stored)`.
