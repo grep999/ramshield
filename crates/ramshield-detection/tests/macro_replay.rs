@@ -4,7 +4,9 @@
 //! they are not a substitute for production packet-capture replay or performance
 //! measurement.
 
-use ramshield_detection::rate_tracker::{DetectorMode, DetectorProfile, PerIpRecord, TrafficContext};
+use ramshield_detection::rate_tracker::{
+    DetectorMode, DetectorProfile, PerIpRecord, TrafficContext,
+};
 use ramshield_forecasting::Hypothesis;
 
 const NS_PER_SECOND: u64 = 1_000_000_000;
