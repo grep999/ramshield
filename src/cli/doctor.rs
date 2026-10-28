@@ -139,9 +139,13 @@ pub fn check_privileges_and_kernel(config: &Config) -> Vec<CheckResult> {
             if (major, minor) >= MIN_KERNEL {
                 out.push(CheckResult::pass("core", "Kernel version", format!("Linux {release} meets the 5.15 diagnostic minimum")));
             } else {
-                let status = if xdp_required { CheckResult::fail } else { CheckResult::warning };
-                out.push(status("core", "Kernel version", format!("Linux {release} is older than the diagnostic minimum 5.15"),
-                    "Upgrade to Linux 5.15 or newer for the supported XDP deployment baseline."));
+                if xdp_required {
+                    out.push(CheckResult::fail("core", "Kernel version", format!("Linux {release} is older than the diagnostic minimum 5.15"),
+                        "Upgrade to Linux 5.15 or newer for the supported XDP deployment baseline."));
+                } else {
+                    out.push(CheckResult::warning("core", "Kernel version", format!("Linux {release} is older than the diagnostic minimum 5.15"),
+                        "Upgrade to Linux 5.15 or newer for the supported XDP deployment baseline."));
+                }
             }
         }
         None => out.push(CheckResult::warning("core", "Kernel version", "could not parse /proc/sys/kernel/osrelease",
@@ -150,9 +154,13 @@ pub fn check_privileges_and_kernel(config: &Config) -> Vec<CheckResult> {
     if Path::new("/sys/kernel/btf/vmlinux").is_file() {
         out.push(CheckResult::pass("core", "Kernel BTF", "/sys/kernel/btf/vmlinux is present"));
     } else {
-        let status = if xdp_required { CheckResult::fail } else { CheckResult::warning };
-        out.push(status("core", "Kernel BTF", "kernel BTF file is absent",
-            "Use a kernel built with BTF support and verify /sys/kernel/btf/vmlinux is readable."));
+        if xdp_required {
+            out.push(CheckResult::fail("core", "Kernel BTF", "kernel BTF file is absent",
+                "Use a kernel built with BTF support and verify /sys/kernel/btf/vmlinux is readable."));
+        } else {
+            out.push(CheckResult::warning("core", "Kernel BTF", "kernel BTF file is absent",
+                "Use a kernel built with BTF support and verify /sys/kernel/btf/vmlinux is readable."));
+        }
     }
     out
 }
@@ -178,9 +186,13 @@ pub fn check_xdp_and_interface(config: &Config) -> Vec<CheckResult> {
     }
     let sysfs = PathBuf::from("/sys/class/net").join(&config.xdp.interface);
     if !sysfs.exists() {
-        let status = if config.xdp.enabled { CheckResult::fail } else { CheckResult::warning };
-        out.push(status("xdp", "Network interface", format!("interface '{}' not found under /sys/class/net", config.xdp.interface),
-            "Set xdp.interface to the actual ingress interface and rerun doctor."));
+        if config.xdp.enabled {
+            out.push(CheckResult::fail("xdp", "Network interface", format!("interface '{}' not found under /sys/class/net", config.xdp.interface),
+                "Set xdp.interface to the actual ingress interface and rerun doctor."));
+        } else {
+            out.push(CheckResult::warning("xdp", "Network interface", format!("interface '{}' not found under /sys/class/net", config.xdp.interface),
+                "Set xdp.interface to the actual ingress interface and rerun doctor."));
+        }
         return out;
     }
     out.push(CheckResult::pass("xdp", "Network interface", format!("interface '{}' exists", config.xdp.interface)));
@@ -225,9 +237,13 @@ pub fn check_ebpf_maps(config: &Config) -> Vec<CheckResult> {
     if mounted {
         out.push(CheckResult::pass("maps", "BPF filesystem", format!("bpffs is mounted at {BPFFS}")));
     } else {
-        let status = if config.xdp.enabled { CheckResult::fail } else { CheckResult::warning };
-        out.push(status("maps", "BPF filesystem", format!("bpffs does not appear mounted at {BPFFS}"),
-            "Inspect mount output; if required, mount bpffs using the host's supported systemd/fstab setup."));
+        if config.xdp.enabled {
+            out.push(CheckResult::fail("maps", "BPF filesystem", format!("bpffs does not appear mounted at {BPFFS}"),
+                "Inspect mount output; if required, mount bpffs using the host's supported systemd/fstab setup."));
+        } else {
+            out.push(CheckResult::warning("maps", "BPF filesystem", format!("bpffs does not appear mounted at {BPFFS}"),
+                "Inspect mount output; if required, mount bpffs using the host's supported systemd/fstab setup."));
+        }
     }
     if Path::new(RAMSHIELD_PIN_DIR).is_dir() {
         out.push(CheckResult::pass("maps", "RamShield pin directory", format!("{RAMSHIELD_PIN_DIR} exists")));
