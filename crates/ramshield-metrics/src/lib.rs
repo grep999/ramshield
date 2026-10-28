@@ -71,6 +71,9 @@ pub struct Metrics {
     /// #90: frames process_packet received but parse_l3 rejected (non-IP,
     /// truncated, trusted-overlay skip). These are intentionally not events.
     pub native_parse_rejects: Arc<AtomicU64>,
+    /// TPACKET_V3 descriptors rejected before L3 parsing due to invalid block,
+    /// header, packet-range, or descriptor-chain metadata.
+    pub native_tpacket_rejects: Arc<AtomicU64>,
     /// #90: events actually handed to the downstream channel.
     pub native_ingest_emitted: Arc<AtomicU64>,
     /// #90: frames the kernel reports delivered to each capture socket
@@ -267,6 +270,7 @@ impl Metrics {
             native_ingest_drops: Arc::new(AtomicU64::new(0)),
             native_frames_walked: Arc::new(AtomicU64::new(0)),
             native_parse_rejects: Arc::new(AtomicU64::new(0)),
+            native_tpacket_rejects: Arc::new(AtomicU64::new(0)),
             native_ingest_emitted: Arc::new(AtomicU64::new(0)),
             native_socket_packets: Arc::new(AtomicU64::new(0)),
             native_socket_drops: Arc::new(AtomicU64::new(0)),
