@@ -8,6 +8,7 @@ pub mod config {
     pub use ramshield_config::*;
 }
 pub mod dashboard;
+pub mod doctor;
 pub mod detection {
     pub use ramshield_detection::*;
 }

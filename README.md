@@ -66,7 +66,7 @@ curl -fsS http://127.0.0.1:9999/healthz
 ./target/release/ramshield-cli status
 ```
 
-See [Quickstart](docs/QUICKSTART.md) for full setup, [Configuration](docs/CONFIGURATION.md) for settings, and [Dashboard access](docs/DASHBOARD_AUTH.md) for setting the operator password.
+See [Quickstart](docs/QUICKSTART.md) for full setup, [Configuration](docs/CONFIGURATION.md) for settings, and [Dashboard access](docs/DASHBOARD_AUTH.md) for setting the operator password. Run [Doctor](docs/DOCTOR.md) before deployment to inspect host and subsystem readiness.
 
 ## What happens when traffic turns bad
 
@@ -204,7 +204,7 @@ Dashboard and API are available from the same local service.
 
 ## Documentation
 
-[Quickstart](docs/QUICKSTART.md) · [Operations](docs/OPERATIONS.md) · [Configuration](docs/CONFIGURATION.md) · [Dashboard access](docs/DASHBOARD_AUTH.md) · [Architecture](docs/ARCHITECTURE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Development](docs/DEVELOPMENT.md)
+[Quickstart](docs/QUICKSTART.md) · [Operations](docs/OPERATIONS.md) · [Configuration](docs/CONFIGURATION.md) · [Dashboard access](docs/DASHBOARD_AUTH.md) · [Doctor](docs/DOCTOR.md) · [Architecture](docs/ARCHITECTURE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Development](docs/DEVELOPMENT.md)
 
 ## Development
 
