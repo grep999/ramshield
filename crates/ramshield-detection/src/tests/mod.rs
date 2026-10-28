@@ -1939,7 +1939,7 @@ fn threat_samples_are_collected_when_forecasting_enabled() {
     );
 
     // Verify the queue is sorted by threat score descending.
-    let mut samples: Vec<(IpAddr, f32)> = eng.store.traffic.drain_threat_sample();
+    let samples: Vec<(IpAddr, f32)> = eng.store.traffic.drain_threat_sample();
     for w in samples.windows(2) {
         assert!(w[0].1 >= w[1].1, "threat samples must be sorted descending");
     }
