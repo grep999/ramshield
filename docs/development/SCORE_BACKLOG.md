@@ -4,7 +4,7 @@ Pick the **first row with status `TODO`**, implement **one bounded fix**, mark i
 
 | Order | ID | Easy? | Area | Task | Status |
 |------:|----|-------|------|------|--------|
-| 1 | E01 | yes | CI | **RESTORE** full `src/engine/boot.rs` from master, then collapsible_if | TODO (merge blocker) |
+| 1 | E01 | yes | CI | **RESTORE** full `src/engine/boot.rs` from master, then collapsible_if | DONE `5375be40` |
 | 1b | E05-restore | yes | protocol | **RESTORE** full `crates/ramshield-protocol/src/auth.rs` from master | TODO (merge blocker) |
 | 2 | E02 | yes | CI | e2e ephemeral IPC port | DONE `c72bf89` |
 | 3 | E03 | yes | process | ACCEPTANCE_REPORT vs Actions | DONE `54e2d1e` |
@@ -28,3 +28,5 @@ Pick the **first row with status `TODO`**, implement **one bounded fix**, mark i
 - E06 DONE `4d75d44`.
 - E07 DONE `23f9285`: bloom KEYSTORE ↔ Prometheus export + value parity tests.
 - E01/E05-restore still required before merge (`boot.rs` / `auth.rs`).
+
+- 2026-10-28T07:03Z E01 DONE `5375be40`: restored full boot.rs from master + collapsible_if on autonomous configure.
