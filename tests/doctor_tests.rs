@@ -1,5 +1,7 @@
-use ramshield::doctor::{check_config_and_schema, check_statistical_brains, diagnose, load_config, CheckStatus};
 use ramshield::Config;
+use ramshield::doctor::{
+    CheckStatus, check_config_and_schema, check_statistical_brains, diagnose, load_config,
+};
 use std::path::PathBuf;
 
 fn temp_config(contents: &str, name: &str) -> PathBuf {
@@ -24,7 +26,12 @@ fn corrupted_config_is_reported_not_panicked() {
     let report = diagnose(Some(&path), Some("config"));
     let _ = std::fs::remove_file(&path);
     assert!(report.has_failures());
-    assert!(report.checks.iter().any(|c| c.subsystem == "config" && c.status == CheckStatus::Fail));
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|c| c.subsystem == "config" && c.status == CheckStatus::Fail)
+    );
 }
 
 #[test]
@@ -40,7 +47,11 @@ fn zero_rate_threshold_is_flagged() {
     let mut config = Config::default();
     config.detection.rps_threshold = 0;
     let checks = check_statistical_brains(&config);
-    assert!(checks.iter().any(|c| c.name == "Rate/CUSUM prerequisites" && c.status == CheckStatus::Fail));
+    assert!(
+        checks
+            .iter()
+            .any(|c| c.name == "Rate/CUSUM prerequisites" && c.status == CheckStatus::Fail)
+    );
 }
 
 #[test]
