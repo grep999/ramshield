@@ -12,7 +12,7 @@ Pick the **first row with status `TODO`**, implement **one bounded fix**, mark i
 | 5 | E05 | yes | protocol | I-024 HMAC pin | DONE (master verified + branch restored; module doc has key_id) |
 | 6 | E06 | med | detection | pre_aggs rate-window unit test | DONE `4d75d44` |
 | 7 | E07 | med | metrics | keystore validate+export parity | DONE `23f9285` |
-| 8 | E08 | med | xdp | autonomous map skip/implement | TODO |
+| 8 | E08 | med | xdp | autonomous map skip/implement | DONE `cbbb9ad` (AUTONOMOUS_CONFIG Array map added to BPF) |
 | 9 | E09 | med | native | drop counters + #90 | TODO |
 | 10 | E10 | hard | mesh | out of scope | SKIP |
 
@@ -25,4 +25,5 @@ Pick the **first row with status `TODO`**, implement **one bounded fix**, mark i
 ## Run log
 - E01 DONE; E05-restore DONE `4814ce44` (full auth.rs + corrected module MAC doc).
 - E02–E07 DONE.
-- Next: **E08** autonomous XDP map.
+- E08 DONE `cbbb9ad` (implemented AUTONOMOUS_CONFIG map in XDP BPF; logic pending).
+- Next: **E09** native drop counters.
