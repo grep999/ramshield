@@ -279,6 +279,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn command_succeeded(command: &mut std::process::Command) -> bool {
     command.output().is_ok_and(|output| output.status.success())
 }
