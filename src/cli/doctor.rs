@@ -187,28 +187,34 @@ pub fn check_privileges_and_kernel(config: &Config) -> Vec<CheckResult> {
     let cap_bpf = caps & (1u64 << 39) != 0;
     let cap_sys_admin = caps & (1u64 << 21) != 0;
     let cap_net_admin = caps & (1u64 << 12) != 0;
-    if uid == Some(0) {
+    let cap_perfmon = caps & (1u64 << 38) != 0;
+    let bpf_admin = cap_bpf || cap_sys_admin;
+    let xdp_caps_ok = bpf_admin && cap_net_admin && cap_perfmon;
+    if xdp_required && !xdp_caps_ok {
+        out.push(CheckResult::fail(
+            "core",
+            "Privileges",
+            format!("XDP is enabled but the effective capability set is insufficient (uid={uid:?}, CAP_BPF={cap_bpf}, CAP_SYS_ADMIN={cap_sys_admin}, CAP_NET_ADMIN={cap_net_admin}, CAP_PERFMON={cap_perfmon})"),
+            "Run with the required capabilities; the current XDP loader expects cap_net_admin, cap_perfmon, and cap_bpf (or the kernel-appropriate CAP_SYS_ADMIN equivalent). Re-apply file capabilities after rebuilding the binary.",
+        ));
+    } else if uid == Some(0) {
         out.push(CheckResult::pass(
             "core",
             "Privileges",
-            "effective UID is 0 (root)",
+            "effective UID is 0 (root); configured XDP capability requirements are satisfied or XDP is disabled",
         ));
-    } else if (cap_bpf || cap_sys_admin) && cap_net_admin {
+    } else if xdp_caps_ok {
         out.push(CheckResult::pass(
             "core",
             "Privileges",
-            "CAP_BPF and CAP_NET_ADMIN are effective",
+            "CAP_BPF/CAP_SYS_ADMIN, CAP_NET_ADMIN, and CAP_PERFMON are effective",
         ));
-    } else if xdp_required {
-        out.push(CheckResult::fail("core", "Privileges",
-            format!("not root and required capabilities are missing (CAP_BPF={cap_bpf}, CAP_NET_ADMIN={cap_net_admin}, CAP_SYS_ADMIN={cap_sys_admin})"),
-            "Run sudo ramshield doctor or grant the minimum capabilities required by the installed kernel and XDP mode."));
     } else {
         out.push(CheckResult::warning(
             "core",
             "Privileges",
             "not running as root; acceptable for a non-XDP userspace configuration",
-            "Use sudo or configure CAP_BPF/CAP_NET_ADMIN before enabling XDP.",
+            "Use sudo or configure the required capabilities before enabling XDP.",
         ));
     }
     match kernel_release() {
@@ -391,7 +397,7 @@ pub fn check_ebpf_maps(config: &Config) -> Vec<CheckResult> {
         .map(|mounts| {
             mounts.lines().any(|line| {
                 let fields: Vec<_> = line.split_whitespace().collect();
-                fields.len() >= 3 && fields[0] == "bpf" && fields[1] == BPFFS && fields[2] == "bpf"
+                fields.len() >= 3 && fields[1] == BPFFS && fields[2] == "bpf"
             })
         })
         .unwrap_or(false);
