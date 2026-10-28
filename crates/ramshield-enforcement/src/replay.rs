@@ -156,7 +156,7 @@ fn replay_wal_into_store_seeded_internal(
                 r.block_state = BlockState::Blocked {
                     reason,
                     since_ns: ts_ns,
-                },;
+                };
                 r
             }
             _ => IpRecord {

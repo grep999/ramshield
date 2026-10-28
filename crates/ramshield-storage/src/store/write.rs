@@ -190,7 +190,7 @@ impl Store {
             BlockState::Blocked { reason, since_ns } => BlockState::Blocked {
                 reason: *reason,
                 since_ns: *since_ns,
-            },,
+            },
             other => {
                 return Err(RsError::InvalidState(format!(
                     "block_ip requires a blocked fallback, got {other:?}"
