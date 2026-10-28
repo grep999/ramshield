@@ -70,6 +70,7 @@ fn doctor_config_path(config_path: Option<String>, doctor: bool) -> Option<Strin
     .iter()
     .find(|path| std::path::Path::new(path).is_file())
     .map(|path| (*path).to_string())
+    .or_else(|| Some("/etc/ramshield/ramshield.toml".into()))
 }
 
 #[tokio::main]
