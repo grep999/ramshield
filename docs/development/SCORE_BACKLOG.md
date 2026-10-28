@@ -13,7 +13,7 @@ Pick the **first row with status `TODO`**, implement **one bounded fix**, mark i
 | 6 | E06 | med | detection | pre_aggs rate-window unit test | DONE `4d75d44` |
 | 7 | E07 | med | metrics | keystore validate+export parity | DONE `23f9285` |
 | 8 | E08 | med | xdp | autonomous map skip/implement | DONE `cbbb9ad` (AUTONOMOUS_CONFIG Array map added to BPF) |
-| 9 | E09 | med | native | drop counters + #90 | TODO |
+| 9 | E09 | med | native | drop counters + #90 | DONE `c88d662` (unit test for emitted/parse-rejects; counters instrumented) |
 | 10 | E10 | hard | mesh | out of scope | SKIP |
 
 ## Rules for the hourly job
@@ -26,4 +26,5 @@ Pick the **first row with status `TODO`**, implement **one bounded fix**, mark i
 - E01 DONE; E05-restore DONE `4814ce44` (full auth.rs + corrected module MAC doc).
 - E02–E07 DONE.
 - E08 DONE `cbbb9ad` (implemented AUTONOMOUS_CONFIG map in XDP BPF; logic pending).
-- Next: **E09** native drop counters.
+- E09 DONE `c88d662` (added unit test confirming #90 native_ingest_emitted and native_parse_rejects accounting; drop counters and #90 instrumentation already present).
+- Next: queue empty (E10 SKIP).
