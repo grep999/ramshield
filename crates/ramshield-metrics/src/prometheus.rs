@@ -554,3 +554,19 @@ impl Metrics {
         out
     }
 }
+
+
+#[cfg(test)]
+mod tpacket_reject_metric_tests {
+    use super::*;
+
+    #[test]
+    fn tpacket_reject_counter_is_exported_as_prometheus_counter() {
+        let metrics = Metrics::new();
+        metrics.native_tpacket_rejects.store(7, Ordering::Relaxed);
+
+        let rendered = metrics.render_prometheus();
+        assert!(rendered.contains("# TYPE ramshield_native_tpacket_rejects_total counter"));
+        assert!(rendered.contains("ramshield_native_tpacket_rejects_total 7"));
+    }
+}
