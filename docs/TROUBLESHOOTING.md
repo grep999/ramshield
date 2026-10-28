@@ -8,6 +8,8 @@ Check the actual error:
 
 ```bash
 RUST_LOG=ramshield=debug ./target/release/ramshield --config config.toml
+# Read-only diagnostics: which gate is failing (config, privileges, XDP, maps, stats, mesh)
+./target/release/ramshield doctor --config config.toml
 ```
 
 Common causes:
