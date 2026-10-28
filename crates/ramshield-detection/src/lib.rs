@@ -25,11 +25,7 @@ use ramshield_storage::{
 };
 use ramshield_types::BlockReason;
 use ramshield_types::{ConnectionEvent, EnforceAction, EnforceCommand, IpNetwork};
-use rate_tracker::{
-    CUSUM_WARMUP_SAMPLES, DetectorMode, DetectorProfile, PerIpRecord, TrafficContext,
-    cusum_allowance, cusum_fired, cusum_step_capped, ewma, ewma_alpha_slow, is_exceeded,
-    pulse_tracker_step,
-};
+use rate_tracker::{CUSUM_WARMUP_SAMPLES, ewma, ewma_alpha_slow, is_exceeded, pulse_tracker_step};
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
 use std::sync::{

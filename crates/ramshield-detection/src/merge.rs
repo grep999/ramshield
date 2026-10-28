@@ -317,7 +317,7 @@ fn update_adaptive_detector(
         };
     }
 
-    let Ok(outcome) = adaptive.update_with_context_at(inst_rps, now_ns, context, context_now_ns)
+    let Ok(outcome) = adaptive.update_with_context_at(inst_rps, now_ns, context.as_ref(), context_now_ns)
     else {
         // PerIpRecord::update validates and calculates before committing. Do not copy
         // anything back on failure; the caller's persisted adaptive fields stay intact.
