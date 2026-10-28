@@ -347,6 +347,14 @@ mod cli_tests {
     }
 
     #[test]
+    fn doctor_subcommand_accepts_subsystem_filter() {
+        let (_, _, doctor, _, subsystem) =
+            parse_args(&args(&["doctor", "--subsystem", "maps"])).unwrap();
+        assert!(doctor);
+        assert_eq!(subsystem.as_deref(), Some("maps"));
+    }
+
+    #[test]
     fn no_xdp_flag_is_recognized() {
         // prod_smoke.sh boots with --no-xdp; the parser must not reject it.
         let (path, no_xdp, _doctor, _validate, _subsystem) =
