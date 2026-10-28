@@ -165,6 +165,18 @@ pub struct IpRecord {
     /// adaptive_sample_count, which belongs to the older persisted detector state.
     #[serde(default)]
     pub adaptive_model_sample_count: u64,
+    /// Independent adaptive model variance; does not alias legacy detector variance.
+    #[serde(default = "default_variance")]
+    pub adaptive_model_variance: f64,
+    /// Last accepted sample timestamp for the independent adaptive model.
+    #[serde(default)]
+    pub adaptive_model_last_bucket_ns: u64,
+    /// Recovery counter for the independent adaptive model.
+    #[serde(default)]
+    pub adaptive_model_recovery_count: u64,
+    /// Mode for the independent adaptive model: 0=WarmingUp, 1=Monitoring, 2=Breached.
+    #[serde(default)]
+    pub adaptive_model_mode: u8,
     /// Current one-second bucket id for the independent adaptive detector.
     #[serde(default)]
     pub adaptive_bucket_id: u64,
@@ -278,6 +290,10 @@ mod adaptive_migration_tests {
             adaptive_baseline_rps: 0.0,
             adaptive_cusum_s: 0.0,
             adaptive_model_sample_count: 0,
+            adaptive_model_variance: default_variance(),
+            adaptive_model_last_bucket_ns: 0,
+            adaptive_model_recovery_count: 0,
+            adaptive_model_mode: 0,
             adaptive_bucket_id: 0,
             adaptive_bucket_packets: 0,
             adaptive_bucket_initialized: false,
@@ -301,6 +317,10 @@ mod adaptive_migration_tests {
             "adaptive_baseline_rps",
             "adaptive_cusum_s",
             "adaptive_model_sample_count",
+            "adaptive_model_variance",
+            "adaptive_model_last_bucket_ns",
+            "adaptive_model_recovery_count",
+            "adaptive_model_mode",
             "adaptive_bucket_id",
             "adaptive_bucket_packets",
             "adaptive_bucket_initialized",
@@ -315,6 +335,10 @@ mod adaptive_migration_tests {
         assert_eq!(restored.adaptive_cusum_s, 0.0);
         assert_eq!(restored.adaptive_sample_count, 5);
         assert_eq!(restored.adaptive_model_sample_count, 0);
+        assert_eq!(restored.adaptive_model_variance, default_variance());
+        assert_eq!(restored.adaptive_model_last_bucket_ns, 0);
+        assert_eq!(restored.adaptive_model_recovery_count, 0);
+        assert_eq!(restored.adaptive_model_mode, 0);
         assert_eq!(restored.detector_mode, 0);
         assert!(!restored.adaptive_bucket_initialized);
     }

@@ -58,6 +58,10 @@ impl DetectionEngine {
                 bucket_accum_pps: 0.0,
                 detector_mode: 0,
                 adaptive_model_sample_count: 0,
+                adaptive_model_variance: 0.1,
+                adaptive_model_last_bucket_ns: 0,
+                adaptive_model_recovery_count: 0,
+                adaptive_model_mode: 0,
                 first_seen_ns: ip_agg.first_ts_ns,
                 last_seen_ns: ip_agg.last_ts_ns,
                 bytes_in: 0,
@@ -297,19 +301,19 @@ fn update_adaptive_detector(
             || rec.adaptive_baseline_rps < 0.0
             || !rec.adaptive_cusum_s.is_finite()
             || rec.adaptive_cusum_s < 0.0
-            || !rec.variance.is_finite()
-            || rec.variance <= 0.0
-            || rec.detector_mode > 2
+            || !rec.adaptive_model_variance.is_finite()
+            || rec.adaptive_model_variance <= 0.0
+            || rec.adaptive_model_mode > 2
         {
             return false;
         }
         adaptive.baseline_rate = rec.adaptive_baseline_rps;
         adaptive.cusum_s = rec.adaptive_cusum_s;
         adaptive.sample_count = rec.adaptive_model_sample_count;
-        adaptive.variance = rec.variance;
-        adaptive.last_bucket_ns = rec.last_bucket_ns;
-        adaptive.recovery_count = rec.recovery_count;
-        adaptive.mode = match rec.detector_mode {
+        adaptive.variance = rec.adaptive_model_variance;
+        adaptive.last_bucket_ns = rec.adaptive_model_last_bucket_ns;
+        adaptive.recovery_count = rec.adaptive_model_recovery_count;
+        adaptive.mode = match rec.adaptive_model_mode {
             0 => DetectorMode::WarmingUp,
             1 => DetectorMode::Monitoring,
             2 => DetectorMode::Breached,
@@ -327,10 +331,10 @@ fn update_adaptive_detector(
     rec.adaptive_baseline_rps = adaptive.baseline_rate;
     rec.adaptive_cusum_s = adaptive.cusum_s;
     rec.adaptive_model_sample_count = adaptive.sample_count;
-    rec.variance = adaptive.variance;
-    rec.last_bucket_ns = adaptive.last_bucket_ns;
-    rec.recovery_count = adaptive.recovery_count;
-    rec.detector_mode = match adaptive.mode {
+    rec.adaptive_model_variance = adaptive.variance;
+    rec.adaptive_model_last_bucket_ns = adaptive.last_bucket_ns;
+    rec.adaptive_model_recovery_count = adaptive.recovery_count;
+    rec.adaptive_model_mode = match adaptive.mode {
         DetectorMode::WarmingUp => 0,
         DetectorMode::Monitoring => 1,
         DetectorMode::Breached => 2,
@@ -366,6 +370,10 @@ mod adaptive_integration_tests {
             bucket_accum_pps: 0.0,
             detector_mode: 0,
             adaptive_model_sample_count: 0,
+            adaptive_model_variance: 0.1,
+            adaptive_model_last_bucket_ns: 0,
+            adaptive_model_recovery_count: 0,
+            adaptive_model_mode: 0,
             first_seen_ns: 0,
             last_seen_ns: 0,
             bytes_in: 0,
@@ -379,6 +387,13 @@ mod adaptive_integration_tests {
     #[test]
     fn adaptive_state_persists_across_flush_updates() {
         let mut rec = record();
+        let legacy_state = (
+            rec.variance,
+            rec.last_bucket_ns,
+            rec.adaptive_sample_count,
+            rec.recovery_count,
+            rec.detector_mode,
+        );
         assert!(!update_adaptive_detector(
             &mut rec,
             100.0,
@@ -387,9 +402,20 @@ mod adaptive_integration_tests {
             1_000_000_000
         ));
         assert_eq!(rec.adaptive_model_sample_count, 1);
-        assert!(rec.variance.is_finite() && rec.variance > 0.0);
+        assert_eq!(
+            (
+                rec.variance,
+                rec.last_bucket_ns,
+                rec.adaptive_sample_count,
+                rec.recovery_count,
+                rec.detector_mode,
+            ),
+            legacy_state,
+            "the independent adaptive detector must not mutate master-owned state"
+        );
+        assert!(rec.adaptive_model_variance.is_finite() && rec.adaptive_model_variance > 0.0);
         let baseline = rec.adaptive_baseline_rps;
-        let variance = rec.variance;
+        let variance = rec.adaptive_model_variance;
 
         assert!(!update_adaptive_detector(
             &mut rec,
@@ -399,10 +425,10 @@ mod adaptive_integration_tests {
             2_000_000_000
         ));
         assert_eq!(rec.adaptive_model_sample_count, 2);
-        assert!(rec.last_bucket_ns == 2_000_000_000);
-        assert!(rec.variance.is_finite() && rec.variance > 0.0);
+        assert!(rec.adaptive_model_last_bucket_ns == 2_000_000_000);
+        assert!(rec.adaptive_model_variance.is_finite() && rec.adaptive_model_variance > 0.0);
         assert_ne!(rec.adaptive_baseline_rps, baseline);
-        assert_ne!(rec.variance, variance);
+        assert_ne!(rec.adaptive_model_variance, variance);
     }
 
     #[test]
@@ -419,10 +445,10 @@ mod adaptive_integration_tests {
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
             rec.adaptive_model_sample_count,
-            rec.variance,
-            rec.last_bucket_ns,
-            rec.recovery_count,
-            rec.detector_mode,
+            rec.adaptive_model_variance,
+            rec.adaptive_model_last_bucket_ns,
+            rec.adaptive_model_recovery_count,
+            rec.adaptive_model_mode,
         );
         assert!(!update_adaptive_detector(
             &mut rec,
@@ -435,10 +461,10 @@ mod adaptive_integration_tests {
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
             rec.adaptive_model_sample_count,
-            rec.variance,
-            rec.last_bucket_ns,
-            rec.recovery_count,
-            rec.detector_mode,
+            rec.adaptive_model_variance,
+            rec.adaptive_model_last_bucket_ns,
+            rec.adaptive_model_recovery_count,
+            rec.adaptive_model_mode,
         );
         assert_eq!(before, after);
     }
@@ -457,10 +483,10 @@ mod adaptive_integration_tests {
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
             rec.adaptive_model_sample_count,
-            rec.variance,
-            rec.last_bucket_ns,
-            rec.recovery_count,
-            rec.detector_mode,
+            rec.adaptive_model_variance,
+            rec.adaptive_model_last_bucket_ns,
+            rec.adaptive_model_recovery_count,
+            rec.adaptive_model_mode,
         );
         assert!(!update_adaptive_detector(
             &mut rec,
@@ -473,10 +499,10 @@ mod adaptive_integration_tests {
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
             rec.adaptive_model_sample_count,
-            rec.variance,
-            rec.last_bucket_ns,
-            rec.recovery_count,
-            rec.detector_mode,
+            rec.adaptive_model_variance,
+            rec.adaptive_model_last_bucket_ns,
+            rec.adaptive_model_recovery_count,
+            rec.adaptive_model_mode,
         );
         assert_eq!(before, after);
     }
@@ -490,15 +516,15 @@ mod adaptive_integration_tests {
             None,
             1_000_000_000
         ));
-        rec.variance = f64::NAN;
+        rec.adaptive_model_variance = f64::NAN;
         let before = (
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
             rec.adaptive_model_sample_count,
-            rec.variance.to_bits(),
-            rec.last_bucket_ns,
-            rec.recovery_count,
-            rec.detector_mode,
+            rec.adaptive_model_variance.to_bits(),
+            rec.adaptive_model_last_bucket_ns,
+            rec.adaptive_model_recovery_count,
+            rec.adaptive_model_mode,
         );
 
         assert!(!update_adaptive_detector(
@@ -512,10 +538,10 @@ mod adaptive_integration_tests {
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
             rec.adaptive_model_sample_count,
-            rec.variance.to_bits(),
-            rec.last_bucket_ns,
-            rec.recovery_count,
-            rec.detector_mode,
+            rec.adaptive_model_variance.to_bits(),
+            rec.adaptive_model_last_bucket_ns,
+            rec.adaptive_model_recovery_count,
+            rec.adaptive_model_mode,
         );
         assert_eq!(before, after);
     }
@@ -539,7 +565,7 @@ mod adaptive_integration_tests {
             breached,
             "sustained upward drift must reach the runtime breach signal"
         );
-        assert_eq!(rec.detector_mode, 2);
+        assert_eq!(rec.adaptive_model_mode, 2);
     }
     #[test]
     fn flash_crowd_suppresses_static_legacy_gates_but_not_adaptive_breach() {
@@ -558,7 +584,7 @@ mod adaptive_integration_tests {
 
         assert!(!update_adaptive_bucket(&mut rec, 5, 1_100_000_000, None));
         assert_eq!(rec.adaptive_model_sample_count, 1);
-        assert_eq!(rec.last_bucket_ns, 1_000_000_000);
+        assert_eq!(rec.adaptive_model_last_bucket_ns, 1_000_000_000);
         assert_eq!(rec.adaptive_bucket_id, 1);
         assert_eq!(rec.adaptive_bucket_packets, 5);
     }
@@ -572,7 +598,7 @@ mod adaptive_integration_tests {
             rec.adaptive_bucket_packets,
             rec.adaptive_bucket_initialized,
             rec.adaptive_model_sample_count,
-            rec.last_bucket_ns,
+            rec.adaptive_model_last_bucket_ns,
         );
         assert!(!update_adaptive_bucket(&mut rec, 5, 900_000_000, None));
         let after = (
@@ -580,7 +606,7 @@ mod adaptive_integration_tests {
             rec.adaptive_bucket_packets,
             rec.adaptive_bucket_initialized,
             rec.adaptive_model_sample_count,
-            rec.last_bucket_ns,
+            rec.adaptive_model_last_bucket_ns,
         );
         assert_eq!(before, after);
     }
