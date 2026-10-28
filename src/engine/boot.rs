@@ -434,120 +434,407 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
                     restore_mesh_crdt_from_wal(mesh, &wal, mesh_min_lsn)?;
                 }
 
-                // Replay WAL tail (or full log if no usable snapshot).
-                let replay_from = if snapshot_used { snap_lsn } else { 0 };
-                let replay = if replay_from == 0 {
-                    wal.replay()
-                } else {
-                    wal.replay_from(replay_from)
-                };
-                match replay {
-                    Ok(entries) => {
-                        let mut applied = 0usize;
-                        for entry in entries {
-                            match entry {
-                                WalEntry::Block { ip, expires_at_ms, tier, .. } => {
-                                    if let Ok(addr) = ip.parse() {
-                                        store.block(addr, expires_at_ms, tier);
-                                        applied += 1;
-                                    }
-                                }
-                                WalEntry::Unblock { ip, .. } => {
-                                    if let Ok(addr) = ip.parse() {
-                                        store.unblock(addr);
-                                        applied += 1;
-                                    }
-                                }
-                                WalEntry::CidrBlock { cidr, expires_at_ms, tier, .. } => {
-                                    if let Ok(net) = cidr.parse() {
-                                        store.block_cidr(net, expires_at_ms, tier);
-                                        applied += 1;
-                                    }
-                                }
-                                WalEntry::CidrUnblock { cidr, .. } => {
-                                    if let Ok(net) = cidr.parse() {
-                                        store.unblock_cidr(net);
-                                        applied += 1;
-                                    }
-                                }
-                                WalEntry::MeshMutation { .. } => {}
-                                WalEntry::Checkpoint { .. } => {}
-                                WalEntry::Snapshot { .. } => {}
-                            }
+                // Hard-WAL invariant (PATCH 9): snapshot present but the WAL
+                // history it relies on has been pruned → recovery would start
+                // from a hole. Fail closed under allow_volatile_fallback=false.
+                if snapshot_used
+                    && hard_wal
+                    && let Some(oldest) = wal.oldest_lsn()
+                    && oldest > snap_lsn + 1
+                {
+                    return Err(std::io::Error::other(format!(
+                        "WAL history pruned past checkpoint boundary (snapshot_lsn={snap_lsn}, oldest_lsn={oldest}) — cannot reconstruct state (allow_volatile_fallback=false)"
+                    )));
+                }
+                // Seed-fold (PATCH 9): the tail fold STARTS from snapshot
+                // block state, so snapshot IPs untouched by the tail remain
+                // blocked, and a tail UnblockIp correctly removes them.
+                // Pre-cleanup of snapshot IPs is implicit: restore_from_snapshot
+                // records are overwritten by the fold result below.
+                let mut replay_seed: std::collections::HashMap<
+                    std::net::IpAddr,
+                    (String, u64, u64),
+                > = std::collections::HashMap::new();
+                if let Some(seed) = snapshot_seed.as_ref() {
+                    // Seed from the exact snapshot record. Do not replace the
+                    // historical reason/since timestamp, and do not reconstruct
+                    // an absolute deadline from a rounded remaining TTL.
+                    for (ip, reason, since_ns, expires_at_ns) in seed.ip_states.iter() {
+                        replay_seed
+                            .insert(*ip, (reason.clone(), *since_ns, expires_at_ns.unwrap_or(0)));
+                    }
+                }
+
+                let min_lsn = if snapshot_used { snap_lsn } else { 0u64 };
+
+                let replay_result = {
+                    #[cfg(feature = "mesh")]
+                    {
+                        if cfg_snapshot.mesh.enabled || mesh_snapshot_seed.is_some() {
+                            ramshield_enforcement::replay_wal_into_store_seeded_with_mesh(
+                                &store,
+                                &wal,
+                                min_lsn,
+                                replay_seed,
+                                mesh_snapshot_seed.as_ref(),
+                            )
+                        } else {
+                            replay_wal_into_store_seeded(&store, &wal, min_lsn, replay_seed)
                         }
-                        tracing::info!(applied, "WAL replay applied enforcement entries");
+                    }
+                    #[cfg(not(feature = "mesh"))]
+                    {
+                        replay_wal_into_store_seeded(&store, &wal, min_lsn, replay_seed)
+                    }
+                };
+                let restored_ttls = match replay_result {
+                    Ok(r) => {
+                        info!(
+                            "WAL replay: restored {} IP blocks (min_lsn={})",
+                            r.len(),
+                            min_lsn
+                        );
+                        r
                     }
                     Err(e) => {
+                        tracing::error!("WAL replay: {}", e);
                         if hard_wal {
-                            return Err(std::io::Error::other(format!("WAL replay failed: {e}")));
+                            return Err(std::io::Error::other(format!(
+                                "WAL replay failed (allow_volatile_fallback=false): {e}"
+                            )));
                         }
-                        tracing::error!(error = %e, "WAL replay failed — continuing with volatile state");
+                        vec![]
                     }
+                };
+                #[cfg(feature = "mesh")]
+                enforcement.refresh_mesh_applied_ips();
+
+                // CIDR recovery is seeded from the snapshot exactly like IP
+                // recovery. This is required for the invariant:
+                // full WAL replay == snapshot + WAL tail replay. In particular,
+                // a tail UnblockCidr must remove a CIDR that existed in the
+                // checkpoint image.
+                let cidr_seed = snapshot_seed
+                    .as_ref()
+                    .map(|seed| {
+                        seed.cidr_states
+                            .iter()
+                            .copied()
+                            .collect::<std::collections::HashMap<_, _>>()
+                    })
+                    .unwrap_or_default();
+                let (restored_cidrs, final_cidrs) =
+                    match replay_wal_cidrs_seeded(&wal, min_lsn, cidr_seed) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::error!("WAL CIDR replay: {}", e);
+                            if hard_wal {
+                                return Err(std::io::Error::other(format!(
+                                    "WAL CIDR replay failed (allow_volatile_fallback=false): {e}"
+                                )));
+                            }
+                            (vec![], std::collections::HashSet::new())
+                        }
+                    };
+                if snapshot_used {
+                    let snapshot_cidrs = snapshot_seed
+                        .as_ref()
+                        .map(|s| {
+                            s.cidr_states
+                                .iter()
+                                .map(|(n, _)| *n)
+                                .collect::<std::collections::HashSet<_>>()
+                        })
+                        .unwrap_or_default();
+                    for network in snapshot_cidrs.difference(&final_cidrs) {
+                        enforcement.remove_restored_cidr(*network);
+                    }
+                }
+                if !restored_cidrs.is_empty() {
+                    info!("WAL replay: restored {} CIDR blocks", restored_cidrs.len());
+                }
+                enforcement = enforcement.with_wal(Arc::clone(&wal));
+                // Re-arm TTL ring and CIDR index with restored state.
+                // PATCH 5: independent domains — a snapshot with 0 temporary
+                // IPs + 3 CIDRs must still restore CIDRs (no coupling via one
+                // !restored_ttls.is_empty() condition).
+                if let Some(seed) = snapshot_seed.take() {
+                    // Snapshot path: re-arm from absolute deadlines captured in
+                    // the snapshot. remaining_secs = ceil(deadline - now).
+                    if !seed.ip_expirations.is_empty() {
+                        let now_ns = crate::engine::checkpoint::now_unix_ns();
+                        let pairs = seed.ip_expirations.iter().map(|(ip, deadline)| {
+                            (*ip, deadline.saturating_sub(now_ns).div_ceil(1_000_000_000))
+                        });
+                        enforcement.restore_expirations(pairs);
+                    }
+                    if !seed.cidr_expirations.is_empty() {
+                        let now_ns = crate::engine::checkpoint::now_unix_ns();
+                        let pairs = seed
+                            .cidr_expirations
+                            .iter()
+                            .filter(|(net, _)| final_cidrs.contains(net))
+                            .map(|(net, deadline)| {
+                                (
+                                    *net,
+                                    deadline.saturating_sub(now_ns).div_ceil(1_000_000_000),
+                                )
+                            });
+                        enforcement.restore_cidr_blocks(pairs);
+                    }
+                }
+                if !restored_ttls.is_empty() {
+                    enforcement.restore_expirations(restored_ttls);
+                }
+                if !restored_cidrs.is_empty() {
+                    enforcement.restore_cidr_blocks(restored_cidrs);
                 }
                 pipeline_wal = Some(wal);
             }
             Err(e) => {
+                tracing::error!("WAL open failed ({}): {}", cfg_snapshot.wal.dir, e);
                 if hard_wal {
-                    return Err(std::io::Error::other(format!("WAL open failed: {e}")));
+                    return Err(std::io::Error::other(format!(
+                        "WAL open failed ({}): {e}",
+                        cfg_snapshot.wal.dir
+                    )));
                 }
-                tracing::error!(error = %e, "WAL open failed — continuing without durability");
             }
         }
     }
-
-    // Spawn enforcement service.
-    let enforcement_handle = tokio::spawn(async move {
+    let mut shutdown_rx = engine.shutdown_rx();
+    // Spawn the enforcement actor and keep the JoinHandle. Do not await run()
+    // here — that starved detection, native ingest, SYNPROXY, and IPC.
+    // Crash is observed in the main select below (Gotcha C).
+    let mut enforcement_handle = tokio::spawn(async move {
         if let Err(e) = enforcement.run(enforcement_rx).await {
-            tracing::error!(error = %e, "enforcement service exited");
+            tracing::error!("enforcement actor: {e}");
         }
     });
 
-    // Periodic checkpoint loop (if WAL present).
-    if let Some(wal) = pipeline_wal.clone() {
-        let checkpoint_interval = Duration::from_secs(cfg_snapshot.wal.checkpoint_interval_secs);
-        let store_ckpt = store.clone();
-        let metrics_ckpt = metrics.clone();
-        let checkpoint_shared_ckpt = checkpoint_shared.clone();
-        let wal_dir = cfg_snapshot.wal.dir.clone();
+    let detection = Arc::new(DetectionEngine::try_new(
+        store.clone(),
+        cfg_handle.clone(),
+        engine.enforcement_tx.clone(),
+        metrics.clone(),
+        engine.shutdown.clone(),
+    )?);
+
+    // The forecaster. It was implemented and unit-tested but never
+    // constructed by the daemon, so the whole forecasting subsystem -
+    // the Holt-Winters forecast, the CUSUM drift detector, the Bayesian
+    // hypothesis tracker and the entropy signal - never ran in
+    // production (I-034).
+    if cfg_snapshot.forecasting.enabled {
+        let forecaster = Arc::new(ramshield_forecasting::Forecaster::new(
+            store.clone(),
+            cfg_snapshot.forecasting.clone(),
+            engine.enforcement_tx.clone(),
+            metrics.clone(),
+        ));
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(checkpoint_interval);
-            loop {
-                interval.tick().await;
-                if engine_shutdown_requested() {
-                    break;
-                }
-                if let Err(e) = checkpoint_shared_ckpt
-                    .barrier
-                    .wait_timeout(checkpoint_shared_ckpt.deadline)
-                    .await
-                {
-                    tracing::warn!(error = %e, "checkpoint barrier wait failed");
-                    continue;
-                }
-                match build_snapshot(&store_ckpt, &metrics_ckpt) {
-                    Ok(snap) => {
-                        let lsn = wal.next_lsn();
-                        if let Err(e) = wal.append_checkpoint(lsn, &snap) {
-                            tracing::error!(error = %e, "checkpoint append failed");
-                            continue;
-                        }
-                        let path = snapshot_path(&wal_dir, lsn);
-                        if let Err(e) = save_snapshot(&path, &snap) {
-                            tracing::error!(error = %e, "snapshot save failed");
-                        } else {
-                            wal.set_snapshot_lsn(lsn);
-                            tracing::info!(lsn, "checkpoint written");
-                        }
-                    }
-                    Err(e) => tracing::error!(error = %e, "build_snapshot failed"),
-                }
-            }
+            forecaster.run().await;
         });
     }
+    let event_tx = detection.event_sender();
+    if cfg_snapshot.native_ingest.enabled
+        && let Err(e) = crate::engine::native::spawn(
+            cfg_snapshot.native_ingest.interface.clone(),
+            cfg_snapshot.native_ingest.max_events_per_sec,
+            cfg_snapshot.xdp.trusted_overlay_cidrs.clone(),
+            event_tx.clone(),
+            engine.shutdown.clone(),
+            metrics.clone(),
+        )
+    {
+        return Err(std::io::Error::other(format!(
+            "native ingest start failed: {e}"
+        )));
+    }
+    if cfg_snapshot.synproxy.enabled
+        && let Err(e) =
+            crate::engine::synproxy::install(&cfg_snapshot.synproxy, &cfg_snapshot.xdp.interface)
+    {
+        engine.shutdown.store(true, Ordering::Release);
+        return Err(std::io::Error::other(format!("synproxy setup failed: {e}")));
+    }
+    let detection_started = detection
+        .clone()
+        .spawn_workers(cfg_snapshot.engine.worker_threads);
+    if !detection_started {
+        engine.pipeline_failed.store(true, Ordering::Release);
+        engine.shutdown.store(true, Ordering::Release);
+        if cfg_snapshot.synproxy.enabled {
+            let _ = crate::engine::synproxy::uninstall();
+        }
+        return Err(std::io::Error::other(
+            "detection workers failed to start; refusing ready state",
+        ));
+    }
+    *engine.detection.lock().unwrap_or_else(|e| e.into_inner()) = Some(detection.clone());
 
-    // Detection / forecast / other loops use cfg_handle for hot reload.
-    // (The full remaining pipeline from master is restored here in the actual commit;
-    // the collapsible_if is applied, and the file is the complete engine boot.)
+    let upstream_cfg = Arc::new(cfg_snapshot.clone());
+    let upstream_metrics = metrics.clone();
+    let upstream_shutdown = engine.shutdown_rx();
+    tokio::spawn(async move {
+        crate::engine::upstream::run(upstream_cfg, upstream_metrics, upstream_shutdown).await;
+    });
 
+    // Capture for checkpoint loop before store is moved into server.
+    let store_arc = store.clone();
+    let cfg_dir = cfg_snapshot.wal.dir;
+
+    let server = match crate::ipc::server::IpcServer::bind(
+        cfg_handle.clone(),
+        engine.clone(),
+        event_tx,
+        store,
+        engine.enforcement_tx.clone(),
+    )
+    .await
+    {
+        Ok(server) => server,
+        Err(e) => {
+            if cfg_snapshot.synproxy.enabled {
+                let _ = crate::engine::synproxy::uninstall();
+            }
+            engine.shutdown.store(true, Ordering::Release);
+            return Err(e);
+        }
+    };
+    // Pipeline is genuinely serving: enforcement, detection, IPC all running.
+    // boot_pipeline blocks in select! below until shutdown, so this is the
+    // one place readiness can be observed while the daemon is live.
+    engine.pipeline_ready.store(true, Ordering::Release);
+    // Signal startup readiness to main BEFORE blocking on shutdown select!.
+    // boot_pipeline only returns when shutdown fires, so we send here.
+    {
+        let mut startup_tx_guard = engine.startup_tx.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(tx) = startup_tx_guard.take() {
+            tx.send(Ok(())).ok();
+        }
+    }
+
+    // Periodic checkpoint loop: snapshot state every CHECKPOINT_INTERVAL.
+    #[cfg(feature = "mesh")]
+    let mesh_checkpoint_blocklist = mesh_blocklist.clone();
+    if let Some(wal) = pipeline_wal {
+        let engine = engine.clone();
+        std::mem::drop(tokio::spawn(async move {
+            let interval = std::time::Duration::from_secs(300);
+            let mut tick = tokio::time::interval(interval);
+            tick.tick().await; // skip immediate first fire (empty snapshot)
+            let mut sd = engine.shutdown_rx();
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {}
+                    _ = sd.changed() => {
+                        info!("checkpoint loop: shutdown");
+                        break;
+                    }
+                }
+                // The boundary and the complete snapshot image must be
+                // captured while holding the same barrier used by enforcement
+                // for [WAL append + Store mutation]. Do not move build_snapshot
+                // outside this guard: it reads the Store, so capturing only the
+                // LSN under the guard is not sufficient.
+                let (boundary, snap) = {
+                    let _guard = checkpoint_shared
+                        .barrier
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+
+                    let boundary = wal.begin_checkpoint();
+                    let mirror = checkpoint_shared.state();
+                    // CIDR deadlines: mirror covers temporaries; permanent
+                    // CIDRs (in store.active_cidrs but absent from the mirror)
+                    // emit None.
+                    let cidrs: Vec<CidrSnapshot> = store_arc
+                        .active_cidrs
+                        .iter()
+                        .map(|e| *e.key())
+                        .map(|network| CidrSnapshot {
+                            network,
+                            expires_at_ns: mirror.cidr_expirations.get(&network).copied(),
+                        })
+                        .collect();
+                    let ckpt_state = CheckpointState {
+                        ip_expirations: mirror.ip_expirations.clone(),
+                        cidrs,
+                    };
+                    let snap = {
+                        #[cfg(feature = "mesh")]
+                        {
+                            if let Some(mesh) = mesh_checkpoint_blocklist.as_ref() {
+                                build_snapshot_with_mesh(
+                                    &store_arc,
+                                    &ckpt_state,
+                                    boundary.lsn,
+                                    mesh.export_snapshot(),
+                                )
+                            } else {
+                                build_snapshot(&store_arc, &ckpt_state, boundary.lsn)
+                            }
+                        }
+                        #[cfg(not(feature = "mesh"))]
+                        {
+                            build_snapshot(&store_arc, &ckpt_state, boundary.lsn)
+                        }
+                    };
+                    (boundary, snap)
+                };
+
+                // Filesystem I/O deliberately happens after the barrier is
+                // released. The barrier protects logical consistency, not disk I/O.
+                let snap_path = match write_snapshot(&cfg_dir, &snap, boundary.lsn) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::error!("snapshot write: {}", e);
+                        continue;
+                    }
+                };
+                match wal.finish_checkpoint(boundary.lsn) {
+                    Ok(new_lsn) => info!(
+                        "checkpoint (lsn={} snap_lsn={}): {}",
+                        new_lsn, boundary.lsn, snap_path
+                    ),
+                    Err(e) => tracing::error!("WAL checkpoint: {}", e),
+                }
+            }
+        }));
+    }
+
+    // Graceful shutdown: wait for signal, then join tasks.
+    // Gotcha C: a detached actor fails silently — select against the
+    // enforcement JoinHandle so a crash becomes FATAL, not a hang.
+    tokio::select! {
+        res = &mut enforcement_handle => {
+            tracing::error!(result = ?res, "enforcement actor terminated unexpectedly");
+            engine.pipeline_failed.store(true, Ordering::Release);
+            return Err(std::io::Error::other("enforcement actor terminated; pipeline FATAL"));
+        }
+        _ = server.start() => {}
+        _ = shutdown_rx.changed() => {
+            tracing::info!("pipeline: shutdown signal received, draining...");
+            enforcement_shutdown.store(true, Ordering::Release);
+            // Join with timeout to avoid hanging on stuck tasks.
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+                        tokio::select! {
+                            _ = shutdown_rx.changed() => {
+                                tracing::warn!("enforcement shutdown timed out via rx changed");
+                            }
+                            _ = tokio::time::sleep_until(deadline) => {
+                                tracing::warn!("enforcement shutdown timed out");
+                            }
+                        }
+
+        }
+    }
+    if cfg_snapshot.synproxy.enabled
+        && let Err(e) = crate::engine::synproxy::uninstall()
+    {
+        tracing::warn!(error = %e, "failed to remove RamShield SYNPROXY ruleset during shutdown");
+    }
     Ok(())
 }
+
