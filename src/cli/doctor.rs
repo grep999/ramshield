@@ -157,7 +157,7 @@ pub fn diagnose(config_path: Option<&Path>, subsystem: Option<&str>) -> DoctorRe
             None => vec![CheckResult::fail(
                 "core",
                 "Subsystem selector",
-                format!("unknown subsystem '{subsystem}'"),
+                format!("unknown subsystem '{filter}'"),
                 "Choose one of: core, config, xdp, maps, stats, mesh.",
             )],
         }
