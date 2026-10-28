@@ -205,6 +205,9 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
                             cfg_snapshot.autonomous.window_ms,
                         ) {
                             tracing::error!(error = %e, "failed to configure autonomous XDP guard");
+                            // ponytail: intentionally not collapsible — error logged unconditionally on failure,
+                            // but return only when hard_xdp=true (fail-open when fallback allowed).
+                            #[allow(clippy::collapsible_if)]
                             if hard_xdp {
                                 return Err(std::io::Error::other(format!(
                                     "autonomous XDP configuration failed: {e}"
