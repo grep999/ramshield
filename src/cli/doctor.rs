@@ -110,33 +110,29 @@ pub fn diagnose(config_path: Option<&Path>, subsystem: Option<&str>) -> DoctorRe
         config.validate()?;
         Ok(config)
     });
-    let config_result = match loaded {
-        Ok(_config) => CheckResult::pass(
-            "config",
-            "Configuration",
-            format!(
-                "loaded and schema-validated {}",
-                config_path
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "environment/default configuration".into())
+    let (config, config_result) = match loaded {
+        Ok(config) => {
+            let result = CheckResult::pass(
+                "config",
+                "Configuration",
+                format!(
+                    "loaded and schema-validated {}",
+                    config_path
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "environment/default configuration".into())
+                ),
+            );
+            (Some(config), result)
+        }
+        Err(error) => (
+            None,
+            CheckResult::fail(
+                "config",
+                "Configuration",
+                format!("configuration could not be loaded or validated: {error:#}"),
+                "Fix the reported TOML/schema error and rerun ramshield doctor --subsystem config.",
             ),
         ),
-        Err(error) => CheckResult::fail(
-            "config",
-            "Configuration",
-            format!("configuration could not be loaded or validated: {error:#}"),
-            "Fix the reported TOML/schema error and rerun ramshield doctor --subsystem config.",
-        ),
-    };
-    let config = match config_path {
-        Some(path) => load_config(path).ok(),
-        None => {
-            let mut config = Config::default();
-            config
-                .apply_env_overrides()
-                .and_then(|_| config.validate().map(|_| config))
-                .ok()
-        }
     };
     let effective = config.clone().unwrap_or_default();
     let mut all = Vec::new();
