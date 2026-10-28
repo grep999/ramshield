@@ -255,7 +255,7 @@ pub fn check_ebpf_maps(config: &Config) -> Vec<CheckResult> {
         Ok(output) if output.status.success() => {
             let text = String::from_utf8_lossy(&output.stdout);
             let count = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v.as_array().map(Vec::len));
-            let suffix = count.map(|n| format!(" ({n} maps)").to_string()).unwrap_or_default();
+            let suffix = count.map(|n| format!(" ({n} maps)")).unwrap_or_default();
             out.push(CheckResult::warning("maps", "BPF map inventory",
                 format!("bpftool enumerated kernel maps{suffix}; occupancy and per-map capacity cannot be inferred from inventory alone"),
                 "Inspect RamShield's pinned map handles and max_entries through bpftool or expose authoritative map telemetry."));
@@ -353,6 +353,7 @@ pub fn run(config_path: Option<&Path>, subsystem: Option<&str>) -> i32 {
     report.exit_code()
 }
 
+#[allow(unsafe_code)]
 fn effective_uid() -> Option<u32> {
     #[cfg(target_os = "linux")]
     { Some(unsafe { libc::geteuid() }) }
