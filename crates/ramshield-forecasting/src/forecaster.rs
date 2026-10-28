@@ -75,10 +75,7 @@ impl Forecaster {
 
     /// Attach a non-blocking publisher for the current Bayesian classification.
     /// The callback should only publish an atomic snapshot; it must not perform I/O.
-    pub fn set_context_publisher(
-        &mut self,
-        publisher: ContextPublisher,
-    ) {
+    pub fn set_context_publisher(&mut self, publisher: ContextPublisher) {
         self.context_publisher = Some(publisher);
     }
 
