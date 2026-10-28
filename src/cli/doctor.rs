@@ -111,7 +111,7 @@ pub fn diagnose(config_path: Option<&Path>, subsystem: Option<&str>) -> DoctorRe
         Ok(config)
     });
     let config_result = match loaded {
-        Ok(config) => CheckResult::pass(
+        Ok(_config) => CheckResult::pass(
             "config",
             "Configuration",
             format!(
@@ -194,7 +194,9 @@ pub fn check_privileges_and_kernel(config: &Config) -> Vec<CheckResult> {
         out.push(CheckResult::fail(
             "core",
             "Privileges",
-            format!("XDP is enabled but the effective capability set is insufficient (uid={uid:?}, CAP_BPF={cap_bpf}, CAP_SYS_ADMIN={cap_sys_admin}, CAP_NET_ADMIN={cap_net_admin}, CAP_PERFMON={cap_perfmon})"),
+            format!(
+                "XDP is enabled but the effective capability set is insufficient (uid={uid:?}, CAP_BPF={cap_bpf}, CAP_SYS_ADMIN={cap_sys_admin}, CAP_NET_ADMIN={cap_net_admin}, CAP_PERFMON={cap_perfmon})"
+            ),
             "Run with the required capabilities; the current XDP loader expects cap_net_admin, cap_perfmon, and cap_bpf (or the kernel-appropriate CAP_SYS_ADMIN equivalent). Re-apply file capabilities after rebuilding the binary.",
         ));
     } else if uid == Some(0) {
