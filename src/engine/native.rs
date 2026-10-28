@@ -1964,4 +1964,25 @@ mod tests {
             "exactly one thread may emit the error, however many notice the closed channel"
         );
     }
+
+    #[test]
+    fn rejected_descriptor_recovery_requires_a_valid_forward_offset() {
+        let blk_len = 512;
+        let block_size = 1024;
+        let off = 192;
+
+        assert_eq!(
+            checked_next_tpacket_offset(off, 128, false, blk_len, block_size),
+            Ok(Some(320)),
+            "a checked, forward offset inside the block may be followed"
+        );
+        assert!(
+            checked_next_tpacket_offset(off, 0, false, blk_len, block_size).is_err(),
+            "a zero offset cannot recover a non-final descriptor"
+        );
+        assert!(
+            checked_next_tpacket_offset(off, 512, false, blk_len, block_size).is_err(),
+            "a next header outside the declared block must not be followed"
+        );
+    }
 }
