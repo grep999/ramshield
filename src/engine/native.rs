@@ -609,6 +609,7 @@ fn run_socket(
             }
         };
         if !valid_tpacket_block_len(blk_len, block_size) {
+            metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
             warn!(
                 worker,
                 block_idx, blk_len, block_size, "rejecting invalid TPACKET_V3 block length"
@@ -633,6 +634,7 @@ fn run_socket(
             ) {
                 Some(value) => value,
                 None => {
+                    metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
                     warn!(
                         worker,
                         block_idx,
@@ -651,6 +653,7 @@ fn run_socket(
             let snaplen = match usize::try_from(unsafe { (*hdr).tp_snaplen }) {
                 Ok(v) => v,
                 Err(_) => {
+                    metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
                     warn!(
                         worker,
                         block_idx, packet_idx, "tp_snaplen does not fit usize"
@@ -667,17 +670,55 @@ fn run_socket(
             ) {
                 Some(value) if mac <= frame_size && snaplen <= frame_size => value,
                 _ => {
-                    warn!(
-                        worker,
-                        block_idx,
-                        packet_idx,
+                    metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
+                    // A malformed descriptor must not create an unbounded log
+                    // stream under attack. Keep the first diagnostic; the
+                    // monotonic counter records every rejected descriptor.
+                    static RANGE_REJECT_WARNED: AtomicBool = AtomicBool::new(false);
+                    if !RANGE_REJECT_WARNED.swap(true, Ordering::Relaxed) {
+                        warn!(
+                            worker,
+                            block_idx,
+                            packet_idx,
+                            off,
+                            mac,
+                            snaplen,
+                            blk_len,
+                            "rejecting invalid TPACKET_V3 packet range"
+                        );
+                    }
+
+                    // The header itself is in-bounds, so its next-offset field
+                    // can be used only as a candidate. Continue only when the
+                    // checked chain proves the next descriptor remains in this
+                    // block and the mapped ring; otherwise abandon the block.
+                    let next = unsafe { (*hdr).tp_next_offset as usize };
+                    match checked_next_tpacket_offset(
                         off,
-                        mac,
-                        snaplen,
+                        next,
+                        packet_idx + 1 == num,
                         blk_len,
-                        "rejecting invalid TPACKET_V3 packet range"
-                    );
-                    break;
+                        block_size,
+                    ) {
+                        Ok(Some(next_off)) => {
+                            off = next_off;
+                            continue;
+                        }
+                        Ok(None) => continue,
+                        Err(reason) => {
+                            metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
+                            warn!(
+                                worker,
+                                block_idx,
+                                packet_idx,
+                                off,
+                                next,
+                                %reason,
+                                "stopping TPACKET_V3 walk after invalid descriptor chain"
+                            );
+                            break;
+                        }
+                    }
                 }
             };
             // SAFETY: checked_tpacket_packet_offsets proves [packet_off,
@@ -701,6 +742,7 @@ fn run_socket(
             let next = match usize::try_from(unsafe { (*hdr).tp_next_offset }) {
                 Ok(v) => v,
                 Err(_) => {
+                    metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
                     warn!(
                         worker,
                         block_idx, packet_idx, "tp_next_offset does not fit usize"
@@ -713,6 +755,7 @@ fn run_socket(
                 Ok(Some(next_off)) => off = next_off,
                 Ok(None) => {}
                 Err(reason) => {
+                    metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
                     warn!(worker, block_idx, packet_idx, off, next, %reason, "rejecting invalid TPACKET_V3 descriptor chain");
                     break;
                 }
