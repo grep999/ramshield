@@ -124,7 +124,7 @@ pub fn check_privileges_and_kernel(config: &Config) -> Vec<CheckResult> {
     let cap_net_admin = caps & (1u64 << 12) != 0;
     if uid == Some(0) {
         out.push(CheckResult::pass("core", "Privileges", "effective UID is 0 (root)"));
-    } else if cap_bpf && cap_net_admin {
+    } else if (cap_bpf || cap_sys_admin) && cap_net_admin {
         out.push(CheckResult::pass("core", "Privileges", "CAP_BPF and CAP_NET_ADMIN are effective"));
     } else if xdp_required {
         out.push(CheckResult::fail("core", "Privileges",
