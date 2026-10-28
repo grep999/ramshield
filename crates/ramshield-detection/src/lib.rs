@@ -155,6 +155,11 @@ pub struct DetectionEngine {
     /// Serializes capacity check/evict/insert so concurrent detector paths
     /// cannot exceed PENDING_MITIGATION_CAP between a len() check and insert.
     pending_mitigation_lock: std::sync::Mutex<()>,
+    /// Captured at engine startup: whether the forecasting worker will run.
+    /// Remains fixed for the engine's lifetime; does not follow hot config
+    /// reloads unless the worker is restarted accordingly.
+    #[allow(dead_code)]
+    forecasting_worker_enabled: bool,
 }
 
 impl DetectionEngine {
@@ -210,7 +215,9 @@ impl DetectionEngine {
         shutdown: Arc<AtomicBool>,
         shm_path: &std::path::Path,
     ) -> std::io::Result<Self> {
-        let bloom_bits = config.load().detection.bloom_bits;
+        let cfg = config.load();
+        let bloom_bits = cfg.detection.bloom_bits;
+        let forecasting_worker_enabled = cfg.forecasting.enabled;
         // Patch A: publish capacity up front so bloom_fp_ppm has a
         // denominator before the first flush (otherwise the gauge reads 0
         // and the FP estimate is silently disabled).
@@ -252,6 +259,7 @@ impl DetectionEngine {
                 32,
             ),
             pending_mitigation_lock: std::sync::Mutex::new(()),
+            forecasting_worker_enabled,
         })
     }
 

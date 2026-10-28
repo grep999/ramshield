@@ -291,9 +291,16 @@ impl DetectionEngine {
         // across flushes (an IP promoted in two flushes counts twice), which
         // only makes the reported FP conservative — it never understates fill.
         self.metrics.record_bloom_inserts(promoted_ips.len() as u64);
-        threat_sample.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        threat_sample.truncate(128);
-        self.store.traffic.push_threat_samples(threat_sample);
+        // Patch B: only collect/sort/enqueue forecast samples when the forecasting
+        // worker is enabled at engine startup. When forecasting is disabled this
+        // work is unnecessary overhead — the disabled path still performs normal
+        // detection, enforcement-related processing, metrics updates, and all
+        // other flush responsibilities unchanged.
+        if self.forecasting_worker_enabled {
+            threat_sample.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            threat_sample.truncate(128);
+            self.store.traffic.push_threat_samples(threat_sample);
+        }
         self.store
             .traffic
             .promoted_ips

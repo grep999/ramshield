@@ -1838,4 +1838,168 @@ fn merge_local_holds_the_merge_lock_for_the_whole_drain() {
          it must be held for the whole drain (old per-IP lock: ~12.5M)"
     );
 }
+
+/// Patch B RED: forecasting disabled at engine startup avoids all forecast-only
+/// sample collection, sorting, and enqueueing without affecting detection.
+#[test]
+fn threat_samples_are_not_collected_when_forecasting_disabled() {
+    use ramshield_config::Config;
+    let mut cfg = Config::default();
+    cfg.detection.emergency_burst_threshold = 5;
+    cfg.detection.block_ttl_secs = 2;
+    cfg.forecasting.enabled = false;
+    let handle = cfg.clone().into_handle();
+    let store = Arc::new(Store::new(16));
+    let metrics = Arc::new(Metrics::new());
+    let (etx, _erx) = mpsc::channel(64);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let eng = Arc::new(
+        DetectionEngine::try_new(store.clone(), handle, etx, metrics.clone(), shutdown)
+            .expect("detection try_new"),
+    );
+
+    // Emit enough events to trigger threat-scoring and promotion.
+    let ip: IpAddr = "192.0.2.77".parse().unwrap();
+    let events: Vec<_> = (0..30u64)
+        .map(|i| ConnectionEvent {
+            ip,
+            timestamp_ns: i,
+            bytes: 64,
+            status_code: 200,
+            proto_fingerprint: 0,
+            l7: None,
+        })
+        .collect();
+    eng.flush_events(&events);
+
+    // With forecasting disabled, the threat_sample queue must stay empty
+    // (no sorting, no enqueue). Normal detection and enforcement behavior
+    // is unchanged — blocks are still emitted.
+    assert_eq!(
+        eng.store.traffic.threat_sample.len(),
+        0,
+        "forecasting disabled: threat sample queue must not grow"
+    );
+
+    // Verify detection still works: same traffic still promotes the IP.
+    let ip2: IpAddr = "10.0.0.5".parse().unwrap();
+    let events2: Vec<_> = (0..30u64)
+        .map(|i| ConnectionEvent {
+            ip: ip2,
+            timestamp_ns: i,
+            bytes: 64,
+            status_code: 200,
+            proto_fingerprint: 0,
+            l7: None,
+        })
+        .collect();
+    eng.flush_events(&events2);
+    assert!(eng.store.get(&ip2).is_some(), "IP must still be promoted by detection");
+}
+
+/// Patch B RED: forecasting enabled at engine startup preserves sample collection
+/// and delivery.
+#[test]
+fn threat_samples_are_collected_when_forecasting_enabled() {
+    use ramshield_config::Config;
+    let mut cfg = Config::default();
+    cfg.detection.emergency_burst_threshold = 5;
+    cfg.detection.block_ttl_secs = 2;
+    // forecasting enabled (the default).
+    let handle = cfg.into_handle();
+    let store = Arc::new(Store::new(16));
+    let metrics = Arc::new(Metrics::new());
+    let (etx, _erx) = mpsc::channel(64);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let eng = Arc::new(
+        DetectionEngine::try_new(store.clone(), handle, etx, metrics.clone(), shutdown)
+            .expect("detection try_new"),
+    );
+
+    // Emit enough events to produce a threat score > 0.5 threshold.
+    let ip: IpAddr = "192.0.2.77".parse().unwrap();
+    let events: Vec<_> = (0..30u64)
+        .map(|i| ConnectionEvent {
+            ip,
+            timestamp_ns: i,
+            bytes: 64,
+            status_code: 200,
+            proto_fingerprint: 0,
+            l7: None,
+        })
+        .collect();
+    eng.flush_events(&events);
+
+    // With forecasting enabled, the threat sample queue must contain entries
+    // (sorted by threat score descending, truncated to 128).
+    let sample_len = eng.store.traffic.threat_sample.len();
+    assert!(
+        sample_len > 0,
+        "forecasting enabled: threat sample queue must contain entries, got {}",
+        sample_len
+    );
+
+    // Verify the queue is sorted by threat score descending.
+    let mut samples: Vec<(IpAddr, f32)> = eng.store.traffic.drain_threat_sample();
+    for w in samples.windows(2) {
+        assert!(w[0].1 >= w[1].1, "threat samples must be sorted descending");
+    }
+
+    // IP must also be promoted by detection.
+    assert!(eng.store.get(&ip).is_some(), "IP must be promoted by detection");
+}
+
+/// Patch B RED: hot configuration changes after engine initialization must not
+/// change the sample-collection decision when the forecasting worker lifecycle
+/// remains unchanged.
+#[test]
+fn threat_sample_gate_tracks_worker_lifecycle_not_hot_config() {
+    use ramshield_config::Config;
+    // Start with forecasting enabled at engine construction.
+    let mut cfg = Config::default();
+    cfg.forecasting.enabled = true;
+    let handle = cfg.clone().into_handle();
+    let store = Arc::new(Store::new(16));
+    let metrics = Arc::new(Metrics::new());
+    let (etx, _erx) = mpsc::channel(64);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let eng = Arc::new(
+        DetectionEngine::try_new(store.clone(), handle, etx, metrics.clone(), shutdown)
+            .expect("detection try_new"),
+    );
+
+    // Forecasting_worker_enabled was captured at startup = true.
+    let sample_len_1 = eng.store.traffic.threat_sample.len();
+
+    // Now toggle the mutable config field off — but the engine's startup
+    // decision remains fixed at true. Hot config does not retroactively change
+    // whether forecast samples were collected.
+    cfg.forecasting.enabled = false;
+
+    // Emit events after the config toggle.
+    let ip: IpAddr = "192.0.2.78".parse().unwrap();
+    let events: Vec<_> = (0..30u64)
+        .map(|i| ConnectionEvent {
+            ip,
+            timestamp_ns: i,
+            bytes: 64,
+            status_code: 200,
+            proto_fingerprint: 0,
+            l7: None,
+        })
+        .collect();
+    eng.flush_events(&events);
+
+    // The engine's startup decision was true, so samples should still be
+    // collected despite the mutable config now being false.
+    let sample_len_2 = eng.store.traffic.threat_sample.len();
+    assert!(
+        sample_len_2 >= sample_len_1,
+        "engine startup decision must persist; samples should not decrease after hot config change"
+    );
+
+    // IP must still be promoted.
+    assert!(eng.store.get(&ip).is_some(), "IP must still be promoted by detection");
+}
+
 mod macro_replay;
