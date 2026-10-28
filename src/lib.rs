@@ -7,6 +7,8 @@
 pub mod config {
     pub use ramshield_config::*;
 }
+#[path = "cli/doctor.rs"]
+pub mod doctor;
 pub mod dashboard;
 pub mod detection {
     pub use ramshield_detection::*;
