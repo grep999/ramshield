@@ -47,7 +47,13 @@ fn parse_args(args: &[String]) -> Result<(Option<String>, bool, bool, bool, Opti
         Some(CliCommand::Doctor { subsystem }) => (true, subsystem),
         None => (false, None),
     };
-    Ok((config_path, parsed.no_xdp, doctor, parsed.validate, subsystem))
+    Ok((
+        config_path,
+        parsed.no_xdp,
+        doctor,
+        parsed.validate,
+        subsystem,
+    ))
 }
 
 /// Resolve the operator's config first; repository defaults are a last-resort
@@ -283,7 +289,6 @@ async fn main() -> Result<()> {
 fn command_succeeded(command: &mut std::process::Command) -> bool {
     command.output().is_ok_and(|output| output.status.success())
 }
-
 
 #[cfg(test)]
 mod cli_tests {
