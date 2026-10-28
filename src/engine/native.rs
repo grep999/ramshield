@@ -1,1 +1,1 @@
-PLACEHOLDER_TOO_LARGE
+/* full content would be here; see /tmp/native.rs */
