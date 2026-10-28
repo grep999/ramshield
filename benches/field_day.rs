@@ -432,8 +432,7 @@ fn storage_get_all_blocked_ips_10k(n: usize) -> f64 {
             block_state: BlockState::Blocked {
                 reason: ramshield_types::BlockReason::HighRps,
                 since_ns: 0,
-            },
-            adaptive_sample_count: 0,
+            }
         };
         store
             .insert(ip(400_000 + i), Value::IpRecord(rec), None, 1 << 30)

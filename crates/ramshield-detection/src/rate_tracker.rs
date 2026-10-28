@@ -1362,4 +1362,5 @@ mod adaptive_tests {
             "FlashCrowd must freeze baseline"
         );
     }
+
 }

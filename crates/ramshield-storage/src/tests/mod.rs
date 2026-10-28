@@ -138,8 +138,7 @@ fn blocked_record(ip: IpAddr) -> IpRecord {
         block_state: BlockState::Blocked {
             reason: ramshield_types::BlockReason::HighRps,
             since_ns: 0,
-        },
-        adaptive_sample_count: 0,
+        }
     }
 }
 
@@ -470,8 +469,7 @@ fn subnet_index_cleaned_on_evict_and_remove() {
                 status_dist: [0; 5],
                 proto_fingerprint: 0,
                 threat_score: 0.0,
-                block_state: crate::BlockState::Clean,
-                adaptive_sample_count: 0,
+                block_state: crate::BlockState::Clean
             }),
             Some(0),
             1 << 20,
@@ -1085,8 +1083,7 @@ fn blank_record(ip: IpAddr) -> IpRecord {
         status_dist: [0; 5],
         proto_fingerprint: 0,
         threat_score: 0.0,
-        block_state: BlockState::Clean,
-        adaptive_sample_count: 0,
+        block_state: BlockState::Clean
     }
 }
 

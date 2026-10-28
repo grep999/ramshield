@@ -191,8 +191,7 @@ fn replay_wal_into_store_seeded_internal(
                 block_state: BlockState::Blocked {
                     reason,
                     since_ns: ts_ns,
-                },
-                adaptive_sample_count: 0,
+                }
             },
         };
         store

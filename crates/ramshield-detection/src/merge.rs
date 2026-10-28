@@ -64,8 +64,7 @@ impl DetectionEngine {
                 status_dist: [0; 5],
                 proto_fingerprint: ip_agg.proto_fp,
                 threat_score: 0.0,
-                block_state: BlockState::Clean,
-                adaptive_sample_count: 0,
+                block_state: BlockState::Clean
             },
             ram_lim,
             |rec| {
