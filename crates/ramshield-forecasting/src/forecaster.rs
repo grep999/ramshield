@@ -77,7 +77,7 @@ impl Forecaster {
     /// The callback should only publish an atomic snapshot; it must not perform I/O.
     pub fn set_context_publisher(
         &mut self,
-        publisher: Arc<dyn Fn(Option<(Hypothesis, f64)>, u64) + Send + Sync + 'static>,
+        publisher: ContextPublisher,
     ) {
         self.context_publisher = Some(publisher);
     }
