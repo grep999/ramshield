@@ -79,11 +79,12 @@ pub struct IpRecord {
     pub pulse_window_start_ns: u64,
     pub adaptive_baseline_rps: f64,
     pub adaptive_cusum_s: f64,
+    pub adaptive_model_sample_count: u64,
     pub adaptive_sample_count: u64,
-    pub adaptive_variance: f64,
-    pub adaptive_last_bucket_ns: u64,
-    pub adaptive_recovery_count: u64,
-    pub adaptive_mode: u8,
+    pub variance: f64,
+    pub last_bucket_ns: u64,
+    pub recovery_count: u64,
+    pub detector_mode: u8,
     pub adaptive_bucket_id: u64,
     pub adaptive_bucket_packets: u64,
     pub adaptive_bucket_initialized: bool,
@@ -255,7 +256,7 @@ The storage benchmarks in it are `subnet_key_v4`, `subnet_key_v6`,
 
 ## Testing
 
-51 tests: shard-level concurrency (8 threads inserting at once), the RAM
+52 tests: shard-level concurrency (8 threads inserting at once), the RAM
 limit (an insert past the limit is refused, and no phantom entry or
 blocked-index entry is left behind), the blocked index staying in step
 with the records (a blocked record published through `update_ip` is
@@ -278,7 +279,7 @@ relative-baseline gates. Its state is stored directly in each `IpRecord` so upda
 survive successive flushes without a separate unbounded map. The legacy CUSUM fields
 remain independent to preserve existing detection semantics during this prototype.
 
-`adaptive_mode` is persisted as `0 = WarmingUp`, `1 = Monitoring`, and
+`detector_mode` is persisted as `0 = WarmingUp`, `1 = Monitoring`, and
 `2 = Breached`. Adaptive updates are accepted only when the sample rate and
 monotonic timestamp are valid and all derived arithmetic remains finite. Rejected
 updates leave the adaptive fields unchanged. Forecast-context modulation is exposed

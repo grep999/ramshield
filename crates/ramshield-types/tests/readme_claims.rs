@@ -170,7 +170,6 @@ fn every_type_the_readme_shows_is_exported() {
         "crates/ramshield-types/src/error.rs",
         "crates/ramshield-types/src/events.rs",
         "crates/ramshield-types/src/ip_network.rs",
-        "crates/ramshield-types/src/util.rs",
     ]
     .iter()
     .map(|f| read(f))
@@ -197,7 +196,6 @@ fn the_readme_test_count_is_the_real_test_count() {
         "crates/ramshield-types/src/error.rs",
         "crates/ramshield-types/src/events.rs",
         "crates/ramshield-types/src/ip_network.rs",
-        "crates/ramshield-types/src/util.rs",
     ] {
         count += read(file).matches("#[test]").count();
         count += read(file).matches("#[tokio::test]").count();

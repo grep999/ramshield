@@ -39,6 +39,13 @@ const TPACKET_ALIGNMENT: usize = 16;
 
 #[cfg(target_os = "linux")]
 #[repr(C)]
+struct TpacketStats {
+    tp_packets: u32,
+    tp_drops: u32,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
 struct TpacketReq3 {
     tp_block_size: u32,
     tp_block_nr: u32,
@@ -620,6 +627,7 @@ fn run_socket(
         let first = unsafe { (*block_ptr).hdr.offset_to_first_pkt as usize };
         let mut off = first;
         for packet_idx in 0..num {
+            metrics.native_frames_walked.fetch_add(1, Ordering::Relaxed);
             let header_abs = match checked_tpacket_header_offset(
                 block_idx, block_size, ring_len, blk_len, off,
             ) {
@@ -677,6 +685,7 @@ fn run_socket(
             let packet =
                 unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
             process_packet(
+                fd,
                 packet,
                 max_eps,
                 trusted_overlay_cidrs,
@@ -833,6 +842,7 @@ fn set_sockopt<T>(fd: i32, level: i32, name: i32, value: &T) -> std::io::Result<
 #[cfg(target_os = "linux")]
 #[allow(clippy::too_many_arguments)] // Producer state stays explicit at this boundary.
 fn process_packet(
+    fd: i32,
     packet: &[u8],
     max_eps: u64,
     trusted_overlay_cidrs: &[IpNetwork],
@@ -851,10 +861,42 @@ fn process_packet(
             .is_ok()
     {
         budget.store(0, Ordering::Relaxed);
+        // #90 accounting: kernel-side socket counters. `tp_packets` counts
+        // every frame the socket received (ring or not); if walked << this,
+        // the ring/walk is losing frames the kernel delivered. `tp_drops`
+        // counts frames the ring had no room for.
+        let mut stats = TpacketStats {
+            tp_packets: 0,
+            tp_drops: 0,
+        };
+        let rc = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_PACKET,
+                20, // PACKET_STATISTICS
+                (&mut stats as *mut TpacketStats).cast(),
+                &mut { std::mem::size_of::<TpacketStats>() as libc::socklen_t }
+                    as *mut libc::socklen_t,
+            )
+        };
+        if rc == 0 {
+            metrics
+                .native_socket_packets
+                .fetch_add(stats.tp_packets as u64, Ordering::Relaxed);
+            metrics
+                .native_socket_drops
+                .fetch_add(stats.tp_drops as u64, Ordering::Relaxed);
+        } else {
+            let err = std::io::Error::last_os_error();
+            warn!(fd, rc, %err, "#90: PACKET_STATISTICS getsockopt failed");
+        }
     }
     let (ip, proto, syn, _fragmented, overlay_identity) = match parse_l3(packet) {
         Some(v) => v,
-        None => return,
+        None => {
+            metrics.native_parse_rejects.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
     };
     if trusted_overlay_cidrs
         .iter()
@@ -901,7 +943,11 @@ fn process_packet(
     // outright, so no counter moved and the loss was invisible both to the
     // operator and to the metrics export.
     match tx.try_send(ev) {
-        Ok(()) => {}
+        Ok(()) => {
+            metrics
+                .native_ingest_emitted
+                .fetch_add(1, Ordering::Relaxed);
+        }
         Err(crossbeam_channel::TrySendError::Full(_)) => {
             // Backpressure: the downstream queue is saturated.
             metrics.inc_native_ingest_drop(1);
@@ -1551,6 +1597,7 @@ mod tests {
             let start = std::time::Instant::now();
             for _ in 0..PACKETS_PER_SAMPLE {
                 process_packet(
+                    0,
                     &frame,
                     PACKETS_PER_SAMPLE as u64,
                     &[],
@@ -1649,6 +1696,7 @@ mod tests {
         let disconnect_log_emissions = AtomicU64::new(0);
 
         process_packet(
+            0,
             &sample_frame(),
             1000,
             &[],
@@ -1696,6 +1744,7 @@ mod tests {
         let disconnect_log_emissions = AtomicU64::new(0);
 
         process_packet(
+            0,
             &sample_frame(),
             1000,
             &[],
@@ -1742,6 +1791,7 @@ mod tests {
 
         for _ in 0..5 {
             process_packet(
+                0,
                 &sample_frame(),
                 1000,
                 &[],
@@ -1785,6 +1835,7 @@ mod tests {
         let disconnect_log_emissions = AtomicU64::new(0);
 
         process_packet(
+            0,
             &sample_frame(),
             1000,
             &[],
@@ -1835,6 +1886,7 @@ mod tests {
             threads.push(std::thread::spawn(move || {
                 for _ in 0..100 {
                     process_packet(
+                        0,
                         &sample_frame(),
                         1_000_000,
                         &[],

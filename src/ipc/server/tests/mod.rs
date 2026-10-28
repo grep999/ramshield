@@ -371,3 +371,22 @@ fn mutating_classification_agrees_with_the_role_table() {
         );
     }
 }
+
+/// Part 3 gate C: an HTTP request pointed at the IPC port (operator error or
+/// reverse-proxy misroute) must fail as a typed frame rejection — never a
+/// panic, never a hang, never a partial parse. The trust boundary is the
+/// frame parser; exercise it directly with a real HTTP/1.1 request line.
+#[test]
+fn http_request_to_ipc_port_is_rejected_not_panicked() {
+    let replay = ramshield_protocol::auth::ReplayStore::default();
+    let http = b"GET / HTTP/1.1\r\nHost: localhost\r\nUser-Agent: curl\r\n\r\n";
+    let err = verify_frame_auth(&[], http, &replay).expect_err("HTTP must not parse as a frame");
+    assert_eq!(err, "frame is not valid JSON");
+
+    // Empty and oversized-garbage lines stay in the same typed-rejection class.
+    let err = verify_frame_auth(&[], b"\r\n", &replay).expect_err("blank line must be rejected");
+    assert_eq!(err, "frame is not valid JSON");
+    let garbage = vec![0x00u8; 8192];
+    let err = verify_frame_auth(&[], &garbage, &replay).expect_err("NUL garbage must be rejected");
+    assert_eq!(err, "frame is not valid JSON");
+}

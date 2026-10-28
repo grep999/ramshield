@@ -85,7 +85,16 @@ impl DetectionEngine {
 
         let mut blocks = Vec::new();
         let mut promoted_ips: Vec<IpAddr> = Vec::with_capacity(64);
-        let mut threat_sample = Vec::with_capacity(64);
+        // Forecast-only sample collection: allocated and populated only when
+        // the forecasting worker is enabled at engine startup. When disabled,
+        // no forecast-only allocation, collection, sorting, or enqueueing
+        // occurs — normal detection/enforcement/metrics run unchanged.
+        let mut threat_sample: Option<Vec<(IpAddr, f32)>> =
+            if self.forecasting_worker_enabled {
+                Some(Vec::with_capacity(64))
+            } else {
+                None
+            };
         let mut promoted = 0u32;
         let mut cold_skipped = 0u32;
         let mut promoted_events = 0u32;
@@ -260,8 +269,14 @@ impl DetectionEngine {
                 "ip promoted to store: gate passed"
             );
 
+            // Allow clippy::collapsible_if: collapsing would need edition 2024 let-chain
+            // syntax which this codebase uses (edition = "2024"), but clippy's
+            // lint detection varies by toolchain version.
+            #[allow(clippy::collapsible_if)]
             if threat > 0.5 {
-                threat_sample.push((ip, threat));
+                if let Some(samples) = threat_sample.as_mut() {
+                    samples.push((ip, threat));
+                }
             }
 
             if should_block {
@@ -291,9 +306,16 @@ impl DetectionEngine {
         // across flushes (an IP promoted in two flushes counts twice), which
         // only makes the reported FP conservative — it never understates fill.
         self.metrics.record_bloom_inserts(promoted_ips.len() as u64);
-        threat_sample.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        threat_sample.truncate(128);
-        self.store.traffic.push_threat_samples(threat_sample);
+        // Patch B: only collect/sort/enqueue forecast samples when the forecasting
+        // worker is enabled at engine startup. When forecasting is disabled this
+        // work is unnecessary overhead — the disabled path still performs normal
+        // detection, enforcement-related processing, metrics updates, and all
+        // other flush responsibilities unchanged.
+        if let Some(mut samples) = threat_sample.take() {
+            samples.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            samples.truncate(128);
+            self.store.traffic.push_threat_samples(samples);
+        }
         self.store
             .traffic
             .promoted_ips

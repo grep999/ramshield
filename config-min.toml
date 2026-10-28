@@ -11,6 +11,7 @@ shard_count = 256
 [detection]
 rps_threshold = 500
 rate_window_secs = 10
+block_ttl_secs = 300
 promote_min_events = 4
 subnet_batch_threshold = 64
 subnet_batch_min_events = 500
@@ -21,10 +22,11 @@ pre_aggs_flush_interval_ms = 250
 pre_aggs_max_size = 1000000
 bloom_bits = 8000000
 
-# Mesh — CRDT-based cluster coordination.
+# Mesh — CRDT-based cluster coordination. Disabled in safe-mode single-node
+# installs; enable with node_id/listen_addr/auth_key + peers when clustering.
 [mesh]
-enabled = true
-peers = [{ address = "127.0.0.1:8080", auth_key = "k1:abcdef0123456789abcdef0123456789abcdef01" }]
+enabled = false
+peers = []
 
 [ipc]
 tcp_addr = "127.0.0.1:7890"

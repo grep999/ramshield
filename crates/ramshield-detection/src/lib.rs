@@ -130,6 +130,12 @@ pub struct DetectionEngine {
     /// pre-aggregation entry limit is a hard bound, not a racy trigger.
     pre_aggs_merge_lock: std::sync::Mutex<()>,
     last_pre_aggs_flush_ns: AtomicU64,
+    /// Rate observation window: ns timestamp of the FIRST event inserted into
+    /// the (previously empty) shared pre-agg map. 0 = no open batch. The rate
+    /// passed to flush_batch is measured from this instant, NOT from the last
+    /// flush attempt — empty flush attempts only advance the timeout scheduler
+    /// (`last_pre_aggs_flush_ns`), never the measurement window.
+    pre_aggs_batch_start_ns: AtomicU64,
     /// F9: batch/subnet threads, joined at shutdown (was: detached + blind
     /// 5s sleep in main). Each does a final flush before exit.
     worker_handles: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
@@ -156,6 +162,11 @@ pub struct DetectionEngine {
     /// Serializes capacity check/evict/insert so concurrent detector paths
     /// cannot exceed PENDING_MITIGATION_CAP between a len() check and insert.
     pending_mitigation_lock: std::sync::Mutex<()>,
+    /// Captured at engine startup: whether the forecasting worker will run.
+    /// Remains fixed for the engine's lifetime; does not follow hot config
+    /// reloads unless the worker is restarted accordingly.
+    #[allow(dead_code)]
+    forecasting_worker_enabled: bool,
 }
 
 impl DetectionEngine {
@@ -211,7 +222,9 @@ impl DetectionEngine {
         shutdown: Arc<AtomicBool>,
         shm_path: &std::path::Path,
     ) -> std::io::Result<Self> {
-        let bloom_bits = config.load().detection.bloom_bits;
+        let cfg = config.load();
+        let bloom_bits = cfg.detection.bloom_bits;
+        let forecasting_worker_enabled = cfg.forecasting.enabled;
         // Patch A: publish capacity up front so bloom_fp_ppm has a
         // denominator before the first flush (otherwise the gauge reads 0
         // and the FP estimate is silently disabled).
@@ -244,6 +257,7 @@ impl DetectionEngine {
             pre_aggs: DashMap::with_hasher_and_shard_amount(ahash::RandomState::new(), 64),
             pre_aggs_merge_lock: std::sync::Mutex::new(()),
             last_pre_aggs_flush_ns: AtomicU64::new(now_ns()),
+            pre_aggs_batch_start_ns: AtomicU64::new(0),
             worker_handles: std::sync::Mutex::new(Vec::new()),
             // P2: one SHM open shared by proxy and CGNAT guard.
             shm_table: shm_table.clone(),
@@ -253,6 +267,7 @@ impl DetectionEngine {
                 32,
             ),
             pending_mitigation_lock: std::sync::Mutex::new(()),
+            forecasting_worker_enabled,
         })
     }
 

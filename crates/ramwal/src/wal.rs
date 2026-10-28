@@ -347,34 +347,27 @@ impl Wal {
         // to it, otherwise a crash could leave durable file contents with no
         // durable directory entry (segment lost on recovery).
         if must_rotate {
-            // A new segment whose directory entry was never made durable may
-            // not survive a crash — poison like any other storage failure.
-            // The fault flag is consumed under the lock.
-            {
-                let mut inner = self
-                    .inner
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if inner.fail_next_dir_fsync {
-                    inner.fail_next_dir_fsync = false;
-                    inner.state = WalState::Poisoned;
-                    return Err(Error::from_io(std::io::Error::other(
-                        "injected dir fsync failure",
-                    )));
-                }
+            // `g` still owns `self.inner` here. Read and consume the injected
+            // failure through that guard rather than locking `self.inner`
+            // again: the mutex is non-reentrant, so reacquiring it here
+            // deadlocks every append that rotates a segment.
+            if g.fail_next_dir_fsync {
+                g.fail_next_dir_fsync = false;
+                g.state = WalState::Poisoned;
+                return Err(Error::from_io(std::io::Error::other(
+                    "injected dir fsync failure",
+                )));
             }
             if let Err(e) = fsync_dir(&self.base_dir) {
-                self.inner
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .state = WalState::Poisoned;
+                g.state = WalState::Poisoned;
                 return Err(Error::from_io(e));
             }
         }
 
-        // The guard is released AFTER directory sync (if rotation occurred):
-        // `run_retention` takes the same non-reentrant mutex, so holding it
-        // here would self-deadlock.
+        // Keep the lock through directory fsync so no append can race ahead
+        // of the durability barrier. Release it before retention, which takes
+        // the same non-reentrant mutex internally.
+        drop(g);
         if must_rotate && self.retention_max > 0 {
             // Retention errors are logged and ignored per spec §20.2-3.
             // We do not propagate them from append.

@@ -1,11 +1,5 @@
 use super::*;
 
-/// Positive migration default for adaptive CUSUM variance.
-/// Keep this in storage to avoid a dependency cycle on ramshield-detection.
-fn default_adaptive_variance() -> f64 {
-    0.5
-}
-
 /// Incremental traffic counters — updated on batch flush, read by forecasting
 /// without scanning the full store (Kafka-style consumer lag / Prometheus counters).
 #[derive(Debug)]
@@ -161,34 +155,23 @@ pub struct IpRecord {
     /// 0 = window not yet opened. Resets on expiry or block.
     #[serde(default)]
     pub pulse_window_start_ns: u64,
-    /// Adaptive detector's independent baseline (legacy baseline remains unchanged).
+    /// Independent adaptive baseline; legacy baseline_rps remains unchanged.
     #[serde(default)]
     pub adaptive_baseline_rps: f64,
-    /// Adaptive detector's independent CUSUM accumulator.
+    /// Independent adaptive CUSUM; legacy cusum_s remains unchanged.
     #[serde(default)]
     pub adaptive_cusum_s: f64,
-    /// Adaptive detector's accepted-sample count, independent of legacy detector state.
+    /// Accepted sample count for the independent detector. Kept separate from
+    /// adaptive_sample_count, which belongs to the older persisted detector state.
     #[serde(default)]
-    pub adaptive_sample_count: u64,
-    /// Adaptive CUSUM variance, persisted with the IP record.
-    #[serde(default = "default_adaptive_variance")]
-    pub adaptive_variance: f64,
-    /// Last monotonic timestamp accepted by the adaptive detector.
-    #[serde(default)]
-    pub adaptive_last_bucket_ns: u64,
-    /// Consecutive recovery evidence for the adaptive detector.
-    #[serde(default)]
-    pub adaptive_recovery_count: u64,
-    /// Persisted adaptive mode: 0 = warming up, 1 = monitoring, 2 = breached.
-    #[serde(default)]
-    pub adaptive_mode: u8,
-    /// Persisted one-second quantization bucket for adaptive CUSUM.
+    pub adaptive_model_sample_count: u64,
+    /// Current one-second bucket id for the independent adaptive detector.
     #[serde(default)]
     pub adaptive_bucket_id: u64,
-    /// Packet/event count accumulated in the current adaptive bucket.
+    /// Event count accumulated in the current adaptive bucket.
     #[serde(default)]
     pub adaptive_bucket_packets: u64,
-    /// Distinguishes a real bucket zero from an uninitialized record.
+    /// Distinguishes an initialized bucket 0 from an uninitialized record.
     #[serde(default)]
     pub adaptive_bucket_initialized: bool,
     pub first_seen_ns: u64,
@@ -198,6 +181,30 @@ pub struct IpRecord {
     pub proto_fingerprint: u32,
     pub threat_score: f32,
     pub block_state: BlockState,
+    /// Adaptive CUSUM variance — baseline for serde default to 0.1 (positive floor).
+    #[serde(default = "default_variance")]
+    pub variance: f64,
+    /// Last completed 1-second bucket timestamp (ns).
+    #[serde(default)]
+    pub last_bucket_ns: u64,
+    /// Adaptive sample count (full u64 — storage keeps legacy u8 sample_count).
+    #[serde(default)]
+    pub adaptive_sample_count: u64,
+    /// Consecutive clean-tick recovery counter while breached.
+    #[serde(default)]
+    pub recovery_count: u64,
+    /// Sub-second bucket accumulator (pps) — flushed at 1s boundary.
+    #[serde(default)]
+    pub bucket_accum_pps: f64,
+    /// Detector mode: 0=WarmingUp, 1=Monitoring, 2=Breached.
+    #[serde(default)]
+    pub detector_mode: u8,
+}
+
+/// Default variance for serde deserialization of legacy IpRecord checkpoints.
+#[inline]
+pub fn default_variance() -> f64 {
+    0.1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -270,11 +277,7 @@ mod adaptive_migration_tests {
             pulse_window_start_ns: 0,
             adaptive_baseline_rps: 0.0,
             adaptive_cusum_s: 0.0,
-            adaptive_sample_count: 0,
-            adaptive_variance: default_adaptive_variance(),
-            adaptive_last_bucket_ns: 0,
-            adaptive_recovery_count: 0,
-            adaptive_mode: 0,
+            adaptive_model_sample_count: 0,
             adaptive_bucket_id: 0,
             adaptive_bucket_packets: 0,
             adaptive_bucket_initialized: false,
@@ -285,17 +288,19 @@ mod adaptive_migration_tests {
             proto_fingerprint: 0,
             threat_score: 0.0,
             block_state: BlockState::Clean,
+            variance: default_variance(),
+            last_bucket_ns: 0,
+            adaptive_sample_count: 5,
+            recovery_count: 0,
+            bucket_accum_pps: 0.0,
+            detector_mode: 0,
         };
         let mut legacy = serde_json::to_value(record).unwrap();
         let object = legacy.as_object_mut().unwrap();
         for field in [
             "adaptive_baseline_rps",
             "adaptive_cusum_s",
-            "adaptive_sample_count",
-            "adaptive_variance",
-            "adaptive_last_bucket_ns",
-            "adaptive_recovery_count",
-            "adaptive_mode",
+            "adaptive_model_sample_count",
             "adaptive_bucket_id",
             "adaptive_bucket_packets",
             "adaptive_bucket_initialized",
@@ -304,11 +309,13 @@ mod adaptive_migration_tests {
         }
 
         let restored: IpRecord = serde_json::from_value(legacy).unwrap();
-        assert_eq!(restored.adaptive_variance, default_adaptive_variance());
-        assert!(restored.adaptive_variance.is_finite());
-        assert!(restored.adaptive_variance > 0.0);
-        assert_eq!(restored.adaptive_sample_count, 0);
-        assert_eq!(restored.adaptive_mode, 0);
+        assert_eq!(restored.variance, default_variance());
+        assert!(restored.variance.is_finite() && restored.variance > 0.0);
+        assert_eq!(restored.adaptive_baseline_rps, 0.0);
+        assert_eq!(restored.adaptive_cusum_s, 0.0);
+        assert_eq!(restored.adaptive_sample_count, 5);
+        assert_eq!(restored.adaptive_model_sample_count, 0);
+        assert_eq!(restored.detector_mode, 0);
         assert!(!restored.adaptive_bucket_initialized);
     }
 }

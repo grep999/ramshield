@@ -1,0 +1,9 @@
+#!/usr/bin/make -f
+%:
+	dh $@
+
+override_dh_auto_install:
+	dh_install ramshield /usr/local/bin/
+	dh_install scripts/install.sh /usr/local/bin/ramshield-install
+	dh_install config-min.toml /etc/ramshield/config-min.toml
+	dh_install config.dev.toml /etc/ramshield/config-dev.toml

@@ -70,7 +70,18 @@ This happens in kernel space — no context switch to userspace, no memory copie
 
 ## Benchmarks
 
-No benchmarks — this crate has no runtime code. Kernel-side packet processing benchmarks would require a live XDP environment and are planned for a future phase.
+XDP kernel-side packet processing benchmarks require a live XDP environment (root, eBPF-capable kernel) and are not run in CI. The userspace enforcement pipeline benchmarks below are measured on the host:
+
+```text
+  Detection Flush (Warm)     222400 ns/op  (4496 ops/s)
+  Detection Flush (Cold Skip) 2606343 ns/op  (384 ops/s)
+  Enforcement Commit (WAL)   3955 ns/op    (252873 ops/s)
+  Idempotent Decision Cache   130 ns/op     (7702531 ops/s)
+  Reverse-Proxy SHM Lookup    1.3 ns        (761 M ops/s)
+  Ingested Event Throughput   95653 eps     (5 s, 1000 IPs)
+```
+
+Full benchmark suite (detection, storage, protocol, CGNAT, mesh) runs via `cargo bench` in the root workspace. See `benches/hot_paths.rs` and `benches/field_day.rs` for raw output.
 
 ## Testing
 

@@ -1347,7 +1347,6 @@ dependencies = [
  "libc",
  "memmap2",
  "proptest",
- "ramshield-analytics",
  "ramshield-cgnat",
  "ramshield-config",
  "ramshield-detection",
@@ -1373,13 +1372,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
-]
-
-[[package]]
-name = "ramshield-analytics"
-version = "0.1.0"
-dependencies = [
- "criterion 0.5.1",
 ]
 
 [[package]]

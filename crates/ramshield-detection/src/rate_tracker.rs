@@ -704,7 +704,7 @@ pub struct PerIpRecord {
     /// Consecutive recovery-evidence samples observed while breached.
     pub recovery_count: u64,
     pub mode: DetectorMode,
-    profile: DetectorProfile,
+    pub profile: DetectorProfile,
 }
 
 impl PerIpRecord {
@@ -740,6 +740,7 @@ impl PerIpRecord {
     /// # Atomic Guarantees
     /// Pre-validates input and state fields before mutating any record variables.
     /// If an error occurs, the record remains identical to its pre-call state.
+    #[allow(clippy::collapsible_if)]
     pub fn update(
         &mut self,
         current_rate: f64,
@@ -815,6 +816,7 @@ impl PerIpRecord {
         // Apply advisory context if fresh and confident. A FlashCrowd classification
         // also suppresses the breach transition while it remains fresh; otherwise a
         // static per-IP spike would override the classifier's legitimate-surge decision.
+        let mut ctx_applied = false;
         let flash_crowd_context = context.is_some_and(|ctx| {
             ctx.is_fresh(context_now_ns, 2_000_000_000)
                 && ctx.confidence >= 0.6
@@ -824,6 +826,7 @@ impl PerIpRecord {
             && ctx.is_fresh(context_now_ns, 2_000_000_000)
             && ctx.confidence >= 0.6
         {
+            ctx_applied = true;
             match ctx.hypothesis {
                 Hypothesis::FlashCrowd => {
                     k *= 1.5;
@@ -876,7 +879,7 @@ impl PerIpRecord {
             0
         };
 
-        if new_mode == DetectorMode::WarmingUp && new_sample_count >= self.profile.warmup_samples {
+        if new_mode == DetectorMode::WarmingUp && new_sample_count > self.profile.warmup_samples {
             new_mode = DetectorMode::Monitoring;
         }
 
@@ -902,26 +905,32 @@ impl PerIpRecord {
         let mut new_baseline = self.baseline_rate;
         let mut new_variance = self.variance;
 
-        // Freeze baseline and variance during a breach or a fresh, confident
-        // FlashCrowd classification. Neither an attack nor a classified surge should
-        // train the reference statistics while contextual suppression is active.
-        if new_mode != DetectorMode::Breached && !flash_crowd_context {
-            let alpha = self.profile.alpha;
-            let old_b = new_baseline;
-            new_baseline += alpha * (current_rate - old_b);
+        // Compute the proposed adaptation unconditionally: pathological input
+        // (e.g. f64::MAX rate) must be rejected atomically even when adaptation
+        // is frozen, so the proposal is always evaluated and validated.
+        let alpha = self.profile.alpha;
+        let old_b = new_baseline;
+        let prop_baseline = new_baseline + alpha * (current_rate - old_b);
+        let diff1 = current_rate - old_b;
+        let diff2 = current_rate - prop_baseline;
+        let prop_variance =
+            ((1.0 - alpha) * new_variance + alpha * (diff1 * diff2)).max(self.profile.min_variance);
 
-            let diff1 = current_rate - old_b;
-            let diff2 = current_rate - new_baseline;
-            new_variance = ((1.0 - alpha) * new_variance + alpha * (diff1 * diff2))
-                .max(self.profile.min_variance);
+        if !prop_baseline.is_finite()
+            || prop_baseline < 0.0
+            || !prop_variance.is_finite()
+            || prop_variance <= 0.0
+        {
+            return Err(DetectorError::NumericalCalculationFailure);
+        }
 
-            if !new_baseline.is_finite()
-                || new_baseline < 0.0
-                || !new_variance.is_finite()
-                || new_variance <= 0.0
-            {
-                return Err(DetectorError::NumericalCalculationFailure);
-            }
+        // Baseline adaptation freezes during breach to protect reference statistics.
+        // It also freezes while an advisory hypothesis is applied (hypothesized traffic
+        // must not poison the reference) and while CUSUM evidence is accumulating —
+        // otherwise the baseline chases the attack and the detector absorbs it.
+        if new_mode != DetectorMode::Breached && !ctx_applied && new_cusum == 0.0 {
+            new_baseline = prop_baseline;
+            new_variance = prop_variance;
         }
 
         // --- STEP 7: COMMIT STATE ---
@@ -1330,7 +1339,6 @@ mod adaptive_tests {
         assert!(!outcome.is_breached);
         assert_ne!(outcome.mode, DetectorMode::Breached);
     }
-
     #[test]
     fn completed_bucket_can_use_context_observed_after_bucket_boundary() {
         let profile = DetectorProfile::default();

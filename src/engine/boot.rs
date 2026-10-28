@@ -47,10 +47,9 @@ fn restore_mesh_crdt_from_wal(
     use ramshield_mesh::aworset::{ClusterBlockDelta, ClusterDot, ClusterUnblockDelta};
     use ramshield_storage::wal::{MeshMutationAction, WalEntry};
 
-    let replay = if min_lsn > 0 {
-        wal.replay_from(min_lsn)
-    } else {
-        wal.replay()
+    let replay = match min_lsn {
+        0 => wal.replay(),
+        n => wal.replay_from(n),
     };
     let entries = replay
         .map_err(|error| std::io::Error::other(format!("mesh WAL replay failed: {error}")))?;
@@ -192,7 +191,12 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
                             )));
                         }
                     }
-                    if let Err(e) = applier.configure_autonomous(
+                    // The shipped XDP program does not define AUTONOMOUS_CONFIG
+                    // (the cold-start PPS guard is not yet implemented in the
+                    // kernel-side program). Configure the map only when the
+                    // autonomous guard is actually enabled, so a disabled
+                    // guard cannot fail XDP startup.
+                    if cfg_snapshot.autonomous.enabled && let Err(e) = applier.configure_autonomous(
                         cfg_snapshot.autonomous.enabled,
                         cfg_snapshot.autonomous.syn_pps_per_cpu,
                         cfg_snapshot.autonomous.udp_pps_per_cpu,
@@ -200,6 +204,8 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
                         cfg_snapshot.autonomous.window_ms,
                     ) {
                         tracing::error!(error = %e, "failed to configure autonomous XDP guard");
+                        // ponytail: collapse-safe — error logged whenever configure() fails;
+                        // return only when hard_xdp=true (fail-open). #[allow(clippy::collapsible_if)]
                         if hard_xdp {
                             return Err(std::io::Error::other(format!(
                                 "autonomous XDP configuration failed: {e}"

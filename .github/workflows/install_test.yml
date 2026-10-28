@@ -1,0 +1,19 @@
+name: Installer Clean-Room Verification
+# Part 3 gate B: pipe-mode install must resolve cleanly in a bare container.
+# --dry-run exercises argument/platform/version resolution without touching
+# the system; real downloads are gated on the release workflow.
+on: [push, pull_request]
+jobs:
+  test-install:
+    runs-on: ubuntu-latest
+    container: debian:bookworm-slim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Prereqs
+        run: apt-get update && apt-get install -y curl procps python3
+      - name: Run Installer in Pipe Mode (dry-run)
+        run: |
+          cat scripts/install_simple.sh | bash -s -- --dry-run || exit 1
+      - name: Run Installer from Checkout (dry-run)
+        run: |
+          bash scripts/install_simple.sh --dry-run || exit 1

@@ -1,4 +1,5 @@
 use super::*;
+use crate::rate_tracker::{DetectorMode, DetectorProfile, PerIpRecord};
 
 impl DetectionEngine {
     /// ponytail: returns the 5-tuple `(ewma_rps, threat, should_block, was_blocked, stored)`.
@@ -48,13 +49,15 @@ impl DetectionEngine {
                 adaptive_baseline_rps: 0.0,
                 adaptive_cusum_s: 0.0,
                 adaptive_sample_count: 0,
-                adaptive_variance: 0.0,
-                adaptive_last_bucket_ns: 0,
-                adaptive_recovery_count: 0,
-                adaptive_mode: 0,
                 adaptive_bucket_id: 0,
                 adaptive_bucket_packets: 0,
                 adaptive_bucket_initialized: false,
+                variance: 0.1,
+                last_bucket_ns: 0,
+                recovery_count: 0,
+                bucket_accum_pps: 0.0,
+                detector_mode: 0,
+                adaptive_model_sample_count: 0,
                 first_seen_ns: ip_agg.first_ts_ns,
                 last_seen_ns: ip_agg.last_ts_ns,
                 bytes_in: 0,
@@ -62,6 +65,7 @@ impl DetectionEngine {
                 proto_fingerprint: ip_agg.proto_fp,
                 threat_score: 0.0,
                 block_state: BlockState::Clean,
+                adaptive_sample_count: 0,
             },
             ram_lim,
             |rec| {
@@ -89,28 +93,17 @@ impl DetectionEngine {
                 // detector has its own persisted baseline/CUSUM/count so migration from
                 // old IpRecord values cannot reinterpret legacy evidence under new rules.
                 let prior_baseline = rec.baseline_rps;
-                let baseline_for_cusum = if prior_baseline > 0.0 && prior_baseline.is_finite() {
-                    prior_baseline
-                } else {
-                    rec.ewma_rps
-                };
 
                 rec.sample_count = rec.sample_count.saturating_add(1);
-                if rec.sample_count >= CUSUM_WARMUP_SAMPLES {
-                    let k = cusum_allowance(det_thr);
-                    rec.cusum_s = cusum_step_capped(
-                        rec.cusum_s,
-                        inst_rps,
-                        baseline_for_cusum + k,
-                        det_thr as f64,
-                    );
-                }
 
                 // Quantize adaptive CUSUM input to completed one-second buckets.
                 // Sub-second flushes accumulate packet counts in IpRecord; only a bucket
                 // transition can submit the previous full bucket to the detector.
                 let adaptive_breach =
                     update_adaptive_bucket(rec, ip_agg.count as u64, adaptive_now_ns, traffic_context);
+                if adaptive_breach {
+                    self.metrics.inc_adaptive_breach();
+                }
 
                 let relative_breach = if det.relative_enabled
                     && prior_baseline.is_finite()
@@ -264,7 +257,7 @@ fn update_adaptive_bucket(
 
     // Begin collecting the current bucket only after the completed bucket was
     // accepted. On a rejected sample, preserve all state including the pending bucket.
-    if candidate.adaptive_last_bucket_ns != end_ns {
+    if candidate.last_bucket_ns != end_ns {
         return false;
     }
     candidate.adaptive_bucket_id = current_bucket;
@@ -283,7 +276,7 @@ fn update_adaptive_detector(
     context: Option<TrafficContext>,
     context_now_ns: u64,
 ) -> bool {
-    let initial_rate = if rec.adaptive_sample_count == 0 {
+    let initial_rate = if rec.adaptive_model_sample_count == 0 {
         inst_rps
     } else if rec.adaptive_baseline_rps.is_finite() && rec.adaptive_baseline_rps >= 0.0 {
         rec.adaptive_baseline_rps
@@ -294,26 +287,26 @@ fn update_adaptive_detector(
         return false;
     };
 
-    if rec.adaptive_sample_count > 0 {
+    if rec.adaptive_model_sample_count > 0 {
         // Do not silently repair corrupt persisted state: reject this update without
         // changing any adaptive fields, so the caller can observe the failure boundary.
         if !rec.adaptive_baseline_rps.is_finite()
             || rec.adaptive_baseline_rps < 0.0
             || !rec.adaptive_cusum_s.is_finite()
             || rec.adaptive_cusum_s < 0.0
-            || !rec.adaptive_variance.is_finite()
-            || rec.adaptive_variance <= 0.0
-            || rec.adaptive_mode > 2
+            || !rec.variance.is_finite()
+            || rec.variance <= 0.0
+            || rec.detector_mode > 2
         {
             return false;
         }
         adaptive.baseline_rate = rec.adaptive_baseline_rps;
         adaptive.cusum_s = rec.adaptive_cusum_s;
-        adaptive.sample_count = rec.adaptive_sample_count;
-        adaptive.variance = rec.adaptive_variance;
-        adaptive.last_bucket_ns = rec.adaptive_last_bucket_ns;
-        adaptive.recovery_count = rec.adaptive_recovery_count;
-        adaptive.mode = match rec.adaptive_mode {
+        adaptive.sample_count = rec.adaptive_model_sample_count;
+        adaptive.variance = rec.variance;
+        adaptive.last_bucket_ns = rec.last_bucket_ns;
+        adaptive.recovery_count = rec.recovery_count;
+        adaptive.mode = match rec.detector_mode {
             0 => DetectorMode::WarmingUp,
             1 => DetectorMode::Monitoring,
             2 => DetectorMode::Breached,
@@ -331,11 +324,11 @@ fn update_adaptive_detector(
 
     rec.adaptive_baseline_rps = adaptive.baseline_rate;
     rec.adaptive_cusum_s = adaptive.cusum_s;
-    rec.adaptive_sample_count = adaptive.sample_count;
-    rec.adaptive_variance = adaptive.variance;
-    rec.adaptive_last_bucket_ns = adaptive.last_bucket_ns;
-    rec.adaptive_recovery_count = adaptive.recovery_count;
-    rec.adaptive_mode = match adaptive.mode {
+    rec.adaptive_model_sample_count = adaptive.sample_count;
+    rec.variance = adaptive.variance;
+    rec.last_bucket_ns = adaptive.last_bucket_ns;
+    rec.recovery_count = adaptive.recovery_count;
+    rec.detector_mode = match adaptive.mode {
         DetectorMode::WarmingUp => 0,
         DetectorMode::Monitoring => 1,
         DetectorMode::Breached => 2,
@@ -362,13 +355,15 @@ mod adaptive_integration_tests {
             adaptive_baseline_rps: 0.0,
             adaptive_cusum_s: 0.0,
             adaptive_sample_count: 0,
-            adaptive_variance: 0.0,
-            adaptive_last_bucket_ns: 0,
-            adaptive_recovery_count: 0,
-            adaptive_mode: 0,
             adaptive_bucket_id: 0,
             adaptive_bucket_packets: 0,
             adaptive_bucket_initialized: false,
+            variance: 0.1,
+            last_bucket_ns: 0,
+            recovery_count: 0,
+            bucket_accum_pps: 0.0,
+            detector_mode: 0,
+            adaptive_model_sample_count: 0,
             first_seen_ns: 0,
             last_seen_ns: 0,
             bytes_in: 0,
@@ -383,17 +378,17 @@ mod adaptive_integration_tests {
     fn adaptive_state_persists_across_flush_updates() {
         let mut rec = record();
         assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000, None, 1_000_000_000));
-        assert_eq!(rec.adaptive_sample_count, 1);
-        assert!(rec.adaptive_variance.is_finite() && rec.adaptive_variance > 0.0);
+        assert_eq!(rec.adaptive_model_sample_count, 1);
+        assert!(rec.variance.is_finite() && rec.variance > 0.0);
         let baseline = rec.adaptive_baseline_rps;
-        let variance = rec.adaptive_variance;
+        let variance = rec.variance;
 
         assert!(!update_adaptive_detector(&mut rec, 105.0, 2_000_000_000, None, 2_000_000_000));
-        assert_eq!(rec.adaptive_sample_count, 2);
-        assert!(rec.adaptive_last_bucket_ns == 2_000_000_000);
-        assert!(rec.adaptive_variance.is_finite() && rec.adaptive_variance > 0.0);
+        assert_eq!(rec.adaptive_model_sample_count, 2);
+        assert!(rec.last_bucket_ns == 2_000_000_000);
+        assert!(rec.variance.is_finite() && rec.variance > 0.0);
         assert_ne!(rec.adaptive_baseline_rps, baseline);
-        assert_ne!(rec.adaptive_variance, variance);
+        assert_ne!(rec.variance, variance);
     }
 
     #[test]
@@ -403,21 +398,21 @@ mod adaptive_integration_tests {
         let before = (
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
-            rec.adaptive_sample_count,
-            rec.adaptive_variance,
-            rec.adaptive_last_bucket_ns,
-            rec.adaptive_recovery_count,
-            rec.adaptive_mode,
+            rec.adaptive_model_sample_count,
+            rec.variance,
+            rec.last_bucket_ns,
+            rec.recovery_count,
+            rec.detector_mode,
         );
         assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000, None, 1_000_000_000));
         let after = (
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
-            rec.adaptive_sample_count,
-            rec.adaptive_variance,
-            rec.adaptive_last_bucket_ns,
-            rec.adaptive_recovery_count,
-            rec.adaptive_mode,
+            rec.adaptive_model_sample_count,
+            rec.variance,
+            rec.last_bucket_ns,
+            rec.recovery_count,
+            rec.detector_mode,
         );
         assert_eq!(before, after);
     }
@@ -429,21 +424,21 @@ mod adaptive_integration_tests {
         let before = (
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
-            rec.adaptive_sample_count,
-            rec.adaptive_variance,
-            rec.adaptive_last_bucket_ns,
-            rec.adaptive_recovery_count,
-            rec.adaptive_mode,
+            rec.adaptive_model_sample_count,
+            rec.variance,
+            rec.last_bucket_ns,
+            rec.recovery_count,
+            rec.detector_mode,
         );
         assert!(!update_adaptive_detector(&mut rec, f64::NAN, 2_000_000_000, None, 2_000_000_000));
         let after = (
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
-            rec.adaptive_sample_count,
-            rec.adaptive_variance,
-            rec.adaptive_last_bucket_ns,
-            rec.adaptive_recovery_count,
-            rec.adaptive_mode,
+            rec.adaptive_model_sample_count,
+            rec.variance,
+            rec.last_bucket_ns,
+            rec.recovery_count,
+            rec.detector_mode,
         );
         assert_eq!(before, after);
     }
@@ -451,26 +446,26 @@ mod adaptive_integration_tests {
     fn corrupt_persisted_adaptive_state_is_not_silently_repaired() {
         let mut rec = record();
         assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000, None, 1_000_000_000));
-        rec.adaptive_variance = f64::NAN;
+        rec.variance = f64::NAN;
         let before = (
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
-            rec.adaptive_sample_count,
-            rec.adaptive_variance.to_bits(),
-            rec.adaptive_last_bucket_ns,
-            rec.adaptive_recovery_count,
-            rec.adaptive_mode,
+            rec.adaptive_model_sample_count,
+            rec.variance.to_bits(),
+            rec.last_bucket_ns,
+            rec.recovery_count,
+            rec.detector_mode,
         );
 
         assert!(!update_adaptive_detector(&mut rec, 105.0, 2_000_000_000, None, 2_000_000_000));
         let after = (
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
-            rec.adaptive_sample_count,
-            rec.adaptive_variance.to_bits(),
-            rec.adaptive_last_bucket_ns,
-            rec.adaptive_recovery_count,
-            rec.adaptive_mode,
+            rec.adaptive_model_sample_count,
+            rec.variance.to_bits(),
+            rec.last_bucket_ns,
+            rec.recovery_count,
+            rec.detector_mode,
         );
         assert_eq!(before, after);
     }
@@ -488,7 +483,7 @@ mod adaptive_integration_tests {
             breached,
             "sustained upward drift must reach the runtime breach signal"
         );
-        assert_eq!(rec.adaptive_mode, 2);
+        assert_eq!(rec.detector_mode, 2);
     }
     #[test]
     fn flash_crowd_suppresses_static_legacy_gates_but_not_adaptive_breach() {
@@ -502,12 +497,12 @@ mod adaptive_integration_tests {
         let mut rec = record();
         assert!(!update_adaptive_bucket(&mut rec, 10, 100_000_000, None));
         assert!(!update_adaptive_bucket(&mut rec, 20, 800_000_000, None));
-        assert_eq!(rec.adaptive_sample_count, 0);
+        assert_eq!(rec.adaptive_model_sample_count, 0);
         assert_eq!(rec.adaptive_bucket_packets, 30);
 
         assert!(!update_adaptive_bucket(&mut rec, 5, 1_100_000_000, None));
-        assert_eq!(rec.adaptive_sample_count, 1);
-        assert_eq!(rec.adaptive_last_bucket_ns, 1_000_000_000);
+        assert_eq!(rec.adaptive_model_sample_count, 1);
+        assert_eq!(rec.last_bucket_ns, 1_000_000_000);
         assert_eq!(rec.adaptive_bucket_id, 1);
         assert_eq!(rec.adaptive_bucket_packets, 5);
     }
@@ -520,16 +515,16 @@ mod adaptive_integration_tests {
             rec.adaptive_bucket_id,
             rec.adaptive_bucket_packets,
             rec.adaptive_bucket_initialized,
-            rec.adaptive_sample_count,
-            rec.adaptive_last_bucket_ns,
+            rec.adaptive_model_sample_count,
+            rec.last_bucket_ns,
         );
         assert!(!update_adaptive_bucket(&mut rec, 5, 900_000_000, None));
         let after = (
             rec.adaptive_bucket_id,
             rec.adaptive_bucket_packets,
             rec.adaptive_bucket_initialized,
-            rec.adaptive_sample_count,
-            rec.adaptive_last_bucket_ns,
+            rec.adaptive_model_sample_count,
+            rec.last_bucket_ns,
         );
         assert_eq!(before, after);
     }

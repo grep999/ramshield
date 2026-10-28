@@ -54,6 +54,11 @@ pub struct DetectionConfig {
     /// worker emits an in-flight block immediately instead of waiting for
     /// the periodic flush (50-1000ms of uninhibited traffic otherwise).
     /// 0 disables the fast path (flush-only detection).
+    /// Deliberately PER-WORKER: traffic from one IP split across workers so
+    /// that no single worker reaches this count does not fire the fast path;
+    /// the aggregate guarantee comes from the flush path (merged cross-worker
+    /// batch counts + rate records). Simultaneous crossings dedupe downstream
+    /// by (ip, reason).
     #[serde(default = "default_emergency_burst_threshold")]
     pub emergency_burst_threshold: u32,
     /// Max unique IPs in the pre-aggregation buffer before flushing to main store.
@@ -144,10 +149,12 @@ pub fn default_pulse_threshold_samples() -> u8 {
     3
 }
 pub fn default_subnet_burst_ttl_secs() -> u64 {
-    120
+    // Must match config.baseline.toml (60) — shorter than block_ttl to avoid CGNAT lockout.
+    60
 }
 pub fn default_subnet_window_threshold() -> u64 {
-    500
+    // Must match config.baseline.toml (12); floor 10, see validate.rs.
+    12
 }
 pub fn default_pre_aggs_max_size() -> usize {
     1_000_000

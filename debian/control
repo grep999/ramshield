@@ -1,0 +1,16 @@
+Package: ramshield
+Version: 0.6.0
+Section: net
+Priority: optional
+Architecture: any
+Depends: python3, curl, systemd
+Maintainer: RamShield <contact@ramshield.io>
+Description: RamShield Autonomous Ingress Defense
+ RamShield is a DDoS mitigation reverse proxy and enforcement layer.
+ It operates at the network edge to detect and block malicious traffic.
+ .
+  Safe-mode (userspace, no XDP) available via --safe-mode flag.
+  Production deployments should use XDP kernel programs for full throughput.
+Homepage: https://github.com/grep999/ramshield
+Standards-Version: 4.5.0
+Inst-Reqs: python3, systemd

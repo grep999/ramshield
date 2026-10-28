@@ -166,13 +166,15 @@ fn blocked_record(ip: std::net::IpAddr) -> crate::storage::IpRecord {
         adaptive_baseline_rps: 0.0,
         adaptive_cusum_s: 0.0,
         adaptive_sample_count: 0,
-        adaptive_variance: 0.0,
-        adaptive_last_bucket_ns: 0,
-        adaptive_recovery_count: 0,
-        adaptive_mode: 0,
         adaptive_bucket_id: 0,
         adaptive_bucket_packets: 0,
         adaptive_bucket_initialized: false,
+        variance: 0.1,
+        last_bucket_ns: 0,
+        recovery_count: 0,
+        bucket_accum_pps: 0.0,
+        detector_mode: 0,
+        adaptive_model_sample_count: 0,
         first_seen_ns: 0,
         last_seen_ns: 0,
         bytes_in: 0,
@@ -183,6 +185,7 @@ fn blocked_record(ip: std::net::IpAddr) -> crate::storage::IpRecord {
             reason: BlockReason::HighRps,
             since_ns: 0,
         },
+        adaptive_sample_count: 0,
     }
 }
 

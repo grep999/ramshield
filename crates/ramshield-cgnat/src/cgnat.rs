@@ -29,7 +29,7 @@ impl CgnatGuard {
         match (Self::is_shared_infrastructure(subnet), host_count, rate) {
             (false, hosts, r) if hosts > 10 && r > 100 => CGNAT_TIER_BLOCK,
             (true, _, r) if r > 100_000 => CGNAT_TIER_CHALLENGE,
-            (_, _, r) if r > 5_000 => CGNAT_TIER_CHALLENGE,
+            (_, _, r) if r >= 5_000 => CGNAT_TIER_CHALLENGE,
             _ => CGNAT_TIER_ALLOW,
         }
     }

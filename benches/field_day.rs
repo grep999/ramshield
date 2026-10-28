@@ -414,13 +414,15 @@ fn storage_get_all_blocked_ips_10k(n: usize) -> f64 {
             adaptive_baseline_rps: 0.0,
             adaptive_cusum_s: 0.0,
             adaptive_sample_count: 0,
-            adaptive_variance: 0.0,
-            adaptive_last_bucket_ns: 0,
-            adaptive_recovery_count: 0,
-            adaptive_mode: 0,
             adaptive_bucket_id: 0,
             adaptive_bucket_packets: 0,
             adaptive_bucket_initialized: false,
+            variance: 0.1,
+            last_bucket_ns: 0,
+            recovery_count: 0,
+            bucket_accum_pps: 0.0,
+            detector_mode: 0,
+            adaptive_model_sample_count: 0,
             first_seen_ns: 0,
             last_seen_ns: 0,
             bytes_in: 0,
@@ -431,6 +433,7 @@ fn storage_get_all_blocked_ips_10k(n: usize) -> f64 {
                 reason: ramshield_types::BlockReason::HighRps,
                 since_ns: 0,
             },
+            adaptive_sample_count: 0,
         };
         store
             .insert(ip(400_000 + i), Value::IpRecord(rec), None, 1 << 30)

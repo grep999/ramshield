@@ -30,6 +30,14 @@ impl DetectionEngine {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         for (ip, agg) in local.drain() {
+            // Open the rate observation window at the FIRST event that lands
+            // in an empty shared map: the batch's window is measured from its
+            // first event, never from flush scheduling.
+            if self.pre_aggs.is_empty() {
+                self.pre_aggs_batch_start_ns
+                    .compare_exchange(0, now_ns(), Ordering::Relaxed, Ordering::Relaxed)
+                    .ok();
+            }
             // The shared map is full and this is a new key: flush to make
             // room. The current aggregate remains owned locally until there
             // is room, so pressure never drops counts.
@@ -59,6 +67,11 @@ impl DetectionEngine {
     /// buffer and merge via `merge_local`.
     #[cfg(test)]
     pub(crate) fn absorb_shared(&self, ev: ConnectionEvent) {
+        if self.pre_aggs.is_empty() {
+            self.pre_aggs_batch_start_ns
+                .compare_exchange(0, now_ns(), Ordering::Relaxed, Ordering::Relaxed)
+                .ok();
+        }
         self.pre_aggs
             .entry(ev.ip)
             .and_modify(|a| a.absorb(&ev))
@@ -104,12 +117,27 @@ impl DetectionEngine {
     /// is a consistent cut of the shared aggregate map.
     fn flush_pre_aggs_locked(&self) {
         let now = now_ns();
+        // Every attempt advances the TIMEOUT SCHEDULER so idle workers don't
+        // spin the trigger; the rate window is measured independently below.
         let prev = self.last_pre_aggs_flush_ns.swap(now, Ordering::Relaxed);
-        let window_ns = now.saturating_sub(prev).max(1);
 
         if self.pre_aggs.is_empty() {
             return;
         }
+
+        // Rate observation window = since the batch's FIRST event. Empty
+        // flushes and worker scheduling cannot distort it: idle time before
+        // the batch started is excluded (batch start is stamped on the first
+        // insert into an empty map), and idle flushes don't move it. When no
+        // batch start exists (pre-aggs seeded by a legacy/test path), fall
+        // back to the previous flush's timestamp.
+        let start = self.pre_aggs_batch_start_ns.swap(0, Ordering::Relaxed);
+        let window_ns = if start != 0 {
+            now.saturating_sub(start)
+        } else {
+            now.saturating_sub(prev)
+        }
+        .max(1);
 
         // (DashMap 6 has no pop() — reviewer snippet was aspirational.
         // Collect keys, then per-key remove(): each remove is atomic under the

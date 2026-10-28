@@ -1,0 +1,29 @@
+{
+  "apps": {
+    "http": {
+      "servers": {
+        "ramshield": {
+          "listen": [":80", ":443"],
+          "routes": [
+            {
+              "match": [{"host": ["*"]}],
+              "handle": [{
+                "handler": "reverse_proxy",
+                "upstreams": [{"dial": "127.0.0.1:8080"}],
+                "headers": {
+                  "request": {
+                    "set": {
+                      "X-Real-IP": ["{http.request.remote_addr}"],
+                      "X-Forwarded-For": ["{http.request.remote_addr}"]
+                    }
+                  }
+                }
+              }]
+            }
+          ],
+          "logs": {"level": "INFO"}
+        }
+      }
+    }
+  }
+}

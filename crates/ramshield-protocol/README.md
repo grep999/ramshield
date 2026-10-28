@@ -112,6 +112,17 @@ Every frame carries an `auth` object alongside its body:
 {"auth": {"key_id": "k1", "ts_ms": 1700000000000, "sig": "<hex>"}, "type": "check_ip", "ip": "1.2.3.4"}
 ```
 
+**Key generation:** The key is a 128-bit (16-byte) hex string (32 hex chars).
+```bash
+# Generate a key:
+openssl rand -hex 16
+# or:
+python3 -c 'import secrets; print(secrets.token_hex(16))'
+```
+Each entry in `ipc.auth_keys` is `key_id:hex_key` (e.g., `k1:0c6f5bc7984b010c8f9594328fe56dbe`).
+Hex must be even-length, at least 32 chars. The `key_id` is inside the MAC input,
+so identical keys with different IDs produce different signatures.
+
 The signing API is:
 
 ```rust
@@ -226,4 +237,4 @@ No standalone benchmarks — message parsing is measured implicitly through the 
 
 ## Testing
 
-34 tests covering: message serialization round-trip, HMAC sign+verify with valid and expired timestamps, replay detection (same nonce sent twice), version rejection (version=2 returns error), and malformed JSON handling.
+25 tests covering: message serialization round-trip, HMAC sign+verify with valid and expired timestamps, replay detection (same nonce sent twice), version rejection (version=2 returns error), and malformed JSON handling.

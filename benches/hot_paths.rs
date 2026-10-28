@@ -200,13 +200,15 @@ fn default_record() -> ramshield_storage::IpRecord {
         adaptive_baseline_rps: 0.0,
         adaptive_cusum_s: 0.0,
         adaptive_sample_count: 0,
-        adaptive_variance: 0.0,
-        adaptive_last_bucket_ns: 0,
-        adaptive_recovery_count: 0,
-        adaptive_mode: 0,
         adaptive_bucket_id: 0,
         adaptive_bucket_packets: 0,
         adaptive_bucket_initialized: false,
+        variance: 0.1,
+        last_bucket_ns: 0,
+        recovery_count: 0,
+        bucket_accum_pps: 0.0,
+        detector_mode: 0,
+        adaptive_model_sample_count: 0,
         first_seen_ns: 0,
         last_seen_ns: 0,
         bytes_in: 0,
@@ -214,6 +216,7 @@ fn default_record() -> ramshield_storage::IpRecord {
         proto_fingerprint: 0,
         threat_score: 0.0,
         block_state: ramshield_storage::BlockState::Clean,
+        adaptive_sample_count: 0,
     }
 }
 
@@ -402,24 +405,6 @@ fn bench_cgnat_classify(n: usize) -> f64 {
     t0.elapsed().as_nanos() as f64 / n as f64
 }
 
-fn bench_cms_update(n: usize) -> f64 {
-    let cms = ramshield_analytics::cms::DecayingCountMinSketch::new();
-    let t0 = Instant::now();
-    for i in 0..n {
-        cms.increment(i as u64);
-    }
-    t0.elapsed().as_nanos() as f64 / n as f64
-}
-
-fn bench_hll_insert(n: usize) -> f64 {
-    let mut hll = ramshield_analytics::hll::SubnetHll::new();
-    let t0 = Instant::now();
-    for i in 0..n {
-        hll.insert((i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
-    }
-    t0.elapsed().as_nanos() as f64 / n as f64
-}
-
 #[cfg(feature = "mesh")]
 fn bench_mesh_record_ban(n: usize) -> f64 {
     use std::net::IpAddr;
@@ -571,11 +556,9 @@ fn main() {
         n_medium
     );
 
-    println!("\n── P2/P3: CGNAT SHM + Analytics + Mesh ─────────────────────────────");
+    println!("\n── P2/P3: CGNAT SHM ─────────────────────────────");
     bench!("SHM rule lookup (hit)", bench_shm_in_cache_hit, n_fast);
     bench!("CGNAT classify (entropy)", bench_cgnat_classify, n_medium);
-    bench!("CMS::increment", bench_cms_update, n_fast);
-    bench!("HLL::insert", bench_hll_insert, n_fast);
     #[cfg(feature = "mesh")]
     bench!("Mesh record_ban", bench_mesh_record_ban, n_medium);
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Canonical enterprise Linux installer. Explicit VERSION is mandatory.
-set -euo pipefail
+set -eu
 umask 027
 REPO="grep999/ramshield"
 VERSION="${VERSION:-}"
@@ -10,9 +10,12 @@ STATE_DIR=/var/lib/ramshield
 USER_NAME=ramshield
 GROUP_NAME=ramshield
 COSIGN_BIN="${COSIGN_BIN:-cosign}"
-log(){ printf '[ramshield-install] %s\n' "$*"; }
-die(){ printf '[ramshield-install] ERROR: %s\n' "$*" >&2; exit 1; }
+LOG="/tmp/ramshield-install-$(date +%Y%m%d-%H%M%S).log"
+log(){ printf '[ramshield-install] %s\n' "$*" | tee -a "$LOG"; }
+die(){ printf '[ramshield-install] ERROR: %s\n' "$*" >&2 | tee -a "$LOG"; exit 1; }
 need(){ command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
+
+exec > >(tee -a "$LOG") 2>&1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -58,6 +61,7 @@ if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
   [[ "$IPC_KEY" =~ ^[0-9a-f]{64}$ ]] || die 'failed to generate IPC authentication key'
   sed -i "s/k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/k1:$IPC_KEY/" "$CONFIG_DIR/config.toml"
   chown root:"$GROUP_NAME" "$CONFIG_DIR/config.toml"; chmod 0640 "$CONFIG_DIR/config.toml"
+  log "HMAC IPC key generated: k1:$IPC_KEY"
 fi
 cat > /etc/systemd/system/ramshield.service <<UNIT
 [Unit]
@@ -83,8 +87,6 @@ ProtectSystem=strict
 ProtectHome=true
 ProtectControlGroups=true
 ProtectKernelTunables=true
-# The SYNPROXY tunables are managed by sysctl.d at boot; the daemon only
-# reads them, so /proc/sys stays read-only.
 ProtectKernelModules=true
 ProtectKernelLogs=true
 RestrictRealtime=true
@@ -102,3 +104,4 @@ systemctl daemon-reload
 "$PREFIX/bin/ramshield" --version | grep -F "ramshield ${VERSION}" >/dev/null || die 'installed binary version mismatch'
 systemctl enable ramshield.service >/dev/null
 log "installed v${VERSION}; inspect ${CONFIG_DIR}/config.toml before starting"
+log "log file: $LOG"

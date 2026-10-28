@@ -189,6 +189,29 @@ impl Metrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record an out-of-order sample drop (arrived before 1s bucket boundary).
+    pub fn inc_out_of_order_sample_dropped(&self) {
+        self.out_of_order_sample_dropped_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a numerical calculation failure (CUSUM, variance, windup ceiling).
+    pub fn inc_numerical_calculation_failure(&self) {
+        self.numerical_calculation_failure_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record an adaptive breach triggered via the CUSUM detector.
+    pub fn inc_adaptive_breach(&self) {
+        self.adaptive_breach_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increment the baseline-frozen IPs gauge (current count of IPs in Breached mode).
+    pub fn inc_baseline_frozen_ips(&self) {
+        self.baseline_frozen_ips_gauge
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Record a dashboard API request blocked by the cross-origin CSRF guard.
     pub fn inc_csrf_blocked(&self) {
         self.csrf_blocked_total.fetch_add(1, Ordering::Relaxed);

@@ -1,19 +1,29 @@
-# RamShield — self-hosted Linux ingress defense in Rust
+# RamShield — Self-Hosted Linux Ingress Defense
+
 Detects and blocks abusive traffic at the kernel (XDP/eBPF) level.
 For self-hosted/sovereign infra operators who can't afford enterprise DDoS mitigation.
-Run it locally or behind your reverse proxy.
-No cloud dependency. No subscription. Just Rust.
+Run it locally or behind your reverse proxy. No cloud dependency. No subscription. Just Rust.
 
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/grep999/ramshield?label=release&color=0A0)](https://github.com/grep999/ramshield/releases/latest)
+[![GitHub release](https://img.shields.io/github/v/release/grep999/ramshield?label=release)](https://github.com/grep999/ramshield/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
+## One-Command Install
 
-**Linux-native traffic protection with eBPF/XDP.**
+**Requires:** root (XDP/eBPF maps, systemd service, /usr/local, /etc/ramshield, /var/lib/ramshield)
 
-RamShield watches traffic from your proxy, spots abusive patterns, and can block offending IPs or networks directly at the kernel level.
+```bash
+curl -fsSL https://raw.githubusercontent.com/grep999/ramshield/master/scripts/install.sh | sudo bash -s -- --version 0.6.0
+```
 
-The basic loop is simple:
+### Userspace (non-root)
 
-**observe → detect → decide → block → expire**
+Downloads binary to `$HOME/.local/bin`, stores config/state in
+`$HOME/.config/ramshield` / `$HOME/.local/share/ramshield`.  No kernel
+XDP/eBPF blocking — only a userspace proxy.  Run as a normal user.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/grep999/ramshield/master/scripts/install-user.sh | bash -s -- --version 0.6.0
+```
 
 ## Quick Start
 
@@ -56,7 +66,7 @@ curl -fsS http://127.0.0.1:9999/healthz
 ./target/release/ramshield-cli status
 ```
 
-See [Quickstart](docs/QUICKSTART.md) for full setup and [Configuration](docs/CONFIGURATION.md) for XDP tuning.
+See [Quickstart](docs/QUICKSTART.md) for full setup, [Configuration](docs/CONFIGURATION.md) for settings, and [Dashboard access](docs/DASHBOARD_AUTH.md) for setting the operator password.
 
 ## What happens when traffic turns bad
 
@@ -108,6 +118,21 @@ XDP
 ```
 
 RamShield exposes the XDP state so you can see whether the kernel dataplane is actually active.
+
+## Modules Overview
+
+| Module | Responsibility |
+|--------|---------------|
+| [ramshield-config](crates/ramshield-config/README.md) | TOML config, validation, env overrides |
+| [ramshield-types](crates/ramshield-types/README.md) | IP networks, ConnectionEvent, IpRecord, CGNAT tiers |
+| [ramshield-detection](crates/ramshield-detection/README.md) | EWMA + CUSUM + Pulse + Subnet/swarm detection |
+| [ramshield-enforcement](crates/ramshield-enforcement/README.md) | XDP projection, reconcile, block-state transition |
+| [ramshield-storage](crates/ramshield-storage/README.md) | WAL, checkpoint, snapshots, recovery |
+| [ramshield-mesh](crates/ramshield-mesh/README.md) | CRDT Aworset sync (disabled in production) |
+| [ramshield-xdp](crates/ramshield-xdp/README.md) | eBPF XDP engine (kernel dataplane) |
+| [ramshield-protocol](crates/ramshield-protocol/README.md) | IPC JSON framing, HMAC auth, replay store |
+| [ramshield-cgnat](crates/ramshield-cgnat/README.md) | CGNAT deployment with shm tables and classification |
+| [ramwal](crates/ramwal/README.md) | WAL persistence: append-only log, checkpoints, snapshots |
 
 ## Configuration
 
@@ -179,7 +204,7 @@ Dashboard and API are available from the same local service.
 
 ## Documentation
 
-[Quickstart](docs/QUICKSTART.md) · [Operations](docs/OPERATIONS.md) · [Configuration](docs/CONFIGURATION.md) · [Architecture](docs/ARCHITECTURE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Development](docs/DEVELOPMENT.md)
+[Quickstart](docs/QUICKSTART.md) · [Operations](docs/OPERATIONS.md) · [Configuration](docs/CONFIGURATION.md) · [Dashboard access](docs/DASHBOARD_AUTH.md) · [Architecture](docs/ARCHITECTURE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Development](docs/DEVELOPMENT.md)
 
 ## Development
 

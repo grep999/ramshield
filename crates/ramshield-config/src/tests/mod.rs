@@ -396,7 +396,8 @@ fn subnet_burst_ttl_default_is_short_and_serde_defaults_apply() {
     // Regression: subnet batch blocks used to inherit block_ttl_secs (1h),
     // locking out whole /24s of shared egress for an hour.
     let cfg = Config::default();
-    assert_eq!(cfg.detection.subnet_burst_ttl_secs, 120);
+    // Must equal config.baseline.toml (60); see rust_defaults_match_config_baseline_toml.
+    assert_eq!(cfg.detection.subnet_burst_ttl_secs, 60);
     assert!(cfg.detection.subnet_burst_ttl_secs < cfg.detection.block_ttl_secs);
     // Old TOML without the field must still parse (serde default) —
     // parse just the [detection] table; other tables have their own requireds.
@@ -404,7 +405,7 @@ fn subnet_burst_ttl_default_is_short_and_serde_defaults_apply() {
         "rps_threshold = 100\nrate_window_secs = 10\nsubnet_batch_threshold = 50\nsubnet_batch_min_events = 100\nbatch_block_enabled = true\nblock_ttl_secs = 3600\nbloom_bits = 1000",
     )
     .unwrap();
-    assert_eq!(parsed.subnet_burst_ttl_secs, 120);
+    assert_eq!(parsed.subnet_burst_ttl_secs, 60);
 }
 
 #[test]
@@ -537,4 +538,46 @@ fn test_batch_channel_capacity_env_override_and_validation() {
     let cfg = Config::load(tmpfile).unwrap();
     assert_eq!(cfg.detection.batch_channel_capacity, 4096);
     clear_env_vars();
+}
+
+/// Step 1 (audit closure): freeze defaults. Rust defaults must equal
+/// config.baseline.toml, or the shipped baseline silently drifts from code.
+#[test]
+fn rust_defaults_match_config_baseline_toml() {
+    // ponytail: relative path from CARGO_MANIFEST_DIR; breaks only if baseline.toml moves.
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config.baseline.toml");
+    let text = std::fs::read_to_string(path).expect("config.baseline.toml must exist");
+    // ponytail: slice the [detection] table out of the whole-file baseline —
+    // the full file needs Config::load's custom handling, this test only needs
+    // the detection section. Upgrade path: parse via Config::load if it moves.
+    let table = text
+        .split("\n[detection]")
+        .nth(1)
+        .expect("baseline must have [detection]")
+        .split("\n[")
+        .next()
+        .unwrap();
+    let parsed: DetectionConfig = toml::from_str(table).expect("baseline [detection] parses");
+    let d = DetectionConfig::default();
+    assert_eq!(parsed.rps_threshold, d.rps_threshold);
+    assert_eq!(parsed.rate_window_secs, d.rate_window_secs);
+    assert_eq!(parsed.promote_min_events, d.promote_min_events);
+    assert_eq!(
+        parsed.emergency_burst_threshold,
+        d.emergency_burst_threshold
+    );
+    assert_eq!(parsed.batch_window_ms, d.batch_window_ms);
+    assert_eq!(parsed.batch_max_events, d.batch_max_events);
+    assert_eq!(
+        parsed.pre_aggs_flush_interval_ms,
+        d.pre_aggs_flush_interval_ms
+    );
+    assert_eq!(parsed.pre_aggs_max_size, d.pre_aggs_max_size);
+    assert_eq!(parsed.subnet_batch_threshold, d.subnet_batch_threshold);
+    assert_eq!(parsed.subnet_batch_min_events, d.subnet_batch_min_events);
+    assert_eq!(parsed.subnet_window_threshold, d.subnet_window_threshold);
+    assert_eq!(parsed.block_ttl_secs, d.block_ttl_secs);
+    assert_eq!(parsed.subnet_burst_ttl_secs, d.subnet_burst_ttl_secs);
+    assert_eq!(parsed.pulse_window_secs, d.pulse_window_secs);
+    assert_eq!(parsed.pulse_threshold_samples, d.pulse_threshold_samples);
 }

@@ -62,6 +62,23 @@ pub struct Metrics {
     /// per-second admission budget — is not counted here, because no event
     /// was built to deliver.
     pub native_ingest_drops: Arc<AtomicU64>,
+    /// #90: raw frames the V3 drain loop walked out of completed blocks.
+    /// Compare against packets on the wire and against
+    /// `native_ingest_emitted` to locate under-capture: walked << wire means
+    /// the walk aborts early; walked ~= wire but emitted << walked means
+    /// events are lost between parse and send.
+    pub native_frames_walked: Arc<AtomicU64>,
+    /// #90: frames process_packet received but parse_l3 rejected (non-IP,
+    /// truncated, trusted-overlay skip). These are intentionally not events.
+    pub native_parse_rejects: Arc<AtomicU64>,
+    /// #90: events actually handed to the downstream channel.
+    pub native_ingest_emitted: Arc<AtomicU64>,
+    /// #90: frames the kernel reports delivered to each capture socket
+    /// (PACKET_STATISTICS.tp_packets, accumulated per epoch). Compare with
+    /// native_frames_walked to separate kernel-side loss from walk loss.
+    pub native_socket_packets: Arc<AtomicU64>,
+    /// #90: frames the ring had no room for (PACKET_STATISTICS.tp_drops).
+    pub native_socket_drops: Arc<AtomicU64>,
     /// The subset of `native_ingest_drops` caused by the downstream channel
     /// being **closed** rather than full. A closed channel means the
     /// detection pipeline is gone, not merely busy — a strictly more serious
@@ -116,6 +133,17 @@ pub struct Metrics {
     pub hw_z_bits: Arc<AtomicU64>,
     pub hw_forecast_bits: Arc<AtomicU64>,
     pub entropy_bits: Arc<AtomicU64>,
+    /// Number of out-of-order samples dropped because they arrived before the
+    /// 1-second bucket boundary. Preserved for telemetry of detection accuracy.
+    pub out_of_order_sample_dropped_total: Arc<AtomicU64>,
+    /// Number of times a numerical calculation (CUSUM, variance, windup ceiling)
+    /// produced a non-finite value and was rejected. Preserved for debugging.
+    pub numerical_calculation_failure_total: Arc<AtomicU64>,
+    /// Number of times an adaptive breach was triggered via the CUSUM detector.
+    pub adaptive_breach_total: Arc<AtomicU64>,
+    /// Number of IPs currently in Breached mode (frozen baseline). Gauge for
+    /// operators monitoring active breach state.
+    pub baseline_frozen_ips_gauge: Arc<AtomicU64>,
     /// P2: CGNAT graduated mitigation counters
     pub cgnat_classify_ticks: Arc<AtomicU64>,
     pub cgnat_tier_allow: Arc<AtomicU64>,
@@ -237,6 +265,11 @@ impl Metrics {
             frames_rejected: Arc::new(AtomicU64::new(0)),
             events_shed: Arc::new(AtomicU64::new(0)),
             native_ingest_drops: Arc::new(AtomicU64::new(0)),
+            native_frames_walked: Arc::new(AtomicU64::new(0)),
+            native_parse_rejects: Arc::new(AtomicU64::new(0)),
+            native_ingest_emitted: Arc::new(AtomicU64::new(0)),
+            native_socket_packets: Arc::new(AtomicU64::new(0)),
+            native_socket_drops: Arc::new(AtomicU64::new(0)),
             native_ingest_drops_disconnected: Arc::new(AtomicU64::new(0)),
             native_capture_workers_expected: Arc::new(AtomicU64::new(0)),
             native_capture_workers_started: Arc::new(AtomicU64::new(0)),
@@ -260,6 +293,10 @@ impl Metrics {
             hw_z_bits: Arc::new(AtomicU64::new(0)),
             hw_forecast_bits: Arc::new(AtomicU64::new(0)),
             entropy_bits: Arc::new(AtomicU64::new(0)),
+            out_of_order_sample_dropped_total: Arc::new(AtomicU64::new(0)),
+            numerical_calculation_failure_total: Arc::new(AtomicU64::new(0)),
+            adaptive_breach_total: Arc::new(AtomicU64::new(0)),
+            baseline_frozen_ips_gauge: Arc::new(AtomicU64::new(0)),
             cgnat_classify_ticks: Arc::new(AtomicU64::new(0)),
             cgnat_tier_allow: Arc::new(AtomicU64::new(0)),
             cgnat_tier_challenge: Arc::new(AtomicU64::new(0)),

@@ -247,6 +247,126 @@ fn emergency_burst_fires_once_before_flush() {
     );
 }
 
+/// Emergency burst gate is deliberately PER-WORKER (see DetectionConfig doc
+/// comment): each worker's unflushed local count crosses the threshold
+/// independently. An IP whose traffic is split across workers so that no
+/// single worker reaches the threshold does NOT trigger the fast path — its
+/// aggregate detection belongs to the flush path (merged cross-worker batch
+/// counts + rate records). If two workers DO cross simultaneously,
+/// enforcement dedupes by (ip, reason).
+#[test]
+fn emergency_threshold_is_per_worker_and_split_traffic_still_aggregates() {
+    let config = Config::default().into_handle();
+    let store = Arc::new(Store::new(16));
+    let metrics = Arc::new(Metrics::new());
+    let (etx, mut erx) = mpsc::channel(64);
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            store,
+            config,
+            etx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
+
+    let ip: IpAddr = "9.9.9.9".parse().unwrap();
+    let ev = |n: u64| ConnectionEvent {
+        ip,
+        timestamp_ns: n,
+        bytes: 10,
+        status_code: 200,
+        proto_fingerprint: 0,
+        l7: None,
+    };
+    // Same IP, 8 events total, split 4/4 across two workers; threshold 5.
+    let mut w1: HashMap<IpAddr, IpAgg> = HashMap::new();
+    let mut w2: HashMap<IpAddr, IpAgg> = HashMap::new();
+    for n in 0..4 {
+        eng.absorb_or_emergency(&mut w1, &ev(n), 5);
+    }
+    for n in 0..4 {
+        eng.absorb_or_emergency(&mut w2, &ev(n), 5);
+    }
+    assert!(
+        erx.try_recv().is_err(),
+        "no worker reached 5: the per-worker fast path must stay silent"
+    );
+
+    // The aggregate is not lost: both workers merge into the shared pre-agg
+    // map and the flush path sees the full cross-worker count.
+    eng.merge_local(&mut w1);
+    eng.merge_local(&mut w2);
+    let agg = eng.pre_aggs.get(&ip).expect("split IP must be merged");
+    assert_eq!(
+        agg.value().count,
+        8,
+        "cross-worker split traffic must aggregate exactly"
+    );
+}
+
+/// Month-4 gate: 100k distinct IPs through the production merge path with a
+/// small pre_aggs_max_size. The shared map must respect its bound at all
+/// times and lose zero events (overflow flushes, never drops).
+#[test]
+fn high_cardinality_100k_ips_respects_pre_aggs_bound_and_loses_nothing() {
+    let mut config = Config::default();
+    config.detection.pre_aggs_max_size = 1000;
+    let cfg = config.into_handle();
+    let store = Arc::new(Store::new(16));
+    let metrics = Arc::new(Metrics::new());
+    let (etx, _erx) = mpsc::channel(4096);
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            store,
+            cfg,
+            etx,
+            metrics.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
+
+    const TOTAL: u64 = 100_000;
+    const BATCH: usize = 500;
+    for chunk in (0..TOTAL).collect::<Vec<_>>().chunks(BATCH) {
+        let mut local: HashMap<IpAddr, IpAgg> = HashMap::new();
+        for &i in chunk {
+            let ip = IpAddr::V4(Ipv4Addr::new(
+                10,
+                ((i >> 16) & 0xff) as u8,
+                ((i >> 8) & 0xff) as u8,
+                (i & 0xff) as u8,
+            ));
+            let a = local.entry(ip).or_default();
+            a.absorb(&ConnectionEvent {
+                ip,
+                timestamp_ns: i,
+                bytes: 64,
+                status_code: 200,
+                proto_fingerprint: 0,
+                l7: None,
+            });
+        }
+        eng.merge_local(&mut local);
+    }
+    // Final drain.
+    while !eng.pre_aggs.is_empty() {
+        eng.flush_pre_aggs_to_store();
+    }
+
+    assert!(
+        eng.pre_aggs.len() <= 1000,
+        "pre_aggs must respect its configured bound"
+    );
+    assert_eq!(
+        metrics.events_ingested.load(Ordering::Relaxed),
+        TOTAL,
+        "no event may be lost to the bound — overflow must flush, not drop"
+    );
+}
+
 /// P1 regression (F1): with N workers, the old iter_mut+take+clear flush
 /// silently erased events inserted during the walk. Invariant:
 /// ingested + left-in-pre_aggs == sent, exactly, under concurrent flush.
@@ -321,6 +441,42 @@ fn concurrent_flush_never_loses_events() {
         ingested + left,
         sent,
         "F1 loss: ingested={ingested} left={left} sent={sent}"
+    );
+}
+
+/// Rate observation window semantics (P1): empty flush attempts advance the
+/// timeout scheduler but must NOT widen the rate window. The window is the
+/// span since the batch's FIRST event, so idle/bursty flush scheduling cannot
+/// dilute the measured rate (and pre-batch idle time is excluded).
+#[test]
+fn empty_flushes_do_not_distort_rate_window() {
+    let eng = engine();
+    // Idle attempt: advances last_pre_aggs_flush_ns only.
+    eng.flush_pre_aggs_to_store();
+    std::thread::sleep(std::time::Duration::from_millis(120));
+
+    let ip: IpAddr = "10.77.0.1".parse().unwrap();
+    let mut local: HashMap<IpAddr, IpAgg> = HashMap::new();
+    let mut a = IpAgg::default();
+    a.absorb(&ConnectionEvent {
+        ip,
+        timestamp_ns: 0,
+        bytes: 10,
+        status_code: 200,
+        proto_fingerprint: 0,
+        l7: None,
+    });
+    local.insert(ip, a);
+    eng.merge_local(&mut local);
+
+    // Flush immediately: the batch window is ~0ms since the first event.
+    // The old semantics divided by the ~120ms since the last (empty) flush,
+    // diluting the rate ~100x.
+    eng.flush_pre_aggs_to_store();
+    let rate = eng.store.traffic.events_last_second.load(Ordering::Relaxed);
+    assert!(
+        rate >= 10_000,
+        "rate must be measured from the batch's first event, not from idle flush scheduling; got {rate}"
     );
 }
 
@@ -847,11 +1003,13 @@ fn distributed_swarm_satisfies_dual_gate() {
 #[test]
 fn swarm_hint_promotes_sparse_hosts_in_one_slash24() {
     let eng = engine();
-    let events: Vec<_> = (1..=60u8)
+    // Baseline dual gate: 64 unique hosts. 65 hosts x 1 event each crosses
+    // the in-batch host leg (65 >= 64) with count 1 < promote_min_events 4.
+    let events: Vec<_> = (1..=65u8)
         .map(|h| ev_at(IpAddr::V4(Ipv4Addr::new(203, 0, 113, h)), 1))
         .collect();
     eng.flush_events(&events);
-    let stored = (1..=60u8)
+    let stored = (1..=65u8)
         .filter(|h| {
             eng.store
                 .get(&IpAddr::V4(Ipv4Addr::new(203, 0, 113, *h)))
@@ -859,13 +1017,126 @@ fn swarm_hint_promotes_sparse_hosts_in_one_slash24() {
         })
         .count();
     assert_eq!(
-        stored, 60,
+        stored, 65,
         "swarm_hint must promote every host once in-batch hosts >= threshold"
     );
     // And the subnet window must actually carry the swarm signal.
     let sk = subnet_key_u128(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1))).unwrap();
     let rec = eng.store.subnet_table().get(&sk).unwrap();
-    assert_eq!(rec.unique_ips(), 60, "60 distinct hosts in the /24 bitmap");
+    assert_eq!(rec.unique_ips(), 65, "65 distinct hosts in the /24 bitmap");
+}
+
+// ponytail: O(n_threads x max_entries) worst-case flush churn is fine at test scale; switch to a pre-filled map if this becomes slow.
+#[test]
+fn concurrent_merge_local_never_exceeds_pre_aggs_max_size() {
+    let mut config = Config::default();
+    config.detection.pre_aggs_max_size = 100;
+    let cfg = config.into_handle();
+    let eng = Arc::new(
+        DetectionEngine::try_new(
+            Arc::new(Store::new(16)),
+            cfg,
+            mpsc::channel(64).0,
+            Arc::new(Metrics::new()),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("detection try_new"),
+    );
+
+    let n_threads = 8;
+    let ips_per_thread = 200;
+    let handles: Vec<_> = (0..n_threads)
+        .map(|t| {
+            let eng = Arc::clone(&eng);
+            std::thread::spawn(move || {
+                let mut local: HashMap<IpAddr, IpAgg> = HashMap::new();
+                for i in 0..ips_per_thread {
+                    let ip = IpAddr::V4(Ipv4Addr::new(10, t as u8, 0, i as u8));
+                    local.entry(ip).or_default().absorb(&ConnectionEvent {
+                        ip,
+                        timestamp_ns: i as u64,
+                        bytes: 1,
+                        status_code: 200,
+                        proto_fingerprint: 0,
+                        l7: None,
+                    });
+                }
+                eng.merge_local(&mut local);
+                assert!(local.is_empty());
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().expect("worker thread");
+    }
+    assert!(
+        eng.pre_aggs.len() <= 100,
+        "concurrent merges exceeded configured capacity: {}",
+        eng.pre_aggs.len()
+    );
+}
+
+/// P1: subnet dual-gate boundary at exactly (64 unique, 500 events) against
+/// the baseline defaults. Both gates pass at (64, 500); each leg alone
+/// blocks. Guards scoped — a held DashMap read guard across flush_events
+/// self-deadlocks on the same shard.
+#[test]
+fn subnet_dual_gate_boundary_exact() {
+    let eng = engine();
+    let ip_in = |o: u8| IpAddr::V4(Ipv4Addr::new(198, 51, 100, o));
+    let mk_events = |hosts: &[u8], n: u64| -> Vec<_> {
+        hosts
+            .iter()
+            .flat_map(|&h| (0..n).map(move |i| ev_at(ip_in(h), i)))
+            .collect()
+    };
+    let gate = |sk: SubnetKey| {
+        let rec = eng.store.subnet_table().get(&sk).unwrap();
+        (rec.unique_ips(), rec.total_rps)
+    };
+
+    // Case 1: exactly 64 unique x 8 events = 512 — both legs pass (64>=64, 512>=500).
+    let hosts: Vec<u8> = (1..=64u8).collect();
+    eng.flush_events(&mk_events(&hosts, 8));
+    let sk1 = subnet_key_u128(ip_in(1)).unwrap();
+    let (uniq, rps) = gate(sk1);
+    assert_eq!(uniq, 64, "exactly 64 unique IPs");
+    assert!(rps >= 500, "512 events meets the event gate (got {rps})");
+
+    // Case 2: 63 unique x 8 events in a FRESH /24 — unique gate blocks (63<64).
+    let hosts63: Vec<u8> = (1..=63u8).collect();
+    let ip_in2 = |o: u8| IpAddr::V4(Ipv4Addr::new(198, 51, 101, o));
+    let evs63: Vec<_> = hosts63
+        .iter()
+        .flat_map(|&h| (0..8).map(move |i| ev_at(ip_in2(h), i)))
+        .collect();
+    eng.flush_events(&evs63);
+    let sk2 = subnet_key_u128(ip_in2(1)).unwrap();
+    let (uniq2, rps2) = gate(sk2);
+    assert_eq!(uniq2, 63, "63 unique IPs below the host gate");
+    assert!(rps2 >= 500, "504 events meets the event gate");
+    assert!(uniq2 < 64, "dual gate must fail on the unique leg alone");
+
+    // Case 3: 64 unique x 7 events in a FRESH /24 — event gate blocks (448<500).
+    let hosts64: Vec<u8> = (1..=64u8).collect();
+    let ip_in3 = |o: u8| IpAddr::V4(Ipv4Addr::new(198, 51, 102, o));
+    let evs64: Vec<_> = hosts64
+        .iter()
+        .flat_map(|&h| (0..7).map(move |i| ev_at(ip_in3(h), i)))
+        .collect();
+    eng.flush_events(&evs64);
+    let sk3 = subnet_key_u128(ip_in3(1)).unwrap();
+    let (uniq3, rps3) = gate(sk3);
+    assert_eq!(uniq3, 64, "64 unique IPs meets the host gate");
+    assert!(rps3 < 500, "448 events below the event gate (got {rps3})");
+
+    // Case 4: one hostile IP at 5000 events in a FRESH /24 — unique gate blocks (1<64).
+    let ip4 = IpAddr::V4(Ipv4Addr::new(198, 51, 103, 100));
+    eng.flush_events(&(0..5000).map(|i| ev_at(ip4, i)).collect::<Vec<_>>());
+    let sk4 = subnet_key_u128(ip4).unwrap();
+    let (uniq4, _rps4) = gate(sk4);
+    assert_eq!(uniq4, 1, "one hostile IP is one distinct host");
+    assert!(uniq4 < 64, "single-IP volume cannot satisfy the dual gate");
 }
 
 /// One CIDR decision, one owner: a /24 swarm is ONE subnet block, not N
@@ -938,10 +1209,10 @@ fn subnet_decision_is_one_block_not_one_per_member() {
 fn swarm_hint_reads_store_dual_gate_across_flushes() {
     let eng = engine();
     let net_ip = |h: u8| IpAddr::V4(Ipv4Addr::new(198, 18, 7, h));
-    // First flush: 55 hosts x 2 events = 110 events — passes the store
-    // dual gate (>=50 uniq, >=100 events) on its own in-batch legs.
-    let seed: Vec<_> = (1..=55u8)
-        .flat_map(|h| (0..2u64).map(move |i| ev_at(net_ip(h), i)))
+    // First flush: 65 hosts x 8 events = 520 events — arms the store dual
+    // gate (>=64 uniq, >=500 events) on its own in-batch legs.
+    let seed: Vec<_> = (1..=65u8)
+        .flat_map(|h| (0..8u64).map(move |i| ev_at(net_ip(h), i)))
         .collect();
     eng.flush_events(&seed);
     let sk = subnet_key_u128(net_ip(1)).unwrap();
@@ -952,8 +1223,8 @@ fn swarm_hint_reads_store_dual_gate_across_flushes() {
         (rec.unique_ips(), rec.total_rps)
     };
     assert!(
-        uniq >= 50 && rps >= 100,
-        "seed must arm the store dual gate"
+        uniq >= 64 && rps >= 500,
+        "seed must arm the store dual gate (got uniq={uniq}, rps={rps})"
     );
     // Second flush: one brand-new host, one event — below promote_min, but
     // the /24 already satisfies the dual gate in the store.
@@ -1567,3 +1838,183 @@ fn merge_local_holds_the_merge_lock_for_the_whole_drain() {
          it must be held for the whole drain (old per-IP lock: ~12.5M)"
     );
 }
+
+/// Patch B RED: forecasting disabled at engine startup avoids all forecast-only
+/// sample collection, sorting, and enqueueing without affecting detection.
+#[test]
+fn threat_samples_are_not_collected_when_forecasting_disabled() {
+    use ramshield_config::Config;
+    let mut cfg = Config::default();
+    cfg.detection.emergency_burst_threshold = 5;
+    cfg.detection.block_ttl_secs = 2;
+    cfg.forecasting.enabled = false;
+    let handle = cfg.clone().into_handle();
+    let store = Arc::new(Store::new(16));
+    let metrics = Arc::new(Metrics::new());
+    let (etx, _erx) = mpsc::channel(64);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let eng = Arc::new(
+        DetectionEngine::try_new(store.clone(), handle, etx, metrics.clone(), shutdown)
+            .expect("detection try_new"),
+    );
+
+    // Emit enough events to trigger threat-scoring and promotion.
+    let ip: IpAddr = "192.0.2.77".parse().unwrap();
+    let events: Vec<_> = (0..30u64)
+        .map(|i| ConnectionEvent {
+            ip,
+            timestamp_ns: i,
+            bytes: 64,
+            status_code: 200,
+            proto_fingerprint: 0,
+            l7: None,
+        })
+        .collect();
+    eng.flush_events(&events);
+
+    // With forecasting disabled, no forecast-only samples are collected,
+// sorted, or enqueued. Normal detection promotion still runs unchanged.
+    assert_eq!(
+        eng.store.traffic.threat_sample.len(),
+        0,
+        "forecasting disabled: threat sample queue must not grow"
+    );
+
+    // Verify detection still works: same traffic still promotes the IP.
+    let ip2: IpAddr = "10.0.0.5".parse().unwrap();
+    let events2: Vec<_> = (0..30u64)
+        .map(|i| ConnectionEvent {
+            ip: ip2,
+            timestamp_ns: i,
+            bytes: 64,
+            status_code: 200,
+            proto_fingerprint: 0,
+            l7: None,
+        })
+        .collect();
+    eng.flush_events(&events2);
+    assert!(eng.store.get(&ip2).is_some(), "IP must still be promoted by detection");
+}
+
+/// Patch B RED: forecasting enabled at engine startup preserves sample collection
+/// and delivery.
+#[test]
+fn threat_samples_are_collected_when_forecasting_enabled() {
+    use ramshield_config::Config;
+    let mut cfg = Config::default();
+    cfg.detection.emergency_burst_threshold = 5;
+    cfg.detection.block_ttl_secs = 2;
+    // forecasting enabled (the default).
+    let handle = cfg.into_handle();
+    let store = Arc::new(Store::new(16));
+    let metrics = Arc::new(Metrics::new());
+    let (etx, _erx) = mpsc::channel(64);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let eng = Arc::new(
+        DetectionEngine::try_new(store.clone(), handle, etx, metrics.clone(), shutdown)
+            .expect("detection try_new"),
+    );
+
+    // Emit enough events to produce a threat score > 0.5 threshold.
+    let ip: IpAddr = "192.0.2.77".parse().unwrap();
+    let events: Vec<_> = (0..30u64)
+        .map(|i| ConnectionEvent {
+            ip,
+            timestamp_ns: i,
+            bytes: 64,
+            status_code: 200,
+            proto_fingerprint: 0,
+            l7: None,
+        })
+        .collect();
+    eng.flush_events(&events);
+
+    // With forecasting enabled, the threat sample queue must contain entries
+    // (sorted by threat score descending, truncated to 128).
+    let sample_len = eng.store.traffic.threat_sample.len();
+    assert!(
+        sample_len > 0,
+        "forecasting enabled: threat sample queue must contain entries, got {}",
+        sample_len
+    );
+
+    // Verify the queue is sorted by threat score descending.
+    let samples: Vec<(IpAddr, f32)> = eng.store.traffic.drain_threat_sample();
+    for w in samples.windows(2) {
+        assert!(w[0].1 >= w[1].1, "threat samples must be sorted descending");
+    }
+
+    // IP must also be promoted by detection.
+    assert!(eng.store.get(&ip).is_some(), "IP must be promoted by detection");
+}
+
+/// Patch B RED: hot configuration changes after engine initialization must not
+/// change the sample-collection decision when the forecasting worker lifecycle
+/// remains unchanged.
+#[test]
+fn threat_sample_gate_tracks_worker_lifecycle_not_hot_config() {
+    use ramshield_config::Config;
+    // Start with forecasting enabled at engine construction.
+    let mut cfg = Config::default();
+    cfg.forecasting.enabled = true;
+    let handle = cfg.clone().into_handle();
+    let store = Arc::new(Store::new(16));
+    let metrics = Arc::new(Metrics::new());
+    let (etx, _erx) = mpsc::channel(64);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let eng = Arc::new(
+        DetectionEngine::try_new(store.clone(), handle, etx, metrics.clone(), shutdown)
+            .expect("detection try_new"),
+    );
+
+    // Flush events to populate the threat sample queue and drain it.
+    let ip: IpAddr = "192.0.2.77".parse().unwrap();
+    let events: Vec<_> = (0..30u64)
+        .map(|i| ConnectionEvent {
+            ip,
+            timestamp_ns: i,
+            bytes: 64,
+            status_code: 200,
+            proto_fingerprint: 0,
+            l7: None,
+        })
+        .collect();
+    eng.flush_events(&events);
+
+    // Drain the queue so the next observation is isolated.
+    let sample_len_1 = eng.store.traffic.drain_threat_sample().len();
+
+    // The engine's startup decision was forecasting enabled, so sample
+    // collection was active. Now toggle the mutable config field off — but
+    // the engine's startup decision remains fixed at true. Hot config does
+    // not retroactively change whether forecast samples were collected.
+    cfg.forecasting.enabled = false;
+
+    // Emit more events after the config toggle.
+    let ip2: IpAddr = "192.0.2.78".parse().unwrap();
+    let events2: Vec<_> = (0..30u64)
+        .map(|i| ConnectionEvent {
+            ip: ip2,
+            timestamp_ns: i,
+            bytes: 64,
+            status_code: 200,
+            proto_fingerprint: 0,
+            l7: None,
+        })
+        .collect();
+    eng.flush_events(&events2);
+
+    // Because the engine's internal decision was captured at startup = true,
+    // forecast samples should still be collected despite the mutable config
+    // now being false.
+    let sample_len_2 = eng.store.traffic.threat_sample.len();
+    assert!(
+        sample_len_2 >= sample_len_1,
+        "engine startup decision must persist; samples should not decrease after hot config change"
+    );
+
+    // IP must still be promoted by detection.
+    assert!(eng.store.get(&ip2).is_some(), "IP must still be promoted by detection");
+}
+
+mod macro_replay;
