@@ -1,5 +1,5 @@
 use super::*;
-use crate::rate_tracker::{DetectorMode, DetectorProfile, PerIpRecord, TrafficContext, cusum_fired};
+use crate::rate_tracker::{DetectorMode, DetectorProfile, PerIpRecord, TrafficContext};
 
 impl DetectionEngine {
     /// ponytail: returns the 5-tuple `(ewma_rps, threat, should_block, was_blocked, stored)`.
@@ -248,7 +248,7 @@ impl DetectionEngine {
                 let block = adaptive_block_gate(
                     hot,
                     adaptive_breach,
-                    legacy_adaptive_blocked || cusum_fired(rec.cusum_s, det_thr),
+                    legacy_adaptive_blocked,
                     pulse_fired,
                     relative_fired,
                     flash_crowd,
