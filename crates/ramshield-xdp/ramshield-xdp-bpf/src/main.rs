@@ -10,7 +10,7 @@ use aya_ebpf::bindings::xdp_md;
 use aya_ebpf::{
     bindings::xdp_action,
     macros::{map, xdp},
-    maps::{lpm_trie::Key, LpmTrie, LruHashMap, PerCpuArray, RingBuf},
+    maps::{Array, lpm_trie::Key, LpmTrie, LruHashMap, PerCpuArray, RingBuf},
     programs::XdpContext,
 };
 use core::mem;
@@ -48,6 +48,13 @@ static EVENTS: RingBuf = RingBuf::with_byte_size(65536, 0);
 // under peak flood. Slot index encodes the outcome (see CounterSlot below).
 #[map]
 static COUNTERS: PerCpuArray<u64> = PerCpuArray::with_max_entries(4, 0);
+
+// Autonomous cold-start PPS guard config. Single-element Array of [u64; 4]:
+// [syn_pps_per_cpu, udp_pps_per_cpu, packet_pps_per_cpu, window_ms].
+// Map is present so userspace configure_autonomous succeeds when enabled.
+// Kernel-side enforcement logic for the guard is not yet active.
+#[map]
+static AUTONOMOUS_CONFIG: Array<[u64; 4]> = Array::with_max_entries(1, 0);
 
 // COUNTERS slot indices. Protocol-aware split so the "did XDP actually drop?"
 // question is answerable without any userspace map scanning.
