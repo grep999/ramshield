@@ -99,8 +99,12 @@ impl DetectionEngine {
                 // Quantize adaptive CUSUM input to completed one-second buckets.
                 // Sub-second flushes accumulate packet counts in IpRecord; only a bucket
                 // transition can submit the previous full bucket to the detector.
-                let adaptive_breach =
-                    update_adaptive_bucket(rec, ip_agg.count as u64, adaptive_now_ns, traffic_context);
+                let adaptive_breach = update_adaptive_bucket(
+                    rec,
+                    ip_agg.count as u64,
+                    adaptive_now_ns,
+                    traffic_context,
+                );
                 if adaptive_breach {
                     self.metrics.inc_adaptive_breach();
                 }
@@ -206,8 +210,7 @@ fn adaptive_block_gate(
     relative: bool,
     flash_crowd: bool,
 ) -> bool {
-    adaptive_breach
-        || (!flash_crowd && (hot || legacy_cusum || pulse || relative))
+    adaptive_breach || (!flash_crowd && (hot || legacy_cusum || pulse || relative))
 }
 
 /// Accumulate per-IP events into discrete one-second buckets. A completed bucket
@@ -237,8 +240,9 @@ fn update_adaptive_bucket(
     }
 
     if current_bucket == candidate.adaptive_bucket_id {
-        candidate.adaptive_bucket_packets =
-            candidate.adaptive_bucket_packets.saturating_add(packet_count);
+        candidate.adaptive_bucket_packets = candidate
+            .adaptive_bucket_packets
+            .saturating_add(packet_count);
         *rec = candidate;
         return false;
     }
@@ -314,8 +318,7 @@ fn update_adaptive_detector(
         };
     }
 
-    let Ok(outcome) =
-        adaptive.update_with_context_at(inst_rps, now_ns, context, context_now_ns)
+    let Ok(outcome) = adaptive.update_with_context_at(inst_rps, now_ns, context, context_now_ns)
     else {
         // PerIpRecord::update validates and calculates before committing. Do not copy
         // anything back on failure; the caller's persisted adaptive fields stay intact.
@@ -377,13 +380,25 @@ mod adaptive_integration_tests {
     #[test]
     fn adaptive_state_persists_across_flush_updates() {
         let mut rec = record();
-        assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000, None, 1_000_000_000));
+        assert!(!update_adaptive_detector(
+            &mut rec,
+            100.0,
+            1_000_000_000,
+            None,
+            1_000_000_000
+        ));
         assert_eq!(rec.adaptive_model_sample_count, 1);
         assert!(rec.variance.is_finite() && rec.variance > 0.0);
         let baseline = rec.adaptive_baseline_rps;
         let variance = rec.variance;
 
-        assert!(!update_adaptive_detector(&mut rec, 105.0, 2_000_000_000, None, 2_000_000_000));
+        assert!(!update_adaptive_detector(
+            &mut rec,
+            105.0,
+            2_000_000_000,
+            None,
+            2_000_000_000
+        ));
         assert_eq!(rec.adaptive_model_sample_count, 2);
         assert!(rec.last_bucket_ns == 2_000_000_000);
         assert!(rec.variance.is_finite() && rec.variance > 0.0);
@@ -394,7 +409,13 @@ mod adaptive_integration_tests {
     #[test]
     fn rejected_adaptive_sample_leaves_persisted_state_unchanged() {
         let mut rec = record();
-        assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000, None, 1_000_000_000));
+        assert!(!update_adaptive_detector(
+            &mut rec,
+            100.0,
+            1_000_000_000,
+            None,
+            1_000_000_000
+        ));
         let before = (
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
@@ -404,7 +425,13 @@ mod adaptive_integration_tests {
             rec.recovery_count,
             rec.detector_mode,
         );
-        assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000, None, 1_000_000_000));
+        assert!(!update_adaptive_detector(
+            &mut rec,
+            100.0,
+            1_000_000_000,
+            None,
+            1_000_000_000
+        ));
         let after = (
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
@@ -420,7 +447,13 @@ mod adaptive_integration_tests {
     #[test]
     fn invalid_rate_does_not_mutate_adaptive_state() {
         let mut rec = record();
-        assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000, None, 1_000_000_000));
+        assert!(!update_adaptive_detector(
+            &mut rec,
+            100.0,
+            1_000_000_000,
+            None,
+            1_000_000_000
+        ));
         let before = (
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
@@ -430,7 +463,13 @@ mod adaptive_integration_tests {
             rec.recovery_count,
             rec.detector_mode,
         );
-        assert!(!update_adaptive_detector(&mut rec, f64::NAN, 2_000_000_000, None, 2_000_000_000));
+        assert!(!update_adaptive_detector(
+            &mut rec,
+            f64::NAN,
+            2_000_000_000,
+            None,
+            2_000_000_000
+        ));
         let after = (
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
@@ -445,7 +484,13 @@ mod adaptive_integration_tests {
     #[test]
     fn corrupt_persisted_adaptive_state_is_not_silently_repaired() {
         let mut rec = record();
-        assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000, None, 1_000_000_000));
+        assert!(!update_adaptive_detector(
+            &mut rec,
+            100.0,
+            1_000_000_000,
+            None,
+            1_000_000_000
+        ));
         rec.variance = f64::NAN;
         let before = (
             rec.adaptive_baseline_rps,
@@ -457,7 +502,13 @@ mod adaptive_integration_tests {
             rec.detector_mode,
         );
 
-        assert!(!update_adaptive_detector(&mut rec, 105.0, 2_000_000_000, None, 2_000_000_000));
+        assert!(!update_adaptive_detector(
+            &mut rec,
+            105.0,
+            2_000_000_000,
+            None,
+            2_000_000_000
+        ));
         let after = (
             rec.adaptive_baseline_rps,
             rec.adaptive_cusum_s,
@@ -473,7 +524,13 @@ mod adaptive_integration_tests {
     #[test]
     fn adaptive_breach_signal_reaches_the_runtime_gate() {
         let mut rec = record();
-        assert!(!update_adaptive_detector(&mut rec, 100.0, 1_000_000_000, None, 1_000_000_000));
+        assert!(!update_adaptive_detector(
+            &mut rec,
+            100.0,
+            1_000_000_000,
+            None,
+            1_000_000_000
+        ));
         let mut breached = false;
         for i in 1..=8 {
             let now = (i + 1) * 1_000_000_000;
@@ -528,5 +585,4 @@ mod adaptive_integration_tests {
         );
         assert_eq!(before, after);
     }
-
 }

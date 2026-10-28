@@ -1335,7 +1335,9 @@ mod adaptive_tests {
             observed_at_ns: 1_000_000_000,
             confidence: 0.95,
         };
-        let outcome = record.update(15_000.0, 1_000_000_000, Some(&context)).unwrap();
+        let outcome = record
+            .update(15_000.0, 1_000_000_000, Some(&context))
+            .unwrap();
         assert!(!outcome.is_breached);
         assert_ne!(outcome.mode, DetectorMode::Breached);
     }
@@ -1352,15 +1354,13 @@ mod adaptive_tests {
             confidence: 0.95,
         };
         let outcome = record
-            .update_with_context_at(
-                15_000.0,
-                1_000_000_000,
-                Some(&context),
-                1_100_000_000,
-            )
+            .update_with_context_at(15_000.0, 1_000_000_000, Some(&context), 1_100_000_000)
             .unwrap();
         assert_ne!(outcome.mode, DetectorMode::Breached);
-        assert_eq!(record.baseline_rate, 100.0, "FlashCrowd must freeze baseline");
+        assert_eq!(
+            record.baseline_rate, 100.0,
+            "FlashCrowd must freeze baseline"
+        );
     }
 
 }

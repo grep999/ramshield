@@ -9,12 +9,7 @@ use ramshield_forecasting::Hypothesis;
 
 const NS_PER_SECOND: u64 = 1_000_000_000;
 
-fn tick(
-    record: &mut PerIpRecord,
-    index: u64,
-    rate: f64,
-    hypothesis: Option<Hypothesis>,
-) -> bool {
+fn tick(record: &mut PerIpRecord, index: u64, rate: f64, hypothesis: Option<Hypothesis>) -> bool {
     let timestamp_ns = index * NS_PER_SECOND;
     let context = hypothesis.map(|hypothesis| TrafficContext {
         hypothesis,

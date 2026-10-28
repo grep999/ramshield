@@ -13,7 +13,6 @@ pub use ip_network::IpNetwork;
 // Enforcement provenance: external/community reputation is not an authoritative source.
 pub use command::EvidenceSource;
 
-
 /// Process-local monotonic nanosecond clock shared by crates that need to
 /// compare freshness or enforce elapsed-time invariants. This is not wall time
 /// and must not be persisted as a calendar timestamp.

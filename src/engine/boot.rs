@@ -196,13 +196,15 @@ pub(crate) async fn boot_pipeline(engine: Arc<Engine>) -> std::io::Result<()> {
                     // kernel-side program). Configure the map only when the
                     // autonomous guard is actually enabled, so a disabled
                     // guard cannot fail XDP startup.
-                    if cfg_snapshot.autonomous.enabled && let Err(e) = applier.configure_autonomous(
-                        cfg_snapshot.autonomous.enabled,
-                        cfg_snapshot.autonomous.syn_pps_per_cpu,
-                        cfg_snapshot.autonomous.udp_pps_per_cpu,
-                        cfg_snapshot.autonomous.packet_pps_per_cpu,
-                        cfg_snapshot.autonomous.window_ms,
-                    ) {
+                    if cfg_snapshot.autonomous.enabled
+                        && let Err(e) = applier.configure_autonomous(
+                            cfg_snapshot.autonomous.enabled,
+                            cfg_snapshot.autonomous.syn_pps_per_cpu,
+                            cfg_snapshot.autonomous.udp_pps_per_cpu,
+                            cfg_snapshot.autonomous.packet_pps_per_cpu,
+                            cfg_snapshot.autonomous.window_ms,
+                        )
+                    {
                         tracing::error!(error = %e, "failed to configure autonomous XDP guard");
                         // ponytail: collapse-safe — error logged whenever configure() fails;
                         // return only when hard_xdp=true (fail-open). #[allow(clippy::collapsible_if)]

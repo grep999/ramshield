@@ -145,9 +145,7 @@ pub struct Forecaster {
     last_slow_ramp_warn_ms: std::sync::atomic::AtomicU64,
     /// Optional lock-free snapshot publisher; keeps the detector crate out of
     /// forecasting's dependency graph while allowing the daemon to bridge context.
-    context_publisher: Option<
-        Arc<dyn Fn(Option<(Hypothesis, f64)>, u64) + Send + Sync + 'static>,
-    >,
+    context_publisher: Option<Arc<dyn Fn(Option<(Hypothesis, f64)>, u64) + Send + Sync + 'static>>,
 }
 
 /// Bounded reservoir of positive deviations; `extreme_q` returns the value that
