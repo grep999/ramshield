@@ -99,16 +99,88 @@ impl DetectionEngine {
 
                 rec.sample_count = rec.sample_count.saturating_add(1);
 
-                // Quantize adaptive CUSUM input to completed one-second buckets.
-                // Sub-second flushes accumulate packet counts in IpRecord; only a bucket
-                // transition can submit the previous full bucket to the detector.
+                // P7/P8 adaptive: bucket quantization — accumulate sub-second
+                // counts, only advance CUSUM at completed 1-second boundaries.
+                rec.bucket_accum_pps += inst_rps;
+                let bucket_ready = rec.last_bucket_ns == 0
+                    || now.saturating_sub(rec.last_bucket_ns) >= 1_000_000_000;
+
+                let legacy_adaptive_blocked = if bucket_ready {
+                    let rate = if rec.last_bucket_ns == 0 {
+                        // First sample: use inst_rps directly.
+                        inst_rps
+                    } else {
+                        rec.bucket_accum_pps
+                    };
+                    // Save state in case update() returns error (D-06 atomicity).
+                    let prev_accum = rec.bucket_accum_pps;
+                    let prev_bucket_ns = rec.last_bucket_ns;
+                    rec.bucket_accum_pps = 0.0;
+                    rec.last_bucket_ns = now;
+
+                    // Build PerIpRecord from IpRecord state.
+                    let profile = DetectorProfile {
+                        min_threshold_h: det_thr as f64 * 1.5,
+                        min_slack_k: det_thr as f64 * 0.75,
+                        min_variance: 0.1,
+                        alpha: 0.3,
+                        clear_ratio: 0.35,
+                        warmup_samples: CUSUM_WARMUP_SAMPLES as u64,
+                        recovery_samples: 3,
+                        max_gap_tolerance_ns: 5_000_000_000,
+                    };
+                    let mut tracker = PerIpRecord {
+                        baseline_rate: rec.baseline_rps,
+                        variance: rec.variance,
+                        cusum_s: rec.cusum_s,
+                        last_bucket_ns: rec.last_bucket_ns,
+                        sample_count: rec.adaptive_sample_count,
+                        recovery_count: rec.recovery_count,
+                        mode: match rec.detector_mode {
+                            0 => DetectorMode::WarmingUp,
+                            1 => DetectorMode::Monitoring,
+                            _ => DetectorMode::Breached,
+                        },
+                        profile,
+                    };
+
+                    match tracker.update(rate, now, None) {
+                        Ok(outcome) => {
+                            // Write adaptive state back to IpRecord.
+                            rec.baseline_rps = outcome.baseline_rate;
+                            rec.cusum_s = outcome.cusum_score;
+                            rec.variance = tracker.variance;
+                            rec.adaptive_sample_count = tracker.sample_count;
+                            rec.recovery_count = tracker.recovery_count;
+                            rec.detector_mode = outcome.mode as u8;
+                            outcome.is_breached
+                        }
+                        Err(_) => {
+                            // Numerical failure — restore pre-update state per D-06 atomicity.
+                            rec.bucket_accum_pps = prev_accum;
+                            rec.last_bucket_ns = prev_bucket_ns;
+                            self.metrics.inc_numerical_calculation_failure();
+                            false
+                        }
+                    }
+                } else {
+                    false
+                };
+
+                // Evaluate context before moving the owned snapshot into the independent
+                // adaptive model. Its contextual result remains authoritative under FlashCrowd.
+                let flash_crowd = traffic_context.as_ref().is_some_and(|ctx| {
+                    ctx.hypothesis == ramshield_forecasting::Hypothesis::FlashCrowd
+                        && ctx.confidence >= 0.6
+                        && ctx.is_fresh(adaptive_now_ns, 2_000_000_000)
+                });
                 let adaptive_breach = update_adaptive_bucket(
                     rec,
                     ip_agg.count as u64,
                     adaptive_now_ns,
                     traffic_context,
                 );
-                if adaptive_breach {
+                if adaptive_breach || legacy_adaptive_blocked {
                     self.metrics.inc_adaptive_breach();
                 }
 
@@ -173,15 +245,10 @@ impl DetectionEngine {
                     && relative_breach
                     && rec.relative_breach_streak >= det.relative_min_breaches;
 
-                let flash_crowd = traffic_context.is_some_and(|ctx| {
-                    ctx.hypothesis == ramshield_forecasting::Hypothesis::FlashCrowd
-                        && ctx.confidence >= 0.6
-                        && ctx.is_fresh(adaptive_now_ns, 2_000_000_000)
-                });
                 let block = adaptive_block_gate(
                     hot,
                     adaptive_breach,
-                    cusum_fired(rec.cusum_s, det_thr),
+                    legacy_adaptive_blocked || cusum_fired(rec.cusum_s, det_thr),
                     pulse_fired,
                     relative_fired,
                     flash_crowd,
