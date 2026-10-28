@@ -17,7 +17,6 @@ const CHANNEL_CAPACITY: usize = 64_000;
 const DEFAULT_BATCH_WINDOW_MS: u64 = 250;
 const DEFAULT_FLUSH_INTERVAL_MS: u64 = 250;
 #[allow(dead_code)]
-
 /// Build a detection engine wrapped in Arc for spawn_workers API.
 fn build_engine() -> Arc<DetectionEngine> {
     let mut cfg = Config::default();
