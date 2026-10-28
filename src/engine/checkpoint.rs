@@ -254,7 +254,7 @@ pub fn restore_from_snapshot(store: &Store, snap: &CheckpointSnapshot) -> Snapsh
                     reason: BlockReason::from_reason_str(&snap_ip.reason)
                         .unwrap_or(BlockReason::ManualBlock),
                     since_ns: snap_ip.since_ns,
-                }
+                },
             };
             // Store-level TTL (secs) for its passive expiry wheel; the
             // enforcement ring re-arms below from the same deadline.
@@ -392,7 +392,7 @@ mod tests {
             block_state: StorageBlockState::Blocked {
                 reason: BlockReason::ManualBlock,
                 since_ns: now_unix_ns(),
-            }
+            },
         };
         store
             .insert(ip, Value::IpRecord(rec), None, 256 * 1024 * 1024)
@@ -508,7 +508,7 @@ mod tests {
             block_state: StorageBlockState::Blocked {
                 reason: BlockReason::ManualBlock,
                 since_ns: now_unix_ns(),
-            }
+            },
         };
         store
             .insert(ip, Value::IpRecord(rec), None, 256 * 1024 * 1024)

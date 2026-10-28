@@ -190,7 +190,7 @@ impl Store {
             BlockState::Blocked { reason, since_ns } => BlockState::Blocked {
                 reason: *reason,
                 since_ns: *since_ns,
-            },
+            },,
             other => {
                 return Err(RsError::InvalidState(format!(
                     "block_ip requires a blocked fallback, got {other:?}"
@@ -523,7 +523,7 @@ impl Store {
                     status_dist: [0; 5],
                     proto_fingerprint: 0,
                     threat_score: 0.0,
-                    block_state: new_state
+                    block_state: new_state,
                 };
                 let old_had_ttl = e.expires_at.is_some();
                 e.value = Value::IpRecord(rec.clone());
@@ -570,7 +570,7 @@ impl Store {
                     status_dist: [0; 5],
                     proto_fingerprint: 0,
                     threat_score: 0.0,
-                    block_state: new_state
+                    block_state: new_state,
                 };
                 let entry_size = std::mem::size_of::<IpAddr>() + std::mem::size_of::<Entry>();
                 let mut current = self.ram_bytes.load(Ordering::Relaxed);

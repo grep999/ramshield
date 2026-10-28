@@ -184,7 +184,7 @@ fn blocked_record(ip: std::net::IpAddr) -> crate::storage::IpRecord {
         block_state: BlockState::Blocked {
             reason: BlockReason::HighRps,
             since_ns: 0,
-        }
+        },
     }
 }
 

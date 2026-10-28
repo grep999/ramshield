@@ -138,7 +138,7 @@ fn blocked_record(ip: IpAddr) -> IpRecord {
         block_state: BlockState::Blocked {
             reason: ramshield_types::BlockReason::HighRps,
             since_ns: 0,
-        }
+        },
     }
 }
 
@@ -469,7 +469,7 @@ fn subnet_index_cleaned_on_evict_and_remove() {
                 status_dist: [0; 5],
                 proto_fingerprint: 0,
                 threat_score: 0.0,
-                block_state: crate::BlockState::Clean
+                block_state: crate::BlockState::Clean,
             }),
             Some(0),
             1 << 20,
@@ -789,7 +789,7 @@ fn update_block_state_preserves_stat_fields() {
         BlockState::Blocked {
             reason: ramshield_types::BlockReason::HighRps,
             since_ns: 42,
-        },
+        },,
         ram_lim,
     ));
 
@@ -829,7 +829,7 @@ fn update_block_state_preserves_stat_fields() {
             BlockState::Blocked {
                 reason: ramshield_types::BlockReason::HighRps,
                 since_ns: 0,
-            },
+            },,
             1
         ),
         "must refuse net-new blocked state when budget exhausted"
@@ -881,7 +881,7 @@ fn an_update_that_publishes_a_blocked_record_indexes_it() {
     blocked.block_state = BlockState::Blocked {
         reason: BlockReason::HighRps,
         since_ns: 1_000,
-    };
+    },;
     let (_, stored) = store.update_ip(ip, blocked, ram_lim, |_| ());
     assert!(stored, "the record was not published");
     assert_eq!(
@@ -988,7 +988,7 @@ fn a_re_block_concurrent_with_a_removal_keeps_its_index_entry() {
             blocked.block_state = BlockState::Blocked {
                 reason: BlockReason::HighRps,
                 since_ns: 1_000,
-            };
+            },;
             let _ = s.block_ip(ip, blocked, ram_lim);
         }
     });
@@ -1083,7 +1083,7 @@ fn blank_record(ip: IpAddr) -> IpRecord {
         status_dist: [0; 5],
         proto_fingerprint: 0,
         threat_score: 0.0,
-        block_state: BlockState::Clean
+        block_state: BlockState::Clean,
     }
 }
 
@@ -1131,7 +1131,7 @@ fn a_block_does_not_roll_back_the_detection_counters() {
     block.block_state = BlockState::Blocked {
         reason: BlockReason::HighRps,
         since_ns: 1_000,
-    };
+    },;
     store.block_ip(ip, block, ram_lim).unwrap();
 
     match store.get(&ip) {
@@ -1166,7 +1166,7 @@ fn an_unblock_does_not_roll_back_the_detection_counters() {
     blocked.block_state = BlockState::Blocked {
         reason: BlockReason::HighRps,
         since_ns: 1_000,
-    };
+    },;
     store
         .insert(ip, Value::IpRecord(blocked), None, ram_lim)
         .unwrap();
@@ -1225,7 +1225,7 @@ fn the_blocked_index_is_updated_under_the_same_lock_as_the_record() {
         block.block_state = BlockState::Blocked {
             reason: BlockReason::HighRps,
             since_ns: 1_000,
-        };
+        },;
 
         let writer_store = store.clone();
         let writer_block = block.clone();
@@ -1282,7 +1282,7 @@ fn a_block_keeps_the_store_blocked_index_in_step() {
     block.block_state = BlockState::Blocked {
         reason: BlockReason::HighRps,
         since_ns: 1_000,
-    };
+    },;
     store.block_ip(ip, block, ram_lim).unwrap();
     assert_eq!(
         store
@@ -1352,7 +1352,7 @@ fn a_block_never_makes_the_detection_counters_go_backwards() {
                 block.block_state = BlockState::Blocked {
                     reason: BlockReason::HighRps,
                     since_ns: 1,
-                };
+                },;
                 store.block_ip(ip, block, ram_lim).unwrap();
             }
         })
