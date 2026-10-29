@@ -40,16 +40,24 @@ for suffix in '' .sha256 .sig .pem; do
 done
 (cd "$TMP" && sha256sum -c "${ART}.sha256") || die 'artifact checksum verification failed'
 "$COSIGN_BIN" verify-blob --signature "$TMP/${ART}.sig" --certificate "$TMP/${ART}.pem" --certificate-identity-regexp '^https://github.com/grep999/ramshield/.github/workflows/release.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' --certificate-oidc-issuer https://token.actions.githubusercontent.com "$TMP/$ART" >/dev/null || die 'Sigstore artifact verification failed'
+mkdir -p "$TMP/unpack"; tar -xzf "$TMP/$ART" -C "$TMP/unpack"
+[[ -x "$TMP/unpack/ramshield" ]] || die 'invalid release archive'
+[[ -x "$TMP/unpack/ramshield-cli" ]] || die 'release archive missing ramshield-cli'
+"$TMP/unpack/ramshield" --version | grep -F "ramshield ${VERSION}" >/dev/null || die 'release binary version mismatch'
 mkdir -p "$CONFIG_DIR"
-IPC_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
-[[ "$IPC_KEY" =~ ^[0-9a-f]{64}$ ]] || die 'failed to generate IPC authentication key'
-sed -i "s/k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/k1:$IPC_KEY/" "$CONFIG_DIR/config.toml"
-chmod 0640 "$CONFIG_DIR/config.toml"
+if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
+  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$BASE/config.baseline.toml" -o "$CONFIG_DIR/config.toml"
+  IPC_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+  [[ "$IPC_KEY" =~ ^[0-9a-f]{64}$ ]] || die 'failed to generate IPC authentication key'
+  sed -i "s/k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/k1:$IPC_KEY/" "$CONFIG_DIR/config.toml"
+  chmod 0640 "$CONFIG_DIR/config.toml"
+fi
 # Create state dir (non-root)
 mkdir -p "$STATE_DIR/wal" "$STATE_DIR/snapshots"
 # Install binaries to $PREFIX/bin (user-local)
-install -o "$USER" -g "$USER" -m 0755 "$TMP/unpack/ramshield" "$PREFIX/bin/ramshield"
-install -o "$USER" -g "$USER" -m 0755 "$TMP/unpack/ramshield-cli" "$PREFIX/bin/ramshield-cli"
+mkdir -p "$PREFIX/bin"
+install -m 0755 "$TMP/unpack/ramshield" "$PREFIX/bin/ramshield"
+install -m 0755 "$TMP/unpack/ramshield-cli" "$PREFIX/bin/ramshield-cli"
 log "installed v${VERSION} to $PREFIX/bin (userspace proxy only; no XDP/eBPF, no systemd)"
 log "config: $CONFIG_DIR/config.toml"
 log "state:  $STATE_DIR"

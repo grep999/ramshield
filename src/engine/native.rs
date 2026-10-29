@@ -783,9 +783,9 @@ unsafe fn walk_block_packets(
                     }
                     Ok(None) => continue,
                     Err(reason) => {
-                        metrics
-                            .native_tpacket_rejects
-                            .fetch_add(1, Ordering::Relaxed);
+                        // ponytail: this descriptor was already counted in
+                        // native_tpacket_rejects by the range-reject path
+                        // above; do not double-count it for the chain stop.
                         warn!(
                             worker,
                             block_idx,

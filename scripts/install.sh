@@ -61,7 +61,7 @@ if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
   [[ "$IPC_KEY" =~ ^[0-9a-f]{64}$ ]] || die 'failed to generate IPC authentication key'
   sed -i "s/k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/k1:$IPC_KEY/" "$CONFIG_DIR/config.toml"
   chown root:"$GROUP_NAME" "$CONFIG_DIR/config.toml"; chmod 0640 "$CONFIG_DIR/config.toml"
-  log "HMAC IPC key generated: k1:$IPC_KEY"
+  log "IPC authentication key generated (written to $CONFIG_DIR/config.toml; not logged)"
 fi
 cat > /etc/systemd/system/ramshield.service <<UNIT
 [Unit]
