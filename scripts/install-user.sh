@@ -44,13 +44,16 @@ mkdir -p "$TMP/unpack"; tar -xzf "$TMP/$ART" -C "$TMP/unpack"
 [[ -x "$TMP/unpack/ramshield" ]] || die 'invalid release archive'
 [[ -x "$TMP/unpack/ramshield-cli" ]] || die 'release archive missing ramshield-cli'
 "$TMP/unpack/ramshield" --version | grep -F "ramshield ${VERSION}" >/dev/null || die 'release binary version mismatch'
-mkdir -p "$CONFIG_DIR"
+if [[ ! -d "$CONFIG_DIR" ]]; then
+  mkdir -p "$CONFIG_DIR"
+  chmod 0700 "$CONFIG_DIR"
+fi
 if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
   curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$BASE/config.baseline.toml" -o "$CONFIG_DIR/config.toml"
   IPC_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
   [[ "$IPC_KEY" =~ ^[0-9a-f]{64}$ ]] || die 'failed to generate IPC authentication key'
   sed -i "s/k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/k1:$IPC_KEY/" "$CONFIG_DIR/config.toml"
-  chmod 0640 "$CONFIG_DIR/config.toml"
+  chmod 0600 "$CONFIG_DIR/config.toml"
 fi
 # Create state dir (non-root)
 mkdir -p "$STATE_DIR/wal" "$STATE_DIR/snapshots"

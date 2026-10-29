@@ -51,6 +51,7 @@ getent group "$GROUP_NAME" >/dev/null 2>&1 || groupadd --system "$GROUP_NAME"
 usermod -g "$GROUP_NAME" "$USER_NAME"
 install -d -o root -g "$GROUP_NAME" -m 0750 "$CONFIG_DIR"
 install -d -o "$USER_NAME" -g "$GROUP_NAME" -m 0750 "$STATE_DIR" "$STATE_DIR/wal" "$STATE_DIR/snapshots"
+mkdir -p "$PREFIX/bin"
 install -o root -g root -m 0755 "$TMP/unpack/ramshield" "$PREFIX/bin/ramshield"
 install -o root -g root -m 0755 "$TMP/unpack/ramshield-cli" "$PREFIX/bin/ramshield-cli"
 if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
