@@ -27,6 +27,8 @@ curl -fsSL https://raw.githubusercontent.com/grep999/ramshield/master/scripts/in
 
 ## Quick Start
 
+Full step-by-step instructions (including IPC auth) live in **[docs/QUICKSTART.md](docs/QUICKSTART.md)**. Short version:
+
 ### Build
 
 ```bash
@@ -35,38 +37,33 @@ cd ramshield
 cargo build --release --locked --features full
 ```
 
-### Run — No XDP (userspace proxy, dev / CI)
+### Run — No XDP (userspace, dev / CI)
 
 ```bash
 cp config.baseline.toml config.toml
-RAMSHIELD_AUTONOMOUS__ENABLED=false \
-RAMSHIELD_NATIVE_INGEST__ENABLED=false \
-RAMSHIELD_SYNPROXY__ENABLED=false \
 ./target/release/ramshield --config config.toml --no-xdp
 ```
 
-Verify:
+Verify (baseline enables IPC auth — the public dev key must be supplied):
+
 ```bash
 curl -fsS http://127.0.0.1:9999/healthz
-./target/release/ramshield-cli status
+
+export RAMSHIELD_IPC_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+./target/release/ramshield-cli --key "$RAMSHIELD_IPC_KEY" status
 ```
 
-### Run — With XDP (kernel eBPF dataplane, production)
+### Run — With XDP (kernel dataplane)
 
 ```bash
 cp config.baseline.toml config.toml
-# edit config.toml: xdp.enabled = true, xdp.interface = "eth0", xdp.mode = "drv"
-sudo setcap cap_net_admin,cap_perfmon,cap_bpf=eip ./target/release/ramshield
-./target/release/ramshield --config config.toml
+# REQUIRED: set xdp.enabled = true, xdp.interface = "<your-nic>", replace the public IPC key,
+# and point wal.dir at persistent storage.
+sudo setcap 'cap_net_admin,cap_perfmon,cap_bpf=eip' ./target/release/ramshield
+sudo ./target/release/ramshield --config config.toml
 ```
 
-Verify:
-```bash
-curl -fsS http://127.0.0.1:9999/healthz
-./target/release/ramshield-cli status
-```
-
-See [Quickstart](docs/QUICKSTART.md) for full setup, [Configuration](docs/CONFIGURATION.md) for settings, and [Dashboard access](docs/DASHBOARD_AUTH.md) for setting the operator password.
+See [Quickstart](docs/QUICKSTART.md) for the complete checklist, [Configuration](docs/CONFIGURATION.md) for every setting, and [Dashboard access](docs/DASHBOARD_AUTH.md) for the operator password.
 
 ## What happens when traffic turns bad
 
@@ -89,18 +86,19 @@ XDP
 Blocks have TTLs, can be inspected from the CLI, and are removed when they expire.
 
 ```bash
-ramshield-cli status
-ramshield-cli stats
-ramshield-cli check <ip>
-ramshield-cli info <ip>
+export KEY=<your-hex-key>
+./target/release/ramshield-cli --key "$KEY" status
+./target/release/ramshield-cli --key "$KEY" stats
+./target/release/ramshield-cli --key "$KEY" check <ip>
+./target/release/ramshield-cli --key "$KEY" info <ip>
 ```
 
-Manual blocks are available too:
+Manual blocks:
 
 ```bash
-ramshield-cli block <ip> --reason manual --ttl 300
-ramshield-cli unblock <ip>
-ramshield-cli unblock-cidr <cidr>
+./target/release/ramshield-cli --key "$KEY" block <ip> --reason manual --ttl 300
+./target/release/ramshield-cli --key "$KEY" unblock <ip>
+./target/release/ramshield-cli --key "$KEY" unblock-cidr <cidr>
 ```
 
 ## XDP
@@ -119,113 +117,15 @@ XDP
 
 RamShield exposes the XDP state so you can see whether the kernel dataplane is actually active.
 
-## Modules Overview
-
-| Module | Responsibility |
-|--------|---------------|
-| [ramshield-config](crates/ramshield-config/README.md) | TOML config, validation, env overrides |
-| [ramshield-types](crates/ramshield-types/README.md) | IP networks, ConnectionEvent, IpRecord, CGNAT tiers |
-| [ramshield-detection](crates/ramshield-detection/README.md) | EWMA + CUSUM + Pulse + Subnet/swarm detection |
-| [ramshield-enforcement](crates/ramshield-enforcement/README.md) | XDP projection, reconcile, block-state transition |
-| [ramshield-storage](crates/ramshield-storage/README.md) | WAL, checkpoint, snapshots, recovery |
-| [ramshield-mesh](crates/ramshield-mesh/README.md) | CRDT Aworset sync (disabled in production) |
-| [ramshield-xdp](crates/ramshield-xdp/README.md) | eBPF XDP engine (kernel dataplane) |
-| [ramshield-protocol](crates/ramshield-protocol/README.md) | IPC JSON framing, HMAC auth, replay store |
-| [ramshield-cgnat](crates/ramshield-cgnat/README.md) | CGNAT deployment with shm tables and classification |
-| [ramwal](crates/ramwal/README.md) | WAL persistence: append-only log, checkpoints, snapshots |
-
-## Configuration
-
-RamShield uses TOML.
-
-A starting point is included in the repository:
-
-```text
-config.baseline.toml
-```
-
-The configuration covers detection, batching, IPC, dashboard, WAL, XDP, forecasting and memory limits.
-
-See [Configuration](docs/CONFIGURATION.md).
-
-## Observe it
-
-Health:
-
-```bash
-curl http://127.0.0.1:9999/healthz
-```
-
-Metrics:
-
-```bash
-curl http://127.0.0.1:9999/metrics
-```
-
-Dashboard and API are available from the same local service.
-
-## Performance & Benchmarks
-
-> Measured on **Intel Core i7-3687U CPU @ 2.10GHz**, **4 cores / 8 threads**, **15 GB RAM**, **Linux 6.8.0-147-generic**, **Rust 1.100.0-nightly (17fd5b8a3 2026-08-28)**. Methodology follows **RFC 9411** (Benchmarking Methodology for Network Security Devices).
-
-### Measured Pipeline Latency & Throughput
-| Pipeline Stage | Measured Latency | Throughput | Workload Context |
-| :--- | :---: | :---: | :--- |
-| **Detection Flush (Warm)** | **222400 ns/op** | **4496 ops/s** | 4096 events / 128 IPs (all promoted) |
-| **Detection Flush (Cold Skip)** | **2606343 ns/op** | **384 ops/s** | 4096 events / 4096 IPs (Bloom rejection) |
-| **Enforcement Commit (WAL)** | **3955 ns/op** | **252873 ops/s** | `GroupCommit` durability |
-| **Idempotent Decision Cache** | **130 ns/op** | **7702531 ops/s** | Re-block deduplication |
-| **Reverse-Proxy SHM Lookup** | **1.3 ns** | **761 M ops/s** | C11 Seqlock table (probe dist 0–3) |
-| **Ingested Event Throughput** | — | **95653 eps** | Sustained multi-subnet flood (5 s, 1000 IPs) |
-
-### Resource Footprint
-- **Idle Memory:** `~266 KB` heap footprint (`14 MB` total process RSS)
-- **Memory Under Attack:** Bounded by `engine.ram_limit_mb` (default `1024 MB`)
-- **WAL Recovery Time:** `<60 ms` to restore state across restarts
-
----
-
-## Architectural Comparison
-
-| Capability / Metric | RamShield | fail2ban | CrowdSec | Nginx `limit_req` | Cloud Edge (e.g., Cloudflare) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Enforcement Layer** | **XDP/eBPF (Kernel)** | Netfilter / iptables | Bouncer / iptables | Userspace (HTTP) | Anycast Edge Scrubbing |
-| **Detection Method** | **EWMA + CUSUM + Pulse + Subnet** | Regex Log Parsing | Log / Scenarios | Leaky Bucket Token | Global ML / Auto-Thresholds |
-| **Throughput (Events/sec)** | **95 653 eps (Measured)** | ~85k eps (via Nginx) | Untracked (Batch) | ~85k eps | Multi-Tbps (Cloud aggregate) |
-| **Crash Durability** | **WAL + Checkpoint (CRC32-C)** | ❌ (State lost) | ⚠️ (DB sync) | ❌ (State lost) | Cloud redundant |
-| **Cold-Start Defense** | **Stateless XDP PPS Budgets** | ❌ (Minutes to fire) | ❌ (Log-dependent) | ⚠️ (Immediate cap) | Global Edge Anycast |
-| **Subnet / Swarm Defense** | **256-bit HostBitmap (/24, /64)** | ❌ | ⚠️ | ❌ | BGP Scrubbing |
-| **Cloud / Feed Dependency**| **Zero (100% Sovereign)** | Zero | Community Feed | Zero | Proprietary Cloud |
-| **Deployment Model** | **Single Binary / Node-Guard** | Daemon | Daemon + Bouncers | Webserver Module | DNS / BGP Proxy |
-
-### Where RamShield Wins & Where It Loses
-- **Where It Wins:** Sovereign, zero-subscription infrastructure; kernel-level packet drops before socket allocations; crash-durable WAL persistence; deterministic microsecond CUSUM drift detection; zero external feed dependencies.
-- **Where It Loses (Stated Plainly):** Cannot defeat attacks that physically saturate the ISP uplink (requires BGP FlowSpec/RTBH upstream escalation); does not provide a community threat-intelligence database; not an HTTP/2 or WAF application-logic rules engine.
-
 ## Documentation
 
-[Quickstart](docs/QUICKSTART.md) · [Operations](docs/OPERATIONS.md) · [Configuration](docs/CONFIGURATION.md) · [Dashboard access](docs/DASHBOARD_AUTH.md) · [Architecture](docs/ARCHITECTURE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Development](docs/DEVELOPMENT.md)
-
-## Development
-
-```bash
-cargo test --workspace --locked --features full
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --features full -- -D warnings
-```
-
-See [Development](docs/DEVELOPMENT.md).
+- [Quickstart](docs/QUICKSTART.md)
+- [Configuration](docs/CONFIGURATION.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Dashboard Auth](docs/DASHBOARD_AUTH.md)
+- [Security](SECURITY.md)
+- [Operations](docs/OPERATIONS.md)
 
 ## License
 
 MIT
-## Threat-intelligence independence
-
-RamShield does not depend on community IP reputation or a shared public ban feed. Enforcement decisions are derived from first-party local telemetry, trusted RamShield fleet signals, or explicit operator action. Community reputation is intentionally excluded from the authoritative enforcement vocabulary, so a feed outage cannot disable detection and an external reputation score cannot silently become a block decision.
-
-This is deliberate: RamShield learns from the protected system and its trusted fleet rather than outsourcing the security boundary to a global reputation service.
-
-
-## Security Gateway Architecture
-
-The 0.6 security gateway closes the proxy-only observation gap with bounded Linux AF_PACKET telemetry, kernel-first XDP/SYNPROXY protection, deterministic bounded HTTP inspection, and optional ExaBGP FlowSpec/RTBH escalation. See `docs/SECURITY_GATEWAY.md`.
