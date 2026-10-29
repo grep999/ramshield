@@ -1,10 +1,12 @@
 # RamShield Production-Essential Audit Backlog
 
-**Target branch:** `master` · **Assessed at:** `2adc966` · **master HEAD:** `bd417cd`
+**Target branch:** `master` · **Assessed at:** `bd417cd` · **master HEAD:** `5876ccc8`
 
-`2adc966` is the parent of `bd417cd`; the rows below were assessed
-against `2adc966`, and `bd417cd` rebuilt this file's tables without
-changing the code.
+**Status note:** the row assessments below were made against `2adc966`/`bd417cd`
+and rebuilt through `bd417cd`. The 0.6.0 release commits (`5876ccc8`) fixed the
+installer secret leak, non-root install flow, and TPACKET reject double-count.
+Revalidate each row against `5876ccc8` before acting; treat the text below as the
+audit-era ledger, not current truth.
 
 **CI on `2adc966`:** CI 39587482510 · Review Pipeline 39587482567 · lint-no-unwrap 39587482557 · Subnet Stress Pin 39587482512 — all success. Local 14-gate run on the same tree: 14/14 EXIT=0, 1858 passed / 0 failed / 42 ignored.
 

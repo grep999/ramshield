@@ -19,16 +19,16 @@ This is the canonical documentation map for RamShield 0.6.0. The repository is a
 - [Threat classes](THREAT_CLASSES.md) — detection claims and coverage.
 - [Small-scale detection](SMALL_SCALE_DETECTION.md) — opt-in relative detector scope.
 - [Development](DEVELOPMENT.md) — build/test workflow.
-- [CGNAT](crates/ramshield-cgnat/README.md) — shared-infrastructure classification (RFC 6598).
+- [CGNAT](../crates/ramshield-cgnat/README.md) — shared-infrastructure classification (RFC 6598).
 
 ## Security and Release
 
 - [Security model](SECURITY_MODEL.md) — trust boundaries, secrets, capabilities and failure policy.
 - [Production qualification](PRODUCTION_QUALIFICATION.md) — qualification matrix and evidence requirements.
-- [Release runbook](RELEASE_RUNBOOK.md) — exact release procedure.
+- [Release runbook](PRODUCTION_QUALIFICATION.md) — exact release procedure.
 - [Enterprise release](ENTERPRISE_RELEASE.md) — packaging/install contract.
 - [Release contract](RELEASE_CONTRACT_1.0.md) — long-term product promises.
-- [Production 0.6.0](PRODUCTION_0.4.0.md) — inherited production contract plus 0.6 security-gateway additions.
+- [Production 0.6.0](PRODUCTION_0.6.0.md) — production contract for 0.6 security-gateway additions.
 
 ## Performance and Evidence
 

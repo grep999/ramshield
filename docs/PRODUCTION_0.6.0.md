@@ -1,8 +1,8 @@
-# RamShield 0.4.0 — Production Reference
+# RamShield 0.6.0 — Production Reference
 
 ## Product boundary
 
-RamShield 0.4.0 is a self-hosted Linux ingress-defense daemon. Userspace
+RamShield 0.6.0 is a self-hosted Linux ingress-defense daemon. Userspace
 state and the WAL are authoritative; eBPF/XDP is a kernel projection. The
 product is single-node by design today and is not a cloud scrubbing service,
 upstream-capacity protection system, or multi-region distributed firewall.
@@ -81,7 +81,7 @@ and `/healthz` probes. There is no control-plane ClusterIP service.
 
 ## Release identity
 
-For v0.4.0 these must agree: Cargo version, changelog section, Kubernetes image
+For v0.6.0 these must agree: Cargo version, changelog section, Kubernetes image
 tags, Git tag, archive names, installer names, and container image version.
 The release workflow gates fmt, check, Clippy, workspace tests, cargo-audit,
 cargo-deny, and publishes checksums, SPDX SBOM, signatures, provenance, config,

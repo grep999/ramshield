@@ -1,5 +1,10 @@
 # RamShield Code Audit Report
 
+> **Historical assessment.** This report was produced against the audit-era
+> branch (pre-0.6.0). The P0/P1 findings below have since been worked through;
+> current master HEAD is `5876ccc8` (v0.6.0 release). Revalidate each finding
+> against that SHA before acting. Kept as audit evidence.
+
 ## Executive Scorecard
 
 **Overall Health**: CRITICAL - Multiple production P0 safety violations detected
