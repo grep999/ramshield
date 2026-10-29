@@ -5,6 +5,7 @@
 //! docs and the binary fails CI instead of failing an operator.
 
 use std::path::PathBuf;
+#[cfg(feature = "full")]
 use std::process::Command;
 
 fn read(rel: &str) -> String {
