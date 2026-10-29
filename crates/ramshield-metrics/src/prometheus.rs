@@ -555,7 +555,6 @@ impl Metrics {
     }
 }
 
-
 #[cfg(test)]
 mod tpacket_reject_metric_tests {
     use super::*;

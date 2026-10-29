@@ -1873,7 +1873,7 @@ fn threat_samples_are_not_collected_when_forecasting_disabled() {
     eng.flush_events(&events);
 
     // With forecasting disabled, no forecast-only samples are collected,
-// sorted, or enqueued. Normal detection promotion still runs unchanged.
+    // sorted, or enqueued. Normal detection promotion still runs unchanged.
     assert_eq!(
         eng.store.traffic.threat_sample.len(),
         0,
@@ -1893,7 +1893,10 @@ fn threat_samples_are_not_collected_when_forecasting_disabled() {
         })
         .collect();
     eng.flush_events(&events2);
-    assert!(eng.store.get(&ip2).is_some(), "IP must still be promoted by detection");
+    assert!(
+        eng.store.get(&ip2).is_some(),
+        "IP must still be promoted by detection"
+    );
 }
 
 /// Patch B RED: forecasting enabled at engine startup preserves sample collection
@@ -1945,7 +1948,10 @@ fn threat_samples_are_collected_when_forecasting_enabled() {
     }
 
     // IP must also be promoted by detection.
-    assert!(eng.store.get(&ip).is_some(), "IP must be promoted by detection");
+    assert!(
+        eng.store.get(&ip).is_some(),
+        "IP must be promoted by detection"
+    );
 }
 
 /// Patch B RED: hot configuration changes after engine initialization must not
@@ -2014,7 +2020,10 @@ fn threat_sample_gate_tracks_worker_lifecycle_not_hot_config() {
     );
 
     // IP must still be promoted by detection.
-    assert!(eng.store.get(&ip2).is_some(), "IP must still be promoted by detection");
+    assert!(
+        eng.store.get(&ip2).is_some(),
+        "IP must still be promoted by detection"
+    );
 }
 
 mod macro_replay;

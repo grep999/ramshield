@@ -609,7 +609,9 @@ fn run_socket(
             }
         };
         if !valid_tpacket_block_len(blk_len, block_size) {
-            metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
+            metrics
+                .native_tpacket_rejects
+                .fetch_add(1, Ordering::Relaxed);
             warn!(
                 worker,
                 block_idx, blk_len, block_size, "rejecting invalid TPACKET_V3 block length"
@@ -626,139 +628,30 @@ fn run_socket(
         }
         let num = unsafe { (*block_ptr).hdr.num_pkts };
         let first = unsafe { (*block_ptr).hdr.offset_to_first_pkt as usize };
-        let mut off = first;
-        for packet_idx in 0..num {
-            metrics.native_frames_walked.fetch_add(1, Ordering::Relaxed);
-            let header_abs = match checked_tpacket_header_offset(
-                block_idx, block_size, ring_len, blk_len, off,
-            ) {
-                Some(value) => value,
-                None => {
-                    metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
-                    warn!(
-                        worker,
-                        block_idx,
-                        packet_idx,
-                        off,
-                        blk_len,
-                        "rejecting invalid TPACKET_V3 packet-header offset"
-                    );
-                    break;
-                }
-            };
-            // SAFETY: checked_tpacket_header_offset proves the complete header
-            // lies in both the declared block and mapped ring before this read.
-            let hdr = unsafe { (map as *const u8).add(header_abs) as *const Tpacket3Hdr };
-            // SAFETY: hdr points at a valid Tpacket3Hdr inside the mapping.
-            let snaplen = match usize::try_from(unsafe { (*hdr).tp_snaplen }) {
-                Ok(v) => v,
-                Err(_) => {
-                    metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
-                    warn!(
-                        worker,
-                        block_idx, packet_idx, "tp_snaplen does not fit usize"
-                    );
-                    break;
-                }
-            };
-            // SAFETY: same hdr validity as above.
-            // `tp_mac` is u16, which fits in `usize` on every supported Linux
-            // target. The range check below validates the value against the ring.
-            let mac = unsafe { (*hdr).tp_mac as usize };
-            let (_header_abs, packet_off) = match checked_tpacket_packet_offsets(
-                block_idx, block_size, ring_len, blk_len, off, mac, snaplen,
-            ) {
-                Some(value) if mac <= frame_size && snaplen <= frame_size => value,
-                _ => {
-                    metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
-                    // A malformed descriptor must not create an unbounded log
-                    // stream under attack. Keep the first diagnostic; the
-                    // monotonic counter records every rejected descriptor.
-                    static RANGE_REJECT_WARNED: AtomicBool = AtomicBool::new(false);
-                    if !RANGE_REJECT_WARNED.swap(true, Ordering::Relaxed) {
-                        warn!(
-                            worker,
-                            block_idx,
-                            packet_idx,
-                            off,
-                            mac,
-                            snaplen,
-                            blk_len,
-                            "rejecting invalid TPACKET_V3 packet range"
-                        );
-                    }
-
-                    // The header itself is in-bounds, so its next-offset field
-                    // can be used only as a candidate. Continue only when the
-                    // checked chain proves the next descriptor remains in this
-                    // block and the mapped ring; otherwise abandon the block.
-                    let next = unsafe { (*hdr).tp_next_offset as usize };
-                    match checked_next_tpacket_offset(
-                        off,
-                        next,
-                        packet_idx + 1 == num,
-                        blk_len,
-                        block_size,
-                    ) {
-                        Ok(Some(next_off)) => {
-                            off = next_off;
-                            continue;
-                        }
-                        Ok(None) => continue,
-                        Err(reason) => {
-                            metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
-                            warn!(
-                                worker,
-                                block_idx,
-                                packet_idx,
-                                off,
-                                next,
-                                %reason,
-                                "stopping TPACKET_V3 walk after invalid descriptor chain"
-                            );
-                            break;
-                        }
-                    }
-                }
-            };
-            // SAFETY: checked_tpacket_packet_offsets proves [packet_off,
-            // packet_off + snaplen) lies in the current block and mapped ring.
-            let packet =
-                unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
-            process_packet(
-                fd,
-                packet,
-                max_eps,
-                trusted_overlay_cidrs,
-                tx,
-                budget,
-                epoch,
-                epoch_base,
-                metrics,
-                disconnect_log_emissions,
-            );
-
-            // SAFETY: hdr still points at the validated packet header in this block.
-            let next = match usize::try_from(unsafe { (*hdr).tp_next_offset }) {
-                Ok(v) => v,
-                Err(_) => {
-                    metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
-                    warn!(
-                        worker,
-                        block_idx, packet_idx, "tp_next_offset does not fit usize"
-                    );
-                    break;
-                }
-            };
-            match checked_next_tpacket_offset(off, next, packet_idx + 1 == num, blk_len, block_size)
+        // SAFETY: blk_len and block_ptr were validated above; the walker
+        // re-validates every descriptor offset against block and ring bounds.
+        unsafe {
             {
-                Ok(Some(next_off)) => off = next_off,
-                Ok(None) => {}
-                Err(reason) => {
-                    metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
-                    warn!(worker, block_idx, packet_idx, off, next, %reason, "rejecting invalid TPACKET_V3 descriptor chain");
-                    break;
-                }
+                walk_block_packets(
+                    map,
+                    ring_len,
+                    block_size,
+                    block_idx,
+                    blk_len,
+                    first,
+                    num,
+                    frame_size,
+                    fd,
+                    max_eps,
+                    trusted_overlay_cidrs,
+                    tx,
+                    budget,
+                    epoch,
+                    epoch_base,
+                    metrics,
+                    disconnect_log_emissions,
+                    worker,
+                );
             }
         }
         std::sync::atomic::fence(Ordering::Release);
@@ -773,6 +666,183 @@ fn run_socket(
     // SAFETY: map was returned by mmap with length ring_len in this function.
     unsafe { libc::munmap(map, ring_len) };
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn walk_block_packets(
+    map: *mut libc::c_void,
+    ring_len: usize,
+    block_size: usize,
+    block_idx: usize,
+    blk_len: usize,
+    first: usize,
+    num: u32,
+    frame_size: usize,
+    fd: i32,
+    max_eps: u64,
+    trusted_overlay_cidrs: &[IpNetwork],
+    tx: &Sender<ConnectionEvent>,
+    budget: &Arc<AtomicU64>,
+    epoch: &Arc<AtomicU64>,
+    epoch_base: std::time::Instant,
+    metrics: &Metrics,
+    disconnect_log_emissions: &AtomicU64,
+    worker: usize,
+) {
+    let mut off = first;
+    for packet_idx in 0..num {
+        metrics.native_frames_walked.fetch_add(1, Ordering::Relaxed);
+        let header_abs =
+            match checked_tpacket_header_offset(block_idx, block_size, ring_len, blk_len, off) {
+                Some(value) => value,
+                None => {
+                    metrics
+                        .native_tpacket_rejects
+                        .fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        worker,
+                        block_idx,
+                        packet_idx,
+                        off,
+                        blk_len,
+                        "rejecting invalid TPACKET_V3 packet-header offset"
+                    );
+                    return;
+                }
+            };
+        // SAFETY: checked_tpacket_header_offset proves the complete header
+        // lies in both the declared block and mapped ring before this read.
+        let hdr = unsafe { (map as *const u8).add(header_abs) as *const Tpacket3Hdr };
+        // SAFETY: hdr points at a valid Tpacket3Hdr inside the mapping.
+        let snaplen = match usize::try_from(unsafe { (*hdr).tp_snaplen }) {
+            Ok(v) => v,
+            Err(_) => {
+                metrics
+                    .native_tpacket_rejects
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    worker,
+                    block_idx, packet_idx, "tp_snaplen does not fit usize"
+                );
+                return;
+            }
+        };
+        // SAFETY: same hdr validity as above.
+        // `tp_mac` is u16, which fits in `usize` on every supported Linux
+        // target. The range check below validates the value against the ring.
+        let mac = unsafe { (*hdr).tp_mac as usize };
+        let (_header_abs, packet_off) = match checked_tpacket_packet_offsets(
+            block_idx, block_size, ring_len, blk_len, off, mac, snaplen,
+        ) {
+            Some(value) if mac <= frame_size && snaplen <= frame_size => value,
+            _ => {
+                metrics
+                    .native_tpacket_rejects
+                    .fetch_add(1, Ordering::Relaxed);
+                // A malformed descriptor must not create an unbounded log
+                // stream under attack. Log the first diagnostic per reject
+                // signature (mac/snaplen/blk_len shape); distinct malformed
+                // shapes still surface. The monotonic counter records every
+                // rejected descriptor.
+                static RANGE_REJECT_SEEN: [AtomicBool; 8] = [const { AtomicBool::new(false) }; 8];
+                let sig = (mac as u64)
+                    ^ ((snaplen as u64) << 32)
+                    ^ (blk_len as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                // ponytail: 8-slot hash table; a collision can suppress one
+                // second shape's log — bump slots or use a map if that
+                // ever matters in practice.
+                if !RANGE_REJECT_SEEN[(sig % 8) as usize].swap(true, Ordering::Relaxed) {
+                    warn!(
+                        worker,
+                        block_idx,
+                        packet_idx,
+                        off,
+                        mac,
+                        snaplen,
+                        blk_len,
+                        "rejecting invalid TPACKET_V3 packet range"
+                    );
+                }
+
+                // The header itself is in-bounds, so its next-offset field
+                // can be used only as a candidate. Continue only when the
+                // checked chain proves the next descriptor remains in this
+                // block and the mapped ring; otherwise abandon the block.
+                let next = unsafe { (*hdr).tp_next_offset as usize };
+                match checked_next_tpacket_offset(
+                    off,
+                    next,
+                    packet_idx + 1 == num,
+                    blk_len,
+                    block_size,
+                ) {
+                    Ok(Some(next_off)) => {
+                        off = next_off;
+                        continue;
+                    }
+                    Ok(None) => continue,
+                    Err(reason) => {
+                        metrics
+                            .native_tpacket_rejects
+                            .fetch_add(1, Ordering::Relaxed);
+                        warn!(
+                            worker,
+                            block_idx,
+                            packet_idx,
+                            off,
+                            next,
+                            %reason,
+                            "stopping TPACKET_V3 walk after invalid descriptor chain"
+                        );
+                        return;
+                    }
+                }
+            }
+        };
+        // SAFETY: checked_tpacket_packet_offsets proves [packet_off,
+        // packet_off + snaplen) lies in the current block and mapped ring.
+        let packet =
+            unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
+        process_packet(
+            fd,
+            packet,
+            max_eps,
+            trusted_overlay_cidrs,
+            tx,
+            budget,
+            epoch,
+            epoch_base,
+            metrics,
+            disconnect_log_emissions,
+        );
+
+        // SAFETY: hdr still points at the validated packet header in this block.
+        let next = match usize::try_from(unsafe { (*hdr).tp_next_offset }) {
+            Ok(v) => v,
+            Err(_) => {
+                metrics
+                    .native_tpacket_rejects
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    worker,
+                    block_idx, packet_idx, "tp_next_offset does not fit usize"
+                );
+                return;
+            }
+        };
+        match checked_next_tpacket_offset(off, next, packet_idx + 1 == num, blk_len, block_size) {
+            Ok(Some(next_off)) => off = next_off,
+            Ok(None) => {}
+            Err(reason) => {
+                metrics
+                    .native_tpacket_rejects
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(worker, block_idx, packet_idx, off, next, %reason, "rejecting invalid TPACKET_V3 descriptor chain");
+                return;
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1983,6 +2053,154 @@ mod tests {
         assert!(
             checked_next_tpacket_offset(off, 512, false, blk_len, block_size).is_err(),
             "a next header outside the declared block must not be followed"
+        );
+    }
+
+    /// Live-ring reproduction of the production reject:
+    /// `tp_snaplen = 0x20000001` inside a real kernel TPACKET_V3 block.
+    ///
+    /// The walker reads the descriptor from an actual `mmap` of a bound
+    /// AF_PACKET ring, so the metadata bytes come from the kernel's
+    /// `Tpacket3Hdr` layout. A decoy `u32` at the `tp_len` offset is in range:
+    /// the reject proves the walker read offset 12 (`tp_snaplen`) rather than
+    /// a neighbouring field. Ignored by default: needs CAP_NET_RAW.
+    #[test]
+    #[ignore = "needs CAP_NET_RAW and a live TPACKET_V3 ring: sudo -E cargo test -- --ignored"]
+    fn live_ring_reproduces_malformed_snaplen_reject() {
+        const BLOCK_SIZE: usize = 4096;
+        const BLOCK_NR: usize = 2;
+        const FRAME_SIZE: usize = 1024;
+        const SNAPLEN: u32 = 0x2000_0001;
+
+        struct Owned {
+            fd: i32,
+            map: *mut libc::c_void,
+            len: usize,
+        }
+        impl Drop for Owned {
+            fn drop(&mut self) {
+                unsafe {
+                    libc::munmap(self.map, self.len);
+                    libc::close(self.fd);
+                }
+            }
+        }
+
+        // SAFETY: plain socket syscall; ownership moves into Owned.
+        let fd = unsafe {
+            libc::socket(
+                libc::AF_PACKET,
+                libc::SOCK_RAW | libc::SOCK_NONBLOCK,
+                (libc::ETH_P_ALL as u16).to_be() as i32,
+            )
+        };
+        assert!(
+            fd >= 0,
+            "AF_PACKET socket: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let version = TPACKET_V3;
+        set_sockopt(fd, libc::SOL_PACKET, PACKET_VERSION, &version).expect("PACKET_VERSION");
+        let ifname = std::ffi::CString::new("lo").unwrap();
+        // SAFETY: ifname is a valid NUL-terminated CString.
+        let ifindex = unsafe { libc::if_nametoindex(ifname.as_ptr()) };
+        assert_ne!(ifindex, 0, "lo has no interface index");
+        let mut addr: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
+        addr.sll_family = libc::AF_PACKET as u16;
+        addr.sll_protocol = (libc::ETH_P_ALL as u16).to_be();
+        addr.sll_ifindex = ifindex as i32;
+        // SAFETY: addr is a fully initialised sockaddr_ll.
+        let rc = unsafe {
+            libc::bind(
+                fd,
+                (&addr as *const libc::sockaddr_ll).cast(),
+                std::mem::size_of::<libc::sockaddr_ll>() as u32,
+            )
+        };
+        assert_eq!(rc, 0, "bind lo: {}", std::io::Error::last_os_error());
+
+        let req = TpacketReq3 {
+            tp_block_size: BLOCK_SIZE as u32,
+            tp_block_nr: BLOCK_NR as u32,
+            tp_frame_size: FRAME_SIZE as u32,
+            tp_frame_nr: (BLOCK_SIZE / FRAME_SIZE * BLOCK_NR) as u32,
+            tp_retire_blk_tov: 64,
+            tp_sizeof_priv: 0,
+            tp_feature_req_word: 1,
+        };
+        set_sockopt(fd, libc::SOL_PACKET, PACKET_RX_RING, &req).expect("PACKET_RX_RING");
+        let ring_len = BLOCK_SIZE * BLOCK_NR;
+        // SAFETY: ring_len matches the configured ring; ownership moves into Owned.
+        let map = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                ring_len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        assert_ne!(map, libc::MAP_FAILED, "mmap ring");
+        let _ring = Owned {
+            fd,
+            map,
+            len: ring_len,
+        };
+
+        // Place a malformed descriptor at the first header offset. Raw bytes,
+        // not a struct literal: this is what the kernel would have written.
+        let base = map as *mut u8;
+        let off = std::mem::size_of::<TpacketBlockDesc>();
+        let snaplen_at = 12usize; // tp_snaplen inside Tpacket3Hdr
+        let tplen_at = 16usize; // tp_len decoy, deliberately in range
+        // SAFETY: [off, off + size_of::<Tpacket3Hdr>()) is inside the first block.
+        unsafe {
+            (base.add(off + snaplen_at) as *mut u32).write_unaligned(SNAPLEN);
+            (base.add(off + tplen_at) as *mut u32).write_unaligned(64);
+        }
+
+        let metrics = Metrics::default();
+        let (tx, _rx) = crossbeam_channel::unbounded::<ConnectionEvent>();
+        let budget = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+        let epoch = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let emissions = std::sync::atomic::AtomicU64::new(0);
+
+        // SAFETY: map/ring_len/block geometry describe the live ring; the
+        // walker re-validates each descriptor against them.
+        unsafe {
+            walk_block_packets(
+                map,
+                ring_len,
+                BLOCK_SIZE,
+                0,
+                BLOCK_SIZE,
+                off,
+                1,
+                FRAME_SIZE,
+                fd,
+                u64::MAX,
+                &[],
+                &tx,
+                &budget,
+                &epoch,
+                std::time::Instant::now(),
+                &metrics,
+                &emissions,
+                0,
+            );
+        }
+
+        assert_eq!(
+            metrics.native_frames_walked.load(Ordering::Relaxed),
+            1,
+            "walker must see the crafted descriptor"
+        );
+        assert_eq!(
+            metrics.native_tpacket_rejects.load(Ordering::Relaxed),
+            1,
+            "malformed tp_snaplen must be rejected; decoy tp_len at offset 16 is in range"
         );
     }
 }

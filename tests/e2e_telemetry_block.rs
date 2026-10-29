@@ -16,6 +16,11 @@ use std::time::{Duration, Instant};
 #[test]
 fn report_connections_burst_blocks_the_ip_end_to_end() {
     let mut cfg = Config::default();
+    // One worker so the burst lands in a single worker-local counter: the
+    // emergency fast path is per-worker, and the default worker count splits
+    // 600 events across CPUs so no worker crosses 500.
+    cfg.engine.worker_threads = 1;
+    cfg.detection.emergency_burst_threshold = 5;
     cfg.ipc.tcp_addr = "127.0.0.1:17897".into();
     cfg.xdp.enabled = false; // safe mode: in-band enforcement, no kernel attach
     let wal_dir = std::env::temp_dir().join(format!("rs_e2e_wal_{}", std::process::id()));
@@ -24,8 +29,12 @@ fn report_connections_burst_blocks_the_ip_end_to_end() {
     cfg.wal.dir = wal_dir.to_str().unwrap().into();
 
     let store = Arc::new(ramshield::storage::Store::new(cfg.engine.shard_count));
+    // ram_limit_mb must be >0: only main.rs propagates cfg.engine.ram_limit_mb
+    // to the store; Engine::new leaves it 0 and enforcement then fails
+    // "update_block_state: capacity exceeded" on the first block.
+    store.set_ram_limit_mb_for_testing(256);
     let metrics = Arc::new(ramshield::metrics::Metrics::new());
-    let engine = Arc::new(Engine::new(cfg, store.clone(), metrics));
+    let engine = Arc::new(Engine::new(cfg, store.clone(), metrics.clone()));
     let _handle = engine.clone().start_async().expect("start");
     std::thread::sleep(Duration::from_secs(1));
 

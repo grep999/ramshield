@@ -89,12 +89,11 @@ impl DetectionEngine {
         // the forecasting worker is enabled at engine startup. When disabled,
         // no forecast-only allocation, collection, sorting, or enqueueing
         // occurs — normal detection/enforcement/metrics run unchanged.
-        let mut threat_sample: Option<Vec<(IpAddr, f32)>> =
-            if self.forecasting_worker_enabled {
-                Some(Vec::with_capacity(64))
-            } else {
-                None
-            };
+        let mut threat_sample: Option<Vec<(IpAddr, f32)>> = if self.forecasting_worker_enabled {
+            Some(Vec::with_capacity(64))
+        } else {
+            None
+        };
         let mut promoted = 0u32;
         let mut cold_skipped = 0u32;
         let mut promoted_events = 0u32;
