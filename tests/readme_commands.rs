@@ -51,6 +51,7 @@ fn quickstart_ramshield_invocations_use_supported_flags() {
 }
 
 #[test]
+#[cfg(feature = "full")]
 fn quickstart_validate_invocation_passes_end_to_end() {
     let bin = env!("CARGO_BIN_EXE_ramshield");
     let out = Command::new(bin)
@@ -70,6 +71,7 @@ fn quickstart_validate_invocation_passes_end_to_end() {
 }
 
 #[test]
+#[cfg(feature = "full")]
 fn unknown_flags_fail_fast_instead_of_booting() {
     let bin = env!("CARGO_BIN_EXE_ramshield");
     let out = Command::new(bin)
