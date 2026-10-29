@@ -1,7 +1,18 @@
 # Changelog
 
-## Unreleased — Maturity hardening
-- Fix synproxy nftables syntax error (meta nfproto ipv4/ipv6), restore XDP stubs, ensure E0277 guard dropped before await, and adjust config defaults for dev boot (wal.dir, enable inband fallback).
+## 0.6.0 — Security gateway closure and maturity hardening (2026-10-29)
+
+### Release engineering
+- Fix the non-root installer: it now extracts the verified archive, checks both
+  binaries and the version against the pinned release, downloads the baseline
+  configuration when absent, and creates the destination directories before
+  installing. The IPC key substitution runs only when a new configuration is
+  created.
+- The root installer no longer prints the generated IPC HMAC key; the key is
+  written only to the protected configuration file.
+- Native TPACKET_V3 capture: a rejected descriptor is now counted exactly once
+  (`native_tpacket_rejects_total`); the bounded post-invalid-range recovery
+  stop no longer double-counts the same descriptor.
 
 ### Security
 - SEC-06: Reject `prefix_len > 32` in `ramshield_ipv4_subnet_key` (nested header) before the mask shift — a shift width ≥ 32 on a 32-bit value is undefined behavior under C99 §6.5.7.
@@ -10,6 +21,8 @@
 - SEC-16: ExaBGP FIFO bridge opens the FIFO `O_RDWR`, so a writer restart no longer delivers EOF and kills the bridge process.
 - SEC-17: `[profile.release]` hardening — `lto`, `codegen-units = 1`, `panic = "abort"`, `strip`, `overflow-checks`.
 
+### Fixes and hardening
+- Fix synproxy nftables syntax error (meta nfproto ipv4/ipv6), restore XDP stubs, ensure E0277 guard dropped before await, and adjust config defaults for dev boot (wal.dir, enable inband fallback).
 - Restore the XDP packet-boundary helpers, counters, and drop-event emitter required by the Aya program.
 - Make VXLAN/Geneve raw-pointer access verifier-safe.
 - Replace private AF_PACKET fanout groups with a shared `PACKET_FANOUT_HASH` group and remove a per-packet mutex from the native event budget.
@@ -19,8 +32,6 @@
 - Restore Kubernetes separation between the sandboxed server Deployment and the host-network node-guard DaemonSet; disable SYNPROXY in the distroless node profile unless a host-netfilter helper is supplied.
 - Make the tracked baseline IPC configuration authenticated and have the installer replace its development credential with a unique 256-bit key.
 - Make the default Docker build a sandboxed profile with host-network defenses disabled unless explicitly requested.
-
-## 0.6.0 — Security gateway closure
 
 - Add native Linux AF_PACKET L3/L4 observation so proxy IPC is no longer the sole telemetry source.
 - Add bounded per-source SYN/UDP and aggregate packet controls in XDP; fix the previous double-counting path.
