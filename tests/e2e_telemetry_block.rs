@@ -21,7 +21,14 @@ fn report_connections_burst_blocks_the_ip_end_to_end() {
     // 600 events across CPUs so no worker crosses 500.
     cfg.engine.worker_threads = 1;
     cfg.detection.emergency_burst_threshold = 5;
-    cfg.ipc.tcp_addr = "127.0.0.1:17897".into();
+    // ponytail: reserve an ephemeral port then release it — avoids static-port
+    // contention in parallel CI runs. Tiny TOCTOU window is acceptable here.
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve port");
+        l.local_addr().unwrap().port()
+    };
+    let ipc_addr = format!("127.0.0.1:{port}");
+    cfg.ipc.tcp_addr = ipc_addr.clone();
     cfg.xdp.enabled = false; // safe mode: in-band enforcement, no kernel attach
     let wal_dir = std::env::temp_dir().join(format!("rs_e2e_wal_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&wal_dir);
@@ -47,7 +54,7 @@ fn report_connections_burst_blocks_the_ip_end_to_end() {
         vec![event; 200].join(",")
     );
 
-    let mut stream = TcpStream::connect("127.0.0.1:17897").expect("TCP connect to IPC");
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).expect("TCP connect to IPC");
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();

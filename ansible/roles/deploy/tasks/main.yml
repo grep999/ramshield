@@ -51,6 +51,13 @@
   when: deploy_mode == "systemd"
 
 # K8S PATH — render manifests then apply
+- name: Ensure rendered manifest directory exists
+  file:
+    path: "{{ project_dir }}/deploy/rendered"
+    state: directory
+    mode: '0755'
+  when: deploy_mode == "k8s"
+
 - name: Render k8s manifests with image tag
   template:
     src: k8s-deployment.yaml.j2

@@ -4,10 +4,16 @@ use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::Duration;
 
+fn ephemeral_addr() -> String {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port for test");
+    format!("127.0.0.1:{}", l.local_addr().unwrap().port())
+}
+
 #[test]
 fn ipc_wiring_binds_and_accepts() {
     let mut cfg = Config::default();
-    cfg.ipc.tcp_addr = "127.0.0.1:17890".into(); // off default port — don't collide
+    let ipc_addr = ephemeral_addr();
+    cfg.ipc.tcp_addr = ipc_addr.clone();
 
     let store = Arc::new(ramshield::storage::Store::new(cfg.engine.shard_count));
     let metrics = Arc::new(ramshield::metrics::Metrics::new());
@@ -17,7 +23,7 @@ fn ipc_wiring_binds_and_accepts() {
     // Give the OS thread time to bind
     std::thread::sleep(Duration::from_secs(1));
 
-    let mut stream = TcpStream::connect("127.0.0.1:17890").expect("TCP connect to IPC server");
+    let mut stream = TcpStream::connect(&ipc_addr).expect("TCP connect to IPC server");
 
     writeln!(stream, r#"{{"type":"get_status"}}"#).expect("write");
     let mut resp = String::new();
