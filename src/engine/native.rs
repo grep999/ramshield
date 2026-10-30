@@ -251,7 +251,6 @@ pub fn spawn(
         // a word about it. Creating them here means the outcome is known
         // before the daemon is told the capture path started.
         let budget = Arc::new(AtomicU64::new(0));
-        let epoch = Arc::new(AtomicU64::new(0));
         let epoch_base = std::time::Instant::now();
         // Counts how many times the "downstream channel is closed"
         // error was actually EMITTED, shared by every worker so the
@@ -267,7 +266,8 @@ pub fn spawn(
             let stop = shutdown.clone();
             let trusted = trusted_overlay_cidrs.clone();
             let b = budget.clone();
-            let e = epoch.clone();
+            // RS-004: per-worker epoch so every socket is sampled independently.
+            let e = Arc::new(AtomicU64::new(0));
             let base = epoch_base;
             // Clone outside the `move` closure: the closure takes
             // ownership of what it captures, so cloning inside it
@@ -917,10 +917,11 @@ fn checked_next_tpacket_offset(
             Err("zero tp_next_offset before final packet")
         };
     }
-    let aligned = next
-        .checked_add(TPACKET_ALIGNMENT - 1)
-        .ok_or("tp_next_offset alignment overflow")?
-        & !(TPACKET_ALIGNMENT - 1);
+    #[allow(clippy::manual_is_multiple_of)]
+    if next % TPACKET_ALIGNMENT != 0 {
+        return Err("tp_next_offset is misaligned");
+    }
+    let aligned = next;
     if aligned < std::mem::size_of::<Tpacket3Hdr>() {
         return Err("tp_next_offset does not advance past the current header");
     }

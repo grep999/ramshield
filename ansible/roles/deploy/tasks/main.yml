@@ -64,6 +64,31 @@
     dest: "{{ project_dir }}/deploy/rendered/deployment.yaml"
   when: deploy_mode == "k8s"
 
+- name: Apply prerequisite k8s manifests in dependency order
+  shell: >
+    kubectl apply
+    -f deploy/k8s/namespace.yaml
+    -f deploy/k8s/configmap.yaml
+    -f deploy/k8s/rbac.yaml
+    -f deploy/k8s/ramshield-wal-pvc.yaml
+  args:
+    chdir: "{{ project_dir }}"
+  when: deploy_mode == "k8s"
+
+- name: Check operator-managed Secret ramshield-admin exists
+  command: kubectl get secret ramshield-admin --namespace=ramshield -o name
+  args:
+    chdir: "{{ project_dir }}"
+  register: secret_check
+  changed_when: false
+  failed_when: false
+  when: deploy_mode == "k8s"
+
+- name: Fail when operator-managed Secret is missing
+  fail:
+    msg: "Operator-managed Secret 'ramshield-admin' is missing in namespace 'ramshield'. Create it before deploying (keys: argon2-hash, ipc-auth-key). Never print secrets."
+  when: deploy_mode == "k8s" and secret_check.rc != 0
+
 - name: Apply k8s manifests
   shell: kubectl apply -f deploy/rendered/ --namespace={{ k8s_namespace | default('ramshield') }}
   args:
@@ -75,3 +100,4 @@
 - name: Confirm deployment mode
   debug:
     msg: "DEPLOY_COMPLETE for {{ deploy_mode }}"
+  when: deploy_mode == "k8s"

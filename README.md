@@ -183,6 +183,12 @@ Dashboard and API are available from the same local service.
 - **Memory Under Attack:** Bounded by `engine.ram_limit_mb` (default `1024 MB`)
 - **WAL Recovery Time:** `<60 ms` to restore state across restarts
 
+### Reproducing benchmarks
+```bash
+cargo bench --bench hot_paths
+cargo bench --bench field_day
+```
+
 ---
 
 ## Architectural Comparison

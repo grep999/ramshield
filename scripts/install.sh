@@ -61,6 +61,8 @@ if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
   IPC_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
   [[ "$IPC_KEY" =~ ^[0-9a-f]{64}$ ]] || die 'failed to generate IPC authentication key'
   sed -i "s/k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/k1:$IPC_KEY/" "$CONFIG_DIR/config.toml"
+  # Persistent WAL directory for production installs: never /tmp under systemd PrivateTmp.
+  sed -i "s|dir = \"/tmp/ramshield-wal\"|dir = \"${STATE_DIR}/wal\"|" "$CONFIG_DIR/config.toml"
   chown root:"$GROUP_NAME" "$CONFIG_DIR/config.toml"; chmod 0640 "$CONFIG_DIR/config.toml"
   log "IPC authentication key generated (written to $CONFIG_DIR/config.toml; not logged)"
 fi
