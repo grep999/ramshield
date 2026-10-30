@@ -82,6 +82,22 @@ pub struct Metrics {
     pub native_socket_packets: Arc<AtomicU64>,
     /// #90: frames the ring had no room for (PACKET_STATISTICS.tp_drops).
     pub native_socket_drops: Arc<AtomicU64>,
+    /// #90: descriptors the completed TPACKET_V3 blocks declared
+    /// (`num_pkts` summed per block). Declared minus walked is what the
+    /// walker never reached: early return, rejected block, or bad chain.
+    pub native_frames_declared: Arc<AtomicU64>,
+    /// #90: descriptors that produced a validated packet slice and entered
+    /// the L3/delivery path. Every one of these takes exactly one terminal
+    /// outcome (parse reject, overlay skip, rate limit, delivered, drop) —
+    /// the accounting invariant asserted by the regression test.
+    pub native_frames_validated: Arc<AtomicU64>,
+    /// #90: validated frames deliberately not turned into events because
+    /// the source is a shared overlay/LB address without an overlay identity.
+    pub native_overlay_skips: Arc<AtomicU64>,
+    /// #90: validated frames refused by the per-second admission budget.
+    /// The kernel captured and the walker validated them; they are not
+    /// a capture loss, but they are not detection events either.
+    pub native_rate_limit_skips: Arc<AtomicU64>,
     /// The subset of `native_ingest_drops` caused by the downstream channel
     /// being **closed** rather than full. A closed channel means the
     /// detection pipeline is gone, not merely busy — a strictly more serious
@@ -274,6 +290,10 @@ impl Metrics {
             native_ingest_emitted: Arc::new(AtomicU64::new(0)),
             native_socket_packets: Arc::new(AtomicU64::new(0)),
             native_socket_drops: Arc::new(AtomicU64::new(0)),
+            native_frames_declared: Arc::new(AtomicU64::new(0)),
+            native_frames_validated: Arc::new(AtomicU64::new(0)),
+            native_overlay_skips: Arc::new(AtomicU64::new(0)),
+            native_rate_limit_skips: Arc::new(AtomicU64::new(0)),
             native_ingest_drops_disconnected: Arc::new(AtomicU64::new(0)),
             native_capture_workers_expected: Arc::new(AtomicU64::new(0)),
             native_capture_workers_started: Arc::new(AtomicU64::new(0)),

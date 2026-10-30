@@ -31,6 +31,8 @@ const PACKET_IGNORE_OUTGOING: i32 = 23;
 #[cfg(target_os = "linux")]
 const PACKET_FANOUT_HASH: u16 = 0;
 #[cfg(target_os = "linux")]
+const PACKET_STATISTICS: i32 = 6;
+#[cfg(target_os = "linux")]
 const TP_STATUS_KERNEL: u32 = 0;
 #[cfg(target_os = "linux")]
 const TP_STATUS_USER: u32 = 1;
@@ -42,6 +44,7 @@ const TPACKET_ALIGNMENT: usize = 16;
 struct TpacketStats {
     tp_packets: u32,
     tp_drops: u32,
+    tp_freeze_q_cnt: u32,
 }
 
 #[cfg(target_os = "linux")]
@@ -466,6 +469,35 @@ fn run_linux(
 }
 
 #[cfg(target_os = "linux")]
+fn sample_socket_stats(fd: i32, metrics: &Metrics) {
+    let mut stats = TpacketStats {
+        tp_packets: 0,
+        tp_drops: 0,
+        tp_freeze_q_cnt: 0,
+    };
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_PACKET,
+            PACKET_STATISTICS, // 6 per Linux UAPI: option 20 is PACKET_QDISC_BYPASS
+            (&mut stats as *mut TpacketStats).cast(),
+            &mut { std::mem::size_of::<TpacketStats>() as libc::socklen_t } as *mut libc::socklen_t,
+        )
+    };
+    if rc == 0 {
+        metrics
+            .native_socket_packets
+            .fetch_add(stats.tp_packets as u64, Ordering::Relaxed);
+        metrics
+            .native_socket_drops
+            .fetch_add(stats.tp_drops as u64, Ordering::Relaxed);
+    } else {
+        let err = std::io::Error::last_os_error();
+        warn!(fd, rc, %err, "PACKET_STATISTICS getsockopt failed");
+    }
+}
+
+#[cfg(target_os = "linux")]
 #[allow(clippy::too_many_arguments)] // Socket/ring resources stay explicit at this boundary.
 fn run_socket(
     fd: i32,
@@ -565,6 +597,18 @@ fn run_socket(
         revents: 0,
     };
     while !shutdown.load(Ordering::Acquire) {
+        // #90: sample this socket's kernel counters on a timer that does not
+        // depend on packet arrival. PACKET_STATISTICS resets on read, so an
+        // interval with no packets would otherwise never be sampled.
+        let second = epoch_base.elapsed().as_secs();
+        let seen = epoch.load(Ordering::Relaxed);
+        if seen != second
+            && epoch
+                .compare_exchange(seen, second, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        {
+            sample_socket_stats(fd, metrics);
+        }
         // B02: Safe block index calculation; guard against overflow.
         if block_idx >= block_nr {
             block_idx = 0;
@@ -633,33 +677,33 @@ fn run_socket(
             continue;
         }
         let num = unsafe { (*block_ptr).hdr.num_pkts };
+        // #90: account for every descriptor the kernel declared in this block.
+        metrics
+            .native_frames_declared
+            .fetch_add(num as u64, Ordering::Relaxed);
         let first = unsafe { (*block_ptr).hdr.offset_to_first_pkt as usize };
         // SAFETY: blk_len and block_ptr were validated above; the walker
         // re-validates every descriptor offset against block and ring bounds.
         unsafe {
-            {
-                walk_block_packets(
-                    map,
-                    ring_len,
-                    block_size,
-                    block_idx,
-                    blk_len,
-                    first,
-                    num,
-                    frame_size,
-                    fd,
-                    max_eps,
-                    trusted_overlay_cidrs,
-                    tx,
-                    budget,
-                    budget_epoch,
-                    epoch,
-                    epoch_base,
-                    metrics,
-                    disconnect_log_emissions,
-                    worker,
-                );
-            }
+            walk_block_packets(
+                map,
+                ring_len,
+                block_size,
+                block_idx,
+                blk_len,
+                first,
+                num,
+                frame_size,
+                max_eps,
+                trusted_overlay_cidrs,
+                tx,
+                budget,
+                budget_epoch,
+                epoch_base,
+                metrics,
+                disconnect_log_emissions,
+                worker,
+            );
         }
         std::sync::atomic::fence(Ordering::Release);
         unsafe {
@@ -670,6 +714,10 @@ fn run_socket(
         }
         block_idx = (block_idx + 1) % block_nr;
     }
+    // Final partial interval: the timer may not have fired since the last
+    // sample, and PACKET_STATISTICS resets on read, so this read is the only
+    // record of the frames since then.
+    sample_socket_stats(fd, metrics);
     // SAFETY: map was returned by mmap with length ring_len in this function.
     unsafe { libc::munmap(map, ring_len) };
     Ok(())
@@ -686,13 +734,11 @@ unsafe fn walk_block_packets(
     first: usize,
     num: u32,
     frame_size: usize,
-    fd: i32,
     max_eps: u64,
     trusted_overlay_cidrs: &[IpNetwork],
     tx: &Sender<ConnectionEvent>,
     budget: &Arc<AtomicU64>,
     budget_epoch: &Arc<AtomicU64>,
-    epoch: &Arc<AtomicU64>,
     epoch_base: std::time::Instant,
     metrics: &Metrics,
     disconnect_log_emissions: &AtomicU64,
@@ -813,6 +859,12 @@ unsafe fn walk_block_packets(
         let packet =
             unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
 
+        // #90: this frame produced a validated packet slice; it will take
+        // exactly one terminal outcome in process_packet.
+        metrics
+            .native_frames_validated
+            .fetch_add(1, Ordering::Relaxed);
+
         // The event budget is shared by all capture workers.
         // Only one worker may reset it for each elapsed second.
         let second = epoch_base.elapsed().as_secs();
@@ -826,14 +878,11 @@ unsafe fn walk_block_packets(
         }
 
         process_packet(
-            fd,
             packet,
             max_eps,
             trusted_overlay_cidrs,
             tx,
             budget,
-            epoch,
-            epoch_base,
             metrics,
             disconnect_log_emissions,
         );
@@ -977,59 +1026,19 @@ fn set_sockopt<T>(fd: i32, level: i32, name: i32, value: &T) -> std::io::Result<
 #[cfg(target_os = "linux")]
 #[allow(clippy::too_many_arguments)] // Producer state stays explicit at this boundary.
 fn process_packet(
-    fd: i32,
     packet: &[u8],
     max_eps: u64,
     trusted_overlay_cidrs: &[IpNetwork],
     tx: &Sender<ConnectionEvent>,
     budget: &Arc<AtomicU64>,
-    epoch: &Arc<AtomicU64>,
-    epoch_base: std::time::Instant,
     metrics: &Metrics,
     disconnect_log_emissions: &AtomicU64,
-) {
-    let second = epoch_base.elapsed().as_secs();
-    let seen = epoch.load(Ordering::Relaxed);
-    if seen != second
-        && epoch
-            .compare_exchange(seen, second, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
-    {
-        // #90 accounting: kernel-side socket counters. `tp_packets` counts
-        // every frame the socket received (ring or not); if walked << this,
-        // the ring/walk is losing frames the kernel delivered. `tp_drops`
-        // counts frames the ring had no room for.
-        let mut stats = TpacketStats {
-            tp_packets: 0,
-            tp_drops: 0,
-        };
-        let rc = unsafe {
-            libc::getsockopt(
-                fd,
-                libc::SOL_PACKET,
-                20, // PACKET_STATISTICS
-                (&mut stats as *mut TpacketStats).cast(),
-                &mut { std::mem::size_of::<TpacketStats>() as libc::socklen_t }
-                    as *mut libc::socklen_t,
-            )
-        };
-        if rc == 0 {
-            metrics
-                .native_socket_packets
-                .fetch_add(stats.tp_packets as u64, Ordering::Relaxed);
-            metrics
-                .native_socket_drops
-                .fetch_add(stats.tp_drops as u64, Ordering::Relaxed);
-        } else {
-            let err = std::io::Error::last_os_error();
-            warn!(fd, rc, %err, "#90: PACKET_STATISTICS getsockopt failed");
-        }
-    }
+) -> PacketOutcome {
     let (ip, proto, syn, _fragmented, overlay_identity) = match parse_l3(packet) {
         Some(v) => v,
         None => {
             metrics.native_parse_rejects.fetch_add(1, Ordering::Relaxed);
-            return;
+            return PacketOutcome::ParseReject;
         }
     };
     if trusted_overlay_cidrs
@@ -1040,7 +1049,8 @@ fn process_packet(
         // A shared cloud/LB/node address is not a safe enforcement identity.
         // Do not feed it into local detection; tenant-aware telemetry must
         // supply the real client identity separately.
-        return;
+        metrics.native_overlay_skips.fetch_add(1, Ordering::Relaxed);
+        return PacketOutcome::OverlaySkip;
     }
     let admitted = budget
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
@@ -1049,7 +1059,10 @@ fn process_packet(
         })
         .is_ok();
     if !admitted {
-        return;
+        metrics
+            .native_rate_limit_skips
+            .fetch_add(1, Ordering::Relaxed);
+        return PacketOutcome::RateLimitSkip;
     }
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1081,10 +1094,12 @@ fn process_packet(
             metrics
                 .native_ingest_emitted
                 .fetch_add(1, Ordering::Relaxed);
+            PacketOutcome::Emitted
         }
         Err(crossbeam_channel::TrySendError::Full(_)) => {
             // Backpressure: the downstream queue is saturated.
             metrics.inc_native_ingest_drop(1);
+            PacketOutcome::IngestDrop
         }
         Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
             // The downstream channel is closed. This is not backpressure —
@@ -1106,8 +1121,22 @@ fn process_packet(
                     "native capture: the downstream event channel is closed — observation events are being dropped"
                 );
             }
+            PacketOutcome::DisconnectDrop
         }
     }
+}
+
+/// The terminal outcome of one validated packet. Exactly one of these is
+/// reached per validated slice, which is what lets the accounting sum to the
+/// validated count instead of leaving an unexplained remainder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PacketOutcome {
+    Emitted,
+    ParseReject,
+    OverlaySkip,
+    RateLimitSkip,
+    IngestDrop,
+    DisconnectDrop,
 }
 
 #[cfg(target_os = "linux")]
@@ -1723,22 +1752,17 @@ mod tests {
             let frame = eth(0x0800, &ip);
             let (tx, rx) = crossbeam_channel::bounded(PACKETS_PER_SAMPLE);
             let budget = Arc::new(AtomicU64::new(0));
-            let epoch = Arc::new(AtomicU64::new(0));
-            let epoch_base = std::time::Instant::now();
             let metrics = Arc::new(Metrics::new());
             let disconnect_log_emissions = Arc::new(AtomicU64::new(0));
 
             let start = std::time::Instant::now();
             for _ in 0..PACKETS_PER_SAMPLE {
                 process_packet(
-                    0,
                     &frame,
                     PACKETS_PER_SAMPLE as u64,
                     &[],
                     &tx,
                     &budget,
-                    &epoch,
-                    epoch_base,
                     &metrics,
                     &disconnect_log_emissions,
                 );
@@ -1825,19 +1849,14 @@ mod tests {
         .expect("seed the channel");
 
         let budget = Arc::new(AtomicU64::new(0));
-        let epoch = Arc::new(AtomicU64::new(0));
-        let epoch_base = std::time::Instant::now();
         let disconnect_log_emissions = AtomicU64::new(0);
 
         process_packet(
-            0,
             &sample_frame(),
             1000,
             &[],
             &tx,
             &budget,
-            &epoch,
-            epoch_base,
             &metrics,
             &disconnect_log_emissions,
         );
@@ -1873,19 +1892,14 @@ mod tests {
         drop(rx);
 
         let budget = Arc::new(AtomicU64::new(0));
-        let epoch = Arc::new(AtomicU64::new(0));
-        let epoch_base = std::time::Instant::now();
         let disconnect_log_emissions = AtomicU64::new(0);
 
         process_packet(
-            0,
             &sample_frame(),
             1000,
             &[],
             &tx,
             &budget,
-            &epoch,
-            epoch_base,
             &metrics,
             &disconnect_log_emissions,
         );
@@ -1919,20 +1933,15 @@ mod tests {
         drop(rx);
 
         let budget = Arc::new(AtomicU64::new(0));
-        let epoch = Arc::new(AtomicU64::new(0));
-        let epoch_base = std::time::Instant::now();
         let disconnect_log_emissions = AtomicU64::new(0);
 
         for _ in 0..5 {
             process_packet(
-                0,
                 &sample_frame(),
                 1000,
                 &[],
                 &tx,
                 &budget,
-                &epoch,
-                epoch_base,
                 &metrics,
                 &disconnect_log_emissions,
             );
@@ -1964,19 +1973,14 @@ mod tests {
         let (tx, rx) = crossbeam_channel::bounded(1);
 
         let budget = Arc::new(AtomicU64::new(0));
-        let epoch = Arc::new(AtomicU64::new(0));
-        let epoch_base = std::time::Instant::now();
         let disconnect_log_emissions = AtomicU64::new(0);
 
         process_packet(
-            0,
             &sample_frame(),
             1000,
             &[],
             &tx,
             &budget,
-            &epoch,
-            epoch_base,
             &metrics,
             &disconnect_log_emissions,
         );
@@ -2006,8 +2010,6 @@ mod tests {
         drop(rx);
 
         let budget = Arc::new(AtomicU64::new(0));
-        let epoch = Arc::new(AtomicU64::new(0));
-        let epoch_base = std::time::Instant::now();
         let disconnect_log_emissions = Arc::new(AtomicU64::new(0));
 
         let mut threads = Vec::new();
@@ -2015,19 +2017,15 @@ mod tests {
             let tx = tx.clone();
             let metrics = metrics.clone();
             let budget = budget.clone();
-            let epoch = epoch.clone();
             let disconnect_log_emissions = disconnect_log_emissions.clone();
             threads.push(std::thread::spawn(move || {
                 for _ in 0..100 {
                     process_packet(
-                        0,
                         &sample_frame(),
                         1_000_000,
                         &[],
                         &tx,
                         &budget,
-                        &epoch,
-                        epoch_base,
                         &metrics,
                         &disconnect_log_emissions,
                     );
@@ -2245,7 +2243,6 @@ mod tests {
         let (tx, _rx) = crossbeam_channel::unbounded::<ConnectionEvent>();
         let budget = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
         let budget_epoch = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let epoch = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let emissions = std::sync::atomic::AtomicU64::new(0);
 
         // SAFETY: map/ring_len/block geometry describe the live ring; the
@@ -2260,13 +2257,11 @@ mod tests {
                 off,
                 1,
                 FRAME_SIZE,
-                fd,
                 u64::MAX,
                 &[],
                 &tx,
                 &budget,
                 &budget_epoch,
-                &epoch,
                 std::time::Instant::now(),
                 &metrics,
                 &emissions,
@@ -2284,5 +2279,72 @@ mod tests {
             1,
             "malformed tp_snaplen must be rejected; decoy tp_len at offset 16 is in range"
         );
+    }
+
+    /// #90 regression: every validated frame takes exactly one terminal
+    /// outcome. If a future return path is added that moves no counter, the
+    /// outcome tally no longer sums and this test fails instead of the loss
+    /// staying invisible.
+    #[test]
+    fn every_validated_frame_takes_exactly_one_terminal_outcome() {
+        let metrics = Metrics::new();
+        // Bounded so one delivered event fills it; the next valid frame is
+        // then a genuine IngestDrop.
+        let (tx, _rx) = crossbeam_channel::bounded(1);
+        let budget = Arc::new(AtomicU64::new(0));
+        let disconnect_log_emissions = AtomicU64::new(0);
+        let overlay = IpNetwork {
+            addr: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            prefix_len: 0,
+        };
+
+        let mut delivered = 0u64;
+        let mut parse_reject = 0u64;
+        let mut overlay_skip = 0u64;
+        let mut rate_limited = 0u64;
+        let mut dropped = 0u64;
+        let mut total = 0u64;
+
+        let mut run = |frame: &[u8], trusted: &[IpNetwork], max_eps: u64| {
+            total += 1;
+            match process_packet(
+                frame,
+                max_eps,
+                trusted,
+                &tx,
+                &budget,
+                &metrics,
+                &disconnect_log_emissions,
+            ) {
+                PacketOutcome::Emitted => delivered += 1,
+                PacketOutcome::ParseReject => parse_reject += 1,
+                PacketOutcome::OverlaySkip => overlay_skip += 1,
+                PacketOutcome::RateLimitSkip => rate_limited += 1,
+                PacketOutcome::IngestDrop | PacketOutcome::DisconnectDrop => dropped += 1,
+            }
+        };
+
+        run(&sample_frame(), &[], 1000); // delivered
+        run(&sample_frame(), &[], 1000); // channel full -> drop
+        run(&[0u8; 8], &[], 1000); // parse reject
+        run(&sample_frame(), &[overlay], 1000); // overlay skip
+        budget.store(1, Ordering::Relaxed);
+        run(&sample_frame(), &[], 0); // rate limited
+
+        assert_eq!(total, 5, "every call must be accounted");
+        assert_eq!(
+            delivered + parse_reject + overlay_skip + rate_limited + dropped,
+            total
+        );
+        assert_eq!(delivered, 1);
+        assert_eq!(parse_reject, 1);
+        assert_eq!(overlay_skip, 1);
+        assert_eq!(rate_limited, 1);
+        assert_eq!(dropped, 1);
+        assert_eq!(metrics.native_ingest_emitted.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.native_parse_rejects.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.native_overlay_skips.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.native_rate_limit_skips.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.native_ingest_drops.load(Ordering::Relaxed), 1);
     }
 }

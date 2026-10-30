@@ -112,17 +112,22 @@ ip -s link show "$HOST_VETH" | sed -n '1,8p'
 echo "=== /proc/net/packet (per-socket: sk, received, dropped) ==="
 cat /proc/net/packet
 
-# #90 discriminator: an independent AF_PACKET tap (plain recv, no ring) on
-# the same veth during a second flood. ~3000 => kernel tap delivery is fine
-# and the loss is in the RX ring or the walk; ~60 => the tap itself is
-# starved (fanout/kernel config).
-echo "=== independent AF_PACKET recv tap (2s during flood) ==="
+# #90 discriminator: one synchronized capture window. The independent
+# AF_PACKET tap and tcpdump are both armed BEFORE the generator runs, so all
+# three observe the same ingress SYNs. Comparing the three counts (independent
+# tap, tcpdump, RamShield native counters) is what localises the loss; a tap
+# started after the burst proves nothing.
+command -v tcpdump >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq tcpdump) || true
+echo "=== synchronized capture: independent tap + tcpdump during one flood ==="
+timeout 4 tcpdump -i "$HOST_VETH" -nn -c 5000 'tcp[tcpflags] & tcp-syn != 0' \
+  -w "$WORK/ingress.pcap" 2>"$WORK/tcpdump.err" &
+TCPDUMP_PID=$!
 python3 - > "$WORK/tap_count.txt" 2>&1 <<'PY' &
-import socket, struct, sys, time
+import socket, time
 s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
 s.bind(("rs-smoke-h", 0))
 s.settimeout(0.5)
-end = time.time() + 2.0
+end = time.time() + 3.0
 n = 0
 while time.time() < end:
     try:
@@ -135,15 +140,12 @@ while time.time() < end:
 print(n)
 PY
 TAP_PID=$!
+sleep 0.3   # let both taps arm before the generator sends anything
 ip netns exec "$NS" bash -c 'for i in $(seq 1 300); do echo > /dev/tcp/10.200.0.1/9 2>/dev/null || true; done' || true
 wait $TAP_PID || true
-echo "independent tap packets in 2s: $(cat "$WORK/tap_count.txt" | tail -1)"
-
-# Cross-check with tcpdump (battle-tested AF_PACKET tap). If tcpdump sees the
-# flood but our sockets don't, the defect is in our socket configuration
-# (fanout/ignore_outgoing/ring). If tcpdump also sees ~0, it is kernel-side.
-command -v tcpdump >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq tcpdump) || true
-timeout 4 tcpdump -i "$HOST_VETH" -c 100 -nn 2>&1 | tail -3 || true
+wait $TCPDUMP_PID || true
+echo "independent tap packets (same window): $(cat "$WORK/tap_count.txt" | tail -1)"
+echo "tcpdump ingress SYNs (same window): $(tcpdump -nn -r "$WORK/ingress.pcap" 2>/dev/null | wc -l)"
 
 # Control: the same plain-recv tap machinery on `lo` (no XDP attached).
 # ~100 => tap machinery works; the starvation is veth/xdpgeneric-specific.
@@ -187,7 +189,8 @@ METRICS=$(curl -fsS http://127.0.0.1:17999/metrics 2>/dev/null)
 [ -n "$METRICS" ] || { cat "$WORK/ramshield.log"; die "metrics endpoint unreachable"; }
 DET=$(printf '%s\n' "$METRICS" | awk '/^ramshield_blocks_detection/ {print $2}')
 log "ramshield_blocks_detection=$DET"
-printf '%s\n' "$METRICS" | grep -E "native_frames_walked|native_socket_packets|native_socket_drops|native_parse_rejects|native_ingest_emitted|native_ingest_drops_total|events_ingested_total"
+printf '%s\n' "$METRICS" | grep -E \
+  "ramshield_native_frames_declared_total|ramshield_native_frames_validated_total|ramshield_native_overlay_skips_total|ramshield_native_rate_limit_skips_total|ramshield_native_parse_rejects_total|ramshield_native_socket_packets_total|ramshield_native_socket_drops_total|ramshield_native_ingest_emitted_total|ramshield_native_ingest_drops_total|ramshield_events_ingested_total|ramshield_events_rejected_total"
 awk -v b="$DET" 'BEGIN { exit (b+0 > 0) ? 0 : 1 }' || { tail -30 "$WORK/ramshield.log"; die "expected blocks_detection > 0"; }
 
 # Kernel drop: the same connect must now time out (XDP discards the SYN)
