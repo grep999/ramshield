@@ -90,11 +90,17 @@
   when: deploy_mode == "k8s" and secret_check.rc != 0
 
 - name: Apply k8s manifests
-  shell: kubectl apply -f deploy/rendered/ --namespace={{ k8s_namespace | default('ramshield') }}
+  shell: kubectl apply -f deploy/rendered/ --namespace=ramshield
   args:
     chdir: "{{ project_dir }}"
   environment:
     DOCKER_BUILDKIT: "1"
+  when: deploy_mode == "k8s"
+
+- name: Wait for deployment rollout readiness
+  command: kubectl rollout status deployment/ramshield --namespace=ramshield --timeout=300s
+  args:
+    chdir: "{{ project_dir }}"
   when: deploy_mode == "k8s"
 
 - name: Confirm deployment mode

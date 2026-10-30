@@ -53,6 +53,10 @@ if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
   sed -i "s/k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/k1:$IPC_KEY/" "$CONFIG_DIR/config.toml"
   # Persistent WAL directory for user installs: never /tmp.
   sed -i "s|dir = \"/tmp/ramshield-wal\"|dir = \"${STATE_DIR}/wal\"|" "$CONFIG_DIR/config.toml"
+elif grep -q 'dir = "/tmp/ramshield-wal"' "$CONFIG_DIR/config.toml" 2>/dev/null; then
+  # Narrow migration: only rewrite the known legacy default path; preserve custom paths.
+  sed -i "s|dir = \"/tmp/ramshield-wal\"|dir = \"${STATE_DIR}/wal\"|" "$CONFIG_DIR/config.toml"
+  log "migrated legacy WAL directory to ${STATE_DIR}/wal"
 fi
 chmod 0600 "$CONFIG_DIR/config.toml"
 # Create state dir (non-root)

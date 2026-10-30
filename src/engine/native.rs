@@ -251,6 +251,7 @@ pub fn spawn(
         // a word about it. Creating them here means the outcome is known
         // before the daemon is told the capture path started.
         let budget = Arc::new(AtomicU64::new(0));
+        let budget_epoch = Arc::new(AtomicU64::new(0));
         let epoch_base = std::time::Instant::now();
         // Counts how many times the "downstream channel is closed"
         // error was actually EMITTED, shared by every worker so the
@@ -266,6 +267,7 @@ pub fn spawn(
             let stop = shutdown.clone();
             let trusted = trusted_overlay_cidrs.clone();
             let b = budget.clone();
+            let be = budget_epoch.clone();
             // RS-004: per-worker epoch so every socket is sampled independently.
             let e = Arc::new(AtomicU64::new(0));
             let base = epoch_base;
@@ -291,6 +293,7 @@ pub fn spawn(
                                 txc.clone(),
                                 stop.clone(),
                                 b.clone(),
+                                be.clone(),
                                 e.clone(),
                                 base,
                                 worker,
@@ -403,6 +406,7 @@ fn run_linux(
     tx: Sender<ConnectionEvent>,
     shutdown: Arc<AtomicBool>,
     budget: Arc<AtomicU64>,
+    budget_epoch: Arc<AtomicU64>,
     epoch: Arc<AtomicU64>,
     epoch_base: std::time::Instant,
     worker: usize,
@@ -448,6 +452,7 @@ fn run_linux(
         &tx,
         &shutdown,
         &budget,
+        &budget_epoch,
         &epoch,
         epoch_base,
         worker,
@@ -470,6 +475,7 @@ fn run_socket(
     tx: &Sender<ConnectionEvent>,
     shutdown: &Arc<AtomicBool>,
     budget: &Arc<AtomicU64>,
+    budget_epoch: &Arc<AtomicU64>,
     epoch: &Arc<AtomicU64>,
     epoch_base: std::time::Instant,
     worker: usize,
@@ -646,6 +652,7 @@ fn run_socket(
                     trusted_overlay_cidrs,
                     tx,
                     budget,
+                    budget_epoch,
                     epoch,
                     epoch_base,
                     metrics,
@@ -684,6 +691,7 @@ unsafe fn walk_block_packets(
     trusted_overlay_cidrs: &[IpNetwork],
     tx: &Sender<ConnectionEvent>,
     budget: &Arc<AtomicU64>,
+    budget_epoch: &Arc<AtomicU64>,
     epoch: &Arc<AtomicU64>,
     epoch_base: std::time::Instant,
     metrics: &Metrics,
@@ -804,6 +812,19 @@ unsafe fn walk_block_packets(
         // packet_off + snaplen) lies in the current block and mapped ring.
         let packet =
             unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
+
+        // The event budget is shared by all capture workers.
+        // Only one worker may reset it for each elapsed second.
+        let second = epoch_base.elapsed().as_secs();
+        let seen = budget_epoch.load(Ordering::Relaxed);
+        if seen != second
+            && budget_epoch
+                .compare_exchange(seen, second, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        {
+            budget.store(0, Ordering::Relaxed);
+        }
+
         process_packet(
             fd,
             packet,
@@ -974,7 +995,6 @@ fn process_packet(
             .compare_exchange(seen, second, Ordering::AcqRel, Ordering::Relaxed)
             .is_ok()
     {
-        budget.store(0, Ordering::Relaxed);
         // #90 accounting: kernel-side socket counters. `tp_packets` counts
         // every frame the socket received (ring or not); if walked << this,
         // the ring/walk is losing frames the kernel delivered. `tp_drops`
@@ -2036,6 +2056,54 @@ mod tests {
         );
     }
 
+    /// Regression for RS-004: the global rate budget must reset at most once per
+    /// second even when multiple workers' walker calls contend within the same second.
+    /// Only one worker may win the shared budget_epoch compare-exchange and call
+    /// budget.store(0). The per-worker stats_epoch (passed separately to process_packet)
+    /// may each independently win their own sampling CAS for local PACKET_STATISTICS.
+    #[test]
+    fn shared_budget_epoch_resets_once_under_concurrent_walker_contention() {
+        // Simulate multiple threads entering walk_block_packets in the same second.
+        // Only one should win the shared budget_epoch CAS and reset budget to 0.
+        let budget = Arc::new(AtomicU64::new(42));
+        // Start "already claimed a different second" so every worker's `seen != second`
+        // holds initially; exactly one CAS wins.
+        let budget_epoch = Arc::new(AtomicU64::new(u64::MAX));
+        let epoch_base = std::time::Instant::now();
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let budget_epoch_i = budget_epoch.clone();
+            let budget_i = budget.clone();
+            handles.push(std::thread::spawn(move || {
+                let second = epoch_base.elapsed().as_secs();
+                let seen = budget_epoch_i.load(Ordering::Relaxed);
+                if seen != second
+                    && budget_epoch_i
+                        .compare_exchange(seen, second, Ordering::AcqRel, Ordering::Relaxed)
+                        .is_ok()
+                {
+                    budget_i.store(0, Ordering::Relaxed);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("thread join");
+        }
+
+        // Exactly one thread should have reset budget; the losers' stores never ran.
+        assert_eq!(
+            budget.load(Ordering::Relaxed),
+            0,
+            "budget must be reset to 0 exactly once"
+        );
+        assert_ne!(
+            budget_epoch.load(Ordering::Relaxed),
+            u64::MAX,
+            "some worker must have claimed the shared epoch"
+        );
+    }
+
     #[test]
     fn rejected_descriptor_recovery_requires_a_valid_forward_offset() {
         let blk_len = 512;
@@ -2165,6 +2233,7 @@ mod tests {
         let metrics = Metrics::default();
         let (tx, _rx) = crossbeam_channel::unbounded::<ConnectionEvent>();
         let budget = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+        let budget_epoch = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let epoch = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let emissions = std::sync::atomic::AtomicU64::new(0);
 
@@ -2185,6 +2254,7 @@ mod tests {
                 &[],
                 &tx,
                 &budget,
+                &budget_epoch,
                 &epoch,
                 std::time::Instant::now(),
                 &metrics,

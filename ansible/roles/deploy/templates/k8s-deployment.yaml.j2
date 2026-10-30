@@ -3,7 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ramshield
-  namespace: {{ k8s_namespace | default('ramshield') }}
+  namespace: ramshield
 spec:
   replicas: 1
   strategy:
