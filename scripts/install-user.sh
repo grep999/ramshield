@@ -55,8 +55,13 @@ if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
   sed -i "s|dir = \"/tmp/ramshield-wal\"|dir = \"${STATE_DIR}/wal\"|" "$CONFIG_DIR/config.toml"
 elif grep -q 'dir = "/tmp/ramshield-wal"' "$CONFIG_DIR/config.toml" 2>/dev/null; then
   # Narrow migration: only rewrite the known legacy default path; preserve custom paths.
-  sed -i "s|dir = \"/tmp/ramshield-wal\"|dir = \"${STATE_DIR}/wal\"|" "$CONFIG_DIR/config.toml"
-  log "migrated legacy WAL directory to ${STATE_DIR}/wal"
+  # If the legacy directory still holds WAL segments, do not silently redirect recovery.
+  if [[ -d /tmp/ramshield-wal ]] && [[ -n "$(ls -A /tmp/ramshield-wal 2>/dev/null)" ]]; then
+    log "refusing legacy WAL path migration: /tmp/ramshield-wal contains unrecovered data; move data to ${STATE_DIR}/wal manually"
+  else
+    sed -i "s|dir = \"/tmp/ramshield-wal\"|dir = \"${STATE_DIR}/wal\"|" "$CONFIG_DIR/config.toml"
+    log "migrated legacy WAL directory to ${STATE_DIR}/wal"
+  fi
 fi
 chmod 0600 "$CONFIG_DIR/config.toml"
 # Create state dir (non-root)

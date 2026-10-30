@@ -65,6 +65,16 @@ if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
   sed -i "s|dir = \"/tmp/ramshield-wal\"|dir = \"${STATE_DIR}/wal\"|" "$CONFIG_DIR/config.toml"
   chown root:"$GROUP_NAME" "$CONFIG_DIR/config.toml"; chmod 0640 "$CONFIG_DIR/config.toml"
   log "IPC authentication key generated (written to $CONFIG_DIR/config.toml; not logged)"
+elif grep -q 'dir = "/tmp/ramshield-wal"' "$CONFIG_DIR/config.toml" 2>/dev/null; then
+  # Narrow migration: only rewrite the known legacy default path; preserve custom paths.
+  # If the legacy directory still holds WAL segments, do not silently redirect recovery.
+  if [[ -d /tmp/ramshield-wal ]] && [[ -n "$(ls -A /tmp/ramshield-wal 2>/dev/null)" ]]; then
+    log "refusing legacy WAL path migration: /tmp/ramshield-wal contains unrecovered data; move data to ${STATE_DIR}/wal manually"
+  else
+    sed -i "s|dir = \"/tmp/ramshield-wal\"|dir = \"${STATE_DIR}/wal\"|" "$CONFIG_DIR/config.toml"
+    chown root:\"$GROUP_NAME\" \"$CONFIG_DIR/config.toml\"; chmod 0640 "$CONFIG_DIR/config.toml"
+    log "migrated legacy WAL directory to ${STATE_DIR}/wal"
+  fi
 fi
 cat > /etc/systemd/system/ramshield.service <<UNIT
 [Unit]

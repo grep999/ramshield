@@ -3,12 +3,27 @@
 # Simulates installer config logic on mock configs and asserts outcomes.
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FAIL=0
 
 fail() {
   echo "FAIL: $*" >&2
   FAIL=1
 }
+
+# Verify both installer scripts contain the required operations.
+for script in install.sh install-user.sh; do
+  path="$ROOT/scripts/$script"
+  [[ -f "$path" ]] || fail "missing installer: $script"
+  # Fresh-install WAL dir substitution must exist.
+  grep -q 'sed -i.*dir = \\\"/tmp/ramshield-wal\\\"' "$path" || fail "$script missing fresh-install WAL dir substitution"
+  # Upgrade migration must exist (narrow elif guard).
+  grep -qF 'elif grep -q' "$path" || fail "$script missing upgrade WAL migration branch"
+  # Existing legacy WAL data must not be silently abandoned.
+  grep -qF 'contains unrecovered data' "$path" || fail "$script missing legacy WAL data-preservation guard"
+done
+
+echo "PASS: installer scripts contain required operations"
 
 run_test() {
   local name="$1"

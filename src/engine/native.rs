@@ -2063,20 +2063,26 @@ mod tests {
     /// may each independently win their own sampling CAS for local PACKET_STATISTICS.
     #[test]
     fn shared_budget_epoch_resets_once_under_concurrent_walker_contention() {
-        // Simulate multiple threads entering walk_block_packets in the same second.
-        // Only one should win the shared budget_epoch CAS and reset budget to 0.
+        // Protocol test for the reset performed in walk_block_packets: for one
+        // fixed second, exactly one worker wins the shared budget_epoch CAS and
+        // resets the shared budget. This is not an integration test of the
+        // packet walker (that needs a live TPACKET_V3 ring).
         let budget = Arc::new(AtomicU64::new(42));
-        // Start "already claimed a different second" so every worker's `seen != second`
-        // holds initially; exactly one CAS wins.
+        // Start on a different second so every worker's `seen != second` holds.
         let budget_epoch = Arc::new(AtomicU64::new(u64::MAX));
-        let epoch_base = std::time::Instant::now();
+        let winners = Arc::new(AtomicU64::new(0));
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        // Compute the second once so all workers contend for the same epoch.
+        let second = 1234u64;
 
         let mut handles = Vec::new();
         for _ in 0..8 {
             let budget_epoch_i = budget_epoch.clone();
             let budget_i = budget.clone();
+            let winners_i = winners.clone();
+            let barrier_i = barrier.clone();
             handles.push(std::thread::spawn(move || {
-                let second = epoch_base.elapsed().as_secs();
+                barrier_i.wait();
                 let seen = budget_epoch_i.load(Ordering::Relaxed);
                 if seen != second
                     && budget_epoch_i
@@ -2084,6 +2090,7 @@ mod tests {
                         .is_ok()
                 {
                     budget_i.store(0, Ordering::Relaxed);
+                    winners_i.fetch_add(1, Ordering::Relaxed);
                 }
             }));
         }
@@ -2091,16 +2098,20 @@ mod tests {
             h.join().expect("thread join");
         }
 
-        // Exactly one thread should have reset budget; the losers' stores never ran.
+        assert_eq!(
+            winners.load(Ordering::Relaxed),
+            1,
+            "exactly one worker claims the epoch"
+        );
         assert_eq!(
             budget.load(Ordering::Relaxed),
             0,
-            "budget must be reset to 0 exactly once"
+            "budget reset exactly once"
         );
-        assert_ne!(
+        assert_eq!(
             budget_epoch.load(Ordering::Relaxed),
-            u64::MAX,
-            "some worker must have claimed the shared epoch"
+            second,
+            "shared epoch advanced once"
         );
     }
 
