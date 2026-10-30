@@ -112,37 +112,44 @@ ip -s link show "$HOST_VETH" | sed -n '1,8p'
 echo "=== /proc/net/packet (per-socket: sk, received, dropped) ==="
 cat /proc/net/packet
 
-# #90 discriminator: one synchronized capture window. The independent
-# AF_PACKET tap and tcpdump are both armed BEFORE the generator runs and both
-# count only ingress IPv4 TCP SYNs, so the numbers are comparable. Comparing
-# (independent tap, tcpdump, RamShield socket/declared/validated/emitted)
-# localises the loss: tap << generated = kernel/tap starvation; tap >>
-# declared = ring/block loss; declared >> validated = walker loss; validated
-# >> emitted = parse/admission/queue loss. A tap started after the burst
-# proves nothing.
+# #90 discriminator: one synchronized capture window. Both tools are armed
+# BEFORE traffic and count only ingress IPv4 TCP SYNs, and both stop together.
+# Comparing (independent tap, tcpdump, RamShield socket/declared/validated/
+# emitted) localises loss: tap << generated = kernel starvation; tap >>
+# declared = ring loss; declared >> validated = walker loss; validated >>
+# emitted = parse/admission/queue loss. A tap started after the burst proves
+# nothing.
 command -v tcpdump >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq tcpdump) || true
 echo "=== synchronized capture: independent tap + tcpdump during one flood ==="
-rm -f "$WORK/tap.ready" "$WORK/tcpdump.ready"
-timeout 5 tcpdump -i "$HOST_VETH" -nn -c 5000 'tcp[tcpflags] & tcp-syn != 0' \
+rm -f "$WORK/tap.ready" "$WORK/tcpdump.ready" "$WORK/stop"
+tcpdump -i "$HOST_VETH" -nn -U 'tcp[tcpflags] & tcp-syn != 0' \
   -w "$WORK/ingress.pcap" 2>"$WORK/tcpdump.err" &
 TCPDUMP_PID=$!
-python3 - "$WORK/tap.ready" > "$WORK/tap_count.txt" 2>&1 <<'PY' &
-import socket, sys, time
-ready = sys.argv[1]
+# Real tcpdump readiness handshake: wait until it reports it is listening.
+for _ in $(seq 1 50); do
+    grep -q "listening on" "$WORK/tcpdump.err" 2>/dev/null && break
+    sleep 0.1
+done
+touch "$WORK/tcpdump.ready"
+python3 - "$WORK/tap.ready" "$WORK/stop" > "$WORK/tap_count.txt" 2>&1 <<'PY' &
+import os, socket, sys
+ready, stop = sys.argv[1], sys.argv[2]
 s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
 s.bind(("rs-smoke-h", 0))
 s.settimeout(0.5)
 open(ready, "w").close()
-end = time.time() + 4.0
 n = 0
-while time.time() < end:
+while not os.path.exists(stop):
     try:
-        frame, _ = s.recvfrom(65535)
+        frame, addr = s.recvfrom(65535)
     except socket.timeout:
         continue
     except OSError:
         break
-    # Ethernet + IPv4 + TCP SYN, ingress only.
+    # sockaddr_ll[2] is sll_pkttype; PACKET_HOST(0) means ingress to us.
+    if len(addr) < 3 or addr[2] != 0:
+        continue
+    # Ethernet + IPv4 + TCP SYN
     if len(frame) < 54 or frame[12:14] != b"\x08\x00":
         continue
     ihl = (frame[14] & 0x0f) * 4
@@ -154,18 +161,22 @@ while time.time() < end:
 print(n)
 PY
 TAP_PID=$!
-# Readiness handshake: do not generate until both taps are armed.
+# Do not generate until both taps are armed.
 for _ in $(seq 1 50); do [ -f "$WORK/tap.ready" ] && break; sleep 0.1; done
 sleep 0.2
+# Generate inside the shared window.
 ip netns exec "$NS" bash -c 'for i in $(seq 1 3000); do echo > /dev/tcp/10.200.0.1/9 2>/dev/null || true; done' || true
+# Stop both consumers together.
+touch "$WORK/stop"
 wait $TAP_PID || true
-wait $TCPDUMP_PID || true
+kill -INT $TCPDUMP_PID 2>/dev/null || true
+wait $TCPDUMP_PID 2>/dev/null || true
 TAP_SYNS=$(cat "$WORK/tap_count.txt" | tail -1)
 PCAP_SYNS=$(tcpdump -nn -r "$WORK/ingress.pcap" 2>/dev/null | wc -l)
-echo "independent tap ingress SYNs (same window): $TAP_SYNS"
-echo "tcpdump ingress SYNs (same window): $PCAP_SYNS"
+echo "independent tap ingress SYNs (shared window): $TAP_SYNS"
+echo "tcpdump ingress SYNs (shared window): $PCAP_SYNS"
 echo "generated connection attempts: 3000"
-
+echo "Accounting: tap<3000 kernel starvation; tap>declared ring loss; declared>validated walker loss; validated>emitted parse/queue loss"
 # Control: the same plain-recv tap machinery on `lo` (no XDP attached).
 # ~100 => tap machinery works; the starvation is veth/xdpgeneric-specific.
 # ~0 => taps are broken machine-wide on this kernel.
@@ -208,6 +219,20 @@ METRICS=$(curl -fsS http://127.0.0.1:17999/metrics 2>/dev/null)
 [ -n "$METRICS" ] || { cat "$WORK/ramshield.log"; die "metrics endpoint unreachable"; }
 DET=$(printf '%s\n' "$METRICS" | awk '/^ramshield_blocks_detection/ {print $2}')
 log "ramshield_blocks_detection=$DET"
+# #90 accounting summary: compare independent capture with native counters.
+TAP_SYNS_FILE=$(cat "$WORK/tap_count.txt" | tail -1)
+printf '%s\n' "$METRICS" | awk -v tap="$TAP_SYNS_FILE" '
+  /ramshield_native_socket_packets_total/ { split($0,a," "); so=a[2] }
+  /ramshield_native_frames_declared_total/ { split($0,a," "); dc=a[2] }
+  /ramshield_native_frames_validated_total/ { split($0,a," "); va=a[2] }
+  /ramshield_native_ingest_emitted_total/ { split($0,a," "); em=a[2] }
+  END {
+    printf("tap=%d socket_packets=%d declared=%d validated=%d emitted=%d\n", tap, so, dc, va, em);
+    printf("tap->declared gap: %d\n", dc-tap);
+    printf("declared->validated gap: %d\n", dc-va);
+    printf("validated->emitted gap: %d\n", va-em);
+  }'
+
 printf '%s\n' "$METRICS" | grep -E \
   "ramshield_native_frames_declared_total|ramshield_native_frames_validated_total|ramshield_native_overlay_skips_total|ramshield_native_rate_limit_skips_total|ramshield_native_parse_rejects_total|ramshield_native_socket_packets_total|ramshield_native_socket_drops_total|ramshield_native_ingest_emitted_total|ramshield_native_ingest_drops_total|ramshield_events_ingested_total|ramshield_events_rejected_total"
 awk -v b="$DET" 'BEGIN { exit (b+0 > 0) ? 0 : 1 }' || { tail -30 "$WORK/ramshield.log"; die "expected blocks_detection > 0"; }
