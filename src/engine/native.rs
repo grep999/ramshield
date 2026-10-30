@@ -475,16 +475,17 @@ fn sample_socket_stats(fd: i32, metrics: &Metrics) {
         tp_drops: 0,
         tp_freeze_q_cnt: 0,
     };
+    let mut len = std::mem::size_of::<TpacketStats>() as libc::socklen_t;
     let rc = unsafe {
         libc::getsockopt(
             fd,
             libc::SOL_PACKET,
             PACKET_STATISTICS, // 6 per Linux UAPI: option 20 is PACKET_QDISC_BYPASS
             (&mut stats as *mut TpacketStats).cast(),
-            &mut { std::mem::size_of::<TpacketStats>() as libc::socklen_t } as *mut libc::socklen_t,
+            &mut len,
         )
     };
-    if rc == 0 {
+    if rc == 0 && len >= std::mem::size_of::<TpacketStats>() as libc::socklen_t {
         metrics
             .native_socket_packets
             .fetch_add(stats.tp_packets as u64, Ordering::Relaxed);
@@ -492,8 +493,16 @@ fn sample_socket_stats(fd: i32, metrics: &Metrics) {
             .native_socket_drops
             .fetch_add(stats.tp_drops as u64, Ordering::Relaxed);
     } else {
-        let err = std::io::Error::last_os_error();
-        warn!(fd, rc, %err, "PACKET_STATISTICS getsockopt failed");
+        let err = if rc < 0 {
+            std::io::Error::last_os_error()
+        } else {
+            std::io::Error::other(format!(
+                "PACKET_STATISTICS: unexpected returned length {} (expected {})",
+                len,
+                std::mem::size_of::<TpacketStats>()
+            ))
+        };
+        warn!(fd, rc, %err, "PACKET_STATISTICS getsockopt failed or unexpected length");
     }
 }
 
@@ -624,6 +633,9 @@ fn run_socket(
                     worker,
                     block_idx, block_size, ring_len, "rejecting invalid TPACKET_V3 block offset"
                 );
+                // #90: this socket's counters are reset on read, so the
+                // error exit must still take the final sample.
+                sample_socket_stats(fd, metrics);
                 unsafe {
                     libc::munmap(map, ring_len);
                 }
@@ -641,6 +653,9 @@ fn run_socket(
             if rc < 0 {
                 let error = std::io::Error::last_os_error();
                 if error.kind() != std::io::ErrorKind::Interrupted {
+                    // #90: this socket's counters are reset on read, so the
+                    // error exit must still take the final sample.
+                    sample_socket_stats(fd, metrics);
                     // SAFETY: map was returned by mmap with length ring_len here.
                     unsafe { libc::munmap(map, ring_len) };
                     return Err(error);
@@ -649,50 +664,13 @@ fn run_socket(
             continue;
         }
         std::sync::atomic::fence(Ordering::Acquire);
-        // Validate kernel-provided lengths before using packet offsets.
-        // SAFETY: block_ptr points into the mmap'd ring at a validated block_offset.
-        let blk_len = match usize::try_from(unsafe { (*block_ptr).hdr.blk_len }) {
-            Ok(v) => v,
-            Err(_) => {
-                warn!(worker, block_idx, "blk_len does not fit usize");
-                break;
-            }
-        };
-        if !valid_tpacket_block_len(blk_len, block_size) {
-            metrics
-                .native_tpacket_rejects
-                .fetch_add(1, Ordering::Relaxed);
-            warn!(
-                worker,
-                block_idx, blk_len, block_size, "rejecting invalid TPACKET_V3 block length"
-            );
-            std::sync::atomic::fence(Ordering::Release);
-            unsafe {
-                std::ptr::write_volatile(
-                    std::ptr::addr_of_mut!((*block_ptr).hdr.block_status),
-                    TP_STATUS_KERNEL,
-                );
-            }
-            block_idx = (block_idx + 1) % block_nr;
-            continue;
-        }
-        let num = unsafe { (*block_ptr).hdr.num_pkts };
-        // #90: account for every descriptor the kernel declared in this block.
-        metrics
-            .native_frames_declared
-            .fetch_add(num as u64, Ordering::Relaxed);
-        let first = unsafe { (*block_ptr).hdr.offset_to_first_pkt as usize };
-        // SAFETY: blk_len and block_ptr were validated above; the walker
-        // re-validates every descriptor offset against block and ring bounds.
         unsafe {
-            walk_block_packets(
+            process_completed_block(
                 map,
                 ring_len,
                 block_size,
                 block_idx,
-                blk_len,
-                first,
-                num,
+                block_ptr,
                 frame_size,
                 max_eps,
                 trusted_overlay_cidrs,
@@ -705,13 +683,6 @@ fn run_socket(
                 worker,
             );
         }
-        std::sync::atomic::fence(Ordering::Release);
-        unsafe {
-            std::ptr::write_volatile(
-                std::ptr::addr_of_mut!((*block_ptr).hdr.block_status),
-                TP_STATUS_KERNEL,
-            );
-        }
         block_idx = (block_idx + 1) % block_nr;
     }
     // Final partial interval: the timer may not have fired since the last
@@ -721,6 +692,105 @@ fn run_socket(
     // SAFETY: map was returned by mmap with length ring_len in this function.
     unsafe { libc::munmap(map, ring_len) };
     Ok(())
+}
+
+/// #90: return a completed (or invalid) block to the kernel for reuse.
+///
+/// The release fence publishes every read the walker did, then the status
+/// write hands the block back. Both the invalid-length path and the normal
+/// path go through here so a test can assert the recycle happens.
+#[cfg(target_os = "linux")]
+fn release_block(block_ptr: *mut TpacketBlockDesc) {
+    std::sync::atomic::fence(Ordering::Release);
+    // SAFETY: block_ptr was validated to point at a TpacketBlockDesc inside
+    // the mapped ring; block_status is a u32 at offset 0 of the header.
+    unsafe {
+        std::ptr::write_volatile(
+            std::ptr::addr_of_mut!((*block_ptr).hdr.block_status),
+            TP_STATUS_KERNEL,
+        );
+    }
+}
+
+/// #90: process one completed (TP_STATUS_USER) block: validate the declared
+/// block length, walk every declared descriptor, then return the block to the
+/// kernel. Extracted from the poll loop so the traversal and recycle can be
+/// exercised with a synthetic block in a test.
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn process_completed_block(
+    map: *mut libc::c_void,
+    ring_len: usize,
+    block_size: usize,
+    block_idx: usize,
+    block_ptr: *mut TpacketBlockDesc,
+    frame_size: usize,
+    max_eps: u64,
+    trusted_overlay_cidrs: &[IpNetwork],
+    tx: &Sender<ConnectionEvent>,
+    budget: &Arc<AtomicU64>,
+    budget_epoch: &Arc<AtomicU64>,
+    epoch_base: std::time::Instant,
+    metrics: &Metrics,
+    disconnect_log_emissions: &AtomicU64,
+    worker: usize,
+) {
+    // SAFETY: block_ptr points at a block descriptor inside the mapped ring.
+    let raw_blk_len =
+        unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*block_ptr).hdr.blk_len)) };
+    let blk_len = match usize::try_from(raw_blk_len) {
+        Ok(v) => v,
+        Err(_) => {
+            warn!(worker, block_idx, "blk_len does not fit usize");
+            // Do not leave a USER-owned block pinned in the ring.
+            release_block(block_ptr);
+            return;
+        }
+    };
+    if !valid_tpacket_block_len(blk_len, block_size) {
+        metrics
+            .native_tpacket_rejects
+            .fetch_add(1, Ordering::Relaxed);
+        warn!(
+            worker,
+            block_idx, blk_len, block_size, "rejecting invalid TPACKET_V3 block length"
+        );
+        release_block(block_ptr);
+        return;
+    }
+    // SAFETY: the block length was validated above.
+    let num = unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*block_ptr).hdr.num_pkts)) };
+    // #90: account for every descriptor the kernel declared in this block.
+    metrics
+        .native_frames_declared
+        .fetch_add(num as u64, Ordering::Relaxed);
+    let first = unsafe {
+        std::ptr::read_volatile(std::ptr::addr_of!((*block_ptr).hdr.offset_to_first_pkt))
+    } as usize;
+    // SAFETY: blk_len and block_ptr were validated above; the walker
+    // re-validates every descriptor offset against block and ring bounds.
+    unsafe {
+        walk_block_packets(
+            map,
+            ring_len,
+            block_size,
+            block_idx,
+            blk_len,
+            first,
+            num,
+            frame_size,
+            max_eps,
+            trusted_overlay_cidrs,
+            tx,
+            budget,
+            budget_epoch,
+            epoch_base,
+            metrics,
+            disconnect_log_emissions,
+            worker,
+        );
+    }
+    release_block(block_ptr);
 }
 
 #[cfg(target_os = "linux")]
@@ -2281,49 +2351,233 @@ mod tests {
         );
     }
 
-    /// #90 regression: every validated frame takes exactly one terminal
-    /// outcome. If a future return path is added that moves no counter, the
-    /// outcome tally no longer sums and this test fails instead of the loss
-    /// staying invisible.
+    const HDR_LEN: usize = std::mem::size_of::<Tpacket3Hdr>();
+    const DESC_LEN: usize = std::mem::size_of::<TpacketBlockDesc>();
+    const SYN_FRAME_LEN: usize = 54;
+    const BLOCK_LEN: usize = 4096;
+    const SYN_STRIDE: usize =
+        (HDR_LEN + SYN_FRAME_LEN + TPACKET_ALIGNMENT - 1) & !(TPACKET_ALIGNMENT - 1);
+
+    /// 16-byte-aligned backing store for a synthetic TPACKET_V3 block.
+    #[repr(align(16))]
+    struct AlignedBlock([u8; BLOCK_LEN]);
+
+    /// Build one completed (TP_STATUS_USER) block holding `n` descriptors,
+    /// each carrying the same Ethernet+IPv4+TCP SYN frame. The descriptor
+    /// chain is well formed: every non-final `tp_next_offset` is `SYN_STRIDE`,
+    /// the final one is zero.
+    fn synthetic_block(n: u32) -> Box<AlignedBlock> {
+        let mut block = Box::new(AlignedBlock([0u8; BLOCK_LEN]));
+        let base = block.0.as_mut_ptr();
+        let frame = sample_frame();
+        assert_eq!(frame.len(), SYN_FRAME_LEN);
+        unsafe {
+            // TpacketBlockDesc: version@0, offset_to_priv@4, hdr@8
+            // TpacketHdrV1: block_status@0, num_pkts@4, offset_to_first_pkt@8, blk_len@12
+            (base.add(8) as *mut u32).write_unaligned(TP_STATUS_USER); // block_status @8
+            (base.add(12) as *mut u32).write_unaligned(n); // num_pkts @12
+            (base.add(16) as *mut u32).write_unaligned(DESC_LEN as u32); // offset_to_first_pkt @16
+            (base.add(20) as *mut u32).write_unaligned(BLOCK_LEN as u32); // blk_len @20
+            // version (0) and offset_to_priv (0) are already zeroed
+
+            let mut off = DESC_LEN;
+            for i in 0..n as usize {
+                let hdr = base.add(off);
+                let next = if i + 1 == n as usize {
+                    0
+                } else {
+                    SYN_STRIDE as u32
+                };
+                (hdr as *mut u32).write_unaligned(next); // tp_next_offset
+                (hdr.add(12) as *mut u32).write_unaligned(SYN_FRAME_LEN as u32); // tp_snaplen
+                (hdr.add(16) as *mut u32).write_unaligned(SYN_FRAME_LEN as u32); // tp_len
+                (hdr.add(24) as *mut u16).write_unaligned(HDR_LEN as u16); // tp_mac
+                std::ptr::copy_nonoverlapping(frame.as_ptr(), hdr.add(HDR_LEN), SYN_FRAME_LEN);
+                off += SYN_STRIDE;
+            }
+        }
+        block
+    }
+
+    /// Run the real block-processing path over a synthetic block.
+    fn process_synthetic_block(
+        block: &mut AlignedBlock,
+        metrics: &Metrics,
+        tx: &Sender<ConnectionEvent>,
+    ) -> *mut TpacketBlockDesc {
+        let base = block.0.as_mut_ptr();
+        // starts empty; max_eps (passed below) is the per-second ceiling.
+        let budget = Arc::new(AtomicU64::new(0));
+        let budget_epoch = Arc::new(AtomicU64::new(0));
+        let emissions = AtomicU64::new(0);
+        let block_ptr = base as *mut TpacketBlockDesc;
+        unsafe {
+            process_completed_block(
+                base as *mut libc::c_void,
+                BLOCK_LEN,
+                BLOCK_LEN,
+                0,
+                block_ptr,
+                2048,
+                u64::MAX,
+                &[],
+                tx,
+                &budget,
+                &budget_epoch,
+                std::time::Instant::now(),
+                metrics,
+                &emissions,
+                0,
+            );
+        }
+        block_ptr
+    }
+
+    /// #90 regression: a block declaring N valid descriptors must be walked in
+    /// full, validate all N frames, deliver all N events, and be recycled to
+    /// the kernel. A walker that truncates traversal fails this test.
     #[test]
-    fn every_validated_frame_takes_exactly_one_terminal_outcome() {
+    fn synthetic_multi_descriptor_block_is_fully_walked_and_recycled() {
+        const N: u32 = 3;
+        let mut block = synthetic_block(N);
         let metrics = Metrics::new();
-        // Bounded so one delivered event fills it; the next valid frame is
-        // then a genuine IngestDrop.
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let block_ptr = process_synthetic_block(&mut block, &metrics, &tx);
+
+        assert_eq!(
+            metrics.native_frames_declared.load(Ordering::Relaxed),
+            N as u64,
+            "every descriptor the block declared must be accounted"
+        );
+        assert_eq!(
+            metrics.native_frames_walked.load(Ordering::Relaxed),
+            N as u64,
+            "the walker must visit every declared descriptor"
+        );
+        assert_eq!(
+            metrics.native_frames_validated.load(Ordering::Relaxed),
+            N as u64,
+            "every in-bounds descriptor must produce a validated slice"
+        );
+        assert_eq!(metrics.native_tpacket_rejects.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            metrics.native_ingest_emitted.load(Ordering::Relaxed),
+            N as u64
+        );
+        assert_eq!(
+            rx.len(),
+            N as usize,
+            "every declared frame must reach delivery"
+        );
+
+        // SAFETY: block_ptr points at the synthetic block we still own.
+        let status =
+            unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*block_ptr).hdr.block_status)) };
+        assert_eq!(
+            status, TP_STATUS_KERNEL,
+            "a processed block must be returned to the kernel"
+        );
+    }
+
+    /// #90: a malformed middle descriptor is skipped and counted, but it must
+    /// not hide the valid descriptors that follow it. The declared count, the
+    /// walked count, the reject count and the delivered count must all agree.
+    #[test]
+    fn synthetic_block_with_malformed_middle_descriptor_counts_the_loss() {
+        const N: u32 = 3;
+        let mut block = synthetic_block(N);
+        // Corrupt the second descriptor's snaplen to an impossible value.
+        unsafe {
+            let second = block.0.as_mut_ptr().add(DESC_LEN + SYN_STRIDE);
+            (second.add(12) as *mut u32).write_unaligned(0x2000_0001);
+        }
+        let metrics = Metrics::new();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let _ = process_synthetic_block(&mut block, &metrics, &tx);
+
+        assert_eq!(
+            metrics.native_frames_declared.load(Ordering::Relaxed),
+            N as u64
+        );
+        assert_eq!(
+            metrics.native_frames_walked.load(Ordering::Relaxed),
+            N as u64,
+            "the malformed descriptor must not stop the walk"
+        );
+        assert_eq!(
+            metrics.native_frames_validated.load(Ordering::Relaxed),
+            2,
+            "only the two valid descriptors become slices"
+        );
+        assert_eq!(
+            metrics.native_tpacket_rejects.load(Ordering::Relaxed),
+            1,
+            "the malformed descriptor must be counted, not hidden"
+        );
+        assert_eq!(metrics.native_ingest_emitted.load(Ordering::Relaxed), 2);
+        assert_eq!(rx.len(), 2);
+    }
+
+    /// #90: a broken descriptor chain truncates the walk. The truncation is
+    /// the suspected under-capture mechanism; it must be visible as walked <
+    /// declared plus a reject, never as a silent shortfall.
+    #[test]
+    fn synthetic_block_truncated_chain_is_counted_as_loss() {
+        const N: u32 = 3;
+        let mut block = synthetic_block(N);
+        // First descriptor claims there is no next packet while more remain.
+        unsafe {
+            (block.0.as_mut_ptr().add(DESC_LEN) as *mut u32).write_unaligned(0);
+        }
+        let metrics = Metrics::new();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let _ = process_synthetic_block(&mut block, &metrics, &tx);
+
+        assert_eq!(
+            metrics.native_frames_declared.load(Ordering::Relaxed),
+            N as u64
+        );
+        assert_eq!(
+            metrics.native_frames_walked.load(Ordering::Relaxed),
+            1,
+            "the walk stops at the broken chain"
+        );
+        assert_eq!(metrics.native_frames_validated.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            metrics.native_tpacket_rejects.load(Ordering::Relaxed),
+            1,
+            "the truncation must be counted"
+        );
+        assert_eq!(metrics.native_ingest_emitted.load(Ordering::Relaxed), 1);
+        assert_eq!(rx.len(), 1);
+    }
+    /// #90 regression: every validated frame takes exactly one terminal
+    /// outcome, and the outcome counters agree with the local tally. Non-
+    /// trivial match logic in `process_packet`; keeps every branch covered.
+    #[test]
+    fn process_packet_every_frame_takes_one_terminal_outcome() {
+        let metrics = Metrics::new();
         let (tx, _rx) = crossbeam_channel::bounded(1);
         let budget = Arc::new(AtomicU64::new(0));
-        let disconnect_log_emissions = AtomicU64::new(0);
+        let emissions = AtomicU64::new(0);
         let overlay = IpNetwork {
             addr: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
             prefix_len: 0,
         };
-
         let mut delivered = 0u64;
         let mut parse_reject = 0u64;
         let mut overlay_skip = 0u64;
         let mut rate_limited = 0u64;
         let mut dropped = 0u64;
-        let mut total = 0u64;
-
-        let mut run = |frame: &[u8], trusted: &[IpNetwork], max_eps: u64| {
-            total += 1;
-            match process_packet(
-                frame,
-                max_eps,
-                trusted,
-                &tx,
-                &budget,
-                &metrics,
-                &disconnect_log_emissions,
-            ) {
-                PacketOutcome::Emitted => delivered += 1,
-                PacketOutcome::ParseReject => parse_reject += 1,
-                PacketOutcome::OverlaySkip => overlay_skip += 1,
-                PacketOutcome::RateLimitSkip => rate_limited += 1,
-                PacketOutcome::IngestDrop | PacketOutcome::DisconnectDrop => dropped += 1,
-            }
+        let mut run = |frame: &[u8], trusted: &[IpNetwork], max_eps: u64| match process_packet(
+            frame, max_eps, trusted, &tx, &budget, &metrics, &emissions,
+        ) {
+            PacketOutcome::Emitted => delivered += 1,
+            PacketOutcome::ParseReject => parse_reject += 1,
+            PacketOutcome::OverlaySkip => overlay_skip += 1,
+            PacketOutcome::RateLimitSkip => rate_limited += 1,
+            PacketOutcome::IngestDrop | PacketOutcome::DisconnectDrop => dropped += 1,
         };
-
         run(&sample_frame(), &[], 1000); // delivered
         run(&sample_frame(), &[], 1000); // channel full -> drop
         run(&[0u8; 8], &[], 1000); // parse reject
@@ -2331,10 +2585,10 @@ mod tests {
         budget.store(1, Ordering::Relaxed);
         run(&sample_frame(), &[], 0); // rate limited
 
-        assert_eq!(total, 5, "every call must be accounted");
         assert_eq!(
             delivered + parse_reject + overlay_skip + rate_limited + dropped,
-            total
+            5,
+            "every validated frame must take exactly one terminal outcome"
         );
         assert_eq!(delivered, 1);
         assert_eq!(parse_reject, 1);

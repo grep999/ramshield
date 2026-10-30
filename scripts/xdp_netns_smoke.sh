@@ -113,39 +113,58 @@ echo "=== /proc/net/packet (per-socket: sk, received, dropped) ==="
 cat /proc/net/packet
 
 # #90 discriminator: one synchronized capture window. The independent
-# AF_PACKET tap and tcpdump are both armed BEFORE the generator runs, so all
-# three observe the same ingress SYNs. Comparing the three counts (independent
-# tap, tcpdump, RamShield native counters) is what localises the loss; a tap
-# started after the burst proves nothing.
+# AF_PACKET tap and tcpdump are both armed BEFORE the generator runs and both
+# count only ingress IPv4 TCP SYNs, so the numbers are comparable. Comparing
+# (independent tap, tcpdump, RamShield socket/declared/validated/emitted)
+# localises the loss: tap << generated = kernel/tap starvation; tap >>
+# declared = ring/block loss; declared >> validated = walker loss; validated
+# >> emitted = parse/admission/queue loss. A tap started after the burst
+# proves nothing.
 command -v tcpdump >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq tcpdump) || true
 echo "=== synchronized capture: independent tap + tcpdump during one flood ==="
-timeout 4 tcpdump -i "$HOST_VETH" -nn -c 5000 'tcp[tcpflags] & tcp-syn != 0' \
+rm -f "$WORK/tap.ready" "$WORK/tcpdump.ready"
+timeout 5 tcpdump -i "$HOST_VETH" -nn -c 5000 'tcp[tcpflags] & tcp-syn != 0' \
   -w "$WORK/ingress.pcap" 2>"$WORK/tcpdump.err" &
 TCPDUMP_PID=$!
-python3 - > "$WORK/tap_count.txt" 2>&1 <<'PY' &
-import socket, time
+python3 - "$WORK/tap.ready" > "$WORK/tap_count.txt" 2>&1 <<'PY' &
+import socket, sys, time
+ready = sys.argv[1]
 s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
 s.bind(("rs-smoke-h", 0))
 s.settimeout(0.5)
-end = time.time() + 3.0
+open(ready, "w").close()
+end = time.time() + 4.0
 n = 0
 while time.time() < end:
     try:
-        s.recvfrom(65535)
-        n += 1
+        frame, _ = s.recvfrom(65535)
     except socket.timeout:
-        pass
+        continue
     except OSError:
         break
+    # Ethernet + IPv4 + TCP SYN, ingress only.
+    if len(frame) < 54 or frame[12:14] != b"\x08\x00":
+        continue
+    ihl = (frame[14] & 0x0f) * 4
+    if ihl < 20 or len(frame) < 14 + ihl + 14 or frame[14 + 9] != 6:
+        continue
+    flags = frame[14 + ihl + 13]
+    if flags & 0x02 and not flags & 0x10:
+        n += 1
 print(n)
 PY
 TAP_PID=$!
-sleep 0.3   # let both taps arm before the generator sends anything
-ip netns exec "$NS" bash -c 'for i in $(seq 1 300); do echo > /dev/tcp/10.200.0.1/9 2>/dev/null || true; done' || true
+# Readiness handshake: do not generate until both taps are armed.
+for _ in $(seq 1 50); do [ -f "$WORK/tap.ready" ] && break; sleep 0.1; done
+sleep 0.2
+ip netns exec "$NS" bash -c 'for i in $(seq 1 3000); do echo > /dev/tcp/10.200.0.1/9 2>/dev/null || true; done' || true
 wait $TAP_PID || true
 wait $TCPDUMP_PID || true
-echo "independent tap packets (same window): $(cat "$WORK/tap_count.txt" | tail -1)"
-echo "tcpdump ingress SYNs (same window): $(tcpdump -nn -r "$WORK/ingress.pcap" 2>/dev/null | wc -l)"
+TAP_SYNS=$(cat "$WORK/tap_count.txt" | tail -1)
+PCAP_SYNS=$(tcpdump -nn -r "$WORK/ingress.pcap" 2>/dev/null | wc -l)
+echo "independent tap ingress SYNs (same window): $TAP_SYNS"
+echo "tcpdump ingress SYNs (same window): $PCAP_SYNS"
+echo "generated connection attempts: 3000"
 
 # Control: the same plain-recv tap machinery on `lo` (no XDP attached).
 # ~100 => tap machinery works; the starvation is veth/xdpgeneric-specific.
