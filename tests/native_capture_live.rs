@@ -175,7 +175,7 @@ fn live_tpacket_v3_capture_accounts_for_ingress_syns() {
     flood_syns();
     // Wait for the ring walker to account for a substantial part of the
     // workload. The final socket-stat sample happens during orderly shutdown.
-    wait_for_declared(&metrics, (SYNS as u64 / 2), Duration::from_secs(3));
+    wait_for_declared(&metrics, SYNS as u64 / 2, Duration::from_secs(3));
     capture.stop();
 
     let emitted = metrics.native_ingest_emitted.load(Ordering::Relaxed);
