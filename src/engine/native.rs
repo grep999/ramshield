@@ -1008,7 +1008,7 @@ fn checked_tpacket_header_offset(
     let header_size = std::mem::size_of::<Tpacket3Hdr>();
     if !valid_tpacket_block_len(blk_len, block_size)
         || off < std::mem::size_of::<TpacketBlockDesc>()
-        || !off.is_multiple_of(std::mem::align_of::<Tpacket3Hdr>())
+        || !off.is_multiple_of(TPACKET_V3_ALIGNMENT)
     {
         return None;
     }
@@ -1511,6 +1511,9 @@ mod tpacket_tests {
         assert!(checked_tpacket_header_offset(0, 128, 128, 128, 128).is_none());
         assert!(checked_tpacket_header_offset(0, 128, 128, 128, 128 - hdr + 1).is_none());
         assert!(checked_tpacket_header_offset(0, 128, 128, 128, desc + 1).is_none());
+        // A naturally u32-aligned offset can still violate TPACKET_V3's
+        // 8-byte descriptor alignment.
+        assert!(checked_tpacket_header_offset(0, 128, 128, 128, desc + 4).is_none());
         assert!(checked_tpacket_header_offset(0, 128, 128, 128, desc).is_some());
     }
 
