@@ -1492,6 +1492,7 @@ mod tpacket_tests {
     fn tpacket_constants_are_sane() {
         assert_eq!(TPACKET_V3, 2);
         assert_eq!(PACKET_RX_RING, 5);
+        assert_eq!(PACKET_STATISTICS, 6);
     }
 
     #[test]

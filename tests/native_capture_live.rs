@@ -14,7 +14,7 @@ use ramshield_types::ConnectionEvent;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const IP: &str = "/usr/sbin/ip";
 const NS: &str = "rs-cap-n";
@@ -77,11 +77,69 @@ impl Drop for Veth {
     }
 }
 
+struct CaptureGuard {
+    shutdown: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl CaptureGuard {
+    fn new(shutdown: Arc<AtomicBool>, handle: std::thread::JoinHandle<()>) -> Self {
+        Self { shutdown, handle: Some(handle) }
+    }
+
+    fn stop(mut self) {
+        self.shutdown.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            handle.join().expect("native supervisor must join cleanly");
+        }
+    }
+}
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn probe_capture() {
+    // A refused connection still sends an ingress SYN. Its failure is expected.
+    let script = format!(
+        "timeout 1 bash -c 'echo > /dev/tcp/{HOST_IP}/9' 2>/dev/null || true"
+    );
+    let _ = Command::new(IP)
+        .args(["netns", "exec", NS, "bash", "-c", &script])
+        .status();
+}
+
+fn wait_for_socket_packets(metrics: &Metrics, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if metrics.native_socket_packets.load(Ordering::Relaxed) > 0 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("native capture did not report any socket packets within {timeout:?}");
+}
+
+fn wait_for_declared(metrics: &Metrics, minimum: u64, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if metrics.native_frames_declared.load(Ordering::Relaxed) >= minimum {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn flood_syns() {
     // Each connect sends one SYN; the host has no listener so it answers RST.
     // The per-connect timeout bounds a dropped-SYN run.
     let script = format!(
-        "for i in $(seq 1 {SYNS}); do timeout 0.1 bash -c 'echo > /dev/tcp/{HOST_IP}/9' 2>/dev/null; done"
+        "for i in $(seq 1 {SYNS}); do timeout 0.1 bash -c 'echo > /dev/tcp/{HOST_IP}/9' 2>/dev/null || true; done"
     );
     let ok = ip(&["netns", "exec", NS, "bash", "-c", &script]);
     assert!(ok, "SYN flood failed");
@@ -107,15 +165,17 @@ fn live_tpacket_v3_capture_accounts_for_ingress_syns() {
         metrics.clone(),
     )
     .expect("native capture must start on the veth");
+    let capture = CaptureGuard::new(shutdown.clone(), handle);
 
-    // Let the capture workers open the socket and arm the ring.
-    std::thread::sleep(Duration::from_millis(500));
+    // Prove the socket is receiving before starting the measured workload.
+    probe_capture();
+    wait_for_socket_packets(&metrics, Duration::from_secs(3));
+
     flood_syns();
-    // Allow the ring to drain and one sampling interval to elapse.
-    std::thread::sleep(Duration::from_millis(1500));
-
-    shutdown.store(true, Ordering::Release);
-    handle.join().expect("native supervisor must join cleanly");
+    // Wait for the ring walker to account for a substantial part of the
+    // workload. The final socket-stat sample happens during orderly shutdown.
+    wait_for_declared(&metrics, (SYNS as u64 / 2), Duration::from_secs(3));
+    capture.stop();
 
     let emitted = metrics.native_ingest_emitted.load(Ordering::Relaxed);
     let drops = metrics.native_ingest_drops.load(Ordering::Relaxed);

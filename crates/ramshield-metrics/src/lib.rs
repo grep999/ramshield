@@ -82,9 +82,9 @@ pub struct Metrics {
     pub native_socket_packets: Arc<AtomicU64>,
     /// #90: frames the ring had no room for (PACKET_STATISTICS.tp_drops).
     pub native_socket_drops: Arc<AtomicU64>,
-    /// #90: descriptors the completed TPACKET_V3 blocks declared
-    /// (`num_pkts` summed per block). Declared minus walked is what the
-    /// walker never reached: early return, rejected block, or bad chain.
+    /// #90: descriptors declared by blocks whose `blk_len` passed validation
+    /// (`num_pkts` summed per accepted block). For those blocks, declared
+    /// minus walked exposes descriptors skipped by an early return or bad chain.
     pub native_frames_declared: Arc<AtomicU64>,
     /// #90: descriptors that produced a validated packet slice and entered
     /// the L3/delivery path. Every one of these takes exactly one terminal

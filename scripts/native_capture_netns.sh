@@ -9,9 +9,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Build the test binary as the calling user.
-cargo test --test native_capture_live --no-run 2>/dev/null | grep -q 'test ' && true
-
+# Build once and extract the test executable from Cargo's JSON messages.
 # Find the compiled test binary path.
 BIN=$(cargo test --test native_capture_live --no-run --message-format=json 2>/dev/null \
   | python3 -c '
@@ -31,4 +29,4 @@ if [ -z "$BIN" ]; then
 fi
 
 echo "[INFO] running $BIN as root (needs CAP_NET_ADMIN + CAP_NET_RAW)"
-sudo "$BIN" --ignored --nocapture
+sudo env RUST_BACKTRACE=1 "$BIN" --ignored --nocapture
