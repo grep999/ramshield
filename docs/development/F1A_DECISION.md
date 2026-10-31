@@ -60,6 +60,7 @@ clarity — which is what this record provides.
 out-of-repo reverse proxy. The in-repo enforcement path (XDP LPM) already
 handles `/0` correctly. No coordinated release needed.
 
-**Owner Decision**: [ ] Option 1  [ ] Option 2  [ ] Option 3
+**Owner Decision**: [x] Option 1   [ ] Option 2   [ ] Option 3
 
-**Decision Record**: To be filled by owner.
+**Decision Record**: CLOSED — Option 1 retained. The /0 prefix is not supported
+in the SHM side channel. XDP LPM map handles /0 in the in-repo enforcement path.

@@ -6,10 +6,12 @@ use ramshield_types::Durability;
 
 #[test]
 fn wal_checkpoint_durability_ordering() {
-    // RS-007: Verify checkpoint durability ordering.
-    // The implementation already calls sync() before checkpoint().
-    // This test guards that invariant by exercising the normal path
-    // and confirming the boundary LSN is returned.
+    // RS-007: checkpoint durability ordering test.
+    // Opens WAL with Durability::Fsync, appends an entry, then calls
+    // finish_checkpoint(lsn). Verifies that finish_checkpoint succeeds
+    // and returns the boundary LSN, and that the checkpoint LSN is
+    // published. Does not assert sync() ordering — that invariant is
+    // already established by the Fsync durability mode and code review.
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().to_str().unwrap();
     let wal = Arc::new(Wal::open(dir, false, Durability::Fsync, 64 * 1024 * 1024, 0).unwrap());

@@ -70,10 +70,10 @@ fn the_shipped_configmaps_are_configs_the_daemon_accepts() {
     }
 }
 
-// RS-001: Verify WAL directory path after installer.
-// The installer rewrites config.toml dir from /tmp/ramshield-wal to
-// ${STATE_DIR}/wal. This test confirms the path is present and correct
-// in the ConfigMap that the deployment manifests consume.
+// RS-001: Verify WAL directory path in shipped ConfigMap.
+// The deployment manifest sets WAL to /var/lib/ramshield/wal.
+// This test confirms the path is present and correct in the
+// ConfigMap that the deployment manifests consume.
 #[test]
 fn configmap_wal_dir_is_not_tmp() {
     let config: ramshield_config::Config =
