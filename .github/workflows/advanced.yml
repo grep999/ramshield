@@ -35,6 +35,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Install bpf-linker for XDP BPF builds
+      - name: Install bpf-linker
+        run: |
+          curl -fsSL -o /tmp/bpf-linker.tar.zst \
+            https://github.com/aya-rs/bpf-linker/releases/download/v0.11.1/bpf-linker-x86_64-unknown-linux-musl.tar.zst
+          tar --zstd -xf /tmp/bpf-linker.tar.zst -C /tmp
+          sudo mv /tmp/bpf-linker /usr/local/bin/
+          bpf-linker --version
       - uses: Swatinem/rust-cache@v2
       # The primary workflow's test-target policy (ci.yml:133): the test
       # step does not use --all-targets, because --all-targets also
