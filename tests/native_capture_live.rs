@@ -84,7 +84,10 @@ struct CaptureGuard {
 
 impl CaptureGuard {
     fn new(shutdown: Arc<AtomicBool>, handle: std::thread::JoinHandle<()>) -> Self {
-        Self { shutdown, handle: Some(handle) }
+        Self {
+            shutdown,
+            handle: Some(handle),
+        }
     }
 
     fn stop(mut self) {
@@ -106,9 +109,7 @@ impl Drop for CaptureGuard {
 
 fn probe_capture() {
     // A refused connection still sends an ingress SYN. Its failure is expected.
-    let script = format!(
-        "timeout 1 bash -c 'echo > /dev/tcp/{HOST_IP}/9' 2>/dev/null || true"
-    );
+    let script = format!("timeout 1 bash -c 'echo > /dev/tcp/{HOST_IP}/9' 2>/dev/null || true");
     let _ = Command::new(IP)
         .args(["netns", "exec", NS, "bash", "-c", &script])
         .status();
