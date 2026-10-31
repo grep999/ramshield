@@ -126,14 +126,28 @@ fn wait_for_socket_packets(metrics: &Metrics, timeout: Duration) {
     panic!("native capture did not report any socket packets within {timeout:?}");
 }
 
-fn wait_for_declared(metrics: &Metrics, minimum: u64, timeout: Duration) {
+fn wait_for_accounting_to_settle(metrics: &Metrics, minimum: u64, timeout: Duration) {
     let deadline = Instant::now() + timeout;
+    let mut settled_since = None;
     while Instant::now() < deadline {
-        if metrics.native_frames_declared.load(Ordering::Relaxed) >= minimum {
-            return;
+        let declared = metrics.native_frames_declared.load(Ordering::Relaxed);
+        let walked = metrics.native_frames_walked.load(Ordering::Relaxed);
+        if declared >= minimum && declared == walked {
+            let since = settled_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= Duration::from_millis(500) {
+                return;
+            }
+        } else {
+            settled_since = None;
         }
         std::thread::sleep(Duration::from_millis(25));
     }
+    panic!(
+        "capture accounting did not settle: declared={}, walked={}, tpacket_rejects={}",
+        metrics.native_frames_declared.load(Ordering::Relaxed),
+        metrics.native_frames_walked.load(Ordering::Relaxed),
+        metrics.native_tpacket_rejects.load(Ordering::Relaxed),
+    );
 }
 
 fn flood_syns() {
@@ -175,7 +189,7 @@ fn live_tpacket_v3_capture_accounts_for_ingress_syns() {
     flood_syns();
     // Wait for the ring walker to account for a substantial part of the
     // workload. The final socket-stat sample happens during orderly shutdown.
-    wait_for_declared(&metrics, SYNS as u64 / 2, Duration::from_secs(3));
+    wait_for_accounting_to_settle(&metrics, SYNS as u64 / 2, Duration::from_secs(5));
     capture.stop();
 
     let emitted = metrics.native_ingest_emitted.load(Ordering::Relaxed);
@@ -194,7 +208,8 @@ fn live_tpacket_v3_capture_accounts_for_ingress_syns() {
         "socket_packets={socket_packets} socket_drops={socket_drops} \
          declared={declared} walked={walked} validated={validated} \
          emitted={emitted} queued={queued} drops={drops} parse={parse} \
-         overlay={overlay} rate={rate}"
+         overlay={overlay} rate={rate} tpacket_rejects={}",
+        metrics.native_tpacket_rejects.load(Ordering::Relaxed)
     );
 
     // Kernel delivered every SYN it captured to the ring (accumulated reads).
