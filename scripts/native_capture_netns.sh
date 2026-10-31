@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 
 # Build once and extract the test executable from Cargo's JSON messages.
 # Find the compiled test binary path.
-BIN=$(cargo test --test native_capture_live --no-run --message-format=json 2>/dev/null \
+BIN=$(cargo test --test native_capture_live --no-run --message-format=json \
   | python3 -c '
 import sys, json
 for line in sys.stdin:
@@ -19,6 +19,10 @@ for line in sys.stdin:
         m = json.loads(line)
     except:
         continue
+    if m.get("reason") == "compiler-message":
+        message = m.get("message", {})
+        if message.get("level") == "error":
+            sys.stderr.write(message.get("rendered") or message.get("message", "") + "\\n")
     if m.get("profile", {}).get("test") and m.get("target", {}).get("name") == "native_capture_live":
         print(m["executable"])
         break
