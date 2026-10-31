@@ -65,9 +65,11 @@ seg_max_bytes = 67108864
 retention_max_bytes = 1073741824
 allow_volatile_fallback = true
 
+# This gate isolates IPC-driven XDP projection. Native capture has its own
+# privileged live test; enabling it here would auto-detect the SYN flood before
+# the explicit IPC block assertion.
 [native_ingest]
-enabled = true
-interface = "$HOST_VETH"
+enabled = false
 
 [ipc]
 tcp_addr = "127.0.0.1:17899"
