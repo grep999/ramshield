@@ -69,3 +69,24 @@ fn the_shipped_configmaps_are_configs_the_daemon_accepts() {
         );
     }
 }
+
+// RS-001: Verify WAL directory path in shipped ConfigMap.
+// The deployment manifest sets WAL to /var/lib/ramshield/wal.
+// This test confirms the path is present and correct in the
+// ConfigMap that the deployment manifests consume.
+#[test]
+fn configmap_wal_dir_is_not_tmp() {
+    let config: ramshield_config::Config =
+        toml::from_str(&configmap_toml("deploy/k8s/configmap.yaml"))
+            .unwrap_or_else(|e| panic!("configmap must parse as config: {e}"));
+    // The deployment manifest sets WAL to /var/lib/ramshield/wal.
+    // It must not be the temporary /tmp path.
+    assert!(
+        !config.wal.dir.contains("/tmp/ramshield-wal"),
+        "configmap WAL dir must not be /tmp/ramshield-wal (temp storage under PrivateTmp)"
+    );
+    assert!(
+        config.wal.dir.contains("/var/lib/ramshield/wal"),
+        "configmap WAL dir must be /var/lib/ramshield/wal (persistent storage)"
+    );
+}
