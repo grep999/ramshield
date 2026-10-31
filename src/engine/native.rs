@@ -37,7 +37,6 @@ const TP_STATUS_KERNEL: u32 = 0;
 #[cfg(target_os = "linux")]
 const TP_STATUS_USER: u32 = 1;
 #[cfg(target_os = "linux")]
-const TPACKET_ALIGNMENT: usize = 16;
 // Linux AF_PACKET uses V3_ALIGNMENT=8 for TPACKET_V3 packet strides.
 const TPACKET_V3_ALIGNMENT: usize = 8;
 
