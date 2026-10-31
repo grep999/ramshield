@@ -38,6 +38,8 @@ const TP_STATUS_KERNEL: u32 = 0;
 const TP_STATUS_USER: u32 = 1;
 #[cfg(target_os = "linux")]
 const TPACKET_ALIGNMENT: usize = 16;
+// Linux AF_PACKET uses V3_ALIGNMENT=8 for TPACKET_V3 packet strides.
+const TPACKET_V3_ALIGNMENT: usize = 8;
 
 #[cfg(target_os = "linux")]
 #[repr(C)]
@@ -1058,7 +1060,7 @@ fn checked_next_tpacket_offset(
         };
     }
     #[allow(clippy::manual_is_multiple_of)]
-    if next % TPACKET_ALIGNMENT != 0 {
+    if next % TPACKET_V3_ALIGNMENT != 0 {
         return Err("tp_next_offset is misaligned");
     }
     let aligned = next;
@@ -1549,6 +1551,11 @@ mod tpacket_tests {
             checked_next_tpacket_offset(48, 48, false, 192, 192),
             Ok(Some(96))
         );
+        // V3 strides are 8-byte aligned; this valid stride is not 16-byte aligned.
+        assert_eq!(
+            checked_next_tpacket_offset(48, 56, false, 192, 192),
+            Ok(Some(104))
+        );
     }
 
     /// Property-style sweep: blk_len must sit in [desc_size, block_size].
@@ -1697,7 +1704,7 @@ mod tpacket_tests {
 
         // next whose *aligned* stride is still shorter than a header.
         for next in 1..hdr {
-            let aligned = (next + TPACKET_ALIGNMENT - 1) & !(TPACKET_ALIGNMENT - 1);
+            let aligned = (next + TPACKET_V3_ALIGNMENT - 1) & !(TPACKET_V3_ALIGNMENT - 1);
             if aligned < hdr {
                 assert!(
                     checked_next_tpacket_offset(off, next, false, blk_len, block_size).is_err(),
@@ -1707,7 +1714,7 @@ mod tpacket_tests {
         }
 
         // Aligned step that lands a full header inside the block.
-        let step = hdr.div_ceil(TPACKET_ALIGNMENT) * TPACKET_ALIGNMENT;
+        let step = hdr.div_ceil(TPACKET_V3_ALIGNMENT) * TPACKET_V3_ALIGNMENT;
         assert!(step >= hdr);
         let next_off = checked_next_tpacket_offset(off, step, false, blk_len, block_size)
             .expect("aligned step");
@@ -2357,7 +2364,7 @@ mod tests {
     const SYN_FRAME_LEN: usize = 54;
     const BLOCK_LEN: usize = 4096;
     const SYN_STRIDE: usize =
-        (HDR_LEN + SYN_FRAME_LEN + TPACKET_ALIGNMENT - 1) & !(TPACKET_ALIGNMENT - 1);
+        (HDR_LEN + SYN_FRAME_LEN + TPACKET_V3_ALIGNMENT - 1) & !(TPACKET_V3_ALIGNMENT - 1);
 
     /// 16-byte-aligned backing store for a synthetic TPACKET_V3 block.
     #[repr(align(16))]
