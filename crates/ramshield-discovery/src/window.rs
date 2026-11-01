@@ -6,11 +6,21 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::Path,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 const MAX_SERVICE_ID_BYTES: usize = 128;
 const MAX_WINDOW_SECONDS: u32 = 86_400;
 const MAX_LEDGER_ENTRIES: usize = 1_000_000;
+
+/// Persistence format version for forward compatibility.
+const PERSISTENCE_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PersistenceEnvelope {
+    version: u32,
+    entries: Vec<(WindowKey, WindowState)>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct WindowKey {
@@ -150,6 +160,8 @@ impl WindowLedger {
     }
 
     /// Atomic snapshot persistence: temp file, file fsync, rename, directory fsync.
+    /// Uses a unique temporary filename based on timestamp to avoid conflicts
+    /// with concurrent flushes to the same path.
     pub fn flush(&self, path: impl AsRef<Path>) -> io::Result<()> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
@@ -160,11 +172,22 @@ impl WindowLedger {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let bytes = serde_json::to_vec(&pairs)
+        let envelope = PersistenceEnvelope {
+            version: PERSISTENCE_VERSION,
+            entries: pairs,
+        };
+        let bytes = serde_json::to_vec(&envelope)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        // Unique temp file using nanosecond timestamp to avoid conflicts
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let mut tmp = path.to_path_buf();
-        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("json");
-        tmp.set_extension(format!("{ext}.tmp"));
+        tmp.set_file_name(format!(".ledger_tmp_{}.json", nanos));
+        if let Some(parent) = tmp.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let mut file = OpenOptions::new()
             .create(true)
             .truncate(true)
@@ -181,24 +204,40 @@ impl WindowLedger {
     }
 
     /// Reconstruct a WindowLedger from a persisted snapshot.
+    /// Validates capacity, persistence format version, duplicate keys,
+    /// and all WindowKey invariants. Fails closed on any corruption.
     pub fn reopen(path: impl AsRef<Path>, max_entries: usize) -> Result<Self, WindowError> {
+        if max_entries == 0 || max_entries > MAX_LEDGER_ENTRIES {
+            return Err(WindowError::InvalidCapacity);
+        }
         let path = path.as_ref();
         if !path.exists() {
-            return Err(WindowError::InvalidCapacity);
+            return Err(WindowError::Io("persistence file not found".into()));
         }
         let bytes = fs::read(path).map_err(|e| WindowError::Io(e.to_string()))?;
-        let pairs: Vec<(WindowKey, WindowState)> =
+        let envelope: PersistenceEnvelope =
             serde_json::from_slice(&bytes).map_err(|e| WindowError::Io(e.to_string()))?;
-        let entries: BTreeMap<WindowKey, WindowState> = pairs.into_iter().collect();
-        if entries.len() > max_entries {
+        if envelope.version != PERSISTENCE_VERSION {
+            return Err(WindowError::Io(format!(
+                "unsupported persistence version {}",
+                envelope.version
+            )));
+        }
+        if envelope.entries.len() > max_entries {
             return Err(WindowError::InvalidCapacity);
         }
-        for key in entries.keys() {
+        // Detect duplicate keys — fail closed rather than silently overwriting.
+        let mut seen = BTreeMap::new();
+        for (key, state) in envelope.entries {
+            if seen.contains_key(&key) {
+                return Err(WindowError::Io("duplicate keys in persistence".into()));
+            }
             key.validate()?;
+            seen.insert(key, state);
         }
         Ok(Self {
             max_entries,
-            entries,
+            entries: seen,
         })
     }
 }
@@ -409,5 +448,280 @@ mod tests {
         assert_eq!(recovered.len(), 2);
         assert_eq!(recovered.entries.len(), 2);
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// Restart semantics: evicted entries must stay evicted after reopen,
+    /// and stale late arrivals must still be rejected.
+    #[test]
+    fn restart_after_eviction_preserves_rejection() {
+        let p = std::env::temp_dir().join(format!(
+            "ledger_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut ledger = WindowLedger::new(2).unwrap();
+        assert_eq!(
+            ledger
+                .record(observation(
+                    WindowState::Observed {
+                        packets: 1,
+                        bytes: 1
+                    },
+                    0
+                ))
+                .unwrap(),
+            RecordOutcome::Inserted
+        );
+        assert_eq!(
+            ledger
+                .record(observation(
+                    WindowState::Observed {
+                        packets: 1,
+                        bytes: 1
+                    },
+                    60
+                ))
+                .unwrap(),
+            RecordOutcome::Inserted
+        );
+        assert_eq!(
+            ledger
+                .record(observation(
+                    WindowState::Observed {
+                        packets: 1,
+                        bytes: 1
+                    },
+                    120
+                ))
+                .unwrap(),
+            RecordOutcome::InsertedAfterEviction
+        );
+        // The window at start=0 is now evicted; reinserting it must be rejected.
+        assert_eq!(
+            ledger
+                .record(observation(
+                    WindowState::Observed {
+                        packets: 1,
+                        bytes: 1
+                    },
+                    0
+                ))
+                .unwrap(),
+            RecordOutcome::RejectedTooOld
+        );
+        ledger.flush(&p).unwrap();
+        let recovered = WindowLedger::reopen(&p, 2).unwrap();
+        assert_eq!(recovered.len(), 2);
+        // Same rejection must hold after recovery.
+        let key_start_0 = WindowKey {
+            service_id: "billing-worker".into(),
+            window_start_secs: 0,
+            window_seconds: 60,
+        };
+        assert!(!recovered.entries.contains_key(&key_start_0));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Invalid capacity must be rejected on reopen.
+    #[test]
+    fn reopen_rejects_invalid_capacity() {
+        let p = std::env::temp_dir().join(format!(
+            "ledger_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut ledger = WindowLedger::new(8).unwrap();
+        assert_eq!(
+            ledger
+                .record(observation(
+                    WindowState::Observed {
+                        packets: 1,
+                        bytes: 1
+                    },
+                    0
+                ))
+                .unwrap(),
+            RecordOutcome::Inserted
+        );
+        ledger.flush(&p).unwrap();
+        // Zero capacity invalid.
+        assert!(matches!(
+            WindowLedger::reopen(&p, 0),
+            Err(WindowError::InvalidCapacity)
+        ));
+        // Excessive capacity invalid.
+        assert!(matches!(
+            WindowLedger::reopen(&p, MAX_LEDGER_ENTRIES + 1),
+            Err(WindowError::InvalidCapacity)
+        ));
+        // Valid capacity works.
+        assert!(WindowLedger::reopen(&p, 8).is_ok());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Truncated JSON must fail closed.
+    #[test]
+    fn reopen_rejects_truncated_json() {
+        let p = std::env::temp_dir().join(format!(
+            "ledger_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&p, b"{\"version\":1,\"entries\":[").unwrap();
+        assert!(matches!(
+            WindowLedger::reopen(&p, 8),
+            Err(WindowError::Io(_))
+        ));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Unknown persistence version must fail closed.
+    #[test]
+    fn reopen_rejects_unknown_version() {
+        let p = std::env::temp_dir().join(format!(
+            "ledger_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let bad: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        let mut bad = bad.clone();
+        bad.insert("version".into(), serde_json::json!(999));
+        bad.insert("entries".into(), serde_json::json!([]));
+        let bytes = serde_json::to_vec(&bad).unwrap();
+        fs::write(&p, &bytes).unwrap();
+        assert!(matches!(
+            WindowLedger::reopen(&p, 8),
+            Err(WindowError::Io(_))
+        ));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Duplicate keys in persistence must fail closed rather than overwrite.
+    #[test]
+    fn reopen_rejects_duplicate_keys() {
+        let p = std::env::temp_dir().join(format!(
+            "ledger_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let key = WindowKey {
+            service_id: "billing-worker".into(),
+            window_start_secs: 0,
+            window_seconds: 60,
+        };
+        let first_key = key.clone();
+        let second_key = key;
+        let first = WindowObservation {
+            key: first_key,
+            state: WindowState::Observed {
+                packets: 10,
+                bytes: 100,
+            },
+        };
+        let second = WindowObservation {
+            key: second_key,
+            state: WindowState::Observed {
+                packets: 20,
+                bytes: 200,
+            },
+        };
+        // Build JSON payload with duplicate keys.
+        let duplicate_payload = serde_json::json!({
+            "version": 1,
+            "entries": [
+                (&first.key, &first.state),
+                (&second.key, &second.state),
+            ]
+        });
+        let json = serde_json::to_string(&duplicate_payload).unwrap();
+        fs::write(&p, json).unwrap();
+        // Duplicate keys should fail closed.
+        assert!(matches!(
+            WindowLedger::reopen(&p, 8),
+            Err(WindowError::Io(_))
+        ));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Invalid WindowKey in persistence must fail closed.
+    #[test]
+    fn reopen_rejects_invalid_window_key() {
+        let p = std::env::temp_dir().join(format!(
+            "ledger_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Empty service_id is invalid.
+        let json = r#"{"version":1,"entries":[[{"service_id":"","window_start_secs":0,"window_seconds":60},{"Observed":{"packets":1,"bytes":1}}]]}"#;
+        fs::write(&p, json).unwrap();
+        assert!(matches!(
+            WindowLedger::reopen(&p, 8),
+            Err(WindowError::Io(_))
+        ));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Over-capacity snapshot must fail closed.
+    #[test]
+    fn reopen_rejects_over_capacity() {
+        let p = std::env::temp_dir().join(format!(
+            "ledger_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let entries: Vec<WindowObservation> = (0..5u64)
+            .map(|i| WindowObservation {
+                key: WindowKey {
+                    service_id: format!("svc-{i}"),
+                    window_start_secs: i * 3600,
+                    window_seconds: 60,
+                },
+                state: WindowState::Observed {
+                    packets: 1,
+                    bytes: 1,
+                },
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "version": 1,
+            "entries": entries.iter().map(|e| (&e.key, &e.state)).collect::<Vec<_>>()
+        });
+        let json = serde_json::to_string(&payload).unwrap();
+        fs::write(&p, json).unwrap();
+        assert!(matches!(
+            WindowLedger::reopen(&p, 2),
+            Err(WindowError::InvalidCapacity)
+        ));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Missing persistence file must return Io error, not InvalidCapacity.
+    #[test]
+    fn reopen_rejects_missing_file() {
+        let p = std::env::temp_dir().join(format!(
+            "nonexistent_ledger_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert!(matches!(
+            WindowLedger::reopen(&p, 8),
+            Err(WindowError::Io(_))
+        ));
     }
 }
