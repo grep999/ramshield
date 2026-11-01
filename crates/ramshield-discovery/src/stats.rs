@@ -99,7 +99,6 @@ pub fn fit_count_model(n: u64, mean: f64, variance: f64) -> CountModelFit {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

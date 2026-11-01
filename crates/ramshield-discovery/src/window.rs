@@ -264,7 +264,7 @@ mod tests {
                         packets: 1,
                         bytes: 1
                     },
-                    30
+                    0
                 ))
                 .unwrap(),
             RecordOutcome::RejectedTooOld
