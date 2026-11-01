@@ -95,7 +95,7 @@ ramshield-config = { path = "crates/ramshield-config", version = "0.1.0" }
 ramshield-storage = { path = "crates/ramshield-storage", version = "0.1.0" }
 ramshield-metrics = { path = "crates/ramshield-metrics", version = "0.1.0" }
 ramshield-detection = { path = "crates/ramshield-detection", version = "0.1.0" }
-ramshield-discovery = { path = "crates/ramshield-discovery", version = "0.1.0" }
+ramshield-learning = { package = "ramshield-learning", path = "crates/ramshield-discovery", version = "0.1.0" }
 ramshield-enforcement = { path = "crates/ramshield-enforcement", version = "0.1.0", default-features = false }
 ramshield-forecasting = { path = "crates/ramshield-forecasting", version = "0.1.0" }
 ramshield-protocol = { path = "crates/ramshield-protocol", version = "0.1.0" }
