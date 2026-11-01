@@ -80,4 +80,14 @@ mod tests {
     fn keeps_underdispersion_explicit() {
         assert!(matches!(fit_count_model(10, 100.0, 20.0), CountModelFit::Underdispersed { .. }));
     }
+
+    #[test]
+    fn rejects_invalid_and_insufficient_model_inputs() {
+        assert!(matches!(fit_count_model(1, 100.0, 100.0), CountModelFit::InsufficientData));
+        assert!(matches!(fit_count_model(10, f64::NAN, 100.0), CountModelFit::InsufficientData));
+        let mut moments = CountMoments::default();
+        moments.push(f64::NAN);
+        assert_eq!(moments.observations(), 0);
+        assert!(moments.is_valid());
+    }
 }
