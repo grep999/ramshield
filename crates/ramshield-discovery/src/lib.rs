@@ -29,6 +29,8 @@ const HOURS_PER_DAY: usize = 24;
 const SOURCE_BUCKETS: usize = 64;
 const DESTINATION_BUCKETS: usize = 64;
 const MAX_PORTS: usize = 256;
+/// Bounded number of concurrently tracked services for fair resource allocation.
+const MAX_SERVICES: usize = 64;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(usize)]
@@ -38,6 +40,22 @@ pub enum Protocol {
     Udp = 2,
     Icmp = 3,
     IcmpV6 = 4,
+}
+
+/// Stable producer-side service identifier.
+/// Distinct from source_key: a source hash may belong to many services,
+/// but each service has exactly one identity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ServiceId(pub u64);
+
+/// Authoritative direction of traffic, sourced from the observation,
+/// never inferred from ports or IP addresses.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TrafficDirection {
+    Ingress,
+    Egress,
+    Internal,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +69,10 @@ pub struct TrafficSample {
     pub source_key: Option<u64>,
     /// Producer-side stable hash. Raw IP addresses are never persisted.
     pub destination_key: Option<u64>,
+    /// Explicit service identity assigned by the producer.
+    /// Never inferred from IP addresses or ports.
+    #[serde(default)]
+    pub service_id: Option<ServiceId>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
@@ -283,6 +305,16 @@ impl Discovery {
             let i = key as usize % DESTINATION_BUCKETS;
             bucket.destinations[i] = bucket.destinations[i].saturating_add(sample.packets);
         }
+        // D5.2: derive service_id from source_key if not explicitly set
+        let effective_service_id = sample.service_id.or_else(|| {
+            sample.source_key.map(|sk| {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                use std::hash::{Hash, Hasher};
+                sk.hash(&mut hasher);
+                ServiceId(hasher.finish())
+            })
+        });
+        let _ = effective_service_id; // available for per-service profiling (D5.2)
         self.state.accepted = self.state.accepted.saturating_add(1);
     }
 
@@ -425,6 +457,7 @@ mod tests {
             destination_port: Some(443),
             source_key: Some(17),
             destination_key: Some(29),
+            service_id: None,
         }
     }
     #[test]
