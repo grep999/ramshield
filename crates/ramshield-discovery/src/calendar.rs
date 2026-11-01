@@ -396,4 +396,16 @@ mod tests {
         let _ = fs::remove_file(p);
     }
 
+
+    #[test]
+    fn one_observation_is_never_treated_as_a_baseline() {
+        let p = path();
+        let mut c = TrafficCalendar::open(&p).unwrap();
+        let t = 1_704_067_200u64;
+        c.observe_hour(t, 100, 10_000);
+        let assessment = c.assess(t + 4 * 7 * 86_400, 1_000, 1, 3.0);
+        assert_eq!(assessment.kind, CalendarAssessmentKind::InsufficientData);
+        let _ = fs::remove_file(p);
+    }
+
 }
