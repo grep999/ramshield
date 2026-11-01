@@ -160,6 +160,8 @@ pub struct CardinalityEstimate {
 /// Fixed-size bitmap; bounded memory regardless of distinct key count.
 /// Accurate at low-to-moderate cardinalities; error grows as the bitmap fills.
 /// Only producer-side hashed keys are observed — no raw IP addresses.
+/// Hash quality matters: poor distribution biases estimates. Prefer stable,
+/// well-distributed hashes from the capture/producer layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CardinalityEstimator {
     bitmap: Vec<u64>,
@@ -199,6 +201,10 @@ impl CardinalityEstimator {
     }
 
     /// Return the current estimate with approximate standard error.
+    /// When the bitmap saturates (v == 0), `estimate` is `u64::MAX` and
+    /// `standard_error` is `f64::INFINITY` — treat results as unreliable.
+    /// `standard_error` is an approximate heuristic, not a calibrated
+    /// confidence interval.
     pub fn estimate(&self) -> CardinalityEstimate {
         let m = self.bit_count as f64;
         let v = self.zero_bits() as f64;
@@ -207,7 +213,7 @@ impl CardinalityEstimator {
         } else {
             (-m * (v / m).ln()) as u64
         };
-        // Approximate standard error for linear counting.
+        // Approximate standard error for linear counting — heuristic only.
         let se = if v > 0.0 {
             estimate as f64 / v.sqrt()
         } else {
@@ -218,6 +224,12 @@ impl CardinalityEstimator {
             standard_error: se,
             observations: self.observed,
         }
+    }
+
+    /// True when the bitmap has filled (no zero bits remaining).
+    /// Estimates at this point are unreliable — the estimator has saturated.
+    pub fn saturated(&self) -> bool {
+        self.zero_bits() == 0
     }
 
     /// Reset the estimator to empty state.
