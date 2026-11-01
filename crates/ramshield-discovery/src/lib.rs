@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{fs::{self, File, OpenOptions}, io::{self, Write}, path::{Path, PathBuf}};
 
 mod calendar;
-pub use calendar::{CalendarSnapshot, CalendarSlotSummary, ExpectedWorkload, Recurrence, TrafficCalendar, WorkloadDeclaration};
+pub use calendar::{CalendarAssessment, CalendarAssessmentKind, CalendarSnapshot, CalendarSlotSummary, ExpectedWorkload, Recurrence, TrafficCalendar, WorkloadDeclaration};
 
 const SCHEMA: u32 = 1;
 const HOURS_PER_DAY: usize = 24;
