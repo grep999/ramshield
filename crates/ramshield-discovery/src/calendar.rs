@@ -65,12 +65,15 @@ impl WorkloadDeclaration {
         let hour_of_day = ((timestamp_secs / 3600) % 24) as u8;
         let offset = (hour_of_day + 24 - self.start_hour) % 24;
         if offset >= self.duration_hours { return false; }
-        let days = timestamp_secs / 86_400;
+        // Evaluate recurrence against the scheduled start day, not the
+        // current day, so windows crossing midnight remain active.
+        let start_secs = timestamp_secs.saturating_sub(u64::from(offset) * 3600);
+        let days = start_secs / 86_400;
         match self.recurrence {
             Recurrence::Daily => true,
             Recurrence::Weekly { weekday } => ((days + 3) % 7) as u8 == weekday,
-            Recurrence::MonthlyDay { day } => utc_day_of_month(timestamp_secs) == Some(day),
-            Recurrence::MonthEnd => is_month_end(timestamp_secs),
+            Recurrence::MonthlyDay { day } => utc_day_of_month(start_secs) == Some(day),
+            Recurrence::MonthEnd => is_month_end(start_secs),
             Recurrence::EveryNDays { interval_days, anchor_day } =>
                 days >= anchor_day && (days - anchor_day) % u64::from(interval_days) == 0,
         }
