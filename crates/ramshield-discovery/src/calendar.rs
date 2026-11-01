@@ -488,13 +488,23 @@ mod tests {
         let p = path();
         let mut c = TrafficCalendar::open(&p).unwrap();
         c.declare_workload(WorkloadDeclaration {
-            id: "month-end-billing".into(), description: "Monthly billing run".into(),
-            recurrence: Recurrence::MonthEnd, start_hour: 22, duration_hours: 3,
-            expected_services: vec!["billing-worker".into()], declared_by: "operator".into(),
-            declared_at_secs: 1_700_000_000, notes: None,
-        }).unwrap();
+            id: "month-end-billing".into(),
+            description: "Monthly billing run".into(),
+            recurrence: Recurrence::MonthEnd,
+            start_hour: 22,
+            duration_hours: 3,
+            expected_services: vec!["billing-worker".into()],
+            declared_by: "operator".into(),
+            declared_at_secs: 1_700_000_000,
+            notes: None,
+        })
+        .unwrap();
         let feb_29_2024_23 = 1_709_247_600;
-        assert!(c.expected_workloads(feb_29_2024_23).iter().any(|w| w.id == "month-end-billing" && w.active));
+        assert!(
+            c.expected_workloads(feb_29_2024_23)
+                .iter()
+                .any(|w| w.id == "month-end-billing" && w.active)
+        );
         c.observe_hour(feb_29_2024_23, 100, 10_000);
         assert!(c.snapshot().month.iter().any(|s| s.observations > 0));
         c.flush().unwrap();
@@ -502,6 +512,7 @@ mod tests {
         assert_eq!(reopened.snapshot().declarations.len(), 1);
         let _ = fs::remove_file(p);
     }
+
     #[test]
     fn weekly_schedule_uses_monday_zero() {
         let declaration = WorkloadDeclaration {
