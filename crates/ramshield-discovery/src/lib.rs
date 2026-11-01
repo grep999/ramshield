@@ -4,14 +4,24 @@
 //! them atomically. It never changes live configuration or network state.
 
 use serde::{Deserialize, Serialize};
-use std::{fs::{self, File, OpenOptions}, io::{self, Write}, path::{Path, PathBuf}};
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 
 mod calendar;
 mod stats;
 mod window;
-pub use stats::{fit_count_model, CountModelFit, CountMoments};
-pub use window::{MissingReason, RecordOutcome, WindowError, WindowKey, WindowLedger, WindowObservation, WindowState};
-pub use calendar::{CalendarAssessment, CalendarAssessmentKind, CalendarSnapshot, CalendarSlotSummary, ExpectedWorkload, Recurrence, TrafficCalendar, WorkloadDeclaration};
+pub use calendar::{
+    CalendarAssessment, CalendarAssessmentKind, CalendarSlotSummary, CalendarSnapshot,
+    ExpectedWorkload, Recurrence, TrafficCalendar, WorkloadDeclaration,
+};
+pub use stats::{CountModelFit, CountMoments, fit_count_model};
+pub use window::{
+    MissingReason, RecordOutcome, WindowError, WindowKey, WindowLedger, WindowObservation,
+    WindowState,
+};
 
 const SCHEMA: u32 = 1;
 const HOURS_PER_DAY: usize = 24;
@@ -21,7 +31,13 @@ const MAX_PORTS: usize = 256;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(usize)]
-pub enum Protocol { Other = 0, Tcp = 1, Udp = 2, Icmp = 3, IcmpV6 = 4 }
+pub enum Protocol {
+    Other = 0,
+    Tcp = 1,
+    Udp = 2,
+    Icmp = 3,
+    IcmpV6 = 4,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrafficSample {
@@ -54,84 +70,154 @@ pub struct DiscoveryConfig {
     pub max_ports_per_hour: usize,
 }
 impl Default for DiscoveryConfig {
-    fn default() -> Self { Self { observation_days: 90, max_ports_per_hour: 64 } }
+    fn default() -> Self {
+        Self {
+            observation_days: 90,
+            max_ports_per_hour: 64,
+        }
+    }
 }
 impl DiscoveryConfig {
     fn validate(&self) -> io::Result<()> {
         if !(1..=365).contains(&self.observation_days) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "observation_days must be 1..=365"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "observation_days must be 1..=365",
+            ));
         }
         if !(1..=MAX_PORTS).contains(&self.max_ports_per_hour) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "max_ports_per_hour must be 1..=256"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "max_ports_per_hour must be 1..=256",
+            ));
         }
         Ok(())
     }
-    fn bucket_count(&self) -> usize { usize::from(self.observation_days) * HOURS_PER_DAY }
+    fn bucket_count(&self) -> usize {
+        usize::from(self.observation_days) * HOURS_PER_DAY
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct PortCounter { port: u16, count: u64, error_bound: u64 }
+struct PortCounter {
+    port: u16,
+    count: u64,
+    error_bound: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct HourBucket {
-    hour: u64, samples: u64, packets: u64, bytes: u64,
-    protocols: [u64; 5], ports: Vec<PortCounter>,
-    sources: Vec<u64>, destinations: Vec<u64>,
-    capture_drops: u64, ingest_drops: u64, malformed: u64,
-    queue_depth_peak: u64, queue_capacity_peak: u64,
-    cpu_millis: u64, memory_bytes_peak: u64,
+    hour: u64,
+    samples: u64,
+    packets: u64,
+    bytes: u64,
+    protocols: [u64; 5],
+    ports: Vec<PortCounter>,
+    sources: Vec<u64>,
+    destinations: Vec<u64>,
+    capture_drops: u64,
+    ingest_drops: u64,
+    malformed: u64,
+    queue_depth_peak: u64,
+    queue_capacity_peak: u64,
+    cpu_millis: u64,
+    memory_bytes_peak: u64,
 }
 impl HourBucket {
     fn new(hour: u64) -> Self {
-        Self { hour, samples: 0, packets: 0, bytes: 0, protocols: [0; 5],
-            ports: Vec::new(), sources: vec![0; SOURCE_BUCKETS],
-            destinations: vec![0; DESTINATION_BUCKETS], capture_drops: 0,
-            ingest_drops: 0, malformed: 0, queue_depth_peak: 0,
-            queue_capacity_peak: 0, cpu_millis: 0, memory_bytes_peak: 0 }
+        Self {
+            hour,
+            samples: 0,
+            packets: 0,
+            bytes: 0,
+            protocols: [0; 5],
+            ports: Vec::new(),
+            sources: vec![0; SOURCE_BUCKETS],
+            destinations: vec![0; DESTINATION_BUCKETS],
+            capture_drops: 0,
+            ingest_drops: 0,
+            malformed: 0,
+            queue_depth_peak: 0,
+            queue_capacity_peak: 0,
+            cpu_millis: 0,
+            memory_bytes_peak: 0,
+        }
     }
     fn add_port(&mut self, port: u16, limit: usize) {
         if let Some(p) = self.ports.iter_mut().find(|p| p.port == port) {
-            p.count = p.count.saturating_add(1); return;
+            p.count = p.count.saturating_add(1);
+            return;
         }
         if self.ports.len() < limit {
-            self.ports.push(PortCounter { port, count: 1, error_bound: 0 }); return;
+            self.ports.push(PortCounter {
+                port,
+                count: 1,
+                error_bound: 0,
+            });
+            return;
         }
         if let Some((idx, min)) = self.ports.iter().enumerate().min_by_key(|(_, p)| p.count) {
             let bound = min.count;
-            self.ports[idx] = PortCounter { port, count: bound.saturating_add(1), error_bound: bound };
+            self.ports[idx] = PortCounter {
+                port,
+                count: bound.saturating_add(1),
+                error_bound: bound,
+            };
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedState {
-    schema: u32, observation_days: u16, buckets: Vec<Option<HourBucket>>,
-    accepted: u64, too_old: u64,
+    schema: u32,
+    observation_days: u16,
+    buckets: Vec<Option<HourBucket>>,
+    accepted: u64,
+    too_old: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PortSummary { pub port: u16, pub count: u64, pub error_bound: u64 }
+pub struct PortSummary {
+    pub port: u16,
+    pub count: u64,
+    pub error_bound: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HourSummary {
-    pub hour: u64, pub samples: u64, pub packets: u64, pub bytes: u64,
-    pub protocols: [u64; 5], pub top_ports: Vec<PortSummary>,
+    pub hour: u64,
+    pub samples: u64,
+    pub packets: u64,
+    pub bytes: u64,
+    pub protocols: [u64; 5],
+    pub top_ports: Vec<PortSummary>,
     pub source_distribution: Vec<u64>,
     pub destination_distribution: Vec<u64>,
-    pub capture_drops: u64, pub ingest_drops: u64, pub malformed_observations: u64,
-    pub queue_depth_peak: u64, pub queue_capacity_peak: u64,
-    pub cpu_millis: u64, pub memory_bytes_peak: u64,
+    pub capture_drops: u64,
+    pub ingest_drops: u64,
+    pub malformed_observations: u64,
+    pub queue_depth_peak: u64,
+    pub queue_capacity_peak: u64,
+    pub cpu_millis: u64,
+    pub memory_bytes_peak: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoverySnapshot {
-    pub schema_version: u32, pub observation_days: u16,
-    pub observations_accepted: u64, pub observations_too_old: u64,
-    pub oldest_hour: Option<u64>, pub newest_hour: Option<u64>,
+    pub schema_version: u32,
+    pub observation_days: u16,
+    pub observations_accepted: u64,
+    pub observations_too_old: u64,
+    pub oldest_hour: Option<u64>,
+    pub newest_hour: Option<u64>,
     pub hours: Vec<HourSummary>,
 }
 
-pub struct Discovery { config: DiscoveryConfig, state: PersistedState, path: PathBuf }
+pub struct Discovery {
+    config: DiscoveryConfig,
+    state: PersistedState,
+    path: PathBuf,
+}
 
 impl Discovery {
     pub fn open(path: impl AsRef<Path>, config: DiscoveryConfig) -> io::Result<Self> {
@@ -141,21 +227,35 @@ impl Discovery {
             let bytes = fs::read(&path)?;
             let state: PersistedState = serde_json::from_slice(&bytes)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            if state.schema != SCHEMA || state.observation_days != config.observation_days
+            if state.schema != SCHEMA
+                || state.observation_days != config.observation_days
                 || state.buckets.len() != config.bucket_count()
                 || state.buckets.iter().flatten().any(|bucket| {
                     bucket.sources.len() != SOURCE_BUCKETS
                         || bucket.destinations.len() != DESTINATION_BUCKETS
                         || bucket.ports.len() > config.max_ports_per_hour
-                }) {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "discovery state schema/configuration mismatch"));
+                })
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "discovery state schema/configuration mismatch",
+                ));
             }
             state
         } else {
-            PersistedState { schema: SCHEMA, observation_days: config.observation_days,
-                buckets: vec![None; config.bucket_count()], accepted: 0, too_old: 0 }
+            PersistedState {
+                schema: SCHEMA,
+                observation_days: config.observation_days,
+                buckets: vec![None; config.bucket_count()],
+                accepted: 0,
+                too_old: 0,
+            }
         };
-        Ok(Self { config, state, path })
+        Ok(Self {
+            config,
+            state,
+            path,
+        })
     }
 
     /// Aggregate a normalized observation. No enforcement or detection action is possible here.
@@ -163,14 +263,17 @@ impl Discovery {
         let hour = sample.timestamp_secs / 3600;
         let port_limit = self.config.max_ports_per_hour;
         let Some(bucket) = self.bucket_mut(hour) else {
-            self.state.too_old = self.state.too_old.saturating_add(1); return;
+            self.state.too_old = self.state.too_old.saturating_add(1);
+            return;
         };
         bucket.samples = bucket.samples.saturating_add(1);
         bucket.packets = bucket.packets.saturating_add(sample.packets);
         bucket.bytes = bucket.bytes.saturating_add(sample.bytes);
         let protocol = sample.protocol as usize;
         bucket.protocols[protocol] = bucket.protocols[protocol].saturating_add(sample.packets);
-        if let Some(port) = sample.destination_port { bucket.add_port(port, port_limit); }
+        if let Some(port) = sample.destination_port {
+            bucket.add_port(port, port_limit);
+        }
         if let Some(key) = sample.source_key {
             let i = key as usize % SOURCE_BUCKETS;
             bucket.sources[i] = bucket.sources[i].saturating_add(sample.packets);
@@ -183,10 +286,14 @@ impl Discovery {
     }
 
     pub fn observe_health(&mut self, sample: HealthSample) {
-        let Some(bucket) = self.bucket_mut(sample.timestamp_secs / 3600) else { return; };
+        let Some(bucket) = self.bucket_mut(sample.timestamp_secs / 3600) else {
+            return;
+        };
         bucket.capture_drops = bucket.capture_drops.saturating_add(sample.capture_drops);
         bucket.ingest_drops = bucket.ingest_drops.saturating_add(sample.ingest_drops);
-        bucket.malformed = bucket.malformed.saturating_add(sample.malformed_observations);
+        bucket.malformed = bucket
+            .malformed
+            .saturating_add(sample.malformed_observations);
         bucket.queue_depth_peak = bucket.queue_depth_peak.max(sample.queue_depth);
         bucket.queue_capacity_peak = bucket.queue_capacity_peak.max(sample.queue_capacity);
         bucket.cpu_millis = bucket.cpu_millis.saturating_add(sample.cpu_millis);
@@ -195,47 +302,88 @@ impl Discovery {
 
     /// Atomic snapshot persistence: temp file, file fsync, rename, directory fsync.
     pub fn flush(&self) -> io::Result<()> {
-        if let Some(parent) = self.path.parent() { fs::create_dir_all(parent)?; }
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let bytes = serde_json::to_vec(&self.state)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let mut tmp = self.path.clone();
-        let ext = self.path.extension().and_then(|s| s.to_str()).unwrap_or("json");
+        let ext = self
+            .path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("json");
         tmp.set_extension(format!("{ext}.tmp"));
-        let mut file = OpenOptions::new().create(true).truncate(true).write(true).open(&tmp)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&tmp)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
         drop(file);
         fs::rename(&tmp, &self.path)?;
-        if let Some(parent) = self.path.parent() { File::open(parent)?.sync_all()?; }
+        if let Some(parent) = self.path.parent() {
+            File::open(parent)?.sync_all()?;
+        }
         Ok(())
     }
 
     pub fn snapshot(&self) -> DiscoverySnapshot {
         let mut buckets: Vec<_> = self.state.buckets.iter().flatten().collect();
         buckets.sort_by_key(|b| b.hour);
-        let hours = buckets.iter().map(|b| HourSummary {
-            hour: b.hour, samples: b.samples, packets: b.packets, bytes: b.bytes,
-            protocols: b.protocols,
-            top_ports: b.ports.iter().map(|p| PortSummary { port: p.port, count: p.count, error_bound: p.error_bound }).collect(),
-            source_distribution: b.sources.clone(), destination_distribution: b.destinations.clone(),
-            capture_drops: b.capture_drops, ingest_drops: b.ingest_drops,
-            malformed_observations: b.malformed, queue_depth_peak: b.queue_depth_peak,
-            queue_capacity_peak: b.queue_capacity_peak, cpu_millis: b.cpu_millis,
-            memory_bytes_peak: b.memory_bytes_peak,
-        }).collect();
-        DiscoverySnapshot { schema_version: SCHEMA, observation_days: self.config.observation_days,
-            observations_accepted: self.state.accepted, observations_too_old: self.state.too_old,
-            oldest_hour: buckets.first().map(|b| b.hour), newest_hour: buckets.last().map(|b| b.hour), hours }
+        let hours = buckets
+            .iter()
+            .map(|b| HourSummary {
+                hour: b.hour,
+                samples: b.samples,
+                packets: b.packets,
+                bytes: b.bytes,
+                protocols: b.protocols,
+                top_ports: b
+                    .ports
+                    .iter()
+                    .map(|p| PortSummary {
+                        port: p.port,
+                        count: p.count,
+                        error_bound: p.error_bound,
+                    })
+                    .collect(),
+                source_distribution: b.sources.clone(),
+                destination_distribution: b.destinations.clone(),
+                capture_drops: b.capture_drops,
+                ingest_drops: b.ingest_drops,
+                malformed_observations: b.malformed,
+                queue_depth_peak: b.queue_depth_peak,
+                queue_capacity_peak: b.queue_capacity_peak,
+                cpu_millis: b.cpu_millis,
+                memory_bytes_peak: b.memory_bytes_peak,
+            })
+            .collect();
+        DiscoverySnapshot {
+            schema_version: SCHEMA,
+            observation_days: self.config.observation_days,
+            observations_accepted: self.state.accepted,
+            observations_too_old: self.state.too_old,
+            oldest_hour: buckets.first().map(|b| b.hour),
+            newest_hour: buckets.last().map(|b| b.hour),
+            hours,
+        }
     }
 
     fn bucket_mut(&mut self, hour: u64) -> Option<&mut HourBucket> {
         if let Some(newest) = self.state.buckets.iter().flatten().map(|b| b.hour).max() {
             let oldest = newest.saturating_sub(self.config.bucket_count() as u64 - 1);
-            if hour < oldest { return None; }
+            if hour < oldest {
+                return None;
+            }
         }
         let len = self.state.buckets.len();
         let index = (hour % len as u64) as usize;
-        if self.state.buckets[index].as_ref().is_none_or(|b| b.hour != hour) {
+        if self.state.buckets[index]
+            .as_ref()
+            .is_none_or(|b| b.hour != hour)
+        {
             self.state.buckets[index] = Some(HourBucket::new(hour));
         }
         self.state.buckets[index].as_mut()
@@ -247,12 +395,22 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
     fn path() -> PathBuf {
-        let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let n = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         std::env::temp_dir().join(format!("rs-discovery-{n}.json"))
     }
     fn sample(t: u64) -> TrafficSample {
-        TrafficSample { timestamp_secs: t, packets: 3, bytes: 300, protocol: Protocol::Tcp,
-            destination_port: Some(443), source_key: Some(17), destination_key: Some(29) }
+        TrafficSample {
+            timestamp_secs: t,
+            packets: 3,
+            bytes: 300,
+            protocol: Protocol::Tcp,
+            destination_port: Some(443),
+            source_key: Some(17),
+            destination_key: Some(29),
+        }
     }
     #[test]
     fn aggregates_protocol_port_and_distribution() {
@@ -270,7 +428,11 @@ mod tests {
     #[test]
     fn persisted_state_recovers_after_reopen() {
         let p = path();
-        { let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap(); d.observe(sample(1_700_000_000)); d.flush().unwrap(); }
+        {
+            let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+            d.observe(sample(1_700_000_000));
+            d.flush().unwrap();
+        }
         let d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
         assert_eq!(d.snapshot().observations_accepted, 1);
         let _ = fs::remove_file(p);
@@ -278,7 +440,10 @@ mod tests {
     #[test]
     fn retention_and_port_cardinality_are_bounded() {
         let p = path();
-        let cfg = DiscoveryConfig { observation_days: 1, max_ports_per_hour: 2 };
+        let cfg = DiscoveryConfig {
+            observation_days: 1,
+            max_ports_per_hour: 2,
+        };
         let mut d = Discovery::open(&p, cfg).unwrap();
         for port in 1..100 {
             let mut event = sample(200 * 3600);
