@@ -333,9 +333,11 @@ impl Discovery {
 
     /// Aggregate a normalized observation. No enforcement or detection action is possible here.
     pub fn observe(&mut self, sample: TrafficSample) {
-        let hour = sample.timestamp_secs / 3600;
+        let hour_utc = sample.timestamp_secs / 3600;
+        let weekday = (sample.timestamp_secs / (3600 * 24)) % 7;
+        let calendar_slot = weekday * 24 + hour_utc % 24;
         let port_limit = self.config.max_ports_per_hour;
-        let Some(bucket) = self.bucket_mut(hour) else {
+        let Some(bucket) = self.bucket_mut(hour_utc) else {
             self.state.too_old = self.state.too_old.saturating_add(1);
             return;
         };
@@ -368,13 +370,13 @@ impl Discovery {
                 || self.service_profiles.len() < MAX_SERVICES;
             if has_capacity {
                 let profile = self.service_profiles.entry(service_id).or_default();
-                let oldest_hour = hour.saturating_sub(self.config.bucket_count() as u64 - 1);
+                let oldest_hour = hour_utc.saturating_sub(self.config.bucket_count() as u64 - 1);
                 profile.prune_before(oldest_hour);
                 let service_key = service_id.as_u64().to_string();
                 profile.observe_cardinality(
                     service_key.clone(),
                     sample.direction,
-                    hour,
+                    calendar_slot,
                     sample.source_key,
                     sample.destination_key,
                     quality,
@@ -382,7 +384,7 @@ impl Discovery {
                 profile.observe_volume(
                     service_key,
                     sample.direction,
-                    hour,
+                    calendar_slot,
                     sample.packets,
                     sample.bytes,
                     quality,
