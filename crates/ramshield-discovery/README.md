@@ -10,6 +10,7 @@ Passive production-environment discovery for RamShield. This crate is deliberate
 - Provide a provisional descriptive hourly range; it is not a calibrated prediction interval or a production alert threshold.
 - Return active operator-declared workload context alongside every assessment, without suppressing anomalies.
 - Record operator-declared services and workloads before onboarding or scheduling them, including daily, weekly, monthly-day, month-end and N-day recurrence.
+- Represent observed-zero, missing and degraded service windows as distinct states, with bounded idempotent ingestion.
 - Track capture/ingestion quality and host resource observations.
 - Persist observations and calendar declarations atomically.
 
@@ -21,7 +22,7 @@ This crate has no dependency on ramshield-detection, ramshield-enforcement, rams
 
 ## Integration contract
 
-The caller adapts existing capture/metrics events into TrafficSample and HealthSample. Address identifiers must be hashed by the caller before they are supplied; this crate does not store raw IP addresses. Call TrafficCalendar::observe_hour alongside traffic aggregation and use declare_workload to feed planned services/jobs into the calendar.
+The caller adapts existing capture/metrics events into TrafficSample and HealthSample. The bounded WindowLedger provides explicit service-window semantics and duplicate/conflict detection; its current implementation is in-memory and must be persisted or replayed by a background owner before it can serve as durable history. Address identifiers must be hashed by the caller before they are supplied; this crate does not store raw IP addresses. Call TrafficCalendar::observe_hour alongside traffic aggregation and use declare_workload to feed planned services/jobs into the calendar.
 
 Persistence is explicit via flush; schedule it from a background task, never from the packet capture hot path. Store files should be owned by the RamShield service account and backed up with the deployment's normal state policy.
 
