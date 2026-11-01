@@ -35,7 +35,7 @@ pub use window::{
     WindowState,
 };
 
-const SCHEMA: u32 = 2;
+const SCHEMA: u32 = 3;
 const HOURS_PER_DAY: usize = 24;
 const SOURCE_BUCKETS: usize = 64;
 const DESTINATION_BUCKETS: usize = 64;
@@ -225,6 +225,7 @@ struct PersistedState {
     buckets: Vec<Option<HourBucket>>,
     accepted: u64,
     too_old: u64,
+    service_profiles: BTreeMap<ServiceId, MetricProfileStore>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,13 +322,15 @@ impl Discovery {
                 buckets: vec![None; config.bucket_count()],
                 accepted: 0,
                 too_old: 0,
+                service_profiles: BTreeMap::new(),
             }
         };
+        let service_profiles = state.service_profiles.clone();
         Ok(Self {
             config,
             state,
             path,
-            service_profiles: BTreeMap::new(),
+            service_profiles,
         })
     }
 
