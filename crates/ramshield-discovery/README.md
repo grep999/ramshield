@@ -5,7 +5,9 @@ Passive production-environment discovery for RamShield. This crate is deliberate
 ## Responsibilities
 
 - Aggregate bounded hourly traffic observations: packet/byte volume, protocol mix, approximate source/destination distributions and bounded destination-port heavy hitters.
-- Learn recurring traffic shape by UTC hour-of-week and hour-of-month.
+- Learn recurring traffic shape by UTC hour-of-week, hour-of-month and a dedicated month-end profile.
+- Assess unexpectedly high or low hourly packet volume against established recurring slots; report insufficient history instead of guessing.
+- Return active operator-declared workload context alongside every assessment, without suppressing anomalies.
 - Record operator-declared services and workloads before onboarding or scheduling them, including daily, weekly, monthly-day, month-end and N-day recurrence.
 - Track capture/ingestion quality and host resource observations.
 - Persist observations and calendar declarations atomically.
