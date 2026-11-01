@@ -25,7 +25,11 @@ pub use metric::{
     ObservationQuality, ProfileKey, extend_assessment, new_profile_key, observe_clean,
     reset_quality_counts,
 };
-pub use stats::{CountModelFit, CountMoments, fit_count_model};
+pub use stats::{
+    CountModelFit, CountMoments, DistributionAssessment, assess_cardinality_anomaly,
+    assess_metric_distribution, calibrate_threshold, d8_saturated_or_insufficient_guard,
+    fit_count_model,
+};
 pub use window::{
     MissingReason, RecordOutcome, WindowError, WindowKey, WindowLedger, WindowObservation,
     WindowState,
@@ -331,51 +335,33 @@ impl Discovery {
             let i = key as usize % DESTINATION_BUCKETS;
             bucket.destinations[i] = bucket.destinations[i].saturating_add(sample.packets);
         }
-        // D5.2: derive service_id from source_key if not explicitly set
-        let effective_service_id = sample.service_id.or_else(|| {
-            sample.source_key.map(|sk| {
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                use std::hash::{Hash, Hasher};
-                sk.hash(&mut hasher);
-                ServiceId(hasher.finish())
-            })
-        });
-
-        // D6: observe source/destination cardinality into per-service profiles
-        if let Some(service_id) = &effective_service_id {
-            let profile = self.service_profiles.entry(*service_id).or_default();
-            profile.observe_cardinality(
-                service_id.as_u64().to_string(),
-                sample.direction,
-                hour,
-                sample.source_key,
-                sample.destination_key,
-                ObservationQuality::Clean,
-            );
-        }
-
-        // Enforce MAX_SERVICES limit on per-service profile creation
-        let service_count = self.service_profiles.len();
-        let is_new_service = effective_service_id
-            .map(|s| !self.service_profiles.contains_key(&s))
-            .unwrap_or(false);
-        if is_new_service && service_count >= MAX_SERVICES {
-            self.state.too_old = self.state.too_old.saturating_add(1);
-            return; // reject new service profiles at capacity
-        }
-
-        // Thread per-service packet/byte profiles (D5.2)
-        if let Some(service_id) = effective_service_id {
-            let profile = self.service_profiles.entry(service_id).or_default();
-            let hour_slot = hour;
-            profile.observe_volume(
-                service_id.as_u64().to_string(),
-                sample.direction,
-                hour_slot,
-                sample.packets,
-                sample.bytes,
-                ObservationQuality::Clean,
-            );
+        // Service identity is an explicit producer contract. Endpoint hashes
+        // identify endpoints; they must never be promoted into service identity.
+        if let Some(service_id) = sample.service_id {
+            let has_capacity = self.service_profiles.contains_key(&service_id)
+                || self.service_profiles.len() < MAX_SERVICES;
+            if has_capacity {
+                let profile = self.service_profiles.entry(service_id).or_default();
+                let service_key = service_id.as_u64().to_string();
+                profile.observe_cardinality(
+                    service_key.clone(),
+                    sample.direction,
+                    hour,
+                    sample.source_key,
+                    sample.destination_key,
+                    ObservationQuality::Clean,
+                );
+                profile.observe_volume(
+                    service_key,
+                    sample.direction,
+                    hour,
+                    sample.packets,
+                    sample.bytes,
+                    ObservationQuality::Clean,
+                );
+            }
+            // At capacity, aggregate traffic is still accepted; only the
+            // optional per-service profile is omitted.
         }
 
         self.state.accepted = self.state.accepted.saturating_add(1);
