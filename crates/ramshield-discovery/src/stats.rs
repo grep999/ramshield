@@ -10,8 +10,9 @@ pub struct CountMoments {
 }
 
 impl CountMoments {
-    pub fn push(&mut self, value: f64) {
-        if !value.is_finite() || value < 0.0 || self.observations == u64::MAX { return; }
+    pub fn push(&mut self, value: u64) {
+        if self.observations == u64::MAX { return; }
+        let value = value as f64;
         self.observations += 1;
         let delta = value - self.mean;
         self.mean += delta / self.observations as f64;
@@ -24,6 +25,7 @@ impl CountMoments {
         self.mean.is_finite() && self.mean >= 0.0 && self.m2.is_finite()
             && self.m2 >= -f64::EPSILON
             && (self.observations != 0 || (self.mean == 0.0 && self.m2 == 0.0))
+            && (self.mean != 0.0 || self.m2.abs() <= f64::EPSILON)
     }
     pub fn sample_variance(&self) -> Option<f64> {
         (self.observations > 1).then(|| (self.m2 / (self.observations - 1) as f64).max(0.0))
@@ -51,8 +53,11 @@ pub fn fit_count_model(n: u64, mean: f64, variance: f64) -> CountModelFit {
     }
     let tolerance = 1e-9 * mean.max(1.0);
     if variance > mean + tolerance {
-        let dispersion = (variance - mean) / (mean * mean);
+        let denominator = mean * mean;
+        if !denominator.is_finite() || denominator <= 0.0 { return CountModelFit::InsufficientData; }
+        let dispersion = (variance - mean) / denominator;
         let size = 1.0 / dispersion;
+        if !dispersion.is_finite() || dispersion <= 0.0 || !size.is_finite() { return CountModelFit::InsufficientData; }
         let probability = size / (size + mean);
         CountModelFit::NegativeBinomial { mean, dispersion, size, probability }
     } else if variance + tolerance >= mean {
@@ -68,7 +73,7 @@ mod tests {
     #[test]
     fn welford_is_stable_for_large_offsets() {
         let mut m = CountMoments::default();
-        for x in [1_000_000_001.0, 1_000_000_002.0, 1_000_000_003.0] { m.push(x); }
+        for x in [1_000_000_001u64, 1_000_000_002, 1_000_000_003] { m.push(x); }
         assert!((m.mean() - 1_000_000_002.0).abs() < 1e-6);
         assert!((m.sample_variance().unwrap() - 1.0).abs() < 1e-6);
     }
@@ -85,8 +90,7 @@ mod tests {
     fn rejects_invalid_and_insufficient_model_inputs() {
         assert!(matches!(fit_count_model(1, 100.0, 100.0), CountModelFit::InsufficientData));
         assert!(matches!(fit_count_model(10, f64::NAN, 100.0), CountModelFit::InsufficientData));
-        let mut moments = CountMoments::default();
-        moments.push(f64::NAN);
+        let moments = CountMoments::default();
         assert_eq!(moments.observations(), 0);
         assert!(moments.is_valid());
     }
