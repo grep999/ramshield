@@ -76,7 +76,7 @@ struct PortCounter { port: u16, count: u64, error_bound: u64 }
 struct HourBucket {
     hour: u64, samples: u64, packets: u64, bytes: u64,
     protocols: [u64; 5], ports: Vec<PortCounter>,
-    sources: [u64; SOURCE_BUCKETS], destinations: [u64; DESTINATION_BUCKETS],
+    sources: Vec<u64>, destinations: Vec<u64>,
     capture_drops: u64, ingest_drops: u64, malformed: u64,
     queue_depth_peak: u64, queue_capacity_peak: u64,
     cpu_millis: u64, memory_bytes_peak: u64,
@@ -84,8 +84,8 @@ struct HourBucket {
 impl HourBucket {
     fn new(hour: u64) -> Self {
         Self { hour, samples: 0, packets: 0, bytes: 0, protocols: [0; 5],
-            ports: Vec::new(), sources: [0; SOURCE_BUCKETS],
-            destinations: [0; DESTINATION_BUCKETS], capture_drops: 0,
+            ports: Vec::new(), sources: vec![0; SOURCE_BUCKETS],
+            destinations: vec![0; DESTINATION_BUCKETS], capture_drops: 0,
             ingest_drops: 0, malformed: 0, queue_depth_peak: 0,
             queue_capacity_peak: 0, cpu_millis: 0, memory_bytes_peak: 0 }
     }
@@ -116,8 +116,8 @@ pub struct PortSummary { pub port: u16, pub count: u64, pub error_bound: u64 }
 pub struct HourSummary {
     pub hour: u64, pub samples: u64, pub packets: u64, pub bytes: u64,
     pub protocols: [u64; 5], pub top_ports: Vec<PortSummary>,
-    pub source_distribution: [u64; SOURCE_BUCKETS],
-    pub destination_distribution: [u64; DESTINATION_BUCKETS],
+    pub source_distribution: Vec<u64>,
+    pub destination_distribution: Vec<u64>,
     pub capture_drops: u64, pub ingest_drops: u64, pub malformed_observations: u64,
     pub queue_depth_peak: u64, pub queue_capacity_peak: u64,
     pub cpu_millis: u64, pub memory_bytes_peak: u64,
