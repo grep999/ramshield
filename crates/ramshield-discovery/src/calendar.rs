@@ -7,10 +7,11 @@
 
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fs, io, path::{Path, PathBuf}};
+use crate::{fit_count_model, CountModelFit, CountMoments};
 
 const WEEK_SLOTS: usize = 7 * 24;
 const MONTH_SLOTS: usize = 31 * 24;
-const SCHEMA: u32 = 2;
+const SCHEMA: u32 = 3;
 const MAX_DECLARATIONS: usize = 512;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,7 +85,7 @@ impl WorkloadDeclaration {
 struct Slot {
     observations: u64,
     packets: u64,
-    packets_squared: u128,
+    moments: CountMoments,
     bytes: u64,
 }
 
@@ -102,6 +103,8 @@ pub struct CalendarSlotSummary {
     pub slot: usize,
     pub observations: u64,
     pub packets: u64,
+    pub mean_packets: Option<f64>,
+    pub sample_variance_packets: Option<f64>,
     pub bytes: u64,
 }
 
@@ -123,6 +126,8 @@ pub struct CalendarAssessment {
     pub observations: u64,
     pub mean_packets: Option<f64>,
     pub standard_deviation_packets: Option<f64>,
+    /// Candidate count family only; not a calibrated tail probability.
+    pub count_model: Option<CountModelFit>,
     pub observed_packets: u64,
     pub lower_expected_packets: Option<f64>,
     pub upper_expected_packets: Option<f64>,
@@ -221,13 +226,13 @@ impl TrafficCalendar {
         let Some((source, slot)) = selected else {
             return CalendarAssessment { kind: CalendarAssessmentKind::InsufficientData,
                 baseline_source: None, observations: monthly.map_or(weekly.observations, |m| m.observations),
-                mean_packets: None, standard_deviation_packets: None, observed_packets,
+                mean_packets: None, standard_deviation_packets: None, count_model: None, observed_packets,
                 lower_expected_packets: None, upper_expected_packets: None, active_workloads };
         };
-        let mean = slot.packets as f64 / slot.observations as f64;
-        let mean_square = slot.packets_squared as f64 / slot.observations as f64;
-        let variance = (mean_square - mean * mean).max(0.0);
+        let mean = slot.moments.mean();
+        let variance = slot.moments.sample_variance().unwrap_or(0.0);
         let stddev = variance.sqrt();
+        let count_model = fit_count_model(slot.observations, mean, variance);
         let spread = sigma.max(0.0) * stddev;
         let lower = (mean - spread).max(0.0);
         let upper = mean + spread;
@@ -237,7 +242,7 @@ impl TrafficCalendar {
             else { CalendarAssessmentKind::WithinExpectedRange };
         CalendarAssessment { kind, baseline_source: Some(source.to_string()),
             observations: slot.observations, mean_packets: Some(mean),
-            standard_deviation_packets: Some(stddev), observed_packets,
+            standard_deviation_packets: Some(stddev), count_model: Some(count_model), observed_packets,
             lower_expected_packets: Some(lower), upper_expected_packets: Some(upper), active_workloads }
     }
 
@@ -270,15 +275,18 @@ impl TrafficCalendar {
 }
 
 fn add(slot: &mut Slot, packets: u64, bytes: u64) {
-    slot.observations = slot.observations.saturating_add(1);
+    if slot.observations == u64::MAX { return; }
+    slot.observations += 1;
     slot.packets = slot.packets.saturating_add(packets);
-    slot.packets_squared = slot.packets_squared.saturating_add(u128::from(packets) * u128::from(packets));
+    slot.moments.push(packets as f64);
     slot.bytes = slot.bytes.saturating_add(bytes);
 }
 
 fn summaries(slots: &[Slot]) -> Vec<CalendarSlotSummary> {
     slots.iter().enumerate().map(|(slot, value)| CalendarSlotSummary {
-        slot, observations: value.observations, packets: value.packets, bytes: value.bytes,
+        slot, observations: value.observations, packets: value.packets,
+        mean_packets: (value.observations > 0).then(|| value.moments.mean()),
+        sample_variance_packets: value.moments.sample_variance(), bytes: value.bytes,
     }).collect()
 }
 
@@ -364,6 +372,7 @@ mod tests {
         assert_eq!(assessment.baseline_source.as_deref(), Some("hour-of-week"));
         assert_eq!(assessment.observations, 4);
         assert!(assessment.upper_expected_packets.unwrap() < 1_000.0);
+        assert!(assessment.count_model.is_some());
         let _ = fs::remove_file(p);
     }
 
