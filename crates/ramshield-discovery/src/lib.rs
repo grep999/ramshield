@@ -31,7 +31,7 @@ pub use window::{
     WindowState,
 };
 
-const SCHEMA: u32 = 1;
+const SCHEMA: u32 = 2;
 const HOURS_PER_DAY: usize = 24;
 const SOURCE_BUCKETS: usize = 64;
 const DESTINATION_BUCKETS: usize = 64;
@@ -61,15 +61,20 @@ impl ServiceId {
     pub fn as_u64(&self) -> u64 {
         self.0
     }
+
+    pub fn new(id: u64) -> Self {
+        ServiceId(id)
+    }
 }
 
 /// Authoritative direction of traffic, sourced from the observation,
 /// never inferred from ports or IP addresses.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub enum TrafficDirection {
     Ingress,
     Egress,
     Internal,
+    #[default]
     Unknown,
 }
 
@@ -88,6 +93,10 @@ pub struct TrafficSample {
     /// Never inferred from IP addresses or ports.
     #[serde(default)]
     pub service_id: Option<ServiceId>,
+    /// Authoritative traffic direction from the capture layer.
+    /// Never inferred from ports or IP addresses; defaults to Unknown.
+    #[serde(default)]
+    pub direction: TrafficDirection,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
@@ -337,7 +346,7 @@ impl Discovery {
             let profile = self.service_profiles.entry(*service_id).or_default();
             profile.observe_cardinality(
                 service_id.as_u64().to_string(),
-                TrafficDirection::Unknown,
+                sample.direction,
                 hour,
                 sample.source_key,
                 sample.destination_key,
@@ -361,7 +370,7 @@ impl Discovery {
             let hour_slot = hour;
             profile.observe_volume(
                 service_id.as_u64().to_string(),
-                TrafficDirection::Unknown,
+                sample.direction,
                 hour_slot,
                 sample.packets,
                 sample.bytes,
@@ -512,6 +521,7 @@ mod tests {
             source_key: Some(17),
             destination_key: Some(29),
             service_id: None,
+            direction: TrafficDirection::Unknown,
         }
     }
     #[test]
