@@ -48,7 +48,7 @@ After any code change:
 
 ---
 
-**Branch**: `fix/issue-90-packet-accounting` at SHA `5a62bdd0`  
-**Last verified**: 2026-10-31 CET  
-**Tests verified**: 14 functional areas; 75+ test assertions with exact commands  
+**Branch**: `fix/issue-90-packet-accounting` at SHA `a743901a`
+**Last verified**: 2026-10-31 CET
+**Tests verified**: 14 functional areas; 75+ test assertions with exact commands
 **CI fix**: bpf-linker installed in Advanced Features workflow (was missing)
