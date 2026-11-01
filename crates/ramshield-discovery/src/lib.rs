@@ -339,6 +339,12 @@ impl Discovery {
             self.state.too_old = self.state.too_old.saturating_add(1);
             return;
         };
+        let quality = if bucket.capture_drops > 0 || bucket.ingest_drops > 0 || bucket.malformed > 0
+        {
+            ObservationQuality::Degraded
+        } else {
+            ObservationQuality::Clean
+        };
         bucket.samples = bucket.samples.saturating_add(1);
         bucket.packets = bucket.packets.saturating_add(sample.packets);
         bucket.bytes = bucket.bytes.saturating_add(sample.bytes);
@@ -371,7 +377,7 @@ impl Discovery {
                     hour,
                     sample.source_key,
                     sample.destination_key,
-                    ObservationQuality::Clean,
+                    quality,
                 );
                 profile.observe_volume(
                     service_key,
@@ -379,7 +385,7 @@ impl Discovery {
                     hour,
                     sample.packets,
                     sample.bytes,
-                    ObservationQuality::Clean,
+                    quality,
                 );
             }
             // At capacity, aggregate traffic is still accepted; only the
