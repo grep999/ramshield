@@ -114,7 +114,7 @@ pub fn assess_cardinality_anomaly(
         return DistributionAssessment::RequiresReview;
     }
     // Check for significant decline (<0.5x baseline)
-    if current.estimate > 0 && current.estimate < base.estimate / 2 {
+    if current.estimate.saturating_mul(2) < base.estimate {
         return DistributionAssessment::RequiresReview;
     }
     DistributionAssessment::Normal
@@ -386,8 +386,11 @@ mod tests {
     }
 }
 
-/// Production threshold calibration — maps learned assessments to
-/// RamShield detector configuration parameters with strict quality gating.
+/// Report-only threshold-calibration eligibility assessment with strict quality gating.
+////
+//// This function does not calculate a numeric threshold, validate a model, or
+//// authorize detector/enforcement changes. Normal means only that the supplied
+//// assessments passed these gates; it is not a production calibration claim.
 ///
 /// **Rule**: Saturated estimators, insufficient samples, degraded windows,
 /// unknown metric semantics, and unvalidated statistical models must never
@@ -398,7 +401,8 @@ mod tests {
 /// - `RequiresReview` when evidence suggests possible anomaly but needs human review
 ///
 /// This function is the D8 boundary: it does not make enforcement decisions,
-/// it only reports calibrated assessment states for the enforcement layer to act on.
+/// it only reports whether the supplied evidence is sufficient for further
+/// offline evaluation. No enforcement action should consume this result directly.
 pub fn calibrate_threshold(
     cardinality_assessment: &DistributionAssessment,
     metric_assessment: &DistributionAssessment,
@@ -435,7 +439,8 @@ pub fn calibrate_threshold(
 /// Convenience: D8 gate for saturated/insufficient conditions,
 /// short-circuiting to InsufficientData without full assessment.
 ///
-/// This is the primary D8 guard rail — callers should NOT bypass it.
+/// This is only a preliminary sample/saturation gate. Normal means these two
+/// checks passed; it is not a statistical assessment or threshold recommendation.
 pub fn d8_saturated_or_insufficient_guard(
     saturated: bool,
     clean_observations: u64,
