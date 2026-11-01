@@ -1,32 +1,42 @@
-//! Explicit service-window semantics for passive learning.
+//! Bounded, direction-aware service-window ledger for passive learning.
 //! Missing and degraded windows are never represented as zero-valued traffic.
+//! Eviction uses a deterministic event-time key and persists a replay watermark.
+use super::TrafficDirection;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{self, Write},
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+const MAX_PERSISTED_ENTRY_BYTES: u64 = 512;
+const MAX_PERSISTED_ENVELOPE_BYTES: u64 = 512;
 
 const MAX_SERVICE_ID_BYTES: usize = 128;
 const MAX_WINDOW_SECONDS: u32 = 86_400;
 const MAX_LEDGER_ENTRIES: usize = 1_000_000;
 
 /// Persistence format version for forward compatibility.
-const PERSISTENCE_VERSION: u32 = 1;
+const PERSISTENCE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct PersistenceEnvelope {
     version: u32,
     entries: Vec<(WindowKey, WindowState)>,
+    eviction_watermark: Option<WindowKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+/// The field order defines deterministic eviction order: event time, service,
+/// window width, then direction.
 pub struct WindowKey {
-    pub service_id: String,
     pub window_start_secs: u64,
+    pub service_id: String,
     pub window_seconds: u32,
+    pub direction: TrafficDirection,
 }
 
 impl WindowKey {
@@ -102,11 +112,14 @@ pub enum WindowError {
     Io(String),
 }
 
-/// Bounded in-memory idempotency ledger. Persistence and runtime feeding are
-/// deliberately owned by the caller, not by the packet capture hot path.
+/// Bounded in-memory idempotency ledger. Snapshot persistence and runtime
+/// feeding are deliberately owned by the caller, not by the packet capture hot path.
+/// The watermark rejects any key at or below the greatest evicted key, including
+/// equal-timestamp replays from another service or direction.
 pub struct WindowLedger {
     max_entries: usize,
     entries: BTreeMap<WindowKey, WindowState>,
+    eviction_watermark: Option<WindowKey>,
 }
 
 impl WindowLedger {
@@ -117,6 +130,7 @@ impl WindowLedger {
         Ok(Self {
             max_entries,
             entries: BTreeMap::new(),
+            eviction_watermark: None,
         })
     }
 
@@ -129,21 +143,27 @@ impl WindowLedger {
                 RecordOutcome::ConflictingDuplicate
             });
         }
+        if self
+            .eviction_watermark
+            .as_ref()
+            .is_some_and(|watermark| &observation.key <= watermark)
+        {
+            return Ok(RecordOutcome::RejectedTooOld);
+        }
+
         let mut outcome = RecordOutcome::Inserted;
         if self.entries.len() >= self.max_entries {
-            let oldest = self
-                .entries
-                .keys()
-                .min_by_key(|key| key.window_start_secs)
-                .cloned();
-            if let Some(oldest_key) = oldest {
-                let oldest_start = oldest_key.window_start_secs;
-                if observation.key.window_start_secs < oldest_start {
-                    return Ok(RecordOutcome::RejectedTooOld);
-                }
-                self.entries.remove(&oldest_key);
-                outcome = RecordOutcome::InsertedAfterEviction;
+            let Some(oldest_key) = self.entries.keys().next().cloned() else {
+                return Err(WindowError::Io(
+                    "ledger is at capacity but has no oldest entry".into(),
+                ));
+            };
+            if observation.key <= oldest_key {
+                return Ok(RecordOutcome::RejectedTooOld);
             }
+            self.entries.remove(&oldest_key);
+            self.eviction_watermark = Some(oldest_key);
+            outcome = RecordOutcome::InsertedAfterEviction;
         }
         self.entries.insert(observation.key, observation.state);
         Ok(outcome)
@@ -159,48 +179,50 @@ impl WindowLedger {
         self.entries.is_empty()
     }
 
-    /// Atomic snapshot persistence: temp file, file fsync, rename, directory fsync.
-    /// Uses a unique temporary filename based on timestamp to avoid conflicts
-    /// with concurrent flushes to the same path.
+    /// Atomic snapshot persistence: exclusive temp file, file fsync, rename,
+    /// then directory fsync. Callers must serialize concurrent writers to one path.
     pub fn flush(&self, path: impl AsRef<Path>) -> io::Result<()> {
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+        if path.file_name().is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ledger snapshot path must name a file",
+            ));
         }
+        let parent = parent_dir(path);
+        fs::create_dir_all(parent)?;
+
         let pairs: Vec<(WindowKey, WindowState)> = self
             .entries
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(key, state)| (key.clone(), state.clone()))
             .collect();
         let envelope = PersistenceEnvelope {
             version: PERSISTENCE_VERSION,
             entries: pairs,
+            eviction_watermark: self.eviction_watermark.clone(),
         };
         let bytes = serde_json::to_vec(&envelope)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        // Unique temp file using nanosecond timestamp to avoid conflicts
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(io::Error::other)?
-            .as_nanos();
-        let mut tmp = path.to_path_buf();
-        tmp.set_file_name(format!(".ledger_tmp_{}.json", nanos));
-        if let Some(parent) = tmp.parent() {
-            fs::create_dir_all(parent)?;
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if bytes.len() as u64 > max_snapshot_bytes(self.max_entries) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "ledger snapshot exceeds configured capacity bound",
+            ));
         }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&tmp)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
+
+        let (tmp, mut file) = create_temp_file(path)?;
+        let write_result = file.write_all(&bytes).and_then(|()| file.sync_all());
         drop(file);
-        fs::rename(&tmp, path)?;
-        if let Some(parent) = path.parent() {
-            File::open(parent)?.sync_all()?;
+        if let Err(error) = write_result {
+            let _ = fs::remove_file(&tmp);
+            return Err(error);
         }
-        Ok(())
+        if let Err(error) = fs::rename(&tmp, path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(error);
+        }
+        File::open(parent)?.sync_all()
     }
 
     /// Reconstruct a WindowLedger from a persisted snapshot.
@@ -214,9 +236,15 @@ impl WindowLedger {
         if !path.exists() {
             return Err(WindowError::Io("persistence file not found".into()));
         }
-        let bytes = fs::read(path).map_err(|e| WindowError::Io(e.to_string()))?;
+        let metadata = fs::metadata(path).map_err(|error| WindowError::Io(error.to_string()))?;
+        if metadata.len() > max_snapshot_bytes(max_entries) {
+            return Err(WindowError::Io(
+                "persistence file exceeds configured capacity bound".into(),
+            ));
+        }
+        let bytes = fs::read(path).map_err(|error| WindowError::Io(error.to_string()))?;
         let envelope: PersistenceEnvelope =
-            serde_json::from_slice(&bytes).map_err(|e| WindowError::Io(e.to_string()))?;
+            serde_json::from_slice(&bytes).map_err(|error| WindowError::Io(error.to_string()))?;
         if envelope.version != PERSISTENCE_VERSION {
             return Err(WindowError::Io(format!(
                 "unsupported persistence version {}",
@@ -226,31 +254,100 @@ impl WindowLedger {
         if envelope.entries.len() > max_entries {
             return Err(WindowError::InvalidCapacity);
         }
-        // Detect duplicate keys — fail closed rather than silently overwriting.
+        if let Some(watermark) = envelope.eviction_watermark.as_ref() {
+            watermark.validate().map_err(|error| {
+                WindowError::Io(format!("invalid eviction watermark: {error:?}"))
+            })?;
+        }
+
         let mut seen = BTreeMap::new();
         for (key, state) in envelope.entries {
             if seen.contains_key(&key) {
                 return Err(WindowError::Io("duplicate keys in persistence".into()));
             }
-            key.validate()?;
+            key.validate().map_err(|error| {
+                WindowError::Io(format!("invalid window key in persistence: {error:?}"))
+            })?;
+            if envelope
+                .eviction_watermark
+                .as_ref()
+                .is_some_and(|watermark| &key <= watermark)
+            {
+                return Err(WindowError::Io(
+                    "retained entry is at or below eviction watermark".into(),
+                ));
+            }
             seen.insert(key, state);
         }
         Ok(Self {
             max_entries,
             entries: seen,
+            eviction_watermark: envelope.eviction_watermark,
         })
     }
 }
+
+fn parent_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn max_snapshot_bytes(max_entries: usize) -> u64 {
+    (max_entries as u64)
+        .saturating_mul(MAX_PERSISTED_ENTRY_BYTES)
+        .saturating_add(MAX_PERSISTED_ENVELOPE_BYTES)
+}
+
+fn create_temp_file(path: &Path) -> io::Result<(PathBuf, File)> {
+    let parent = parent_dir(path);
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ledger snapshot path must name a file",
+        )
+    })?;
+    let file_name = file_name.to_string_lossy();
+
+    for _ in 0..16 {
+        let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = parent.join(format!(
+            ".{file_name}.tmp.{}.{}",
+            std::process::id(),
+            counter
+        ));
+        match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => return Ok((tmp, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a unique ledger snapshot file",
+    ))
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
     fn observation(state: WindowState, start: u64) -> WindowObservation {
+        observation_for("billing-worker", TrafficDirection::Unknown, state, start)
+    }
+
+    fn observation_for(
+        service_id: &str,
+        direction: TrafficDirection,
+        state: WindowState,
+        start: u64,
+    ) -> WindowObservation {
         WindowObservation {
             key: WindowKey {
-                service_id: "billing-worker".into(),
                 window_start_secs: start,
+                service_id: service_id.into(),
                 window_seconds: 60,
+                direction,
             },
             state,
         }
@@ -395,6 +492,7 @@ mod tests {
             service_id: "billing-worker".into(),
             window_start_secs: 0,
             window_seconds: 60,
+            direction: TrafficDirection::Unknown,
         };
         assert_eq!(
             recovered.entries[&key],
@@ -452,76 +550,138 @@ mod tests {
 
     /// Restart semantics: evicted entries must stay evicted after reopen,
     /// and stale late arrivals must still be rejected.
+    /// Equal-timestamp eviction remains replay-safe after a restart.
     #[test]
-    fn restart_after_eviction_preserves_rejection() {
+    fn restart_after_equal_timestamp_eviction_rejects_replay() {
         let p = std::env::temp_dir().join(format!(
-            "ledger_{}.json",
+            "ledger_equal_timestamp_{}.json",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
         let mut ledger = WindowLedger::new(2).unwrap();
-        assert_eq!(
-            ledger
-                .record(observation(
-                    WindowState::Observed {
-                        packets: 1,
-                        bytes: 1
-                    },
-                    0
-                ))
-                .unwrap(),
-            RecordOutcome::Inserted
+        let evicted = observation_for(
+            "a-service",
+            TrafficDirection::Ingress,
+            WindowState::Observed { packets: 1, bytes: 1 },
+            60,
         );
-        assert_eq!(
-            ledger
-                .record(observation(
-                    WindowState::Observed {
-                        packets: 1,
-                        bytes: 1
-                    },
-                    60
-                ))
-                .unwrap(),
-            RecordOutcome::Inserted
+        let retained = observation_for(
+            "b-service",
+            TrafficDirection::Ingress,
+            WindowState::Observed { packets: 2, bytes: 2 },
+            60,
         );
-        assert_eq!(
-            ledger
-                .record(observation(
-                    WindowState::Observed {
-                        packets: 1,
-                        bytes: 1
-                    },
-                    120
-                ))
-                .unwrap(),
-            RecordOutcome::InsertedAfterEviction
+        let incoming = observation_for(
+            "c-service",
+            TrafficDirection::Ingress,
+            WindowState::Observed { packets: 3, bytes: 3 },
+            120,
         );
-        // The window at start=0 is now evicted; reinserting it must be rejected.
-        assert_eq!(
-            ledger
-                .record(observation(
-                    WindowState::Observed {
-                        packets: 1,
-                        bytes: 1
-                    },
-                    0
-                ))
-                .unwrap(),
-            RecordOutcome::RejectedTooOld
-        );
+        assert_eq!(ledger.record(evicted.clone()).unwrap(), RecordOutcome::Inserted);
+        assert_eq!(ledger.record(retained.clone()).unwrap(), RecordOutcome::Inserted);
+        assert_eq!(ledger.record(incoming).unwrap(), RecordOutcome::InsertedAfterEviction);
+        assert!(ledger.get(&evicted.key).is_none());
+        assert_eq!(ledger.get(&retained.key), Some(&retained.state));
+
         ledger.flush(&p).unwrap();
-        let recovered = WindowLedger::reopen(&p, 2).unwrap();
-        assert_eq!(recovered.len(), 2);
-        // Same rejection must hold after recovery.
-        let key_start_0 = WindowKey {
-            service_id: "billing-worker".into(),
-            window_start_secs: 0,
-            window_seconds: 60,
-        };
-        assert!(!recovered.entries.contains_key(&key_start_0));
+        let mut recovered = WindowLedger::reopen(&p, 2).unwrap();
+        assert_eq!(recovered.record(evicted).unwrap(), RecordOutcome::RejectedTooOld);
+        assert_eq!(recovered.get(&retained.key), Some(&retained.state));
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn ingress_and_egress_are_distinct_window_identities() {
+        let mut ledger = WindowLedger::new(2).unwrap();
+        let ingress = observation_for(
+            "billing-worker",
+            TrafficDirection::Ingress,
+            WindowState::Observed { packets: 1, bytes: 10 },
+            60,
+        );
+        let egress = observation_for(
+            "billing-worker",
+            TrafficDirection::Egress,
+            WindowState::Observed { packets: 2, bytes: 20 },
+            60,
+        );
+        assert_eq!(ledger.record(ingress).unwrap(), RecordOutcome::Inserted);
+        assert_eq!(ledger.record(egress).unwrap(), RecordOutcome::Inserted);
+        assert_eq!(ledger.len(), 2);
+    }
+
+    #[test]
+    fn relative_snapshot_path_is_supported() {
+        let p = PathBuf::from(format!(
+            "ledger_relative_{}_{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut ledger = WindowLedger::new(2).unwrap();
+        let sample = observation(WindowState::Observed { packets: 7, bytes: 70 }, 0);
+        assert_eq!(ledger.record(sample).unwrap(), RecordOutcome::Inserted);
+        ledger.flush(&p).unwrap();
+        assert_eq!(WindowLedger::reopen(&p, 2).unwrap().len(), 1);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn failed_rename_removes_temporary_snapshot() {
+        let dir = std::env::temp_dir().join(format!(
+            "ledger_temp_cleanup_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("snapshot.json");
+        fs::create_dir(&target).unwrap();
+        let ledger = WindowLedger::new(2).unwrap();
+        assert!(ledger.flush(&target).is_err());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reopen_rejects_retained_entry_at_or_below_watermark() {
+        let p = std::env::temp_dir().join(format!(
+            "ledger_bad_watermark_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let retained = observation(WindowState::Observed { packets: 1, bytes: 1 }, 60);
+        let payload = PersistenceEnvelope {
+            version: PERSISTENCE_VERSION,
+            entries: vec![(retained.key.clone(), retained.state)],
+            eviction_watermark: Some(retained.key),
+        };
+        fs::write(&p, serde_json::to_vec(&payload).unwrap()).unwrap();
+        assert!(matches!(WindowLedger::reopen(&p, 2), Err(WindowError::Io(_))));
+        let _ = fs::remove_file(&p);
+    }
+
+    #[test]
+    fn reopen_rejects_snapshot_larger_than_configured_bound() {
+        let p = std::env::temp_dir().join(format!(
+            "ledger_oversized_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let oversized = vec![b' '; max_snapshot_bytes(1) as usize + 1];
+        fs::write(&p, oversized).unwrap();
+        assert!(matches!(WindowLedger::reopen(&p, 1), Err(WindowError::Io(_))));
+        let _ = fs::remove_file(&p);
     }
 
     /// Invalid capacity must be rejected on reopen.
@@ -595,6 +755,7 @@ mod tests {
         let mut bad = bad.clone();
         bad.insert("version".into(), serde_json::json!(999));
         bad.insert("entries".into(), serde_json::json!([]));
+        bad.insert("eviction_watermark".into(), serde_json::Value::Null);
         let bytes = serde_json::to_vec(&bad).unwrap();
         fs::write(&p, &bytes).unwrap();
         assert!(matches!(
@@ -618,6 +779,7 @@ mod tests {
             service_id: "billing-worker".into(),
             window_start_secs: 0,
             window_seconds: 60,
+            direction: TrafficDirection::Unknown,
         };
         let first_key = key.clone();
         let second_key = key;
@@ -637,11 +799,12 @@ mod tests {
         };
         // Build JSON payload with duplicate keys.
         let duplicate_payload = serde_json::json!({
-            "version": 1,
+            "version": 2,
             "entries": [
                 (&first.key, &first.state),
                 (&second.key, &second.state),
-            ]
+            ],
+            "eviction_watermark": null
         });
         let json = serde_json::to_string(&duplicate_payload).unwrap();
         fs::write(&p, json).unwrap();
@@ -664,7 +827,7 @@ mod tests {
                 .as_nanos()
         ));
         // Empty service_id is invalid.
-        let json = r#"{"version":1,"entries":[[{"service_id":"","window_start_secs":0,"window_seconds":60},{"Observed":{"packets":1,"bytes":1}}]]}"#;
+        let json = r#"{"version":2,"entries":[[{"window_start_secs":0,"service_id":"","window_seconds":60,"direction":"Unknown"},{"state":"observed","packets":1,"bytes":1}]],"eviction_watermark":null}"#;
         fs::write(&p, json).unwrap();
         assert!(matches!(
             WindowLedger::reopen(&p, 8),
@@ -689,6 +852,7 @@ mod tests {
                     service_id: format!("svc-{i}"),
                     window_start_secs: i * 3600,
                     window_seconds: 60,
+                    direction: TrafficDirection::Unknown,
                 },
                 state: WindowState::Observed {
                     packets: 1,
@@ -697,8 +861,9 @@ mod tests {
             })
             .collect();
         let payload = serde_json::json!({
-            "version": 1,
-            "entries": entries.iter().map(|e| (&e.key, &e.state)).collect::<Vec<_>>()
+            "version": 2,
+            "entries": entries.iter().map(|e| (&e.key, &e.state)).collect::<Vec<_>>(),
+            "eviction_watermark": null
         });
         let json = serde_json::to_string(&payload).unwrap();
         fs::write(&p, json).unwrap();
