@@ -174,6 +174,9 @@ impl CardinalityEstimator {
     /// Default 4096 bits (512 bytes) supports up to ~2000 distinct keys
     /// with reasonable relative error.
     pub fn new(bit_count: usize) -> Self {
+        // A zero-bit estimator cannot accept observations (modulo by zero).
+        // Keep the public constructor total and guarantee at least one bit.
+        let bit_count = bit_count.max(1);
         Self {
             bitmap: vec![0; bit_count.div_ceil(64)],
             bit_count,
@@ -247,7 +250,8 @@ impl CardinalityEstimator {
         let remainder = self.bit_count % 64;
         if remainder > 0 {
             let mask = (1u64 << remainder) - 1;
-            zeros += (self.bitmap[full_words] & mask).count_zeros() as usize;
+            let occupied = (self.bitmap[full_words] & mask).count_ones() as usize;
+            zeros += remainder - occupied;
         }
         zeros
     }
@@ -576,6 +580,21 @@ impl MetricProfileStore {
 #[cfg(test)]
 mod retention_tests {
     use super::*;
+
+    #[test]
+    fn cardinality_estimator_handles_zero_and_partial_word_sizes() {
+        let mut empty = CardinalityEstimator::new(0);
+        assert_eq!(empty.bit_count(), 1);
+        empty.observe(42);
+        assert_eq!(empty.zero_bits(), 0);
+        assert!(empty.saturated());
+
+        let mut partial = CardinalityEstimator::new(7);
+        assert_eq!(partial.zero_bits(), 7);
+        partial.observe(42);
+        assert_eq!(partial.zero_bits(), 6);
+        assert!(!partial.saturated());
+    }
 
     #[test]
     fn pruning_removes_expired_metric_and_cardinality_profiles() {
