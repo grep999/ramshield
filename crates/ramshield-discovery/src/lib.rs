@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::{fs::{self, File, OpenOptions}, io::{self, Write}, path::{Path, PathBuf}};
 
 mod calendar;
+mod stats;
+pub use stats::{fit_count_model, CountModelFit, CountMoments};
 pub use calendar::{CalendarAssessment, CalendarAssessmentKind, CalendarSnapshot, CalendarSlotSummary, ExpectedWorkload, Recurrence, TrafficCalendar, WorkloadDeclaration};
 
 const SCHEMA: u32 = 1;
