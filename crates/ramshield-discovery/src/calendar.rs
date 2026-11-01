@@ -344,9 +344,9 @@ mod tests {
             expected_services: vec!["billing-worker".into()], declared_by: "operator".into(),
             declared_at_secs: 1_700_000_000, notes: None,
         }).unwrap();
-        let feb_28_2024_23 = 1_709_164_800;
-        assert!(c.expected_workloads(feb_28_2024_23).iter().any(|w| w.id == "month-end-billing" && w.active));
-        c.observe_hour(feb_28_2024_23, 100, 10_000);
+        let feb_29_2024_23 = 1_709_247_600;
+        assert!(c.expected_workloads(feb_29_2024_23).iter().any(|w| w.id == "month-end-billing" && w.active));
+        c.observe_hour(feb_29_2024_23, 100, 10_000);
         assert!(c.snapshot().month.iter().any(|s| s.observations > 0));
         c.flush().unwrap();
         let reopened = TrafficCalendar::open(&p).unwrap();
