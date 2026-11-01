@@ -129,6 +129,8 @@ pub fn assess_metric_distribution(assessment: &MetricAssessment) -> Distribution
     // The latest observation must be clean, and the count must describe the
     // exact moments state being assessed. A stale/mismatched counter is unsafe.
     if assessment.quality != crate::ObservationQuality::Clean
+        || assessment.metric == crate::CountMetric::Flows
+        || assessment.degraded_observations != 0
         || clean < 10
         || assessment.moments.observations() != clean
     {
@@ -585,6 +587,26 @@ mod d7_d8_regression_tests {
     #[test]
     fn d7_rejects_latest_degraded_metric_observation() {
         let assessment = metric_assessment(ObservationQuality::Degraded, 12);
+        assert_eq!(
+            assess_metric_distribution(&assessment),
+            DistributionAssessment::InsufficientData
+        );
+    }
+
+    #[test]
+    fn d7_rejects_profiles_with_degraded_observations() {
+        let mut assessment = metric_assessment(ObservationQuality::Clean, 12);
+        assessment.degraded_observations = 1;
+        assert_eq!(
+            assess_metric_distribution(&assessment),
+            DistributionAssessment::InsufficientData
+        );
+    }
+
+    #[test]
+    fn d7_rejects_flow_metric_without_validated_flow_source() {
+        let mut assessment = metric_assessment(ObservationQuality::Clean, 12);
+        assessment.metric = CountMetric::Flows;
         assert_eq!(
             assess_metric_distribution(&assessment),
             DistributionAssessment::InsufficientData
