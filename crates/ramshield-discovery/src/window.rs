@@ -21,7 +21,7 @@ impl WindowKey {
             return Err(WindowError::InvalidServiceId);
         }
         if self.window_seconds == 0 || self.window_seconds > MAX_WINDOW_SECONDS
-            || self.window_start_secs % u64::from(self.window_seconds) != 0 {
+            || !self.window_start_secs.is_multiple_of(u64::from(self.window_seconds)) {
             return Err(WindowError::InvalidWindow);
         }
         Ok(())
