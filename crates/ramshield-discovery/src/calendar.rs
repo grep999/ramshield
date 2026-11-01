@@ -358,7 +358,7 @@ impl TrafficCalendar {
                 e.state = ExecutionState::Active;
                 e.start_time_secs = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .map_err(io::Error::other)?
                     .as_secs();
                 self.state.executions.insert(id.to_string(), e);
                 Ok(())
@@ -379,7 +379,7 @@ impl TrafficCalendar {
                 e.state = ExecutionState::Overrun;
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .map_err(io::Error::other)?
                     .as_secs();
                 let expected = e.start_time_secs + (e.expected_duration_hours * 3600);
                 e.actual_duration_hours = if now > expected {
@@ -406,7 +406,7 @@ impl TrafficCalendar {
                 e.state = ExecutionState::Completed;
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .map_err(io::Error::other)?
                     .as_secs();
                 let expected = e.start_time_secs + (e.expected_duration_hours * 3600);
                 e.actual_duration_hours = if now > expected {

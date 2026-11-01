@@ -802,7 +802,6 @@ mod tests {
 
     #[test]
     fn cardinality_estimator_known_cardinality() {
-        use crate::metric::CardinalityEstimate;
         let mut ce = CardinalityEstimator::new(4096);
         // Insert exactly 100 distinct identities
         let identities: Vec<u64> = (0..100u64).collect();

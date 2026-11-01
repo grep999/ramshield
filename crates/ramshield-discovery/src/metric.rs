@@ -3,7 +3,7 @@
 //! Every metric entering the statistical engine must carry a CountMetric identity.
 //! This prevents mixing units (e.g. packets vs bytes) in the same model.
 
-use crate::{CountMoments, ExpectedWorkload, TrafficDirection};
+use crate::{CountMoments, TrafficDirection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -101,16 +101,6 @@ impl Default for MetricAssessment {
             last_updated_secs: 0,
         }
     }
-}
-
-/// A composite assessment containing one MetricAssessment per supported metric.
-/// The existing CalendarAssessment (packet-only) is kept for backward compatibility.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ServiceAssessment {
-    pub service_id: String,
-    pub timestamp_secs: u64,
-    pub metrics: Vec<MetricAssessment>,
-    pub workloads: Vec<ExpectedWorkload>,
 }
 
 /// Initialise a fresh metric profile for a service/direction/metric/calendar slot.

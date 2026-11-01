@@ -181,7 +181,7 @@ impl WindowLedger {
         // Unique temp file using nanosecond timestamp to avoid conflicts
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(io::Error::other)?
             .as_nanos();
         let mut tmp = path.to_path_buf();
         tmp.set_file_name(format!(".ledger_tmp_{}.json", nanos));
