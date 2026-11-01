@@ -158,6 +158,13 @@ impl TrafficCalendar {
             if state.schema != SCHEMA || state.week.len() != WEEK_SLOTS || state.month.len() != MONTH_SLOTS || state.month_end.len() != 24 {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "traffic calendar schema mismatch"));
             }
+            let slots_valid = state.week.iter().chain(&state.month).chain(&state.month_end)
+                .all(|slot| slot.observations == slot.moments.observations() && slot.moments.is_valid());
+            let declarations_valid = state.declarations.iter()
+                .all(|(id, declaration)| id == &declaration.id && declaration.validate().is_ok());
+            if !slots_valid || !declarations_valid || state.declarations.len() > MAX_DECLARATIONS {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "traffic calendar contains invalid persisted state"));
+            }
             state
         } else {
             CalendarState { schema: SCHEMA, week: vec![Slot::default(); WEEK_SLOTS],
