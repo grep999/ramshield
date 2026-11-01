@@ -129,7 +129,10 @@ pub fn assess_metric_distribution(assessment: &MetricAssessment) -> Distribution
     // The latest observation must be clean, and the count must describe the
     // exact moments state being assessed. A stale/mismatched counter is unsafe.
     if assessment.quality != crate::ObservationQuality::Clean
-        || assessment.metric == crate::CountMetric::Flows
+        || matches!(
+            assessment.metric,
+            crate::CountMetric::Flows | crate::CountMetric::Bytes
+        )
         || assessment.degraded_observations != 0
         || clean < 10
         || assessment.moments.observations() != clean
