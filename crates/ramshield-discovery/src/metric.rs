@@ -576,7 +576,6 @@ impl MetricProfileStore {
     }
 }
 
-
 #[cfg(test)]
 mod retention_tests {
     use super::*;
@@ -634,17 +633,35 @@ mod retention_tests {
 
         store.prune_before(20);
 
-        assert!(store
-            .assessment("service-a", TrafficDirection::Ingress, CountMetric::Packets, 10)
-            .is_none());
-        assert!(store
-            .assessment("service-a", TrafficDirection::Ingress, CountMetric::Packets, 20)
-            .is_some());
-        assert!(store
-            .source_cardinality_estimate("service-a", TrafficDirection::Ingress, 10)
-            .is_none());
-        assert!(store
-            .source_cardinality_estimate("service-a", TrafficDirection::Ingress, 20)
-            .is_some());
+        assert!(
+            store
+                .assessment(
+                    "service-a",
+                    TrafficDirection::Ingress,
+                    CountMetric::Packets,
+                    10
+                )
+                .is_none()
+        );
+        assert!(
+            store
+                .assessment(
+                    "service-a",
+                    TrafficDirection::Ingress,
+                    CountMetric::Packets,
+                    20
+                )
+                .is_some()
+        );
+        assert!(
+            store
+                .source_cardinality_estimate("service-a", TrafficDirection::Ingress, 10)
+                .is_none()
+        );
+        assert!(
+            store
+                .source_cardinality_estimate("service-a", TrafficDirection::Ingress, 20)
+                .is_some()
+        );
     }
 }

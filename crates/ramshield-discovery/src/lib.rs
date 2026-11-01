@@ -406,25 +406,25 @@ impl Discovery {
         let service_key = service_id.as_u64().to_string();
         let previous_hour = hour.checked_sub(1);
 
-        let current_source =
-            profile.source_cardinality_estimate(&service_key, direction, hour);
-        let baseline_source = previous_hour
-            .and_then(|previous| profile.source_cardinality_estimate(&service_key, direction, previous));
-        let current_destination =
-            profile.dest_cardinality_estimate(&service_key, direction, hour);
-        let baseline_destination = previous_hour
-            .and_then(|previous| profile.dest_cardinality_estimate(&service_key, direction, previous));
+        let current_source = profile.source_cardinality_estimate(&service_key, direction, hour);
+        let baseline_source = previous_hour.and_then(|previous| {
+            profile.source_cardinality_estimate(&service_key, direction, previous)
+        });
+        let current_destination = profile.dest_cardinality_estimate(&service_key, direction, hour);
+        let baseline_destination = previous_hour.and_then(|previous| {
+            profile.dest_cardinality_estimate(&service_key, direction, previous)
+        });
 
-        let source_cardinality = current_source.as_ref().map_or(
-            DistributionAssessment::InsufficientData,
-            |current| {
-                assess_cardinality_anomaly(
-                    current,
-                    baseline_source.as_ref(),
-                    current.observations,
-                )
-            },
-        );
+        let source_cardinality =
+            current_source
+                .as_ref()
+                .map_or(DistributionAssessment::InsufficientData, |current| {
+                    assess_cardinality_anomaly(
+                        current,
+                        baseline_source.as_ref(),
+                        current.observations,
+                    )
+                });
         let destination_cardinality = current_destination.as_ref().map_or(
             DistributionAssessment::InsufficientData,
             |current| {
@@ -436,8 +436,7 @@ impl Discovery {
             },
         );
 
-        let cardinality_assessment = if source_cardinality
-            == DistributionAssessment::RequiresReview
+        let cardinality_assessment = if source_cardinality == DistributionAssessment::RequiresReview
             || destination_cardinality == DistributionAssessment::RequiresReview
         {
             DistributionAssessment::RequiresReview
@@ -701,7 +700,10 @@ mod tests {
         let mut event = sample(100 * 3600);
         event.source_key = Some(77);
         d.observe(event);
-        assert!(d.assess_service(ServiceId::new(77), TrafficDirection::Unknown, 100).is_none());
+        assert!(
+            d.assess_service(ServiceId::new(77), TrafficDirection::Unknown, 100)
+                .is_none()
+        );
         let _ = fs::remove_file(p);
     }
 
@@ -736,11 +738,20 @@ mod tests {
         let report = d
             .assess_service(ServiceId::new(9), TrafficDirection::Ingress, 100)
             .unwrap();
-        assert_eq!(report.source_cardinality, DistributionAssessment::InsufficientData);
-        assert_eq!(report.destination_cardinality, DistributionAssessment::InsufficientData);
-        assert!(report.metrics.iter().all(|metric| {
-            metric.calibration == DistributionAssessment::InsufficientData
-        }));
+        assert_eq!(
+            report.source_cardinality,
+            DistributionAssessment::InsufficientData
+        );
+        assert_eq!(
+            report.destination_cardinality,
+            DistributionAssessment::InsufficientData
+        );
+        assert!(
+            report
+                .metrics
+                .iter()
+                .all(|metric| { metric.calibration == DistributionAssessment::InsufficientData })
+        );
         let _ = fs::remove_file(p);
     }
 

@@ -366,12 +366,17 @@ mod tests {
         moments.push(11);
         moments.push(13);
         moments.push(10);
+        moments.push(11);
+        moments.push(12);
+        moments.push(10);
+        moments.push(11);
+        moments.push(13);
         let assessment = MetricAssessment {
             metric: CountMetric::Packets,
-            observed_packets: 56,
+            observed_packets: 113,
             quality: ObservationQuality::Clean,
             moments,
-            clean_observations: 5,
+            clean_observations: 10,
             degraded_observations: 0,
             baseline_source: None,
             last_updated_secs: 0,
@@ -389,10 +394,10 @@ mod tests {
 }
 
 /// Report-only threshold-calibration eligibility assessment with strict quality gating.
-////
-//// This function does not calculate a numeric threshold, validate a model, or
-//// authorize detector/enforcement changes. Normal means only that the supplied
-//// assessments passed these gates; it is not a production calibration claim.
+///
+/// This function does not calculate a numeric threshold, validate a model, or
+/// authorize detector/enforcement changes. Normal means only that the supplied
+/// assessments passed these gates; it is not a production calibration claim.
 ///
 /// **Rule**: Saturated estimators, insufficient samples, degraded windows,
 /// unknown metric semantics, and unvalidated statistical models must never
@@ -534,7 +539,6 @@ fn d8_guard_sufficient_passes() {
         DistributionAssessment::Normal
     );
 }
-
 
 #[cfg(test)]
 mod d7_d8_regression_tests {
