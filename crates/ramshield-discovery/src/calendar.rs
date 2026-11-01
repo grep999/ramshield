@@ -209,8 +209,11 @@ impl TrafficCalendar {
 
     /// Compare a new hourly count with recurring history. Monthly day-of-month
     /// history takes precedence when it has enough samples (useful for month-end
-    /// jobs); otherwise the hour-of-week profile is used. This is advisory only.
+    /// jobs); otherwise the hour-of-week profile is used. The current mean +/-
+    /// sigma band is descriptive only, not a calibrated prediction interval.
+    /// The count-family fit is diagnostic and does not establish goodness-of-fit.
     pub fn assess(&self, timestamp_secs: u64, observed_packets: u64, min_observations: u64, sigma: f64) -> CalendarAssessment {
+        let min_observations = min_observations.max(2);
         let hour = (timestamp_secs / 3600 % 24) as usize;
         let weekday = ((timestamp_secs / 86_400 + 3) % 7) as usize;
         let weekly = &self.state.week[weekday * 24 + hour];
@@ -233,7 +236,7 @@ impl TrafficCalendar {
         let variance = slot.moments.sample_variance().unwrap_or(0.0);
         let stddev = variance.sqrt();
         let count_model = fit_count_model(slot.observations, mean, variance);
-        let spread = sigma.max(0.0) * stddev;
+        let spread = if sigma.is_finite() { sigma.max(0.0) * stddev } else { 0.0 };
         let lower = (mean - spread).max(0.0);
         let upper = mean + spread;
         let observed = observed_packets as f64;
