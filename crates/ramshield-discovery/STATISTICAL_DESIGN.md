@@ -18,7 +18,7 @@ A declared workload is explanatory context, never an exemption. Observed deviati
 
 Use fixed UTC event-time windows. The initial collection resolution may be one minute, with hourly calendar summaries derived from completed windows. A window must have a stable identity `(service_id, window_start, window_width, metric)` so replay is idempotent.
 
-Represent at least these states distinctly:
+Represent at least these states distinctly. The current bounded `WindowLedger` prototype implements the three states and duplicate/conflict detection in memory; durable persistence and runtime integration remain caller responsibilities:
 
 - `Observed(value)`: collector completed the window; zero is a valid value.
 - `Missing(reason)`: no valid observation exists.
