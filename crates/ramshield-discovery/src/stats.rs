@@ -20,6 +20,11 @@ impl CountMoments {
     }
     pub fn observations(&self) -> u64 { self.observations }
     pub fn mean(&self) -> f64 { self.mean }
+    pub fn is_valid(&self) -> bool {
+        self.mean.is_finite() && self.mean >= 0.0 && self.m2.is_finite()
+            && self.m2 >= -f64::EPSILON
+            && (self.observations != 0 || (self.mean == 0.0 && self.m2 == 0.0))
+    }
     pub fn sample_variance(&self) -> Option<f64> {
         (self.observations > 1).then(|| (self.m2 / (self.observations - 1) as f64).max(0.0))
     }
@@ -40,7 +45,10 @@ pub fn fit_count_model(n: u64, mean: f64, variance: f64) -> CountModelFit {
     if n < 2 || !mean.is_finite() || !variance.is_finite() || mean < 0.0 || variance < 0.0 {
         return CountModelFit::InsufficientData;
     }
-    if mean <= f64::EPSILON { return CountModelFit::Poisson { mean: 0.0 }; }
+    if mean <= f64::EPSILON {
+        return if variance <= f64::EPSILON { CountModelFit::Poisson { mean: 0.0 } }
+            else { CountModelFit::Underdispersed { mean, variance } };
+    }
     let tolerance = 1e-9 * mean.max(1.0);
     if variance > mean + tolerance {
         let dispersion = (variance - mean) / (mean * mean);
