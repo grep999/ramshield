@@ -264,6 +264,26 @@ pub struct DiscoverySnapshot {
     pub hours: Vec<HourSummary>,
 }
 
+/// Report-only distribution diagnostics for one service and traffic direction.
+/// These states never modify detector configuration or enforcement.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricDistributionResult {
+    pub metric: CountMetric,
+    pub assessment: DistributionAssessment,
+    pub calibration: DistributionAssessment,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceDistributionAssessment {
+    pub service_id: ServiceId,
+    pub direction: TrafficDirection,
+    /// Absolute UTC hour used by the discovery profile store.
+    pub hour: u64,
+    pub source_cardinality: DistributionAssessment,
+    pub destination_cardinality: DistributionAssessment,
+    pub metrics: Vec<MetricDistributionResult>,
+}
+
 pub struct Discovery {
     config: DiscoveryConfig,
     state: PersistedState,
@@ -365,6 +385,106 @@ impl Discovery {
         }
 
         self.state.accepted = self.state.accepted.saturating_add(1);
+    }
+
+    /// Assess one service's latest hourly profiles against the preceding hour.
+    ///
+    /// This is a report-only integration point for D7/D8. It deliberately returns
+    /// InsufficientData for unknown direction, missing hourly cardinality baselines,
+    /// or unqualified metrics. It never emits numeric thresholds or changes runtime
+    /// configuration. TrafficSample counts are producer observations, not a claim
+    /// that independent completed windows have been collected.
+    pub fn assess_service(
+        &self,
+        service_id: ServiceId,
+        direction: TrafficDirection,
+        hour: u64,
+    ) -> Option<ServiceDistributionAssessment> {
+        let profile = self.service_profiles.get(&service_id)?;
+        let service_key = service_id.as_u64().to_string();
+        let previous_hour = hour.saturating_sub(1);
+
+        let current_source =
+            profile.source_cardinality_estimate(&service_key, direction, hour);
+        let baseline_source =
+            profile.source_cardinality_estimate(&service_key, direction, previous_hour);
+        let current_destination =
+            profile.dest_cardinality_estimate(&service_key, direction, hour);
+        let baseline_destination =
+            profile.dest_cardinality_estimate(&service_key, direction, previous_hour);
+
+        let source_cardinality = current_source.as_ref().map_or(
+            DistributionAssessment::InsufficientData,
+            |current| {
+                assess_cardinality_anomaly(
+                    current,
+                    baseline_source.as_ref(),
+                    current.observations,
+                )
+            },
+        );
+        let destination_cardinality = current_destination.as_ref().map_or(
+            DistributionAssessment::InsufficientData,
+            |current| {
+                assess_cardinality_anomaly(
+                    current,
+                    baseline_destination.as_ref(),
+                    current.observations,
+                )
+            },
+        );
+
+        let cardinality_assessment = if source_cardinality
+            == DistributionAssessment::RequiresReview
+            || destination_cardinality == DistributionAssessment::RequiresReview
+        {
+            DistributionAssessment::RequiresReview
+        } else if source_cardinality == DistributionAssessment::InsufficientData
+            || destination_cardinality == DistributionAssessment::InsufficientData
+        {
+            DistributionAssessment::InsufficientData
+        } else {
+            DistributionAssessment::Normal
+        };
+
+        let cardinality_saturated = current_source
+            .as_ref()
+            .is_some_and(|estimate| estimate.estimate == u64::MAX)
+            || current_destination
+                .as_ref()
+                .is_some_and(|estimate| estimate.estimate == u64::MAX);
+
+        let metrics = profile
+            .all_assessments(&service_key, direction, hour)
+            .into_iter()
+            .map(|assessment| {
+                let distribution = if direction == TrafficDirection::Unknown {
+                    DistributionAssessment::InsufficientData
+                } else {
+                    assess_metric_distribution(&assessment)
+                };
+                let calibration = calibrate_threshold(
+                    &cardinality_assessment,
+                    &distribution,
+                    cardinality_saturated,
+                    assessment.clean_observations,
+                );
+                MetricDistributionResult {
+                    metric: assessment.metric,
+                    assessment: distribution,
+                    calibration,
+                }
+            })
+            .collect();
+
+        Some(ServiceDistributionAssessment {
+            service_id,
+            direction,
+            hour,
+            source_cardinality,
+            destination_cardinality,
+            metrics,
+        })
     }
 
     pub fn observe_health(&mut self, sample: HealthSample) {
@@ -569,6 +689,78 @@ mod tests {
         assert!(s.hours[0].top_ports.len() <= 2);
         assert!(s.hours.len() <= 24);
         assert_eq!(s.observations_accepted, 99);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn service_identity_is_never_derived_from_endpoint_hash() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        let mut event = sample(100 * 3600);
+        event.source_key = Some(77);
+        d.observe(event);
+        assert!(d.assess_service(ServiceId::new(77), TrafficDirection::Unknown, 100).is_none());
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn service_admission_limit_does_not_reject_aggregate_observations() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        for id in 0..(MAX_SERVICES as u64 + 1) {
+            let mut event = sample(100 * 3600);
+            event.service_id = Some(ServiceId::new(id + 1));
+            event.direction = TrafficDirection::Ingress;
+            d.observe(event);
+        }
+        assert_eq!(d.service_profiles.len(), MAX_SERVICES);
+        assert_eq!(d.state.accepted, MAX_SERVICES as u64 + 1);
+        assert_eq!(d.state.too_old, 0);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn d7_d8_service_assessment_is_report_only_and_fails_closed_without_baseline() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        for key in 0..12u64 {
+            let mut event = sample(100 * 3600 + key);
+            event.service_id = Some(ServiceId::new(9));
+            event.direction = TrafficDirection::Ingress;
+            event.source_key = Some(key + 1);
+            event.destination_key = Some(key + 100);
+            d.observe(event);
+        }
+        let report = d
+            .assess_service(ServiceId::new(9), TrafficDirection::Ingress, 100)
+            .unwrap();
+        assert_eq!(report.source_cardinality, DistributionAssessment::InsufficientData);
+        assert_eq!(report.destination_cardinality, DistributionAssessment::InsufficientData);
+        assert!(report.metrics.iter().all(|metric| {
+            metric.calibration == DistributionAssessment::InsufficientData
+        }));
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn d7_d8_service_assessment_rejects_unknown_direction() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        for key in 0..12u64 {
+            let mut event = sample(100 * 3600 + key);
+            event.service_id = Some(ServiceId::new(10));
+            event.direction = TrafficDirection::Unknown;
+            event.source_key = Some(key + 1);
+            event.destination_key = Some(key + 100);
+            d.observe(event);
+        }
+        let report = d
+            .assess_service(ServiceId::new(10), TrafficDirection::Unknown, 100)
+            .unwrap();
+        assert!(report.metrics.iter().all(|metric| {
+            metric.assessment == DistributionAssessment::InsufficientData
+                && metric.calibration == DistributionAssessment::InsufficientData
+        }));
         let _ = fs::remove_file(p);
     }
 
