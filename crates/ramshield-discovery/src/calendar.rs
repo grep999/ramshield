@@ -237,7 +237,7 @@ impl TrafficCalendar {
             return CalendarAssessment { kind: CalendarAssessmentKind::InsufficientData,
                 baseline_source: None, observations: monthly.map_or(weekly.observations, |m| m.observations),
                 mean_packets: None, standard_deviation_packets: None, count_model: None, observed_packets,
-                lower_expected_packets: None, upper_expected_packets: None, active_workloads };
+                lower_descriptive_packets: None, upper_descriptive_packets: None, active_workloads };
         };
         let mean = slot.moments.mean();
         let variance = slot.moments.sample_variance().unwrap_or(0.0);
@@ -247,13 +247,13 @@ impl TrafficCalendar {
         let lower = (mean - spread).max(0.0);
         let upper = mean + spread;
         let observed = observed_packets as f64;
-        let kind = if observed > upper { CalendarAssessmentKind::AboveExpectedRange }
-            else if observed < lower { CalendarAssessmentKind::BelowExpectedRange }
-            else { CalendarAssessmentKind::WithinExpectedRange };
+        let kind = if observed > upper { CalendarAssessmentKind::AboveDescriptiveBand }
+            else if observed < lower { CalendarAssessmentKind::BelowDescriptiveBand }
+            else { CalendarAssessmentKind::WithinDescriptiveBand };
         CalendarAssessment { kind, baseline_source: Some(source.to_string()),
             observations: slot.observations, mean_packets: Some(mean),
             standard_deviation_packets: Some(stddev), count_model: Some(count_model), observed_packets,
-            lower_expected_packets: Some(lower), upper_expected_packets: Some(upper), active_workloads }
+            lower_descriptive_packets: Some(lower), upper_descriptive_packets: Some(upper), active_workloads }
     }
 
     pub fn snapshot(&self) -> CalendarSnapshot {
@@ -378,10 +378,10 @@ mod tests {
             declared_at_secs: 0, notes: Some("Expected monthly batch".into()),
         }).unwrap();
         let assessment = c.assess(monday_midnight + 4 * 7 * 86_400, 1_000, 4, 3.0);
-        assert_eq!(assessment.kind, CalendarAssessmentKind::AboveExpectedRange);
+        assert_eq!(assessment.kind, CalendarAssessmentKind::AboveDescriptiveBand);
         assert_eq!(assessment.baseline_source.as_deref(), Some("hour-of-week"));
         assert_eq!(assessment.observations, 4);
-        assert!(assessment.upper_expected_packets.unwrap() < 1_000.0);
+        assert!(assessment.upper_descriptive_packets.unwrap() < 1_000.0);
         assert!(assessment.count_model.is_some());
         let _ = fs::remove_file(p);
     }
