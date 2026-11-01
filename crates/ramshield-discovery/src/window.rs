@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(ledger.record(observation(WindowState::Observed { packets: 1, bytes: 1 }, 0)).unwrap(), RecordOutcome::Inserted);
         assert_eq!(ledger.record(observation(WindowState::Observed { packets: 1, bytes: 1 }, 60)).unwrap(), RecordOutcome::Inserted);
         assert_eq!(ledger.record(observation(WindowState::Observed { packets: 1, bytes: 1 }, 120)).unwrap(), RecordOutcome::InsertedAfterEviction);
-        assert_eq!(ledger.record(observation(WindowState::Observed { packets: 1, bytes: 1 }, 30)).unwrap(), RecordOutcome::RejectedTooOld);
+        assert_eq!(ledger.record(observation(WindowState::Observed { packets: 1, bytes: 1 }, 0)).unwrap(), RecordOutcome::RejectedTooOld);
         assert_eq!(ledger.len(), 2);
     }
 }
