@@ -1,7 +1,12 @@
 //! Explicit service-window semantics for passive learning.
 //! Missing and degraded windows are never represented as zero-valued traffic.
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    fs::{self, File, OpenOptions},
+    io::{self, Write},
+    path::Path,
+};
 
 const MAX_SERVICE_ID_BYTES: usize = 128;
 const MAX_WINDOW_SECONDS: u32 = 86_400;
@@ -79,11 +84,12 @@ pub enum RecordOutcome {
     RejectedTooOld,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowError {
     InvalidServiceId,
     InvalidWindow,
     InvalidCapacity,
+    Io(String),
 }
 
 /// Bounded in-memory idempotency ledger. Persistence and runtime feeding are
@@ -141,6 +147,59 @@ impl WindowLedger {
     }
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Atomic snapshot persistence: temp file, file fsync, rename, directory fsync.
+    pub fn flush(&self, path: impl AsRef<Path>) -> io::Result<()> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let pairs: Vec<(WindowKey, WindowState)> = self
+            .entries
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let bytes = serde_json::to_vec(&pairs)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let mut tmp = path.to_path_buf();
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("json");
+        tmp.set_extension(format!("{ext}.tmp"));
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&tmp)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&tmp, path)?;
+        if let Some(parent) = path.parent() {
+            File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    }
+
+    /// Reconstruct a WindowLedger from a persisted snapshot.
+    pub fn reopen(path: impl AsRef<Path>, max_entries: usize) -> Result<Self, WindowError> {
+        let path = path.as_ref();
+        if !path.exists() {
+            return Err(WindowError::InvalidCapacity);
+        }
+        let bytes = fs::read(path).map_err(|e| WindowError::Io(e.to_string()))?;
+        let pairs: Vec<(WindowKey, WindowState)> =
+            serde_json::from_slice(&bytes).map_err(|e| WindowError::Io(e.to_string()))?;
+        let entries: BTreeMap<WindowKey, WindowState> = pairs.into_iter().collect();
+        if entries.len() > max_entries {
+            return Err(WindowError::InvalidCapacity);
+        }
+        for key in entries.keys() {
+            key.validate()?;
+        }
+        Ok(Self {
+            max_entries,
+            entries,
+        })
     }
 }
 
@@ -270,5 +329,85 @@ mod tests {
             RecordOutcome::RejectedTooOld
         );
         assert_eq!(ledger.len(), 2);
+    }
+
+    #[test]
+    fn persisted_state_recovers_after_reopen() {
+        let p = std::env::temp_dir().join(format!(
+            "ledger_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut ledger = WindowLedger::new(8).unwrap();
+        let zero = observation(
+            WindowState::Observed {
+                packets: 42,
+                bytes: 1000,
+            },
+            0,
+        );
+        assert_eq!(ledger.record(zero).unwrap(), RecordOutcome::Inserted);
+        ledger.flush(&p).unwrap();
+        let recovered = WindowLedger::reopen(&p, 8).unwrap();
+        assert_eq!(recovered.len(), 1);
+        let key = WindowKey {
+            service_id: "billing-worker".into(),
+            window_start_secs: 0,
+            window_seconds: 60,
+        };
+        assert_eq!(
+            recovered.entries[&key],
+            WindowState::Observed {
+                packets: 42,
+                bytes: 1000
+            }
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn persistence_evicts_exceeds_max_entries() {
+        let p = std::env::temp_dir().join(format!(
+            "ledger_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut ledger = WindowLedger::new(2).unwrap();
+        let a = observation(
+            WindowState::Observed {
+                packets: 1,
+                bytes: 1,
+            },
+            0,
+        );
+        let b = observation(
+            WindowState::Observed {
+                packets: 2,
+                bytes: 2,
+            },
+            60,
+        );
+        let c = observation(
+            WindowState::Observed {
+                packets: 3,
+                bytes: 3,
+            },
+            120,
+        );
+        assert_eq!(ledger.record(a).unwrap(), RecordOutcome::Inserted);
+        assert_eq!(ledger.record(b).unwrap(), RecordOutcome::Inserted);
+        assert_eq!(
+            ledger.record(c).unwrap(),
+            RecordOutcome::InsertedAfterEviction
+        );
+        ledger.flush(&p).unwrap();
+        let recovered = WindowLedger::reopen(&p, 2).unwrap();
+        assert_eq!(recovered.len(), 2);
+        assert_eq!(recovered.entries.len(), 2);
+        let _ = std::fs::remove_file(&p);
     }
 }
