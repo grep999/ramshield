@@ -21,8 +21,9 @@ pub use calendar::{
     WorkloadExecution,
 };
 pub use metric::{
-    CountMetric, MetricAssessment, MetricProfileStore, ObservationQuality, ProfileKey,
-    extend_assessment, new_profile_key, observe_clean, reset_quality_counts,
+    CardinalityEstimate, CardinalityEstimator, CountMetric, MetricAssessment, MetricProfileStore,
+    ObservationQuality, ProfileKey, extend_assessment, new_profile_key, observe_clean,
+    reset_quality_counts,
 };
 pub use stats::{CountModelFit, CountMoments, fit_count_model};
 pub use window::{
@@ -331,6 +332,19 @@ impl Discovery {
             })
         });
 
+        // D6: observe source/destination cardinality into per-service profiles
+        if let Some(service_id) = &effective_service_id {
+            let profile = self.service_profiles.entry(*service_id).or_default();
+            profile.observe_cardinality(
+                service_id.as_u64().to_string(),
+                TrafficDirection::Unknown,
+                hour,
+                sample.source_key,
+                sample.destination_key,
+                ObservationQuality::Clean,
+            );
+        }
+
         // Enforce MAX_SERVICES limit on per-service profile creation
         let service_count = self.service_profiles.len();
         let is_new_service = effective_service_id
@@ -343,10 +357,7 @@ impl Discovery {
 
         // Thread per-service packet/byte profiles (D5.2)
         if let Some(service_id) = effective_service_id {
-            let profile = self
-                .service_profiles
-                .entry(service_id)
-                .or_insert_with(MetricProfileStore::new);
+            let profile = self.service_profiles.entry(service_id).or_default();
             let hour_slot = hour;
             profile.observe_volume(
                 service_id.as_u64().to_string(),
@@ -563,5 +574,237 @@ mod tests {
         assert!(s.hours.len() <= 24);
         assert_eq!(s.observations_accepted, 99);
         let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn cardinality_estimator_linear_counting_basic() {
+        use crate::metric::CardinalityEstimator;
+        let mut ce = CardinalityEstimator::new(4096);
+        // Identity 0 is special - let's use real keys
+        for i in 0..10u64 {
+            ce.observe(i);
+        }
+        let estimate = ce.estimate();
+        assert!(
+            estimate.estimate >= 10,
+            "estimate {:?} should be >= 10, got {:?}",
+            estimate.estimate,
+            estimate
+        );
+        assert!(
+            estimate.estimate <= 20,
+            "estimate {:?} should be <= 20 for 10 inserted, got {:?}",
+            estimate.estimate,
+            estimate
+        );
+    }
+
+    #[test]
+    fn cardinality_estimator_known_cardinality() {
+        use crate::metric::CardinalityEstimate;
+        let mut ce = CardinalityEstimator::new(4096);
+        // Insert exactly 100 distinct identities
+        let identities: Vec<u64> = (0..100u64).collect();
+        for id in &identities {
+            ce.observe(*id);
+        }
+        let est = ce.estimate();
+        // Linear counting should be within a factor of ~2 of 100 for 4096 bits
+        assert!(
+            est.estimate >= 60,
+            "estimate {} should be >= 60 for 100 inserted",
+            est.estimate
+        );
+        assert!(
+            est.estimate <= 140,
+            "estimate {} should be <= 140 for 100 inserted",
+            est.estimate
+        );
+        // Standard error should be non-zero and reasonable
+        assert!(
+            est.standard_error > 0.0,
+            "standard_error should be positive"
+        );
+    }
+
+    #[test]
+    fn cardinality_estimator_known_cardinality_1000() {
+        let mut ce = CardinalityEstimator::new(4096);
+        // Insert exactly 1000 distinct identities
+        let identities: Vec<u64> = (0..1000u64).collect();
+        for id in &identities {
+            ce.observe(*id);
+        }
+        let est = ce.estimate();
+        // For larger cardinalities, error grows; still should be in the ballpark
+        assert!(
+            est.estimate >= 500,
+            "estimate {} should be >= 500 for 1000 inserted",
+            est.estimate
+        );
+        assert!(
+            est.estimate <= 1500,
+            "estimate {} should be <= 1500 for 1000 inserted",
+            est.estimate
+        );
+    }
+
+    #[test]
+    fn cardinality_estimator_idempotent() {
+        let mut ce = CardinalityEstimator::new(4096);
+        let id = 42u64;
+        // Observe same identity 10 times
+        for _ in 0..10 {
+            ce.observe(id);
+        }
+        let est = ce.estimate();
+        // Should still estimate ~1 distinct identity
+        assert!(
+            est.estimate >= 1,
+            "estimate should be >= 1, got {}",
+            est.estimate
+        );
+        assert!(
+            est.estimate <= 5,
+            "estimate should be <= 5 for repeated id, got {}",
+            est.estimate
+        );
+    }
+
+    #[test]
+    fn cardinality_estimator_zero() {
+        let ce = CardinalityEstimator::new(4096);
+        let est = ce.estimate();
+        assert_eq!(est.estimate, 0);
+        assert_eq!(est.observations, 0);
+    }
+
+    #[test]
+    fn metric_profile_store_cardinality_observation() {
+        let mut ps = MetricProfileStore::new();
+        ps.observe_cardinality(
+            "svc-1".into(),
+            TrafficDirection::Unknown,
+            0u64,
+            Some(17u64),
+            Some(29u64),
+            ObservationQuality::Clean,
+        );
+        ps.observe_cardinality(
+            "svc-1".into(),
+            TrafficDirection::Unknown,
+            0u64,
+            Some(17u64), // repeated - should not inflate
+            Some(29u64),
+            ObservationQuality::Clean,
+        );
+        ps.observe_cardinality(
+            "svc-1".into(),
+            TrafficDirection::Unknown,
+            0u64,
+            Some(18u64), // new distinct source
+            None,
+            ObservationQuality::Clean,
+        );
+
+        let src_est = ps.source_cardinality_estimate("svc-1", TrafficDirection::Unknown, 0);
+        assert!(
+            src_est.is_some(),
+            "source cardinality estimate should exist"
+        );
+        let est = src_est.unwrap();
+        // Two distinct sources (17, 18) plus one repeated = ~2-3
+        assert!(
+            est.estimate >= 1,
+            "estimate should be >= 1, got {}",
+            est.estimate
+        );
+        assert!(
+            est.estimate <= 5,
+            "estimate should be <= 5 for 2 distinct, got {}",
+            est.estimate
+        );
+
+        let dst_est = ps.dest_cardinality_estimate("svc-1", TrafficDirection::Unknown, 0);
+        assert!(dst_est.is_some(), "dest cardinality estimate should exist");
+    }
+
+    #[test]
+    fn cardinality_independence_per_service() {
+        let mut ps1 = MetricProfileStore::new();
+        let mut ps2 = MetricProfileStore::new();
+
+        // Service A: source keys 1..10
+        for i in 0..10u64 {
+            ps1.observe_cardinality(
+                "svc-a".into(),
+                TrafficDirection::Unknown,
+                0u64,
+                Some(i),
+                None,
+                ObservationQuality::Clean,
+            );
+        }
+
+        // Service B: source keys 20..29 (different, no overlap)
+        for i in 20..30u64 {
+            ps2.observe_cardinality(
+                "svc-b".into(),
+                TrafficDirection::Unknown,
+                0u64,
+                Some(i),
+                None,
+                ObservationQuality::Clean,
+            );
+        }
+
+        let a_src = ps1
+            .source_cardinality_estimate("svc-a", TrafficDirection::Unknown, 0)
+            .unwrap();
+        let b_src = ps2
+            .source_cardinality_estimate("svc-b", TrafficDirection::Unknown, 0)
+            .unwrap();
+
+        // Service A should estimate ~10 distinct
+        assert!(
+            a_src.estimate >= 6,
+            "svc-a estimate should be >= 6, got {}",
+            a_src.estimate
+        );
+        assert!(
+            a_src.estimate <= 15,
+            "svc-a estimate should be <= 15, got {}",
+            a_src.estimate
+        );
+
+        // Service B should estimate ~10 distinct
+        assert!(
+            b_src.estimate >= 6,
+            "svc-b estimate should be >= 6, got {}",
+            b_src.estimate
+        );
+        assert!(
+            b_src.estimate <= 15,
+            "svc-b estimate should be <= 15, got {}",
+            b_src.estimate
+        );
+    }
+
+    #[test]
+    fn cardinality_estimator_bounded_memory() {
+        let mut ce = CardinalityEstimator::new(64); // tiny bitmap
+        // Insert many distinct identities
+        for i in 0..500u64 {
+            ce.observe(i);
+        }
+        let est = ce.estimate();
+        // Memory is always 64 bits regardless of 500 inserted
+        // Estimate will be approximate with significant error at this scale
+        assert!(est.estimate > 0, "estimate should be > 0");
+        // Memory stays bounded - verify bitmap size via bit_count accessor
+        assert!(
+            ce.bit_count() <= 64,
+            "bitmap memory should be bounded (64 bits)"
+        );
     }
 }
