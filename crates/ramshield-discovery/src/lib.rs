@@ -15,7 +15,8 @@ mod stats;
 mod window;
 pub use calendar::{
     CalendarAssessment, CalendarAssessmentKind, CalendarSlotSummary, CalendarSnapshot,
-    ExpectedWorkload, Recurrence, TrafficCalendar, WorkloadDeclaration,
+    ExecutionState, ExpectedWorkload, Recurrence, TrafficCalendar, WorkloadDeclaration,
+    WorkloadExecution,
 };
 pub use stats::{CountModelFit, CountMoments, fit_count_model};
 pub use window::{

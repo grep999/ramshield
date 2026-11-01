@@ -146,6 +146,7 @@ struct CalendarState {
     month: Vec<Slot>,
     month_end: Vec<Slot>,
     declarations: BTreeMap<String, WorkloadDeclaration>,
+    executions: BTreeMap<String, WorkloadExecution>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,6 +200,30 @@ pub struct ExpectedWorkload {
     pub notes: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkloadExecution {
+    pub id: String,
+    pub description: String,
+    pub state: ExecutionState,
+    pub start_time_secs: u64,
+    pub expected_duration_hours: u64,
+    pub actual_duration_hours: Option<u64>,
+    pub declared_by: String,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ExecutionState {
+    #[default]
+    Declared,
+    Scheduled,
+    Active,
+    Overrun,
+    Completed,
+    Cancelled,
+    Missed,
+}
+
 pub struct TrafficCalendar {
     state: CalendarState,
     path: PathBuf,
@@ -232,7 +257,15 @@ impl TrafficCalendar {
                 .declarations
                 .iter()
                 .all(|(id, declaration)| id == &declaration.id && declaration.validate().is_ok());
-            if !slots_valid || !declarations_valid || state.declarations.len() > MAX_DECLARATIONS {
+            let executions_valid = state
+                .executions
+                .iter()
+                .all(|(id, execution)| id == &execution.id);
+            if !slots_valid
+                || !declarations_valid
+                || !executions_valid
+                || state.declarations.len() > MAX_DECLARATIONS
+            {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "traffic calendar contains invalid persisted state",
@@ -246,6 +279,7 @@ impl TrafficCalendar {
                 month: vec![Slot::default(); MONTH_SLOTS],
                 month_end: vec![Slot::default(); 24],
                 declarations: BTreeMap::new(),
+                executions: BTreeMap::new(),
             }
         };
         Ok(Self { state, path })
@@ -271,6 +305,167 @@ impl TrafficCalendar {
 
     pub fn remove_workload(&mut self, id: &str) -> bool {
         self.state.declarations.remove(id).is_some()
+    }
+
+    /// Record that a workload execution has begun. Creates a new execution
+    /// record in the Scheduled state. Replaces any existing execution with
+    /// the same ID.
+    pub fn declare_execution(&mut self, execution: WorkloadExecution) -> io::Result<()> {
+        if execution.state != ExecutionState::Scheduled {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "execution must start in Scheduled state",
+            ));
+        }
+        if execution.start_time_secs == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "execution start_time_secs must be nonzero",
+            ));
+        }
+        if self.state.executions.len() >= MAX_DECLARATIONS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "execution limit reached",
+            ));
+        }
+        self.state
+            .executions
+            .insert(execution.id.clone(), execution);
+        Ok(())
+    }
+
+    /// Transition an execution to a new state.
+    pub fn transition_execution(
+        &mut self,
+        id: &str,
+        new_state: ExecutionState,
+    ) -> Result<(), io::Error> {
+        match new_state {
+            ExecutionState::Active => {
+                let Some(mut e) = self.state.executions.get(id).cloned() else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "execution not found",
+                    ));
+                };
+                if e.state != ExecutionState::Scheduled {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid transition",
+                    ));
+                }
+                e.state = ExecutionState::Active;
+                e.start_time_secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                self.state.executions.insert(id.to_string(), e);
+                Ok(())
+            }
+            ExecutionState::Overrun => {
+                let Some(mut e) = self.state.executions.get(id).cloned() else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "execution not found",
+                    ));
+                };
+                if e.state != ExecutionState::Active {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid transition",
+                    ));
+                }
+                e.state = ExecutionState::Overrun;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                let expected = e.start_time_secs + (e.expected_duration_hours * 3600);
+                e.actual_duration_hours = if now > expected {
+                    Some((now - expected) / 3600)
+                } else {
+                    None
+                };
+                self.state.executions.insert(id.to_string(), e);
+                Ok(())
+            }
+            ExecutionState::Completed => {
+                let Some(mut e) = self.state.executions.get(id).cloned() else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "execution not found",
+                    ));
+                };
+                if e.state != ExecutionState::Active {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid transition",
+                    ));
+                }
+                e.state = ExecutionState::Completed;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                let expected = e.start_time_secs + (e.expected_duration_hours * 3600);
+                e.actual_duration_hours = if now > expected {
+                    Some((now - expected) / 3600)
+                } else {
+                    None
+                };
+                self.state.executions.insert(id.to_string(), e);
+                Ok(())
+            }
+            ExecutionState::Cancelled => {
+                let Some(mut e) = self.state.executions.get(id).cloned() else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "execution not found",
+                    ));
+                };
+                if e.state == ExecutionState::Completed {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid transition",
+                    ));
+                }
+                e.state = ExecutionState::Cancelled;
+                self.state.executions.insert(id.to_string(), e);
+                Ok(())
+            }
+            ExecutionState::Missed => {
+                let Some(mut e) = self.state.executions.get(id).cloned() else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "execution not found",
+                    ));
+                };
+                if e.state != ExecutionState::Scheduled {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid transition",
+                    ));
+                }
+                e.state = ExecutionState::Missed;
+                self.state.executions.insert(id.to_string(), e);
+                Ok(())
+            }
+            ExecutionState::Scheduled | ExecutionState::Declared => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid transition",
+            )),
+        }
+    }
+
+    /// Get the current execution state for a given execution ID.
+    pub fn execution_state(&self, id: &str) -> Option<ExecutionState> {
+        self.state.executions.get(id).map(|e| e.state)
+    }
+
+    /// Get the full execution record for a given ID.
+    pub fn execution(&self, id: &str) -> Option<&WorkloadExecution> {
+        self.state.executions.get(id)
     }
 
     /// Aggregate an hourly traffic observation into recurring calendar slots.
