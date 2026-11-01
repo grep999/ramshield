@@ -171,6 +171,39 @@ impl TrafficCalendar {
         }).collect()
     }
 
+    /// Compare a new hourly count with recurring history. Monthly day-of-month
+    /// history takes precedence when it has enough samples (useful for month-end
+    /// jobs); otherwise the hour-of-week profile is used. This is advisory only.
+    pub fn assess(&self, timestamp_secs: u64, observed_packets: u64, min_observations: u64, sigma: f64) -> CalendarAssessment {
+        let hour = (timestamp_secs / 3600 % 24) as usize;
+        let weekday = ((timestamp_secs / 86_400 + 3) % 7) as usize;
+        let weekly = &self.state.week[weekday * 24 + hour];
+        let monthly = utc_day_of_month(timestamp_secs)
+            .map(|day| &self.state.month[(usize::from(day) - 1) * 24 + hour]);
+        let selected = monthly.filter(|slot| slot.observations >= min_observations)
+            .map(|slot| ("hour-of-month", slot))
+            .or_else(|| (weekly.observations >= min_observations).then_some(("hour-of-week", weekly)));
+        let active_workloads = self.expected_workloads(timestamp_secs);
+        let Some((source, slot)) = selected else {
+            return CalendarAssessment { kind: CalendarAssessmentKind::InsufficientData,
+                baseline_source: None, observations: monthly.map_or(weekly.observations, |m| m.observations),
+                mean_packets: None, standard_deviation_packets: None, observed_packets,
+                upper_expected_packets: None, active_workloads };
+        };
+        let mean = slot.packets as f64 / slot.observations as f64;
+        let mean_square = slot.packets_squared as f64 / slot.observations as f64;
+        let variance = (mean_square - mean * mean).max(0.0);
+        let stddev = variance.sqrt();
+        let upper = mean + sigma.max(0.0) * stddev;
+        let kind = if observed_packets as f64 > upper {
+            CalendarAssessmentKind::AboveExpectedRange
+        } else { CalendarAssessmentKind::WithinExpectedRange };
+        CalendarAssessment { kind, baseline_source: Some(source.to_string()),
+            observations: slot.observations, mean_packets: Some(mean),
+            standard_deviation_packets: Some(stddev), observed_packets,
+            upper_expected_packets: Some(upper), active_workloads }
+    }
+
     pub fn snapshot(&self) -> CalendarSnapshot {
         CalendarSnapshot {
             week: summaries(&self.state.week),
