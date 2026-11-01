@@ -13,7 +13,7 @@ const MONTH_SLOTS: usize = 31 * 24;
 const SCHEMA: u32 = 2;
 const MAX_DECLARATIONS: usize = 512;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Recurrence {
     Daily,
     Weekly { weekday: u8 },
