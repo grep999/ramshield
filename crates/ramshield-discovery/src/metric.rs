@@ -551,6 +551,17 @@ impl MetricProfileStore {
         results
     }
 
+    /// Prune metric and cardinality state older than the caller's retention boundary.
+    /// The caller supplies an absolute UTC hour so this store follows DiscoveryConfig.
+    pub fn prune_before(&mut self, oldest_hour: u64) {
+        self.profiles
+            .retain(|key, _| key.calendar_slot >= oldest_hour);
+        self.source_cardinality
+            .retain(|(_, _, hour), _| *hour >= oldest_hour);
+        self.dest_cardinality
+            .retain(|(_, _, hour), _| *hour >= oldest_hour);
+    }
+
     /// Number of distinct profiles stored.
     pub fn len(&self) -> usize {
         self.profiles.len()
@@ -558,5 +569,63 @@ impl MetricProfileStore {
 
     pub fn is_empty(&self) -> bool {
         self.profiles.is_empty()
+    }
+}
+
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    #[test]
+    fn pruning_removes_expired_metric_and_cardinality_profiles() {
+        let mut store = MetricProfileStore::new();
+        store.observe(
+            "service-a".into(),
+            TrafficDirection::Ingress,
+            CountMetric::Packets,
+            10,
+            100,
+            ObservationQuality::Clean,
+        );
+        store.observe_cardinality(
+            "service-a".into(),
+            TrafficDirection::Ingress,
+            10,
+            Some(1),
+            Some(2),
+            ObservationQuality::Clean,
+        );
+        store.observe(
+            "service-a".into(),
+            TrafficDirection::Ingress,
+            CountMetric::Packets,
+            20,
+            120,
+            ObservationQuality::Clean,
+        );
+        store.observe_cardinality(
+            "service-a".into(),
+            TrafficDirection::Ingress,
+            20,
+            Some(3),
+            Some(4),
+            ObservationQuality::Clean,
+        );
+
+        store.prune_before(20);
+
+        assert!(store
+            .assessment("service-a", TrafficDirection::Ingress, CountMetric::Packets, 10)
+            .is_none());
+        assert!(store
+            .assessment("service-a", TrafficDirection::Ingress, CountMetric::Packets, 20)
+            .is_some());
+        assert!(store
+            .source_cardinality_estimate("service-a", TrafficDirection::Ingress, 10)
+            .is_none());
+        assert!(store
+            .source_cardinality_estimate("service-a", TrafficDirection::Ingress, 20)
+            .is_some());
     }
 }
