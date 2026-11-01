@@ -11,6 +11,7 @@ use std::{collections::BTreeMap, fs, io, path::{Path, PathBuf}};
 const WEEK_SLOTS: usize = 7 * 24;
 const MONTH_SLOTS: usize = 31 * 24;
 const SCHEMA: u32 = 1;
+const MAX_DECLARATIONS: usize = 512;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Recurrence {
@@ -40,7 +41,9 @@ impl WorkloadDeclaration {
         if self.id.is_empty() || self.id.len() > 96 || !self.id.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "workload id must be 1..=96 ASCII alphanumeric/._- characters"));
         }
-        if self.description.len() > 512 || self.declared_by.len() > 128 || self.expected_services.len() > 64 {
+        if self.description.len() > 512 || self.declared_by.len() > 128 || self.expected_services.len() > 64
+            || self.expected_services.iter().any(|service| service.is_empty() || service.len() > 128)
+            || self.notes.as_ref().is_some_and(|notes| notes.len() > 1_024) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "workload declaration exceeds field bounds"));
         }
         if self.start_hour > 23 || !(1..=24).contains(&self.duration_hours) {
@@ -156,6 +159,9 @@ impl TrafficCalendar {
     /// Replacing a declaration with the same ID updates its operator-provided context.
     pub fn declare_workload(&mut self, declaration: WorkloadDeclaration) -> io::Result<()> {
         declaration.validate()?;
+        if !self.state.declarations.contains_key(&declaration.id) && self.state.declarations.len() >= MAX_DECLARATIONS {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "workload declaration limit reached"));
+        }
         self.state.declarations.insert(declaration.id.clone(), declaration);
         Ok(())
     }
