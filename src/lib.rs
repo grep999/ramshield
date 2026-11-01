@@ -5,7 +5,7 @@
 pub mod config { pub use ramshield_config::*; }
 pub mod dashboard;
 pub mod detection { pub use ramshield_detection::*; }
-pub mod discovery { pub use ramshield_discovery::*; }
+pub mod learning { pub use ramshield_learning::*; }
 pub mod engine;
 pub mod enforcement { pub use ramshield_enforcement::*; }
 pub mod forecasting { pub use ramshield_forecasting::*; }
