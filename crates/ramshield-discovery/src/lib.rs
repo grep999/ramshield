@@ -373,7 +373,15 @@ impl Discovery {
 
     fn bucket_mut(&mut self, hour: u64) -> Option<&mut HourBucket> {
         let retention = self.config.bucket_count() as u64;
-        if let Some(newest) = self.state.buckets.iter().flatten().map(|b| b.hour).max() {
+        if let Some(newest) = self
+            .state
+            .buckets
+            .iter()
+            .flatten()
+            .map(|bucket| bucket.hour)
+            .max()
+        {
+            let newest = newest.max(hour);
             let oldest = newest.saturating_sub(retention - 1);
             if hour < oldest {
                 return None;
