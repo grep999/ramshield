@@ -10,7 +10,7 @@ use std::{collections::BTreeMap, fs, io, path::{Path, PathBuf}};
 
 const WEEK_SLOTS: usize = 7 * 24;
 const MONTH_SLOTS: usize = 31 * 24;
-const SCHEMA: u32 = 1;
+const SCHEMA: u32 = 2;
 const MAX_DECLARATIONS: usize = 512;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -90,6 +90,7 @@ struct CalendarState {
     schema: u32,
     week: Vec<Slot>,
     month: Vec<Slot>,
+    month_end: Vec<Slot>,
     declarations: BTreeMap<String, WorkloadDeclaration>,
 }
 
@@ -105,6 +106,7 @@ pub struct CalendarSlotSummary {
 pub struct CalendarSnapshot {
     pub week: Vec<CalendarSlotSummary>,
     pub month: Vec<CalendarSlotSummary>,
+    pub month_end: Vec<CalendarSlotSummary>,
     pub declarations: Vec<WorkloadDeclaration>,
 }
 
@@ -144,13 +146,13 @@ impl TrafficCalendar {
         let state = if path.exists() {
             let state: CalendarState = serde_json::from_slice(&fs::read(&path)?)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            if state.schema != SCHEMA || state.week.len() != WEEK_SLOTS || state.month.len() != MONTH_SLOTS {
+            if state.schema != SCHEMA || state.week.len() != WEEK_SLOTS || state.month.len() != MONTH_SLOTS || state.month_end.len() != 24 {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "traffic calendar schema mismatch"));
             }
             state
         } else {
             CalendarState { schema: SCHEMA, week: vec![Slot::default(); WEEK_SLOTS],
-                month: vec![Slot::default(); MONTH_SLOTS], declarations: BTreeMap::new() }
+                month: vec![Slot::default(); MONTH_SLOTS], month_end: vec![Slot::default(); 24], declarations: BTreeMap::new() }
         };
         Ok(Self { state, path })
     }
@@ -182,6 +184,9 @@ impl TrafficCalendar {
             let month_slot = (usize::from(day) - 1) * 24 + hour_of_day;
             add(&mut self.state.month[month_slot], packets, bytes);
         }
+        if is_month_end(timestamp_secs) {
+            add(&mut self.state.month_end[hour_of_day], packets, bytes);
+        }
     }
 
     /// Operator context matching the supplied time. Declarations never erase samples.
@@ -202,8 +207,11 @@ impl TrafficCalendar {
         let weekly = &self.state.week[weekday * 24 + hour];
         let monthly = utc_day_of_month(timestamp_secs)
             .map(|day| &self.state.month[(usize::from(day) - 1) * 24 + hour]);
-        let selected = monthly.filter(|slot| slot.observations >= min_observations)
-            .map(|slot| ("hour-of-month", slot))
+        let month_end = &self.state.month_end[hour];
+        let selected = (is_month_end(timestamp_secs) && month_end.observations >= min_observations)
+            .then_some(("month-end", month_end))
+            .or_else(|| monthly.filter(|slot| slot.observations >= min_observations)
+                .map(|slot| ("hour-of-month", slot)))
             .or_else(|| (weekly.observations >= min_observations).then_some(("hour-of-week", weekly)));
         let active_workloads = self.expected_workloads(timestamp_secs);
         let Some((source, slot)) = selected else {
@@ -230,6 +238,7 @@ impl TrafficCalendar {
         CalendarSnapshot {
             week: summaries(&self.state.week),
             month: summaries(&self.state.month),
+            month_end: summaries(&self.state.month_end),
             declarations: self.state.declarations.values().cloned().collect(),
         }
     }
