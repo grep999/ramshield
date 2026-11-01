@@ -78,6 +78,7 @@ impl WorkloadDeclaration {
 struct Slot {
     observations: u64,
     packets: u64,
+    packets_squared: u128,
     bytes: u64,
 }
 
@@ -102,6 +103,21 @@ pub struct CalendarSnapshot {
     pub week: Vec<CalendarSlotSummary>,
     pub month: Vec<CalendarSlotSummary>,
     pub declarations: Vec<WorkloadDeclaration>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CalendarAssessmentKind { InsufficientData, WithinExpectedRange, AboveExpectedRange }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CalendarAssessment {
+    pub kind: CalendarAssessmentKind,
+    pub baseline_source: Option<String>,
+    pub observations: u64,
+    pub mean_packets: Option<f64>,
+    pub standard_deviation_packets: Option<f64>,
+    pub observed_packets: u64,
+    pub upper_expected_packets: Option<f64>,
+    pub active_workloads: Vec<ExpectedWorkload>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -234,6 +250,7 @@ impl TrafficCalendar {
 fn add(slot: &mut Slot, packets: u64, bytes: u64) {
     slot.observations = slot.observations.saturating_add(1);
     slot.packets = slot.packets.saturating_add(packets);
+    slot.packets_squared = slot.packets_squared.saturating_add(u128::from(packets) * u128::from(packets));
     slot.bytes = slot.bytes.saturating_add(bytes);
 }
 
