@@ -13,6 +13,8 @@ Passive production-environment discovery for RamShield. This crate is deliberate
 - Track capture/ingestion quality and host resource observations.
 - Persist observations and calendar declarations atomically.
 
+See [STATISTICAL_DESIGN.md](STATISTICAL_DESIGN.md) for the model assumptions, validation protocol and Stage 0 acceptance gates.
+
 ## Safety boundary
 
 This crate has no dependency on ramshield-detection, ramshield-enforcement, ramshield-xdp or firewall APIs. It cannot block traffic, change network state, activate thresholds or reload live configuration. Workload declarations add explanatory context; they do not delete, hide or automatically whitelist events.
