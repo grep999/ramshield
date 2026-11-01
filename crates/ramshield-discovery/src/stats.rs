@@ -87,11 +87,14 @@ pub fn assess_cardinality_anomaly(
     observations: u64,
 ) -> DistributionAssessment {
     // Saturated estimator — unreliable evidence, never automatic recommendation
-    if current.estimate == u64::MAX || current.standard_error == f64::INFINITY {
+    if current.estimate == u64::MAX
+        || !current.standard_error.is_finite()
+        || current.standard_error < 0.0
+    {
         return DistributionAssessment::InsufficientData;
     }
-    // Insufficient recent observations to assess change
-    if observations < 10 {
+    // Require enough evidence in both the explicit gate and the estimator itself.
+    if observations < 10 || current.observations < 10 {
         return DistributionAssessment::InsufficientData;
     }
     // No baseline to compare against — conservatively insufficient
@@ -99,11 +102,15 @@ pub fn assess_cardinality_anomaly(
         return DistributionAssessment::InsufficientData;
     };
     // Both estimates must be finite and positive
-    if base.estimate == 0 || base.standard_error.is_nan() || base.standard_error == f64::INFINITY {
+    if base.estimate == 0
+        || base.observations < 10
+        || !base.standard_error.is_finite()
+        || base.standard_error < 0.0
+    {
         return DistributionAssessment::InsufficientData;
     }
-    // Check for significant growth (>2x baseline)
-    if current.estimate > base.estimate * 2 {
+    // Saturating arithmetic prevents a large but finite baseline from wrapping.
+    if current.estimate > base.estimate.saturating_mul(2) {
         return DistributionAssessment::RequiresReview;
     }
     // Check for significant decline (<0.5x baseline)
@@ -119,8 +126,12 @@ pub fn assess_cardinality_anomaly(
 /// Returns InsufficientData when not enough Clean observations exist.
 pub fn assess_metric_distribution(assessment: &MetricAssessment) -> DistributionAssessment {
     let clean = assessment.clean_observations;
-    // Insufficient Clean observations to form a baseline
-    if clean < 5 {
+    // The latest observation must be clean, and the count must describe the
+    // exact moments state being assessed. A stale/mismatched counter is unsafe.
+    if assessment.quality != crate::ObservationQuality::Clean
+        || clean < 10
+        || assessment.moments.observations() != clean
+    {
         return DistributionAssessment::InsufficientData;
     }
     // Moments must be valid
@@ -135,11 +146,17 @@ pub fn assess_metric_distribution(assessment: &MetricAssessment) -> Distribution
     let mean = assessment.moments.mean();
     // If variance is within expected Poisson range, Normal
     // Otherwise RequiresReview for over/under-dispersion
-    if mean > 0.0 {
-        // Simple dispersion check: if variance > 1.5 * mean, suggests anomaly
-        if variance > mean * 1.5 {
-            return DistributionAssessment::RequiresReview;
-        }
+    if mean == 0.0 {
+        return if variance == 0.0 {
+            DistributionAssessment::Normal
+        } else {
+            DistributionAssessment::RequiresReview
+        };
+    }
+    // Flag material over- and under-dispersion for human review. This is a
+    // descriptive heuristic, not a calibrated statistical test.
+    if variance > mean * 1.5 || variance < mean * 0.5 {
+        return DistributionAssessment::RequiresReview;
     }
     DistributionAssessment::Normal
 }
@@ -396,7 +413,15 @@ pub fn calibrate_threshold(
     if clean_observations < 10 {
         return DistributionAssessment::InsufficientData;
     }
-    // If either assessment requires review, propagate that
+    // Fail closed: insufficient evidence from either assessment must never
+    // be promoted to Normal merely because the aggregate sample count is high.
+    if matches!(
+        cardinality_assessment,
+        DistributionAssessment::InsufficientData
+    ) || matches!(metric_assessment, DistributionAssessment::InsufficientData)
+    {
+        return DistributionAssessment::InsufficientData;
+    }
     if matches!(
         cardinality_assessment,
         DistributionAssessment::RequiresReview
@@ -404,7 +429,6 @@ pub fn calibrate_threshold(
     {
         return DistributionAssessment::RequiresReview;
     }
-    // Both assessments normal and sufficient — calibrated threshold OK
     DistributionAssessment::Normal
 }
 
@@ -502,4 +526,109 @@ fn d8_guard_sufficient_passes() {
         d8_saturated_or_insufficient_guard(false, 100),
         DistributionAssessment::Normal
     );
+}
+
+
+#[cfg(test)]
+mod d7_d8_regression_tests {
+    use super::*;
+    use crate::{CountMetric, MetricAssessment, ObservationQuality};
+
+    fn metric_assessment(quality: ObservationQuality, clean: u64) -> MetricAssessment {
+        let mut moments = CountMoments::default();
+        for value in 0..clean {
+            moments.push(value);
+        }
+        MetricAssessment {
+            metric: CountMetric::Packets,
+            observed_packets: clean,
+            quality,
+            moments,
+            clean_observations: clean,
+            degraded_observations: 0,
+            baseline_source: Some("test-baseline".into()),
+            last_updated_secs: 0,
+        }
+    }
+
+    #[test]
+    fn d8_does_not_promote_insufficient_cardinality_to_normal() {
+        assert_eq!(
+            calibrate_threshold(
+                &DistributionAssessment::InsufficientData,
+                &DistributionAssessment::Normal,
+                false,
+                100,
+            ),
+            DistributionAssessment::InsufficientData
+        );
+    }
+
+    #[test]
+    fn d8_does_not_promote_insufficient_metric_to_normal() {
+        assert_eq!(
+            calibrate_threshold(
+                &DistributionAssessment::Normal,
+                &DistributionAssessment::InsufficientData,
+                false,
+                100,
+            ),
+            DistributionAssessment::InsufficientData
+        );
+    }
+
+    #[test]
+    fn d7_rejects_latest_degraded_metric_observation() {
+        let assessment = metric_assessment(ObservationQuality::Degraded, 12);
+        assert_eq!(
+            assess_metric_distribution(&assessment),
+            DistributionAssessment::InsufficientData
+        );
+    }
+
+    #[test]
+    fn d7_rejects_mismatched_moment_and_quality_counts() {
+        let mut assessment = metric_assessment(ObservationQuality::Clean, 12);
+        assessment.clean_observations = 13;
+        assert_eq!(
+            assess_metric_distribution(&assessment),
+            DistributionAssessment::InsufficientData
+        );
+    }
+
+    #[test]
+    fn d7_rejects_invalid_cardinality_standard_errors() {
+        let current = CardinalityEstimate {
+            estimate: 100,
+            standard_error: f64::NAN,
+            observations: 100,
+        };
+        let baseline = CardinalityEstimate {
+            estimate: 50,
+            standard_error: 1.0,
+            observations: 100,
+        };
+        assert_eq!(
+            assess_cardinality_anomaly(&current, Some(&baseline), 100),
+            DistributionAssessment::InsufficientData
+        );
+    }
+
+    #[test]
+    fn d7_cardinality_growth_comparison_cannot_overflow() {
+        let current = CardinalityEstimate {
+            estimate: u64::MAX - 1,
+            standard_error: 1.0,
+            observations: 100,
+        };
+        let baseline = CardinalityEstimate {
+            estimate: (u64::MAX / 2) + 1,
+            standard_error: 1.0,
+            observations: 100,
+        };
+        assert_eq!(
+            assess_cardinality_anomaly(&current, Some(&baseline), 100),
+            DistributionAssessment::Normal
+        );
+    }
 }
