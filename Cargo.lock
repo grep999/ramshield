@@ -1352,6 +1352,7 @@ dependencies = [
  "ramshield-detection",
  "ramshield-enforcement",
  "ramshield-forecasting",
+ "ramshield-learning",
  "ramshield-mesh",
  "ramshield-metrics",
  "ramshield-protocol",
@@ -1452,6 +1453,14 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "ramshield-learning"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
