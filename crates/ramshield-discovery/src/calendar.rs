@@ -323,4 +323,36 @@ mod tests {
         assert!(declaration.active_at(4 * 86_400 + 3600));
         assert!(!declaration.active_at(5 * 86_400 + 3600));
     }
+    #[test]
+    fn repeated_weekly_pattern_flags_outlier_but_reports_workload_context() {
+        let p = path();
+        let mut c = TrafficCalendar::open(&p).unwrap();
+        let monday_midnight = 1_704_067_200u64;
+        for week in 0..4 {
+            c.observe_hour(monday_midnight + week * 7 * 86_400, 100, 10_000);
+        }
+        c.declare_workload(WorkloadDeclaration {
+            id: "monthly-billing".into(), description: "Billing export".into(),
+            recurrence: Recurrence::MonthEnd, start_hour: 0, duration_hours: 2,
+            expected_services: vec!["billing".into()], declared_by: "ops".into(),
+            declared_at_secs: 0, notes: Some("Expected monthly batch".into()),
+        }).unwrap();
+        let assessment = c.assess(monday_midnight + 4 * 7 * 86_400, 1_000, 4, 3.0);
+        assert_eq!(assessment.kind, CalendarAssessmentKind::AboveExpectedRange);
+        assert_eq!(assessment.baseline_source.as_deref(), Some("hour-of-week"));
+        assert_eq!(assessment.observations, 4);
+        assert!(assessment.upper_expected_packets.unwrap() < 1_000.0);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn calendar_assessment_refuses_to_score_without_history() {
+        let p = path();
+        let c = TrafficCalendar::open(&p).unwrap();
+        let assessment = c.assess(1_700_000_000, 50_000, 4, 3.0);
+        assert_eq!(assessment.kind, CalendarAssessmentKind::InsufficientData);
+        assert!(assessment.mean_packets.is_none());
+        let _ = fs::remove_file(p);
+    }
+
 }
