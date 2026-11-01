@@ -328,7 +328,6 @@ fn create_temp_file(path: &Path) -> io::Result<(PathBuf, File)> {
     ))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,30 +563,51 @@ mod tests {
         let evicted = observation_for(
             "a-service",
             TrafficDirection::Ingress,
-            WindowState::Observed { packets: 1, bytes: 1 },
+            WindowState::Observed {
+                packets: 1,
+                bytes: 1,
+            },
             60,
         );
         let retained = observation_for(
             "b-service",
             TrafficDirection::Ingress,
-            WindowState::Observed { packets: 2, bytes: 2 },
+            WindowState::Observed {
+                packets: 2,
+                bytes: 2,
+            },
             60,
         );
         let incoming = observation_for(
             "c-service",
             TrafficDirection::Ingress,
-            WindowState::Observed { packets: 3, bytes: 3 },
+            WindowState::Observed {
+                packets: 3,
+                bytes: 3,
+            },
             120,
         );
-        assert_eq!(ledger.record(evicted.clone()).unwrap(), RecordOutcome::Inserted);
-        assert_eq!(ledger.record(retained.clone()).unwrap(), RecordOutcome::Inserted);
-        assert_eq!(ledger.record(incoming).unwrap(), RecordOutcome::InsertedAfterEviction);
+        assert_eq!(
+            ledger.record(evicted.clone()).unwrap(),
+            RecordOutcome::Inserted
+        );
+        assert_eq!(
+            ledger.record(retained.clone()).unwrap(),
+            RecordOutcome::Inserted
+        );
+        assert_eq!(
+            ledger.record(incoming).unwrap(),
+            RecordOutcome::InsertedAfterEviction
+        );
         assert!(ledger.get(&evicted.key).is_none());
         assert_eq!(ledger.get(&retained.key), Some(&retained.state));
 
         ledger.flush(&p).unwrap();
         let mut recovered = WindowLedger::reopen(&p, 2).unwrap();
-        assert_eq!(recovered.record(evicted).unwrap(), RecordOutcome::RejectedTooOld);
+        assert_eq!(
+            recovered.record(evicted).unwrap(),
+            RecordOutcome::RejectedTooOld
+        );
         assert_eq!(recovered.get(&retained.key), Some(&retained.state));
         let _ = std::fs::remove_file(&p);
     }
@@ -598,13 +618,19 @@ mod tests {
         let ingress = observation_for(
             "billing-worker",
             TrafficDirection::Ingress,
-            WindowState::Observed { packets: 1, bytes: 10 },
+            WindowState::Observed {
+                packets: 1,
+                bytes: 10,
+            },
             60,
         );
         let egress = observation_for(
             "billing-worker",
             TrafficDirection::Egress,
-            WindowState::Observed { packets: 2, bytes: 20 },
+            WindowState::Observed {
+                packets: 2,
+                bytes: 20,
+            },
             60,
         );
         assert_eq!(ledger.record(ingress).unwrap(), RecordOutcome::Inserted);
@@ -623,7 +649,13 @@ mod tests {
                 .as_nanos()
         ));
         let mut ledger = WindowLedger::new(2).unwrap();
-        let sample = observation(WindowState::Observed { packets: 7, bytes: 70 }, 0);
+        let sample = observation(
+            WindowState::Observed {
+                packets: 7,
+                bytes: 70,
+            },
+            0,
+        );
         assert_eq!(ledger.record(sample).unwrap(), RecordOutcome::Inserted);
         ledger.flush(&p).unwrap();
         assert_eq!(WindowLedger::reopen(&p, 2).unwrap().len(), 1);
@@ -658,14 +690,23 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let retained = observation(WindowState::Observed { packets: 1, bytes: 1 }, 60);
+        let retained = observation(
+            WindowState::Observed {
+                packets: 1,
+                bytes: 1,
+            },
+            60,
+        );
         let payload = PersistenceEnvelope {
             version: PERSISTENCE_VERSION,
             entries: vec![(retained.key.clone(), retained.state)],
             eviction_watermark: Some(retained.key),
         };
         fs::write(&p, serde_json::to_vec(&payload).unwrap()).unwrap();
-        assert!(matches!(WindowLedger::reopen(&p, 2), Err(WindowError::Io(_))));
+        assert!(matches!(
+            WindowLedger::reopen(&p, 2),
+            Err(WindowError::Io(_))
+        ));
         let _ = fs::remove_file(&p);
     }
 
@@ -680,7 +721,10 @@ mod tests {
         ));
         let oversized = vec![b' '; max_snapshot_bytes(1) as usize + 1];
         fs::write(&p, oversized).unwrap();
-        assert!(matches!(WindowLedger::reopen(&p, 1), Err(WindowError::Io(_))));
+        assert!(matches!(
+            WindowLedger::reopen(&p, 1),
+            Err(WindowError::Io(_))
+        ));
         let _ = fs::remove_file(&p);
     }
 
