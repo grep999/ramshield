@@ -142,7 +142,12 @@ impl Discovery {
             let state: PersistedState = serde_json::from_slice(&bytes)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             if state.schema != SCHEMA || state.observation_days != config.observation_days
-                || state.buckets.len() != config.bucket_count() {
+                || state.buckets.len() != config.bucket_count()
+                || state.buckets.iter().flatten().any(|bucket| {
+                    bucket.sources.len() != SOURCE_BUCKETS
+                        || bucket.destinations.len() != DESTINATION_BUCKETS
+                        || bucket.ports.len() > config.max_ports_per_hour
+                }) {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "discovery state schema/configuration mismatch"));
             }
             state
@@ -212,7 +217,7 @@ impl Discovery {
             hour: b.hour, samples: b.samples, packets: b.packets, bytes: b.bytes,
             protocols: b.protocols,
             top_ports: b.ports.iter().map(|p| PortSummary { port: p.port, count: p.count, error_bound: p.error_bound }).collect(),
-            source_distribution: b.sources, destination_distribution: b.destinations,
+            source_distribution: b.sources.clone(), destination_distribution: b.destinations.clone(),
             capture_drops: b.capture_drops, ingest_drops: b.ingest_drops,
             malformed_observations: b.malformed, queue_depth_peak: b.queue_depth_peak,
             queue_capacity_peak: b.queue_capacity_peak, cpu_millis: b.cpu_millis,
