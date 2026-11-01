@@ -55,7 +55,7 @@ impl WorkloadDeclaration {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, "weekday must be 0..=6 (Monday=0)")),
             Recurrence::MonthlyDay { day } if !(1..=31).contains(&day) =>
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, "monthly day must be 1..=31")),
-            Recurrence::EveryNDays { interval_days, .. } if interval_days == 0 =>
+            Recurrence::EveryNDays { interval_days: 0, .. } =>
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, "interval_days must be nonzero")),
             _ => {}
         }
@@ -76,7 +76,7 @@ impl WorkloadDeclaration {
             Recurrence::MonthlyDay { day } => utc_day_of_month(start_secs) == Some(day),
             Recurrence::MonthEnd => is_month_end(start_secs),
             Recurrence::EveryNDays { interval_days, anchor_day } =>
-                days >= anchor_day && (days - anchor_day) % u64::from(interval_days) == 0,
+                days >= anchor_day && (days - anchor_day).is_multiple_of(u64::from(interval_days)),
         }
     }
 }
