@@ -128,6 +128,30 @@ impl Metrics {
             "counter"
         ));
         out.push_str(&emit!(
+            "ramshield_native_frames_declared_total",
+            self.native_frames_declared.load(Ordering::Relaxed),
+            "#90: descriptors declared by completed TPACKET_V3 blocks (num_pkts summed).",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_native_frames_validated_total",
+            self.native_frames_validated.load(Ordering::Relaxed),
+            "#90: descriptors that produced a validated packet slice and entered the L3/delivery path.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_native_overlay_skips_total",
+            self.native_overlay_skips.load(Ordering::Relaxed),
+            "#90: validated frames skipped because the source is a trusted overlay address without overlay identity.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_native_rate_limit_skips_total",
+            self.native_rate_limit_skips.load(Ordering::Relaxed),
+            "#90: validated frames refused by the per-second admission budget.",
+            "counter"
+        ));
+        out.push_str(&emit!(
             "ramshield_native_ingest_drops_disconnected_total",
             self.native_ingest_drops_disconnected.load(Ordering::Relaxed),
             "Subset of native ingest drops caused by the downstream channel being closed rather than full.",
