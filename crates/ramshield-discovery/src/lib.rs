@@ -152,6 +152,7 @@ impl Discovery {
     /// Aggregate a normalized observation. No enforcement or detection action is possible here.
     pub fn observe(&mut self, sample: TrafficSample) {
         let hour = sample.timestamp_secs / 3600;
+        let port_limit = self.config.max_ports_per_hour;
         let Some(bucket) = self.bucket_mut(hour) else {
             self.state.too_old = self.state.too_old.saturating_add(1); return;
         };
@@ -160,7 +161,7 @@ impl Discovery {
         bucket.bytes = bucket.bytes.saturating_add(sample.bytes);
         let protocol = sample.protocol as usize;
         bucket.protocols[protocol] = bucket.protocols[protocol].saturating_add(sample.packets);
-        if let Some(port) = sample.destination_port { bucket.add_port(port, self.config.max_ports_per_hour); }
+        if let Some(port) = sample.destination_port { bucket.add_port(port, port_limit); }
         if let Some(key) = sample.source_key {
             let i = key as usize % SOURCE_BUCKETS;
             bucket.sources[i] = bucket.sources[i].saturating_add(sample.packets);
@@ -224,7 +225,7 @@ impl Discovery {
             if hour < oldest { return None; }
         }
         let len = self.state.buckets.len();
-        let index = hour as usize % len;
+        let index = (hour % len as u64) as usize;
         if self.state.buckets[index].as_ref().is_none_or(|b| b.hour != hour) {
             self.state.buckets[index] = Some(HourBucket::new(hour));
         }
