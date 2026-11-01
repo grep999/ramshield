@@ -402,16 +402,16 @@ impl Discovery {
     ) -> Option<ServiceDistributionAssessment> {
         let profile = self.service_profiles.get(&service_id)?;
         let service_key = service_id.as_u64().to_string();
-        let previous_hour = hour.saturating_sub(1);
+        let previous_hour = hour.checked_sub(1);
 
         let current_source =
             profile.source_cardinality_estimate(&service_key, direction, hour);
-        let baseline_source =
-            profile.source_cardinality_estimate(&service_key, direction, previous_hour);
+        let baseline_source = previous_hour
+            .and_then(|previous| profile.source_cardinality_estimate(&service_key, direction, previous));
         let current_destination =
             profile.dest_cardinality_estimate(&service_key, direction, hour);
-        let baseline_destination =
-            profile.dest_cardinality_estimate(&service_key, direction, previous_hour);
+        let baseline_destination = previous_hour
+            .and_then(|previous| profile.dest_cardinality_estimate(&service_key, direction, previous));
 
         let source_cardinality = current_source.as_ref().map_or(
             DistributionAssessment::InsufficientData,
