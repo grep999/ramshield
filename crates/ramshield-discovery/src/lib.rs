@@ -5,18 +5,24 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
 };
 
 mod calendar;
+mod metric;
 mod stats;
 mod window;
 pub use calendar::{
     CalendarAssessment, CalendarAssessmentKind, CalendarSlotSummary, CalendarSnapshot,
     ExecutionState, ExpectedWorkload, Recurrence, TrafficCalendar, WorkloadDeclaration,
     WorkloadExecution,
+};
+pub use metric::{
+    CountMetric, MetricAssessment, MetricProfileStore, ObservationQuality, ProfileKey,
+    extend_assessment, new_profile_key, observe_clean, reset_quality_counts,
 };
 pub use stats::{CountModelFit, CountMoments, fit_count_model};
 pub use window::{
@@ -45,12 +51,20 @@ pub enum Protocol {
 /// Stable producer-side service identifier.
 /// Distinct from source_key: a source hash may belong to many services,
 /// but each service has exactly one identity.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd,
+)]
 pub struct ServiceId(pub u64);
+
+impl ServiceId {
+    pub fn as_u64(&self) -> u64 {
+        self.0
+    }
+}
 
 /// Authoritative direction of traffic, sourced from the observation,
 /// never inferred from ports or IP addresses.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub enum TrafficDirection {
     Ingress,
     Egress,
@@ -240,6 +254,7 @@ pub struct Discovery {
     config: DiscoveryConfig,
     state: PersistedState,
     path: PathBuf,
+    service_profiles: BTreeMap<ServiceId, MetricProfileStore>,
 }
 
 impl Discovery {
@@ -278,6 +293,7 @@ impl Discovery {
             config,
             state,
             path,
+            service_profiles: BTreeMap::new(),
         })
     }
 
@@ -314,7 +330,34 @@ impl Discovery {
                 ServiceId(hasher.finish())
             })
         });
-        let _ = effective_service_id; // available for per-service profiling (D5.2)
+
+        // Enforce MAX_SERVICES limit on per-service profile creation
+        let service_count = self.service_profiles.len();
+        let is_new_service = effective_service_id
+            .map(|s| !self.service_profiles.contains_key(&s))
+            .unwrap_or(false);
+        if is_new_service && service_count >= MAX_SERVICES {
+            self.state.too_old = self.state.too_old.saturating_add(1);
+            return; // reject new service profiles at capacity
+        }
+
+        // Thread per-service packet/byte profiles (D5.2)
+        if let Some(service_id) = effective_service_id {
+            let profile = self
+                .service_profiles
+                .entry(service_id)
+                .or_insert_with(MetricProfileStore::new);
+            let hour_slot = hour;
+            profile.observe_volume(
+                service_id.as_u64().to_string(),
+                TrafficDirection::Unknown,
+                hour_slot,
+                sample.packets,
+                sample.bytes,
+                ObservationQuality::Clean,
+            );
+        }
+
         self.state.accepted = self.state.accepted.saturating_add(1);
     }
 
