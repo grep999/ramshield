@@ -117,7 +117,7 @@ pub struct CalendarSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum CalendarAssessmentKind { InsufficientData, WithinExpectedRange, AboveExpectedRange, BelowExpectedRange }
+pub enum CalendarAssessmentKind { InsufficientData, WithinDescriptiveBand, AboveDescriptiveBand, BelowDescriptiveBand }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalendarAssessment {
@@ -129,8 +129,8 @@ pub struct CalendarAssessment {
     /// Candidate count family only; not a calibrated tail probability.
     pub count_model: Option<CountModelFit>,
     pub observed_packets: u64,
-    pub lower_expected_packets: Option<f64>,
-    pub upper_expected_packets: Option<f64>,
+    pub lower_descriptive_packets: Option<f64>,
+    pub upper_descriptive_packets: Option<f64>,
     pub active_workloads: Vec<ExpectedWorkload>,
 }
 
