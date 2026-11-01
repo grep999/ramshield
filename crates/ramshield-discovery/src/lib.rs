@@ -372,17 +372,23 @@ impl Discovery {
     }
 
     fn bucket_mut(&mut self, hour: u64) -> Option<&mut HourBucket> {
+        let retention = self.config.bucket_count() as u64;
         if let Some(newest) = self.state.buckets.iter().flatten().map(|b| b.hour).max() {
-            let oldest = newest.saturating_sub(self.config.bucket_count() as u64 - 1);
+            let oldest = newest.saturating_sub(retention - 1);
             if hour < oldest {
                 return None;
+            }
+            for bucket in &mut self.state.buckets {
+                if bucket.as_ref().is_some_and(|bucket| bucket.hour < oldest) {
+                    *bucket = None;
+                }
             }
         }
         let len = self.state.buckets.len();
         let index = (hour % len as u64) as usize;
         if self.state.buckets[index]
             .as_ref()
-            .is_none_or(|b| b.hour != hour)
+            .is_none_or(|bucket| bucket.hour != hour)
         {
             self.state.buckets[index] = Some(HourBucket::new(hour));
         }
@@ -437,6 +443,23 @@ mod tests {
         assert_eq!(d.snapshot().observations_accepted, 1);
         let _ = fs::remove_file(p);
     }
+    #[test]
+    fn retention_prunes_stale_buckets_after_large_time_jump() {
+        let p = path();
+        let cfg = DiscoveryConfig {
+            observation_days: 1,
+            max_ports_per_hour: 2,
+        };
+        let mut d = Discovery::open(&p, cfg).unwrap();
+        d.observe(sample(200 * 3600));
+        d.observe(sample(1_200 * 3600));
+        let snapshot = d.snapshot();
+        assert_eq!(snapshot.hours.len(), 1);
+        assert_eq!(snapshot.oldest_hour, Some(1_200));
+        assert_eq!(snapshot.newest_hour, Some(1_200));
+        let _ = fs::remove_file(p);
+    }
+
     #[test]
     fn retention_and_port_cardinality_are_bounded() {
         let p = path();
