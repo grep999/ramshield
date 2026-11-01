@@ -288,7 +288,7 @@ fn add(slot: &mut Slot, packets: u64, bytes: u64) {
     if slot.observations == u64::MAX { return; }
     slot.observations += 1;
     slot.packets = slot.packets.saturating_add(packets);
-    slot.moments.push(packets as f64);
+    slot.moments.push(packets);
     slot.bytes = slot.bytes.saturating_add(bytes);
 }
 
