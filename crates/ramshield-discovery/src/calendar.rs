@@ -111,7 +111,7 @@ pub struct CalendarSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum CalendarAssessmentKind { InsufficientData, WithinExpectedRange, AboveExpectedRange }
+pub enum CalendarAssessmentKind { InsufficientData, WithinExpectedRange, AboveExpectedRange, BelowExpectedRange }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalendarAssessment {
@@ -121,6 +121,7 @@ pub struct CalendarAssessment {
     pub mean_packets: Option<f64>,
     pub standard_deviation_packets: Option<f64>,
     pub observed_packets: u64,
+    pub lower_expected_packets: Option<f64>,
     pub upper_expected_packets: Option<f64>,
     pub active_workloads: Vec<ExpectedWorkload>,
 }
@@ -218,20 +219,23 @@ impl TrafficCalendar {
             return CalendarAssessment { kind: CalendarAssessmentKind::InsufficientData,
                 baseline_source: None, observations: monthly.map_or(weekly.observations, |m| m.observations),
                 mean_packets: None, standard_deviation_packets: None, observed_packets,
-                upper_expected_packets: None, active_workloads };
+                lower_expected_packets: None, upper_expected_packets: None, active_workloads };
         };
         let mean = slot.packets as f64 / slot.observations as f64;
         let mean_square = slot.packets_squared as f64 / slot.observations as f64;
         let variance = (mean_square - mean * mean).max(0.0);
         let stddev = variance.sqrt();
-        let upper = mean + sigma.max(0.0) * stddev;
-        let kind = if observed_packets as f64 > upper {
-            CalendarAssessmentKind::AboveExpectedRange
-        } else { CalendarAssessmentKind::WithinExpectedRange };
+        let spread = sigma.max(0.0) * stddev;
+        let lower = (mean - spread).max(0.0);
+        let upper = mean + spread;
+        let observed = observed_packets as f64;
+        let kind = if observed > upper { CalendarAssessmentKind::AboveExpectedRange }
+            else if observed < lower { CalendarAssessmentKind::BelowExpectedRange }
+            else { CalendarAssessmentKind::WithinExpectedRange };
         CalendarAssessment { kind, baseline_source: Some(source.to_string()),
             observations: slot.observations, mean_packets: Some(mean),
             standard_deviation_packets: Some(stddev), observed_packets,
-            upper_expected_packets: Some(upper), active_workloads }
+            lower_expected_packets: Some(lower), upper_expected_packets: Some(upper), active_workloads }
     }
 
     pub fn snapshot(&self) -> CalendarSnapshot {
