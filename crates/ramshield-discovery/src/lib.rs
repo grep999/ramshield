@@ -362,6 +362,8 @@ impl Discovery {
                 || self.service_profiles.len() < MAX_SERVICES;
             if has_capacity {
                 let profile = self.service_profiles.entry(service_id).or_default();
+                let oldest_hour = hour.saturating_sub(self.config.bucket_count() as u64 - 1);
+                profile.prune_before(oldest_hour);
                 let service_key = service_id.as_u64().to_string();
                 profile.observe_cardinality(
                     service_key.clone(),
