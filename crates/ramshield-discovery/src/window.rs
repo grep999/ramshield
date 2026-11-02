@@ -335,7 +335,8 @@ mod tests {
                 .record(observation(
                     WindowState::Observed {
                         packets: 1,
-                        bytes: 1
+                        captured_bytes: 1,
+                        wire_bytes: 1,
                     },
                     0
                 ))
@@ -347,7 +348,8 @@ mod tests {
                 .record(observation(
                     WindowState::Observed {
                         packets: 1,
-                        bytes: 1
+                        captured_bytes: 1,
+                        wire_bytes: 1,
                     },
                     60
                 ))
@@ -359,7 +361,8 @@ mod tests {
                 .record(observation(
                     WindowState::Observed {
                         packets: 1,
-                        bytes: 1
+                        captured_bytes: 1,
+                        wire_bytes: 1,
                     },
                     120
                 ))
@@ -371,7 +374,8 @@ mod tests {
                 .record(observation(
                     WindowState::Observed {
                         packets: 1,
-                        bytes: 1
+                        captured_bytes: 1,
+                        wire_bytes: 1,
                     },
                     0
                 ))
@@ -413,7 +417,8 @@ mod tests {
             recovered.entries[&key],
             WindowState::Observed {
                 packets: 42,
-                bytes: 1000
+                captured_bytes: 1000,
+                wire_bytes: 1000,
             }
         );
         let _ = std::fs::remove_file(&p);
@@ -483,7 +488,8 @@ mod tests {
                 .record(observation(
                     WindowState::Observed {
                         packets: 1,
-                        bytes: 1
+                        captured_bytes: 1,
+                        wire_bytes: 1,
                     },
                     0
                 ))
@@ -495,7 +501,8 @@ mod tests {
                 .record(observation(
                     WindowState::Observed {
                         packets: 1,
-                        bytes: 1
+                        captured_bytes: 1,
+                        wire_bytes: 1,
                     },
                     60
                 ))
@@ -507,7 +514,8 @@ mod tests {
                 .record(observation(
                     WindowState::Observed {
                         packets: 1,
-                        bytes: 1
+                        captured_bytes: 1,
+                        wire_bytes: 1,
                     },
                     120
                 ))
@@ -520,7 +528,8 @@ mod tests {
                 .record(observation(
                     WindowState::Observed {
                         packets: 1,
-                        bytes: 1
+                        captured_bytes: 1,
+                        wire_bytes: 1,
                     },
                     0
                 ))
@@ -557,7 +566,8 @@ mod tests {
                 .record(observation(
                     WindowState::Observed {
                         packets: 1,
-                        bytes: 1
+                        captured_bytes: 1,
+                        wire_bytes: 1,
                     },
                     0
                 ))
