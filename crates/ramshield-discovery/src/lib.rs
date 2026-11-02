@@ -5,10 +5,11 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 mod calendar;
@@ -40,6 +41,15 @@ const HOURS_PER_DAY: usize = 24;
 const SOURCE_BUCKETS: usize = 64;
 const DESTINATION_BUCKETS: usize = 64;
 const MAX_PORTS: usize = 256;
+
+// The configured retention and port limits imply a conservative serialized
+// size bound. This absolute ceiling keeps corrupted snapshots from causing
+// unbounded reads while still covering the largest supported configuration.
+const MAX_DISCOVERY_SNAPSHOT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_BUCKET_FIXED_BYTES: u64 = 4 * 1024;
+const MAX_PORT_ENTRY_BYTES: u64 = 96;
+const SNAPSHOT_ENVELOPE_BYTES: u64 = 1024;
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Bounded number of concurrently tracked services for fair resource allocation.
 const MAX_SERVICES: usize = 64;
 
@@ -296,23 +306,9 @@ impl Discovery {
         config.validate()?;
         let path = path.as_ref().to_path_buf();
         let state = if path.exists() {
-            let bytes = fs::read(&path)?;
-            let state: PersistedState = serde_json::from_slice(&bytes)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            if state.schema != SCHEMA
-                || state.observation_days != config.observation_days
-                || state.buckets.len() != config.bucket_count()
-                || state.buckets.iter().flatten().any(|bucket| {
-                    bucket.sources.len() != SOURCE_BUCKETS
-                        || bucket.destinations.len() != DESTINATION_BUCKETS
-                        || bucket.ports.len() > config.max_ports_per_hour
-                })
-            {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "discovery state schema/configuration mismatch",
-                ));
-            }
+            let state: PersistedState =
+                read_snapshot(&path, max_discovery_snapshot_bytes(&config))?;
+            validate_persisted_state(&state, &config)?;
             state
         } else {
             PersistedState {
@@ -581,33 +577,14 @@ impl Discovery {
         bucket.memory_bytes_peak = bucket.memory_bytes_peak.max(sample.memory_bytes);
     }
 
-    /// Atomic snapshot persistence: temp file, file fsync, rename, directory fsync.
+    /// Persist the bounded aggregate snapshot through an exclusive same-directory
+    /// temporary file, file fsync, atomic rename and directory fsync.
     pub fn flush(&self) -> io::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let bytes = serde_json::to_vec(&self.state)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let mut tmp = self.path.clone();
-        let ext = self
-            .path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("json");
-        tmp.set_extension(format!("{ext}.tmp"));
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&tmp)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&tmp, &self.path)?;
-        if let Some(parent) = self.path.parent() {
-            File::open(parent)?.sync_all()?;
-        }
-        Ok(())
+        write_snapshot(
+            &self.path,
+            &self.state,
+            max_discovery_snapshot_bytes(&self.config),
+        )
     }
 
     pub fn snapshot(&self) -> DiscoverySnapshot {
@@ -685,6 +662,197 @@ impl Discovery {
     }
 }
 
+
+fn max_discovery_snapshot_bytes(config: &DiscoveryConfig) -> u64 {
+    let per_bucket = MAX_BUCKET_FIXED_BYTES.saturating_add(
+        (config.max_ports_per_hour as u64).saturating_mul(MAX_PORT_ENTRY_BYTES),
+    );
+    (config.bucket_count() as u64)
+        .saturating_mul(per_bucket)
+        .saturating_add(SNAPSHOT_ENVELOPE_BYTES)
+        .min(MAX_DISCOVERY_SNAPSHOT_BYTES)
+}
+
+fn parent_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn create_temp_file(path: &Path) -> io::Result<(PathBuf, File)> {
+    let parent = parent_dir(path);
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "discovery snapshot path must name a file",
+        )
+    })?;
+    let file_name = file_name.to_string_lossy();
+
+    for _ in 0..16 {
+        let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temporary = parent.join(format!(
+            ".{file_name}.tmp.{}.{}",
+            std::process::id(),
+            counter
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => return Ok((temporary, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a unique discovery snapshot file",
+    ))
+}
+
+fn read_snapshot<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    max_bytes: u64,
+) -> io::Result<T> {
+    let file = File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "discovery snapshot exceeds its configured size bound",
+        ));
+    }
+
+    let mut bytes = Vec::new();
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "discovery snapshot grew beyond its configured size bound",
+        ));
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+fn write_snapshot<T: Serialize>(path: &Path, value: &T, max_bytes: u64) -> io::Result<()> {
+    if path.file_name().is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "discovery snapshot path must name a file",
+        ));
+    }
+    let parent = parent_dir(path);
+    fs::create_dir_all(parent)?;
+
+    let (temporary, mut file) = create_temp_file(path)?;
+    let write_result = (|| {
+        serde_json::to_writer(&mut file, value)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if file.metadata()?.len() > max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "discovery snapshot exceeds its configured size bound",
+            ));
+        }
+        file.sync_all()
+    })();
+    drop(file);
+
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    File::open(parent)?.sync_all()
+}
+
+fn validate_persisted_state(
+    state: &PersistedState,
+    config: &DiscoveryConfig,
+) -> io::Result<()> {
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "discovery snapshot contains inconsistent persisted state",
+        )
+    };
+    let bucket_count = state.buckets.len();
+    if state.schema != SCHEMA
+        || state.observation_days != config.observation_days
+        || bucket_count != config.bucket_count()
+        || bucket_count == 0
+    {
+        return Err(invalid());
+    }
+
+    let mut newest_hour = None;
+    let mut retained_samples = 0u64;
+    let mut retained_samples_overflowed = false;
+
+    for (index, maybe_bucket) in state.buckets.iter().enumerate() {
+        let Some(bucket) = maybe_bucket else {
+            continue;
+        };
+        if bucket.hour > u64::MAX / 3600
+            || bucket.hour % bucket_count as u64 != index as u64
+            || bucket.sources.len() != SOURCE_BUCKETS
+            || bucket.destinations.len() != DESTINATION_BUCKETS
+            || bucket.ports.len() > config.max_ports_per_hour
+            || bucket.protocols.iter().any(|count| *count > bucket.packets)
+            || bucket
+                .sources
+                .iter()
+                .chain(&bucket.destinations)
+                .any(|count| *count > bucket.packets)
+        {
+            return Err(invalid());
+        }
+
+        let mut seen_ports = BTreeSet::new();
+        if bucket.ports.iter().any(|port| {
+            port.count == 0
+                || port.count > bucket.samples
+                || port.error_bound > port.count
+                || !seen_ports.insert(port.port)
+        }) {
+            return Err(invalid());
+        }
+
+        match retained_samples.checked_add(bucket.samples) {
+            Some(total) => retained_samples = total,
+            None => retained_samples_overflowed = true,
+        }
+        newest_hour = Some(newest_hour.map_or(bucket.hour, |newest: u64| newest.max(bucket.hour)));
+    }
+
+    if (retained_samples_overflowed && state.accepted != u64::MAX)
+        || (!retained_samples_overflowed && retained_samples > state.accepted)
+    {
+        return Err(invalid());
+    }
+
+    if let Some(newest) = newest_hour {
+        let oldest_retained = newest.saturating_sub(bucket_count as u64 - 1);
+        if state
+            .buckets
+            .iter()
+            .flatten()
+            .any(|bucket| bucket.hour < oldest_retained)
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -754,6 +922,105 @@ mod tests {
         assert_eq!(d.snapshot().observations_accepted, 1);
         let _ = fs::remove_file(p);
     }
+
+    #[test]
+    fn reopen_rejects_bucket_outside_its_ring_slot() {
+        let p = path();
+        let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        discovery.observe(sample(1_700_000_000));
+        let mut state = discovery.state.clone();
+        let index = state
+            .buckets
+            .iter()
+            .position(Option::is_some)
+            .unwrap();
+        let bucket = state.buckets[index].take().unwrap();
+        let wrong_index = (index + 1) % state.buckets.len();
+        state.buckets[wrong_index] = Some(bucket);
+        fs::write(&p, serde_json::to_vec(&state).unwrap()).unwrap();
+
+        let error = Discovery::open(&p, DiscoveryConfig::default())
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn reopen_rejects_distribution_counters_above_packet_total() {
+        let p = path();
+        let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        discovery.observe(sample(1_700_000_000));
+        let mut state = discovery.state.clone();
+        let bucket = state.buckets.iter_mut().flatten().next().unwrap();
+        bucket.sources[0] = bucket.packets.saturating_add(1);
+        fs::write(&p, serde_json::to_vec(&state).unwrap()).unwrap();
+
+        let error = Discovery::open(&p, DiscoveryConfig::default())
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn reopen_rejects_oversized_snapshot_before_json_parsing() {
+        let p = path();
+        let config = DiscoveryConfig {
+            observation_days: 1,
+            max_ports_per_hour: 1,
+        };
+        let size = max_discovery_snapshot_bytes(&config) as usize + 1;
+        fs::write(&p, vec![b' '; size]).unwrap();
+
+        let error = Discovery::open(&p, config).err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn relative_snapshot_path_is_supported() {
+        let p = PathBuf::from(format!(
+            "ramshield-discovery-relative-{}-{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        discovery.observe(sample(1_700_000_000));
+        discovery.flush().unwrap();
+        assert_eq!(
+            Discovery::open(&p, DiscoveryConfig::default())
+                .unwrap()
+                .snapshot()
+                .observations_accepted,
+            1
+        );
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn failed_snapshot_rename_removes_temporary_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "discovery_temp_cleanup_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("snapshot.json");
+        let discovery = Discovery::open(&target, DiscoveryConfig::default()).unwrap();
+        fs::create_dir(&target).unwrap();
+
+        assert!(discovery.flush().is_err());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn retention_prunes_stale_buckets_after_large_time_jump() {
         let p = path();
