@@ -331,19 +331,47 @@ impl Discovery {
         })
     }
 
-    /// Aggregate a normalized observation. No enforcement or detection action is possible here.
+    /// Aggregate a normalized traffic observation without training service profiles.
+    ///
+    /// HealthSample is a separate, potentially out-of-order stream. Its absence
+    /// cannot prove that an individual traffic sample was clean. Use
+    /// observe_with_quality when the producer can explicitly classify the sample.
     pub fn observe(&mut self, sample: TrafficSample) {
+        self.observe_inner(sample, None);
+    }
+
+    /// Aggregate a sample and update its service profile only with explicit
+    /// producer-supplied quality.
+    ///
+    /// Missing and invalid states cannot accompany a traffic sample: represent
+    /// missing windows with WindowLedger and reject invalid traffic before this
+    /// API. Degraded samples remain visible in aggregate traffic but do not
+    /// contribute to clean metric moments or cardinality estimates.
+    pub fn observe_with_quality(
+        &mut self,
+        sample: TrafficSample,
+        quality: ObservationQuality,
+    ) -> io::Result<()> {
+        if matches!(quality, ObservationQuality::Missing | ObservationQuality::Invalid) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "traffic samples require Clean or Degraded quality",
+            ));
+        }
+        self.observe_inner(sample, Some(quality));
+        Ok(())
+    }
+
+    fn observe_inner(
+        &mut self,
+        sample: TrafficSample,
+        service_quality: Option<ObservationQuality>,
+    ) {
         let hour_utc = sample.timestamp_secs / 3600;
         let port_limit = self.config.max_ports_per_hour;
         let Some(bucket) = self.bucket_mut(hour_utc) else {
             self.state.too_old = self.state.too_old.saturating_add(1);
             return;
-        };
-        let quality = if bucket.capture_drops > 0 || bucket.ingest_drops > 0 || bucket.malformed > 0
-        {
-            ObservationQuality::Degraded
-        } else {
-            ObservationQuality::Clean
         };
         bucket.samples = bucket.samples.saturating_add(1);
         bucket.packets = bucket.packets.saturating_add(sample.packets);
@@ -361,9 +389,11 @@ impl Discovery {
             let i = key as usize % DESTINATION_BUCKETS;
             bucket.destinations[i] = bucket.destinations[i].saturating_add(sample.packets);
         }
-        // Service identity is an explicit producer contract. Endpoint hashes
-        // identify endpoints; they must never be promoted into service identity.
-        if let Some(service_id) = sample.service_id {
+
+        // Service identity and quality are explicit producer contracts.
+        // HealthSample is aggregated independently and is not used to infer
+        // per-sample quality from event arrival order.
+        if let (Some(service_id), Some(quality)) = (sample.service_id, service_quality) {
             let has_capacity = self.service_profiles.contains_key(&service_id)
                 || self.service_profiles.len() < MAX_SERVICES;
             if has_capacity {
@@ -415,28 +445,50 @@ impl Discovery {
         let service_key = service_id.as_u64().to_string();
         let previous_hour = hour.checked_sub(1);
 
-        // Unknown direction is not a comparable service series. Do not let
-        // cardinality evidence from the Unknown bucket produce a Normal or
-        // RequiresReview result when the caller requested a directional view.
+        // Unknown direction is not a comparable service series. Also require
+        // explicit clean evidence in both adjacent hours before assessing
+        // cardinality: degraded samples are otherwise absent from the estimator
+        // and could make a partial hour look deceptively complete.
         let direction_known = direction != TrafficDirection::Unknown;
-        let current_source = if direction_known {
+        let quality_is_clean = |profile_hour| {
+            profile
+                .assessment(
+                    &service_key,
+                    direction,
+                    CountMetric::Packets,
+                    profile_hour,
+                )
+                .is_some_and(|assessment| {
+                    assessment.quality == ObservationQuality::Clean
+                        && assessment.degraded_observations == 0
+                        && assessment.clean_observations == assessment.moments.observations()
+                })
+        };
+        let current_quality_clean = quality_is_clean(hour);
+        let baseline_quality_clean = match previous_hour {
+            Some(previous) => quality_is_clean(previous),
+            None => false,
+        };
+        let quality_qualified =
+            direction_known && current_quality_clean && baseline_quality_clean;
+        let current_source = if quality_qualified {
             profile.source_cardinality_estimate(&service_key, direction, hour)
         } else {
             None
         };
-        let baseline_source = if direction_known {
+        let baseline_source = if quality_qualified {
             previous_hour.and_then(|previous| {
                 profile.source_cardinality_estimate(&service_key, direction, previous)
             })
         } else {
             None
         };
-        let current_destination = if direction_known {
+        let current_destination = if quality_qualified {
             profile.dest_cardinality_estimate(&service_key, direction, hour)
         } else {
             None
         };
-        let baseline_destination = if direction_known {
+        let baseline_destination = if quality_qualified {
             previous_hour.and_then(|previous| {
                 profile.dest_cardinality_estimate(&service_key, direction, previous)
             })
@@ -674,7 +726,9 @@ mod tests {
             event.source_key = Some(key + 1);
             event.destination_key = Some(key + 100);
             event.packets = 10 + (key % 2);
-            discovery.observe(event);
+            discovery
+                .observe_with_quality(event, ObservationQuality::Clean)
+                .unwrap();
         }
     }
 
@@ -741,6 +795,83 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_observe_does_not_assume_clean_service_quality() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        let mut event = sample(100 * 3600);
+        event.service_id = Some(ServiceId::new(77));
+        event.direction = TrafficDirection::Ingress;
+
+        // Aggregate traffic and collector health can arrive in either order.
+        d.observe(event.clone());
+        d.observe_health(HealthSample {
+            timestamp_secs: 100 * 3600,
+            capture_drops: 1,
+            ..HealthSample::default()
+        });
+        assert!(d.service_profiles.is_empty());
+
+        d.observe_with_quality(event, ObservationQuality::Degraded)
+            .unwrap();
+        let assessment = d
+            .service_profiles
+            .get(&ServiceId::new(77))
+            .unwrap()
+            .assessment("77", TrafficDirection::Ingress, CountMetric::Packets, 100)
+            .unwrap();
+        assert_eq!(assessment.clean_observations, 0);
+        assert_eq!(assessment.degraded_observations, 1);
+        assert_eq!(assessment.moments.observations(), 0);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn missing_and_invalid_quality_are_rejected_before_aggregation() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        let before = d.snapshot().observations_accepted;
+        for quality in [ObservationQuality::Missing, ObservationQuality::Invalid] {
+            assert!(
+                d.observe_with_quality(sample(100 * 3600), quality)
+                    .is_err()
+            );
+        }
+        assert_eq!(d.snapshot().observations_accepted, before);
+        assert!(d.service_profiles.is_empty());
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn degraded_sample_invalidates_cardinality_for_its_hour() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        let service = ServiceId::new(88);
+        observe_service_hour(&mut d, service, TrafficDirection::Ingress, 10_000);
+        observe_service_hour(&mut d, service, TrafficDirection::Ingress, 10_001);
+
+        let mut degraded = sample(10_001 * 3600 + 30);
+        degraded.service_id = Some(service);
+        degraded.direction = TrafficDirection::Ingress;
+        degraded.source_key = Some(50_000);
+        degraded.destination_key = Some(60_000);
+        d.observe_with_quality(degraded, ObservationQuality::Degraded)
+            .unwrap();
+
+        let report = d
+            .assess_service(service, TrafficDirection::Ingress, 10_001)
+            .unwrap();
+        assert_eq!(
+            report.source_cardinality,
+            DistributionAssessment::InsufficientData
+        );
+        assert_eq!(
+            report.destination_cardinality,
+            DistributionAssessment::InsufficientData
+        );
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
     fn service_identity_is_never_derived_from_endpoint_hash() {
         let p = path();
         let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
@@ -762,7 +893,8 @@ mod tests {
             let mut event = sample(100 * 3600);
             event.service_id = Some(ServiceId::new(id + 1));
             event.direction = TrafficDirection::Ingress;
-            d.observe(event);
+            d.observe_with_quality(event, ObservationQuality::Clean)
+                .unwrap();
         }
         assert_eq!(d.service_profiles.len(), MAX_SERVICES);
         assert_eq!(d.state.accepted, MAX_SERVICES as u64 + 1);
@@ -780,7 +912,8 @@ mod tests {
             event.direction = TrafficDirection::Ingress;
             event.source_key = Some(key + 1);
             event.destination_key = Some(key + 100);
-            d.observe(event);
+            d.observe_with_quality(event, ObservationQuality::Clean)
+                .unwrap();
         }
         let report = d
             .assess_service(ServiceId::new(9), TrafficDirection::Ingress, 100)
@@ -1113,7 +1246,8 @@ mod tests {
             direction: TrafficDirection::Ingress,
         };
         for _ in 0..5 {
-            disc.observe(sample.clone());
+            disc.observe_with_quality(sample.clone(), ObservationQuality::Clean)
+                .unwrap();
         }
         disc.flush().unwrap();
 
