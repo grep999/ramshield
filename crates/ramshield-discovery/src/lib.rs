@@ -871,7 +871,9 @@ fn validate_persisted_state(state: &PersistedState, config: &DiscoveryConfig) ->
         let Some(bucket) = maybe_bucket else {
             continue;
         };
-        if bucket.hour > u64::MAX / 3600
+        // A bucket with no accepted samples cannot carry packet or byte totals.
+        if (bucket.samples == 0 && (bucket.packets != 0 || bucket.bytes != 0))
+            || bucket.hour > u64::MAX / 3600
             || bucket.hour % bucket_count as u64 != index as u64
             || bucket.sources.len() != SOURCE_BUCKETS
             || bucket.destinations.len() != DESTINATION_BUCKETS
@@ -1212,6 +1214,32 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn reopen_rejects_packet_or_byte_totals_without_samples() {
+        let p = path();
+        let discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        let hour = 1_700_000_000 / 3600;
+        let index = hour as usize % discovery.state.buckets.len();
+
+        // Exercise packet and byte totals independently so neither can be
+        // accepted merely because the other aggregate remains zero.
+        for (packets, bytes) in [(1, 0), (0, 1)] {
+            let mut state = discovery.state.clone();
+            let mut bucket = HourBucket::new(hour);
+            bucket.packets = packets;
+            bucket.bytes = bytes;
+            bucket.protocols[Protocol::Other as usize] = packets;
+            state.buckets[index] = Some(bucket);
+            fs::write(&p, serde_json::to_vec(&state).unwrap()).unwrap();
+
+            let error = Discovery::open(&p, DiscoveryConfig::default())
+                .err()
+                .unwrap();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        }
         let _ = fs::remove_file(p);
     }
 
