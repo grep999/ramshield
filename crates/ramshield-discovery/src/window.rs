@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -247,16 +247,26 @@ impl WindowLedger {
             return Err(WindowError::InvalidCapacity);
         }
         let path = path.as_ref();
-        if !path.exists() {
-            return Err(WindowError::Io("persistence file not found".into()));
+        let file = File::open(path).map_err(|error| WindowError::Io(error.to_string()))?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| WindowError::Io(error.to_string()))?;
+        let max_bytes = max_snapshot_bytes(max_entries);
+        if !metadata.is_file() {
+            return Err(WindowError::Io(
+                "persistence path is not a regular file".into(),
+            ));
         }
-        let metadata = fs::metadata(path).map_err(|error| WindowError::Io(error.to_string()))?;
-        if metadata.len() > max_snapshot_bytes(max_entries) {
+        if metadata.len() > max_bytes {
             return Err(WindowError::Io(
                 "persistence file exceeds configured capacity bound".into(),
             ));
         }
-        let bytes = fs::read(path).map_err(|error| WindowError::Io(error.to_string()))?;
+        // Enforce the limit while reading as well as before parsing. The file
+        // can grow after metadata() returns, so fs::read() would reintroduce an
+        // unbounded allocation through that time-of-check/time-of-use window.
+        let bytes = read_bounded(file, max_bytes)
+            .map_err(|error| WindowError::Io(error.to_string()))?;
         let envelope: PersistenceEnvelope =
             serde_json::from_slice(&bytes).map_err(|error| WindowError::Io(error.to_string()))?;
         if envelope.version != PERSISTENCE_VERSION {
@@ -305,6 +315,20 @@ fn max_snapshot_bytes(max_entries: usize) -> u64 {
     (max_entries as u64)
         .saturating_mul(MAX_PERSISTED_ENTRY_BYTES)
         .saturating_add(MAX_PERSISTED_ENVELOPE_BYTES)
+}
+
+fn read_bounded(reader: impl Read, max_bytes: u64) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "persistence file grew beyond configured capacity bound",
+        ));
+    }
+    Ok(bytes)
 }
 
 fn create_temp_file(path: &Path) -> io::Result<(PathBuf, File)> {
@@ -762,6 +786,21 @@ mod tests {
             Err(WindowError::Io(_))
         ));
         let _ = fs::remove_file(&p);
+    }
+
+    #[test]
+    fn bounded_reader_rejects_data_beyond_limit() {
+        let within_bound = vec![b'x'; 8];
+        assert_eq!(
+            read_bounded(std::io::Cursor::new(within_bound), 8)
+                .unwrap()
+                .len(),
+            8
+        );
+
+        let beyond_bound = vec![b'x'; 9];
+        let error = read_bounded(std::io::Cursor::new(beyond_bound), 8).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 
     /// Invalid capacity must be rejected on reopen.
