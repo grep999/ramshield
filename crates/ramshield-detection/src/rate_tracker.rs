@@ -747,6 +747,19 @@ impl PerIpRecord {
         timestamp_ns: u64,
         context: Option<&TrafficContext>,
     ) -> Result<DetectionOutcome, DetectorError> {
+        self.update_with_context_at(current_rate, timestamp_ns, context, timestamp_ns)
+    }
+
+    /// Update a completed sample at its bucket timestamp while evaluating advisory
+    /// context freshness against the current processing timestamp. These timestamps
+    /// differ when a flush finalizes the previous one-second bucket.
+    pub fn update_with_context_at(
+        &mut self,
+        current_rate: f64,
+        timestamp_ns: u64,
+        context: Option<&TrafficContext>,
+        context_now_ns: u64,
+    ) -> Result<DetectionOutcome, DetectorError> {
         // --- STEP 1: ATOMIC PRE-VALIDATION ---
         if !current_rate.is_finite() || current_rate < 0.0 {
             return Err(DetectorError::InvalidCurrentRate);
@@ -768,10 +781,10 @@ impl PerIpRecord {
         if !self.cusum_s.is_finite() || self.cusum_s < 0.0 {
             return Err(DetectorError::InvalidInternalCusum);
         }
-        if let Some(ctx) = context {
-            if !ctx.is_valid() {
-                return Err(DetectorError::InvalidContextConfidence);
-            }
+        if let Some(ctx) = context
+            && !ctx.is_valid()
+        {
+            return Err(DetectorError::InvalidContextConfidence);
         }
         // Defensive validation also protects records created through deserialization
         // or future internal constructors that might bypass `new`.
@@ -800,28 +813,32 @@ impl PerIpRecord {
 
         let mut h = (self.baseline_rate * 1.5).max(self.profile.min_threshold_h);
 
-        // Apply advisory context if fresh and confident
+        // Apply advisory context if fresh and confident. A FlashCrowd classification
+        // also suppresses the breach transition while it remains fresh; otherwise a
+        // static per-IP spike would override the classifier's legitimate-surge decision.
         let mut ctx_applied = false;
-        let mut flash_crowd_tagged = false;
-        if let Some(ctx) = context {
-            if ctx.is_fresh(timestamp_ns, 2_000_000_000) && ctx.confidence >= 0.6 {
-                ctx_applied = true;
-                match ctx.hypothesis {
-                    Hypothesis::FlashCrowd => {
-                        // FlashCrowd is treated as legitimate traffic (OWNER_DECISION_PACKAGE):
-                        // hypothesized flash crowds are never escalated to Breached.
-                        k *= 1.5;
-                        h *= 2.0;
-                        flash_crowd_tagged = true;
-                    }
-                    Hypothesis::VolumetricDoS => {
-                        h *= 0.8;
-                    }
-                    Hypothesis::SlowRampDoS => {
-                        k *= 0.5;
-                    }
-                    Hypothesis::Normal => {}
+        let flash_crowd_context = context.is_some_and(|ctx| {
+            ctx.is_fresh(context_now_ns, 2_000_000_000)
+                && ctx.confidence >= 0.6
+                && ctx.hypothesis == Hypothesis::FlashCrowd
+        });
+        if let Some(ctx) = context
+            && ctx.is_fresh(context_now_ns, 2_000_000_000)
+            && ctx.confidence >= 0.6
+        {
+            ctx_applied = true;
+            match ctx.hypothesis {
+                Hypothesis::FlashCrowd => {
+                    k *= 1.5;
+                    h *= 2.0;
                 }
+                Hypothesis::VolumetricDoS => {
+                    h *= 0.8;
+                }
+                Hypothesis::SlowRampDoS => {
+                    k *= 0.5;
+                }
+                Hypothesis::Normal => {}
             }
         }
 
@@ -866,7 +883,7 @@ impl PerIpRecord {
             new_mode = DetectorMode::Monitoring;
         }
 
-        if new_mode == DetectorMode::Monitoring && new_cusum > h && !flash_crowd_tagged {
+        if new_mode == DetectorMode::Monitoring && new_cusum > h && !flash_crowd_context {
             new_mode = DetectorMode::Breached;
             new_recovery_count = 0;
         } else if new_mode == DetectorMode::Breached {
@@ -1305,5 +1322,44 @@ mod adaptive_tests {
             Err(DetectorError::InvalidInternalSampleCount)
         );
         assert_eq!(record, before);
+    }
+    #[test]
+    fn fresh_flash_crowd_context_suppresses_adaptive_breach_transition() {
+        let profile = DetectorProfile::default();
+        let mut record = PerIpRecord::new(100.0, profile).unwrap();
+        record.sample_count = profile.warmup_samples;
+        record.mode = DetectorMode::Monitoring;
+        record.last_bucket_ns = 999_000_000;
+        let context = TrafficContext {
+            hypothesis: Hypothesis::FlashCrowd,
+            observed_at_ns: 1_000_000_000,
+            confidence: 0.95,
+        };
+        let outcome = record
+            .update(15_000.0, 1_000_000_000, Some(&context))
+            .unwrap();
+        assert!(!outcome.is_breached);
+        assert_ne!(outcome.mode, DetectorMode::Breached);
+    }
+    #[test]
+    fn completed_bucket_can_use_context_observed_after_bucket_boundary() {
+        let profile = DetectorProfile::default();
+        let mut record = PerIpRecord::new(100.0, profile).unwrap();
+        record.sample_count = profile.warmup_samples;
+        record.mode = DetectorMode::Monitoring;
+        record.last_bucket_ns = 999_000_000;
+        let context = TrafficContext {
+            hypothesis: Hypothesis::FlashCrowd,
+            observed_at_ns: 1_050_000_000,
+            confidence: 0.95,
+        };
+        let outcome = record
+            .update_with_context_at(15_000.0, 1_000_000_000, Some(&context), 1_100_000_000)
+            .unwrap();
+        assert_ne!(outcome.mode, DetectorMode::Breached);
+        assert_eq!(
+            record.baseline_rate, 100.0,
+            "FlashCrowd must freeze baseline"
+        );
     }
 }

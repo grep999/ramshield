@@ -25,6 +25,9 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
+/// Callback that publishes a timestamped forecasting hypothesis to the detector.
+pub type ContextPublisher = Arc<dyn Fn(Option<(Hypothesis, f64)>, u64) + Send + Sync + 'static>;
+
 mod forecaster;
 mod hypothesis;
 mod models;
@@ -143,6 +146,9 @@ pub struct Forecaster {
     // Cooldown gate: SLOW-RAMP WARN emitted at most once per WARN_COOLDOWN_MS
     // while the hypothesis persists; quieter debug ticks in between.
     last_slow_ramp_warn_ms: std::sync::atomic::AtomicU64,
+    /// Optional lock-free snapshot publisher; keeps the detector crate out of
+    /// forecasting's dependency graph while allowing the daemon to bridge context.
+    context_publisher: Option<ContextPublisher>,
 }
 
 /// Bounded reservoir of positive deviations; `extreme_q` returns the value that
