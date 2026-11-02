@@ -533,6 +533,7 @@ mod tests {
         // Same rejection must hold after recovery.
         let key_start_0 = WindowKey {
             service_id: "billing-worker".into(),
+            direction: TrafficDirection::Unknown,
             window_start_secs: 0,
             window_seconds: 60,
         };
@@ -632,6 +633,7 @@ mod tests {
         ));
         let key = WindowKey {
             service_id: "billing-worker".into(),
+            direction: TrafficDirection::Unknown,
             window_start_secs: 0,
             window_seconds: 60,
         };
