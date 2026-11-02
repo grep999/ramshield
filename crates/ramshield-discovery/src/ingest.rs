@@ -117,6 +117,11 @@ impl IngestionEngine {
         let mut staged: BTreeMap<(ServiceId, TrafficDirection, u64), WindowAccumulator> =
             BTreeMap::new();
         for event in events {
+            if event.captured_bytes > event.wire_bytes
+                || event.truncated != (event.wire_bytes > event.captured_bytes)
+            {
+                return Err(WindowError::InvalidObservation);
+            }
             let timestamp_secs = event.timestamp_ns / 1_000_000_000;
             let window_seconds = u64::from(self.config.window_seconds);
             let window_start = (timestamp_secs / window_seconds) * window_seconds;
@@ -126,6 +131,13 @@ impl IngestionEngine {
                 .absorb(event);
         }
         self.check_capacity(staged.keys())?;
+        if staged.keys().any(|key| {
+            self.pending
+                .get(key)
+                .is_some_and(|pending| pending.zero_traffic_complete)
+        }) {
+            return Err(WindowError::InvalidObservation);
+        }
         for (key, accumulator) in staged {
             self.pending.entry(key).or_default().merge(accumulator);
         }
@@ -175,7 +187,11 @@ impl IngestionEngine {
         }
         let key = (service_id, direction, window_start_secs);
         self.check_capacity(std::iter::once(&key))?;
-        self.pending.entry(key).or_default().zero_traffic_complete = true;
+        let accumulator = self.pending.entry(key).or_default();
+        if accumulator.packets > 0 {
+            return Err(WindowError::InvalidObservation);
+        }
+        accumulator.zero_traffic_complete = true;
         Ok(())
     }
 
@@ -385,6 +401,38 @@ mod tests {
         assert_eq!(
             eng.seal_completed(3_600).unwrap(),
             vec![RecordOutcome::Inserted]
+        );
+    }
+
+    #[test]
+    fn inconsistent_capture_lengths_are_rejected_without_partial_admission() {
+        let mut eng = engine(IngestConfig::default());
+        let service = ServiceId::new(16);
+        let ip = Ipv4Addr::new(10, 0, 0, 16).into();
+        let good = sample_event(ip, 1_000_000_000, 100, 100, false);
+        let bad = sample_event(ip, 1_000_000_500, 150, 100, false);
+        assert_eq!(
+            eng.record_batch(service, TrafficDirection::Ingress, &[good, bad]),
+            Err(WindowError::InvalidObservation)
+        );
+        assert_eq!(eng.pending_count(), 0);
+    }
+
+    #[test]
+    fn packet_events_cannot_be_added_after_declaring_empty_window() {
+        let mut eng = engine(IngestConfig::default());
+        let service = ServiceId::new(17);
+        eng.record_empty_window(service, TrafficDirection::Ingress, 0).unwrap();
+        let event = sample_event(
+            Ipv4Addr::new(10, 0, 0, 17).into(),
+            1_000_000_000,
+            100,
+            100,
+            false,
+        );
+        assert_eq!(
+            eng.record_batch(service, TrafficDirection::Ingress, &[event]),
+            Err(WindowError::InvalidObservation)
         );
     }
 

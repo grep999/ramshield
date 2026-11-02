@@ -104,6 +104,7 @@ pub enum WindowError {
     InvalidServiceId,
     InvalidWindow,
     InvalidCapacity,
+    InvalidObservation,
     Io(String),
 }
 
