@@ -5,7 +5,7 @@
 
 use ramshield_learning::{
     CardinalityEstimate, CardinalityEstimator, CountMetric, CountMoments, DistributionAssessment,
-    IngestConfig, IngestionEngine, MetricAssessment, MetricProfileStore, ObservationQuality,
+    CollectorHealth, IngestConfig, IngestionEngine, MetricAssessment, MetricProfileStore, ObservationQuality,
     RecordOutcome, ServiceId, TrafficDirection, WindowKey, WindowLedger, WindowObservation,
     WindowState, assess_cardinality_anomaly, assess_metric_distribution, calibrate_threshold,
 };
@@ -27,8 +27,18 @@ fn event(ip: IpAddr, ts_ns: u64, captured: u64, wire: u64, truncated: bool) -> C
 }
 
 fn mk_key(svc: &str, start: u64, seconds: u32) -> WindowKey {
+    mk_key_direction(svc, start, seconds, TrafficDirection::Unknown)
+}
+
+fn mk_key_direction(
+    svc: &str,
+    start: u64,
+    seconds: u32,
+    direction: TrafficDirection,
+) -> WindowKey {
     WindowKey {
         service_id: svc.to_string(),
+        direction,
         window_start_secs: start,
         window_seconds: seconds,
     }
@@ -38,13 +48,19 @@ fn mk_obs(key: WindowKey, packets: u64, bytes: u64, drops: u64) -> WindowObserva
     let state = if drops > 0 {
         WindowState::Degraded {
             packets,
-            bytes,
+            captured_bytes: bytes,
+            wire_bytes: bytes,
+            truncated_packets: 0,
             capture_drops: drops,
             ingest_drops: 0,
             malformed: 0,
         }
     } else {
-        WindowState::Observed { packets, bytes }
+        WindowState::Observed {
+            packets,
+            captured_bytes: bytes,
+            wire_bytes: bytes,
+        }
     };
     WindowObservation { key, state }
 }
@@ -53,79 +69,88 @@ fn mk_obs(key: WindowKey, packets: u64, bytes: u64, drops: u64) -> WindowObserva
 
 #[test]
 fn ground_truth_counts_match_input_exactly() {
-    let _dir = tempdir().unwrap();
     let mut eng = IngestionEngine::new(100, IngestConfig::default()).unwrap();
+    let service = ServiceId::new(1001);
     let ip: IpAddr = Ipv4Addr::new(10, 0, 0, 1).into();
     let events = vec![
         event(ip, 1_000_000_000, 100, 100, false),
         event(ip, 1_000_000_500, 200, 200, false),
         event(ip, 1_000_000_999, 50, 50, false),
     ];
-    eng.record_batch(&events);
-    let outcomes = eng.flush_pending().unwrap();
-    assert_eq!(outcomes.len(), 1);
-    assert_eq!(outcomes[0], RecordOutcome::Inserted);
+    eng.record_batch(service, TrafficDirection::Ingress, &events).unwrap();
+    let outcomes = eng.seal_completed(3_600).unwrap();
+    assert_eq!(outcomes, vec![RecordOutcome::Inserted]);
 
-    let key = mk_key(&ServiceId::from_ip(ip).as_string(), 0, 60);
-    let state = eng
-        .ledger()
-        .get(&key)
-        .expect("window should exist after flush");
+    let key = mk_key_direction(&service.as_string(), 0, 3_600, TrafficDirection::Ingress);
+    let state = eng.ledger().get(&key).expect("window should exist after seal");
     assert!(matches!(
         state,
         WindowState::Observed {
             packets: 3,
-            bytes: 350
+            captured_bytes: 350,
+            wire_bytes: 350,
         }
     ));
 }
 
 #[test]
 fn ground_truth_wire_bytes_never_underreported() {
-    let _dir = tempdir().unwrap();
     let mut eng = IngestionEngine::new(100, IngestConfig::default()).unwrap();
+    let service = ServiceId::new(1002);
     let ip: IpAddr = Ipv4Addr::new(10, 0, 0, 1).into();
     let events = vec![event(ip, 1_000_000_000, 64, 1500, true)];
-    eng.record_batch(&events);
-    eng.flush_pending().unwrap();
-    let key = mk_key(&ServiceId::from_ip(ip).as_string(), 0, 60);
-    let state = eng.ledger().get(&key).expect("window should exist");
-    assert!(matches!(state, WindowState::Degraded { .. }));
-}
-
-// ── Fault injection ────────────────────────────────────────────────────
-
-#[test]
-fn ring_drop_marks_window_degraded() {
-    let _dir = tempdir().unwrap();
-    let mut eng = IngestionEngine::new(100, IngestConfig::default()).unwrap();
-    eng.record_capture_drops(5);
-    let ip: IpAddr = Ipv4Addr::new(10, 0, 0, 1).into();
-    eng.record_batch(&[event(ip, 1_000_000_000, 100, 100, false)]);
-    eng.flush_pending().unwrap();
-    let key = mk_key(&ServiceId::from_ip(ip).as_string(), 0, 60);
+    eng.record_batch(service, TrafficDirection::Ingress, &events).unwrap();
+    eng.seal_completed(3_600).unwrap();
+    let key = mk_key_direction(&service.as_string(), 0, 3_600, TrafficDirection::Ingress);
     let state = eng.ledger().get(&key).expect("window should exist");
     assert!(matches!(
         state,
         WindowState::Degraded {
-            capture_drops: 5,
+            captured_bytes: 64,
+            wire_bytes: 1500,
+            truncated_packets: 1,
             ..
         }
     ));
 }
 
 #[test]
-fn parse_reject_marks_window_degraded() {
-    let _dir = tempdir().unwrap();
+fn ring_drop_marks_window_degraded() {
     let mut eng = IngestionEngine::new(100, IngestConfig::default()).unwrap();
-    eng.record_malformed(3);
+    let service = ServiceId::new(1003);
+    eng.record_window_health(
+        service,
+        TrafficDirection::Ingress,
+        0,
+        CollectorHealth { capture_drops: 5, ..CollectorHealth::default() },
+    ).unwrap();
     let ip: IpAddr = Ipv4Addr::new(10, 0, 0, 1).into();
-    eng.record_batch(&[event(ip, 1_000_000_000, 100, 100, false)]);
-    eng.flush_pending().unwrap();
-    let key = mk_key(&ServiceId::from_ip(ip).as_string(), 0, 60);
+    eng.record_batch(service, TrafficDirection::Ingress, &[event(ip, 1_000_000_000, 100, 100, false)]).unwrap();
+    eng.seal_completed(3_600).unwrap();
+    let key = mk_key_direction(&service.as_string(), 0, 3_600, TrafficDirection::Ingress);
+    let state = eng.ledger().get(&key).expect("window should exist");
+    assert!(matches!(state, WindowState::Degraded { capture_drops: 5, .. }));
+}
+
+#[test]
+fn parse_reject_marks_window_degraded() {
+    let mut eng = IngestionEngine::new(100, IngestConfig::default()).unwrap();
+    let service = ServiceId::new(1004);
+    eng.record_window_health(
+        service,
+        TrafficDirection::Ingress,
+        0,
+        CollectorHealth { malformed: 3, ..CollectorHealth::default() },
+    ).unwrap();
+    let ip: IpAddr = Ipv4Addr::new(10, 0, 0, 1).into();
+    eng.record_batch(service, TrafficDirection::Ingress, &[event(ip, 1_000_000_000, 100, 100, false)]).unwrap();
+    eng.seal_completed(3_600).unwrap();
+    let key = mk_key_direction(&service.as_string(), 0, 3_600, TrafficDirection::Ingress);
     let state = eng.ledger().get(&key).expect("window should exist");
     assert!(matches!(state, WindowState::Degraded { malformed: 3, .. }));
 }
+
+
 
 // ── Window integrity ───────────────────────────────────────────────────
 
@@ -174,32 +199,34 @@ fn out_of_order_window_rejected_too_old() {
 
 #[test]
 fn crash_recovery_preserves_committed_windows() {
-    let path = tempdir().unwrap().path().join("ledger.json");
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("ledger.json");
+    let service = ServiceId::new(1005);
     {
         let mut eng = IngestionEngine::new(100, IngestConfig::default()).unwrap();
         let ip: IpAddr = Ipv4Addr::new(10, 0, 0, 1).into();
-        eng.record_batch(&[event(ip, 1_000_000_000, 100, 100, false)]);
-        eng.flush_pending().unwrap();
+        eng.record_batch(
+            service,
+            TrafficDirection::Ingress,
+            &[event(ip, 1_000_000_000, 100, 100, false)],
+        ).unwrap();
+        eng.seal_completed(3_600).unwrap();
         eng.persist(&path).unwrap();
     }
     let eng = IngestionEngine::reopen(&path, 100, IngestConfig::default()).unwrap();
-    let key = mk_key(
-        &ServiceId::from_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))).as_string(),
-        0,
-        60,
-    );
-    let state = eng
-        .ledger()
-        .get(&key)
-        .expect("committed window survives restart");
+    let key = mk_key_direction(&service.as_string(), 0, 3_600, TrafficDirection::Ingress);
+    let state = eng.ledger().get(&key).expect("committed window survives restart");
     assert!(matches!(
         state,
         WindowState::Observed {
             packets: 1,
-            bytes: 100
+            captured_bytes: 100,
+            wire_bytes: 100,
         }
     ));
 }
+
+
 
 #[test]
 fn corrupted_snapshot_is_rejected() {
@@ -343,18 +370,20 @@ fn high_cardinality_estimator_stays_bounded() {
 
 #[test]
 fn out_of_order_timestamps_does_not_panic() {
-    let _dir = tempdir().unwrap();
     let mut eng = IngestionEngine::new(100, IngestConfig::default()).unwrap();
+    let service = ServiceId::new(1006);
     let ip: IpAddr = Ipv4Addr::new(10, 0, 0, 1).into();
     let events = vec![
         event(ip, 1_000_000_900, 100, 100, false),
         event(ip, 1_000_000_100, 100, 100, false),
         event(ip, 1_000_000_500, 100, 100, false),
     ];
-    eng.record_batch(&events);
-    let outcomes = eng.flush_pending().unwrap();
+    eng.record_batch(service, TrafficDirection::Ingress, &events).unwrap();
+    let outcomes = eng.seal_completed(3_600).unwrap();
     assert_eq!(outcomes.len(), 1);
 }
+
+
 
 // ── Quality gate: degraded never promotes to Normal ────────────────────
 
