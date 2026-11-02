@@ -16,9 +16,9 @@ A declared workload is explanatory context, never an exemption. Observed deviati
 
 ## 2. Observation contract
 
-Use fixed UTC event-time windows. The initial collection resolution may be one minute, with hourly calendar summaries derived from completed windows. A window must have a stable identity `(service_id, window_start, window_width, metric)` so replay is idempotent.
+Use fixed UTC event-time windows. The initial collection resolution may be one minute, with hourly calendar summaries derived from completed windows. The current `WindowKey` identity is `(service_id, direction, window_start, window_width)`; each ledger entry carries packet/byte totals and quality state, not a separate metric key.
 
-Represent at least these states distinctly. The current bounded `WindowLedger` prototype implements the three states and duplicate/conflict detection in memory; durable persistence and runtime integration remain caller responsibilities:
+Represent at least these states distinctly. The bounded `WindowLedger` implements duplicate/conflict detection in memory and explicit snapshot persistence through `flush`/`reopen`; its eviction watermark survives a successful snapshot/reopen. It is not a per-record WAL, so records since the last successful flush are not crash-durable. The ledger is not yet wired into `Discovery`'s D7/D8 profiles and does not contain protocol totals or endpoint keys needed to reconstruct every `TrafficSample` dimension. Runtime feeding and flush scheduling remain caller responsibilities. The D7/D8 per-service metric/cardinality profiles in `Discovery` are currently process-local and are not included in the aggregate snapshot:
 
 - `Observed(value)`: collector completed the window; zero is a valid value.
 - `Missing(reason)`: no valid observation exists.
@@ -26,7 +26,7 @@ Represent at least these states distinctly. The current bounded `WindowLedger` p
 
 Never convert missing or degraded windows to zero. Record capture drops, ingest drops, queue saturation and parser rejects as quality covariates. Baseline training must be able to exclude or separately model degraded windows.
 
-All event timestamps are stored in UTC. Workload declarations additionally carry an IANA timezone and local recurrence. Resolve local schedule boundaries to UTC at evaluation time, including daylight-saving gaps and repeated local times. Do not use a fixed UTC offset as a timezone.
+All event timestamps are stored in UTC. The current `TrafficCalendar` recurrence implementation is UTC-only: workload declarations do not yet carry an IANA timezone or local recurrence. IANA timezone support, including daylight-saving gaps and repeated local times, remains a future requirement; do not represent a fixed UTC offset as a timezone.
 
 ## 3. Conditional calendar
 
@@ -79,7 +79,7 @@ Do not automatically update the trusted baseline with an anomalous or degraded w
 
 ## 7. Workload context
 
-Declarations include stable ID, description, owner, declared-at timestamp, IANA timezone, recurrence, local start, duration, affected services and expected behavioural changes. Keep provenance and revision history.
+Declarations include stable ID, description, owner, declared-at timestamp, timezone, recurrence, local start, duration, affected services and expected behavioural changes. Keep provenance and revision history. The current implementation records UTC recurrence only; it does not yet implement the timezone field. Workload execution records validate identifiers, metadata bounds, nonzero durations and representable expected end times on admission and reopen. Overrun transitions require the expected end to have passed; completion may follow either Active or Overrun and records total elapsed whole hours.
 
 During a declaration, report both the statistical deviation and the declaration context. Repeated observations may eventually establish a recurring baseline, but the declaration itself must not alter the observed sample or suppress a finding.
 
@@ -102,7 +102,8 @@ Use public network time-series data such as CESNET-TimeSeries24 as an external b
 - No enforcement or live configuration mutation.
 - No training on missing or collector-degraded windows as if they were zero.
 - Idempotent window ingestion and explicit duplicate handling.
-- Service-specific series and workload provenance.
+- Service-specific series and workload provenance; the current D7/D8 service profiles are process-local and still need durable persistence.
+- A lossless native/metrics adapter contract for packet counts, service identity and direction before service-specific capture integration.
 - Timezone-correct recurrence tests.
 - Count-family diagnostics validated against synthetic Poisson, overdispersed and underdispersed data.
 - Predictive intervals and calibration tested on chronological holdouts.

@@ -207,9 +207,61 @@ pub struct WorkloadExecution {
     pub state: ExecutionState,
     pub start_time_secs: u64,
     pub expected_duration_hours: u64,
+    /// Whole elapsed hours from the actual start, rounded down.
     pub actual_duration_hours: Option<u64>,
     pub declared_by: String,
     pub notes: Option<String>,
+}
+
+impl WorkloadExecution {
+    fn expected_end_secs(&self) -> Option<u64> {
+        self.expected_duration_hours
+            .checked_mul(3600)?
+            .checked_add(self.start_time_secs)
+    }
+
+    fn validate(&self) -> io::Result<()> {
+        if self.id.is_empty()
+            || self.id.len() > 96
+            || !self
+                .id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "execution id must be 1..=96 ASCII alphanumeric/._- characters",
+            ));
+        }
+        if self.description.len() > 512
+            || self.declared_by.len() > 128
+            || self.notes.as_ref().is_some_and(|notes| notes.len() > 1_024)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "execution metadata exceeds field bounds",
+            ));
+        }
+        if self.state == ExecutionState::Declared
+            || self.start_time_secs == 0
+            || self.expected_duration_hours == 0
+            || self.expected_end_secs().is_none()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "execution state, start time, or expected end time is invalid",
+            ));
+        }
+        if self.actual_duration_hours.is_some()
+            && !matches!(self.state, ExecutionState::Overrun | ExecutionState::Completed)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "actual duration is only valid for overrun or completed executions",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -257,10 +309,10 @@ impl TrafficCalendar {
                 .declarations
                 .iter()
                 .all(|(id, declaration)| id == &declaration.id && declaration.validate().is_ok());
-            let executions_valid = state
-                .executions
-                .iter()
-                .all(|(id, execution)| id == &execution.id);
+            let executions_valid = state.executions.len() <= MAX_DECLARATIONS
+                && state.executions.iter().all(|(id, execution)| {
+                    id == &execution.id && execution.validate().is_ok()
+                });
             if !slots_valid
                 || !declarations_valid
                 || !executions_valid
@@ -307,9 +359,7 @@ impl TrafficCalendar {
         self.state.declarations.remove(id).is_some()
     }
 
-    /// Record that a workload execution has begun. Creates a new execution
-    /// record in the Scheduled state. Replaces any existing execution with
-    /// the same ID.
+    /// Register a scheduled workload execution, replacing the same ID if present.
     pub fn declare_execution(&mut self, execution: WorkloadExecution) -> io::Result<()> {
         if execution.state != ExecutionState::Scheduled {
             return Err(io::Error::new(
@@ -317,13 +367,10 @@ impl TrafficCalendar {
                 "execution must start in Scheduled state",
             ));
         }
-        if execution.start_time_secs == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "execution start_time_secs must be nonzero",
-            ));
-        }
-        if self.state.executions.len() >= MAX_DECLARATIONS {
+        execution.validate()?;
+        if !self.state.executions.contains_key(&execution.id)
+            && self.state.executions.len() >= MAX_DECLARATIONS
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "execution limit reached",
@@ -335,120 +382,151 @@ impl TrafficCalendar {
         Ok(())
     }
 
-    /// Transition an execution to a new state.
+    /// Transition an execution to a new state using the current UTC clock.
     pub fn transition_execution(
         &mut self,
         id: &str,
         new_state: ExecutionState,
     ) -> Result<(), io::Error> {
+        let now_secs = match new_state {
+            ExecutionState::Active | ExecutionState::Overrun | ExecutionState::Completed => {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(io::Error::other)?
+                    .as_secs()
+            }
+            _ => 0,
+        };
+        self.transition_execution_at(id, new_state, now_secs)
+    }
+
+    fn transition_execution_at(
+        &mut self,
+        id: &str,
+        new_state: ExecutionState,
+        now_secs: u64,
+    ) -> Result<(), io::Error> {
         match new_state {
             ExecutionState::Active => {
-                let Some(mut e) = self.state.executions.get(id).cloned() else {
+                let Some(mut execution) = self.state.executions.get(id).cloned() else {
                     return Err(io::Error::new(
                         io::ErrorKind::NotFound,
                         "execution not found",
                     ));
                 };
-                if e.state != ExecutionState::Scheduled {
+                if execution.state != ExecutionState::Scheduled || now_secs == 0 {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
-                        "invalid transition",
+                        "invalid transition or execution start time",
                     ));
                 }
-                e.state = ExecutionState::Active;
-                e.start_time_secs = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(io::Error::other)?
-                    .as_secs();
-                self.state.executions.insert(id.to_string(), e);
+                execution.state = ExecutionState::Active;
+                execution.start_time_secs = now_secs;
+                execution.actual_duration_hours = None;
+                execution.validate()?;
+                self.state.executions.insert(id.to_string(), execution);
                 Ok(())
             }
             ExecutionState::Overrun => {
-                let Some(mut e) = self.state.executions.get(id).cloned() else {
+                let Some(mut execution) = self.state.executions.get(id).cloned() else {
                     return Err(io::Error::new(
                         io::ErrorKind::NotFound,
                         "execution not found",
                     ));
                 };
-                if e.state != ExecutionState::Active {
+                if execution.state != ExecutionState::Active {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "invalid transition",
                     ));
                 }
-                e.state = ExecutionState::Overrun;
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(io::Error::other)?
-                    .as_secs();
-                let expected = e.start_time_secs + (e.expected_duration_hours * 3600);
-                e.actual_duration_hours = if now > expected {
-                    Some((now - expected) / 3600)
-                } else {
-                    None
-                };
-                self.state.executions.insert(id.to_string(), e);
+                let expected_end = execution.expected_end_secs().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "execution expected end time overflows",
+                    )
+                })?;
+                if now_secs <= expected_end {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "execution has not exceeded its expected duration",
+                    ));
+                }
+                let elapsed = now_secs
+                    .checked_sub(execution.start_time_secs)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "clock precedes execution start",
+                        )
+                    })?;
+                execution.state = ExecutionState::Overrun;
+                execution.actual_duration_hours = Some(elapsed / 3600);
+                self.state.executions.insert(id.to_string(), execution);
                 Ok(())
             }
             ExecutionState::Completed => {
-                let Some(mut e) = self.state.executions.get(id).cloned() else {
+                let Some(mut execution) = self.state.executions.get(id).cloned() else {
                     return Err(io::Error::new(
                         io::ErrorKind::NotFound,
                         "execution not found",
                     ));
                 };
-                if e.state != ExecutionState::Active {
+                if !matches!(
+                    execution.state,
+                    ExecutionState::Active | ExecutionState::Overrun
+                ) {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "invalid transition",
                     ));
                 }
-                e.state = ExecutionState::Completed;
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(io::Error::other)?
-                    .as_secs();
-                let expected = e.start_time_secs + (e.expected_duration_hours * 3600);
-                e.actual_duration_hours = if now > expected {
-                    Some((now - expected) / 3600)
-                } else {
-                    None
-                };
-                self.state.executions.insert(id.to_string(), e);
+                let elapsed = now_secs
+                    .checked_sub(execution.start_time_secs)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "clock precedes execution start",
+                        )
+                    })?;
+                execution.state = ExecutionState::Completed;
+                execution.actual_duration_hours = Some(elapsed / 3600);
+                self.state.executions.insert(id.to_string(), execution);
                 Ok(())
             }
             ExecutionState::Cancelled => {
-                let Some(mut e) = self.state.executions.get(id).cloned() else {
+                let Some(mut execution) = self.state.executions.get(id).cloned() else {
                     return Err(io::Error::new(
                         io::ErrorKind::NotFound,
                         "execution not found",
                     ));
                 };
-                if e.state == ExecutionState::Completed {
+                if execution.state == ExecutionState::Completed {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "invalid transition",
                     ));
                 }
-                e.state = ExecutionState::Cancelled;
-                self.state.executions.insert(id.to_string(), e);
+                execution.state = ExecutionState::Cancelled;
+                execution.actual_duration_hours = None;
+                self.state.executions.insert(id.to_string(), execution);
                 Ok(())
             }
             ExecutionState::Missed => {
-                let Some(mut e) = self.state.executions.get(id).cloned() else {
+                let Some(mut execution) = self.state.executions.get(id).cloned() else {
                     return Err(io::Error::new(
                         io::ErrorKind::NotFound,
                         "execution not found",
                     ));
                 };
-                if e.state != ExecutionState::Scheduled {
+                if execution.state != ExecutionState::Scheduled {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "invalid transition",
                     ));
                 }
-                e.state = ExecutionState::Missed;
-                self.state.executions.insert(id.to_string(), e);
+                execution.state = ExecutionState::Missed;
+                self.state.executions.insert(id.to_string(), execution);
                 Ok(())
             }
             ExecutionState::Scheduled | ExecutionState::Declared => Err(io::Error::new(
@@ -678,6 +756,23 @@ mod tests {
             .as_nanos();
         std::env::temp_dir().join(format!("rs-calendar-{n}.json"))
     }
+
+    fn execution(
+        id: &str,
+        start_time_secs: u64,
+        expected_duration_hours: u64,
+    ) -> WorkloadExecution {
+        WorkloadExecution {
+            id: id.into(),
+            description: "Scheduled workload".into(),
+            state: ExecutionState::Scheduled,
+            start_time_secs,
+            expected_duration_hours,
+            actual_duration_hours: None,
+            declared_by: "operator".into(),
+            notes: None,
+        }
+    }
     #[test]
     fn weekly_and_month_end_workloads_are_declared_context() {
         let p = path();
@@ -774,6 +869,146 @@ mod tests {
         c.observe_hour(t, 100, 10_000);
         let assessment = c.assess(t + 4 * 7 * 86_400, 1_000, 1, 3.0);
         assert_eq!(assessment.kind, CalendarAssessmentKind::InsufficientData);
+        let _ = fs::remove_file(p);
+    }
+    #[test]
+    fn execution_validation_rejects_overflowing_expected_end() {
+        let p = path();
+        let mut calendar = TrafficCalendar::open(&p).unwrap();
+        assert!(
+            calendar
+                .declare_execution(execution("overflow", u64::MAX - 100, 1))
+                .is_err()
+        );
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn activation_rejects_expected_end_overflow_after_actual_start() {
+        let p = path();
+        let mut calendar = TrafficCalendar::open(&p).unwrap();
+        calendar
+            .declare_execution(execution("long-job", 1, u64::MAX / 3600))
+            .unwrap();
+        assert!(
+            calendar
+                .transition_execution_at("long-job", ExecutionState::Active, 1_000)
+                .is_err()
+        );
+        assert_eq!(
+            calendar.execution_state("long-job"),
+            Some(ExecutionState::Scheduled)
+        );
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn execution_transitions_are_checked_and_record_total_elapsed_hours() {
+        let p = path();
+        let mut calendar = TrafficCalendar::open(&p).unwrap();
+        calendar
+            .declare_execution(execution("billing", 1_000, 1))
+            .unwrap();
+        calendar
+            .transition_execution_at("billing", ExecutionState::Active, 2_000)
+            .unwrap();
+
+        assert!(
+            calendar
+                .transition_execution_at("billing", ExecutionState::Overrun, 5_599)
+                .is_err()
+        );
+        assert_eq!(
+            calendar.execution_state("billing"),
+            Some(ExecutionState::Active)
+        );
+
+        calendar
+            .transition_execution_at("billing", ExecutionState::Overrun, 9_200)
+            .unwrap();
+        assert_eq!(
+            calendar.execution("billing").unwrap().actual_duration_hours,
+            Some(2)
+        );
+        calendar
+            .transition_execution_at("billing", ExecutionState::Completed, 11_000)
+            .unwrap();
+        assert_eq!(
+            calendar.execution_state("billing"),
+            Some(ExecutionState::Completed)
+        );
+        assert_eq!(
+            calendar.execution("billing").unwrap().actual_duration_hours,
+            Some(2)
+        );
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn completed_execution_records_elapsed_time_before_expected_end() {
+        let p = path();
+        let mut calendar = TrafficCalendar::open(&p).unwrap();
+        calendar
+            .declare_execution(execution("batch", 1_000, 3))
+            .unwrap();
+        calendar
+            .transition_execution_at("batch", ExecutionState::Active, 2_000)
+            .unwrap();
+        calendar
+            .transition_execution_at("batch", ExecutionState::Completed, 9_200)
+            .unwrap();
+        assert_eq!(
+            calendar.execution("batch").unwrap().actual_duration_hours,
+            Some(2)
+        );
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn persisted_execution_validation_rejects_overflowing_schedule() {
+        let p = path();
+        let mut calendar = TrafficCalendar::open(&p).unwrap();
+        calendar.state.executions.insert(
+            "overflow".into(),
+            execution("overflow", u64::MAX - 100, 1),
+        );
+        calendar.flush().unwrap();
+        assert!(TrafficCalendar::open(&p).is_err());
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn persisted_execution_validation_enforces_capacity() {
+        let p = path();
+        let mut calendar = TrafficCalendar::open(&p).unwrap();
+        for index in 0..=MAX_DECLARATIONS {
+            let id = format!("exec-{index}");
+            calendar
+                .state
+                .executions
+                .insert(id.clone(), execution(&id, 1, 1));
+        }
+        calendar.flush().unwrap();
+        assert!(TrafficCalendar::open(&p).is_err());
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn execution_at_capacity_can_replace_existing_id() {
+        let p = path();
+        let mut calendar = TrafficCalendar::open(&p).unwrap();
+        for index in 0..MAX_DECLARATIONS {
+            let id = format!("exec-{index}");
+            calendar.declare_execution(execution(&id, 1, 1)).unwrap();
+        }
+        let mut replacement = execution("exec-0", 2, 1);
+        replacement.description = "Updated schedule".into();
+        calendar.declare_execution(replacement).unwrap();
+        assert_eq!(calendar.state.executions.len(), MAX_DECLARATIONS);
+        assert_eq!(
+            calendar.execution("exec-0").unwrap().description,
+            "Updated schedule"
+        );
         let _ = fs::remove_file(p);
     }
 }
