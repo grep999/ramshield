@@ -4,6 +4,36 @@
 //! them atomically. It never changes live configuration or network state.
 
 use serde::{Deserialize, Serialize};
+
+mod serde_map_as_vec {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::BTreeMap;
+
+    pub fn serialize<K, V, S>(map: &BTreeMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        K: Serialize + Ord,
+        V: Serialize,
+        S: Serializer,
+    {
+        map.iter().collect::<Vec<_>>().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, K, V, D>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
+    where
+        K: Deserialize<'de> + Ord,
+        V: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        let entries = Vec::<(K, V)>::deserialize(deserializer)?;
+        let mut map = BTreeMap::new();
+        for (key, value) in entries {
+            if map.insert(key, value).is_some() {
+                return Err(serde::de::Error::custom("duplicate key in persisted map"));
+            }
+        }
+        Ok(map)
+    }
+}
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -36,7 +66,12 @@ pub use window::{
     WindowState,
 };
 
-const SCHEMA: u32 = 3;
+const LEGACY_SCHEMA: u32 = 3;
+const SCHEMA: u32 = 4;
+/// D7/D8 currently compare only the current and immediately preceding absolute UTC hour.
+const MAX_SERVICE_PROFILE_HOURS: u64 = 2;
+/// Reserve a bounded amount in the aggregate snapshot for service-profile state.
+const MAX_SERVICE_PROFILE_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
 const HOURS_PER_DAY: usize = 24;
 const SOURCE_BUCKETS: usize = 64;
 const DESTINATION_BUCKETS: usize = 64;
@@ -235,6 +270,8 @@ struct PersistedState {
     buckets: Vec<Option<HourBucket>>,
     accepted: u64,
     too_old: u64,
+    #[serde(default, with = "crate::serde_map_as_vec")]
+    service_profiles: BTreeMap<ServiceId, MetricProfileStore>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -298,17 +335,21 @@ pub struct Discovery {
     config: DiscoveryConfig,
     state: PersistedState,
     path: PathBuf,
-    service_profiles: BTreeMap<ServiceId, MetricProfileStore>,
 }
 
 impl Discovery {
     pub fn open(path: impl AsRef<Path>, config: DiscoveryConfig) -> io::Result<Self> {
         config.validate()?;
         let path = path.as_ref().to_path_buf();
-        let state = if path.exists() {
-            let state: PersistedState =
+        let mut state = if path.exists() {
+            let mut state: PersistedState =
                 read_snapshot(&path, max_discovery_snapshot_bytes(&config))?;
             validate_persisted_state(&state, &config)?;
+            // Schema 3 never persisted service profiles. Migrate its aggregate
+            // observations without inventing historical per-service evidence.
+            if state.schema == LEGACY_SCHEMA {
+                state.schema = SCHEMA;
+            }
             state
         } else {
             PersistedState {
@@ -317,13 +358,13 @@ impl Discovery {
                 buckets: vec![None; config.bucket_count()],
                 accepted: 0,
                 too_old: 0,
+                service_profiles: BTreeMap::new(),
             }
         };
         Ok(Self {
             config,
             state,
             path,
-            service_profiles: BTreeMap::new(),
         })
     }
 
@@ -368,60 +409,73 @@ impl Discovery {
     ) {
         let hour_utc = sample.timestamp_secs / 3600;
         let port_limit = self.config.max_ports_per_hour;
-        let Some(bucket) = self.bucket_mut(hour_utc) else {
-            self.state.too_old = self.state.too_old.saturating_add(1);
-            return;
-        };
-        bucket.samples = bucket.samples.saturating_add(1);
-        bucket.packets = bucket.packets.saturating_add(sample.packets);
-        bucket.bytes = bucket.bytes.saturating_add(sample.bytes);
-        let protocol = sample.protocol as usize;
-        bucket.protocols[protocol] = bucket.protocols[protocol].saturating_add(sample.packets);
-        if let Some(port) = sample.destination_port {
-            bucket.add_port(port, port_limit);
+        {
+            let Some(bucket) = self.bucket_mut(hour_utc) else {
+                self.state.too_old = self.state.too_old.saturating_add(1);
+                return;
+            };
+            bucket.samples = bucket.samples.saturating_add(1);
+            bucket.packets = bucket.packets.saturating_add(sample.packets);
+            bucket.bytes = bucket.bytes.saturating_add(sample.bytes);
+            let protocol = sample.protocol as usize;
+            bucket.protocols[protocol] = bucket.protocols[protocol].saturating_add(sample.packets);
+            if let Some(port) = sample.destination_port {
+                bucket.add_port(port, port_limit);
+            }
+            if let Some(key) = sample.source_key {
+                let i = key as usize % SOURCE_BUCKETS;
+                bucket.sources[i] = bucket.sources[i].saturating_add(sample.packets);
+            }
+            if let Some(key) = sample.destination_key {
+                let i = key as usize % DESTINATION_BUCKETS;
+                bucket.destinations[i] = bucket.destinations[i].saturating_add(sample.packets);
+            }
         }
-        if let Some(key) = sample.source_key {
-            let i = key as usize % SOURCE_BUCKETS;
-            bucket.sources[i] = bucket.sources[i].saturating_add(sample.packets);
-        }
-        if let Some(key) = sample.destination_key {
-            let i = key as usize % DESTINATION_BUCKETS;
-            bucket.destinations[i] = bucket.destinations[i].saturating_add(sample.packets);
-        }
+
+        self.prune_service_profiles();
 
         // Service identity and quality are explicit producer contracts.
         // HealthSample is aggregated independently and is not used to infer
-        // per-sample quality from event arrival order.
+        // per-sample quality from event arrival order. D7/D8 profiles retain
+        // only the adjacent-hour comparison window used by assess_service.
         if let (Some(service_id), Some(quality)) = (sample.service_id, service_quality) {
-            let has_capacity = self.service_profiles.contains_key(&service_id)
-                || self.service_profiles.len() < MAX_SERVICES;
-            if has_capacity {
-                let profile = self.service_profiles.entry(service_id).or_default();
-                let oldest_hour = hour_utc.saturating_sub(self.config.bucket_count() as u64 - 1);
-                profile.prune_before(oldest_hour);
-                let service_key = service_id.as_u64().to_string();
-                // D7/D8 compare adjacent absolute UTC hours and prune by the
-                // same absolute-hour key. A recurring hour-of-week slot would
-                // wrap every week and be incompatible with this retention floor.
-                profile.observe_cardinality(
-                    service_key.clone(),
-                    sample.direction,
-                    hour_utc,
-                    sample.source_key,
-                    sample.destination_key,
-                    quality,
-                );
-                profile.observe_volume(
-                    service_key,
-                    sample.direction,
-                    hour_utc,
-                    sample.packets,
-                    sample.bytes,
-                    quality,
-                );
+            let newest_hour = self
+                .state
+                .buckets
+                .iter()
+                .flatten()
+                .map(|bucket| bucket.hour)
+                .max()
+                .unwrap_or(hour_utc);
+            let oldest_profile_hour =
+                newest_hour.saturating_sub(MAX_SERVICE_PROFILE_HOURS - 1);
+            if hour_utc >= oldest_profile_hour {
+                let has_capacity = self.state.service_profiles.contains_key(&service_id)
+                    || self.state.service_profiles.len() < MAX_SERVICES;
+                if has_capacity {
+                    let profile = self.state.service_profiles.entry(service_id).or_default();
+                    let service_key = service_id.as_u64().to_string();
+                    profile.observe_cardinality(
+                        service_key.clone(),
+                        sample.direction,
+                        hour_utc,
+                        sample.source_key,
+                        sample.destination_key,
+                        quality,
+                    );
+                    profile.observe_volume(
+                        service_key,
+                        sample.direction,
+                        hour_utc,
+                        sample.packets,
+                        sample.bytes,
+                        quality,
+                    );
+                }
             }
-            // At capacity, aggregate traffic is still accepted; only the
-            // optional per-service profile is omitted.
+            // At capacity, or outside the adjacent-hour profile horizon,
+            // aggregate traffic is still accepted; only the service profile
+            // update is omitted.
         }
 
         self.state.accepted = self.state.accepted.saturating_add(1);
@@ -440,7 +494,7 @@ impl Discovery {
         direction: TrafficDirection,
         hour: u64,
     ) -> Option<ServiceDistributionAssessment> {
-        let profile = self.service_profiles.get(&service_id)?;
+        let profile = self.state.service_profiles.get(&service_id)?;
         let service_key = service_id.as_u64().to_string();
         let previous_hour = hour.checked_sub(1);
 
@@ -563,18 +617,21 @@ impl Discovery {
     }
 
     pub fn observe_health(&mut self, sample: HealthSample) {
-        let Some(bucket) = self.bucket_mut(sample.timestamp_secs / 3600) else {
-            return;
-        };
-        bucket.capture_drops = bucket.capture_drops.saturating_add(sample.capture_drops);
-        bucket.ingest_drops = bucket.ingest_drops.saturating_add(sample.ingest_drops);
-        bucket.malformed = bucket
-            .malformed
-            .saturating_add(sample.malformed_observations);
-        bucket.queue_depth_peak = bucket.queue_depth_peak.max(sample.queue_depth);
-        bucket.queue_capacity_peak = bucket.queue_capacity_peak.max(sample.queue_capacity);
-        bucket.cpu_millis = bucket.cpu_millis.saturating_add(sample.cpu_millis);
-        bucket.memory_bytes_peak = bucket.memory_bytes_peak.max(sample.memory_bytes);
+        {
+            let Some(bucket) = self.bucket_mut(sample.timestamp_secs / 3600) else {
+                return;
+            };
+            bucket.capture_drops = bucket.capture_drops.saturating_add(sample.capture_drops);
+            bucket.ingest_drops = bucket.ingest_drops.saturating_add(sample.ingest_drops);
+            bucket.malformed = bucket
+                .malformed
+                .saturating_add(sample.malformed_observations);
+            bucket.queue_depth_peak = bucket.queue_depth_peak.max(sample.queue_depth);
+            bucket.queue_capacity_peak = bucket.queue_capacity_peak.max(sample.queue_capacity);
+            bucket.cpu_millis = bucket.cpu_millis.saturating_add(sample.cpu_millis);
+            bucket.memory_bytes_peak = bucket.memory_bytes_peak.max(sample.memory_bytes);
+        }
+        self.prune_service_profiles();
     }
 
     /// Persist the bounded aggregate snapshot through an exclusive same-directory
@@ -629,6 +686,27 @@ impl Discovery {
         }
     }
 
+    fn prune_service_profiles(&mut self) {
+        let Some(newest_hour) = self
+            .state
+            .buckets
+            .iter()
+            .flatten()
+            .map(|bucket| bucket.hour)
+            .max()
+        else {
+            self.state.service_profiles.clear();
+            return;
+        };
+        let oldest_hour = newest_hour.saturating_sub(MAX_SERVICE_PROFILE_HOURS - 1);
+        for profile in self.state.service_profiles.values_mut() {
+            profile.prune_before(oldest_hour);
+        }
+        self.state
+            .service_profiles
+            .retain(|_, profile| !profile.is_empty());
+    }
+
     fn bucket_mut(&mut self, hour: u64) -> Option<&mut HourBucket> {
         let retention = self.config.bucket_count() as u64;
         if let Some(newest) = self
@@ -668,6 +746,7 @@ fn max_discovery_snapshot_bytes(config: &DiscoveryConfig) -> u64 {
     (config.bucket_count() as u64)
         .saturating_mul(per_bucket)
         .saturating_add(SNAPSHOT_ENVELOPE_BYTES)
+        .saturating_add(MAX_SERVICE_PROFILE_SNAPSHOT_BYTES)
         .min(MAX_DISCOVERY_SNAPSHOT_BYTES)
 }
 
@@ -777,7 +856,8 @@ fn validate_persisted_state(state: &PersistedState, config: &DiscoveryConfig) ->
         )
     };
     let bucket_count = state.buckets.len();
-    if state.schema != SCHEMA
+    if !matches!(state.schema, LEGACY_SCHEMA | SCHEMA)
+        || (state.schema == LEGACY_SCHEMA && !state.service_profiles.is_empty())
         || state.observation_days != config.observation_days
         || bucket_count != config.bucket_count()
         || bucket_count == 0
@@ -841,6 +921,31 @@ fn validate_persisted_state(state: &PersistedState, config: &DiscoveryConfig) ->
         {
             return Err(invalid());
         }
+
+        if state.service_profiles.len() > MAX_SERVICES {
+            return Err(invalid());
+        }
+        let oldest_profile_hour = newest.saturating_sub(MAX_SERVICE_PROFILE_HOURS - 1);
+        let retained_hours: BTreeSet<u64> = state
+            .buckets
+            .iter()
+            .flatten()
+            .map(|bucket| bucket.hour)
+            .collect();
+        if state.service_profiles.iter().any(|(service_id, profile)| {
+            profile.is_empty()
+                || !profile.validate_for_service(
+                    &service_id.as_u64().to_string(),
+                    oldest_profile_hour,
+                    newest,
+                    &retained_hours,
+                    MAX_SERVICE_PROFILE_HOURS as usize,
+                )
+        }) {
+            return Err(invalid());
+        }
+    } else if !state.service_profiles.is_empty() {
+        return Err(invalid());
     }
     Ok(())
 }
@@ -887,6 +992,115 @@ mod tests {
                 .observe_with_quality(event, ObservationQuality::Clean)
                 .unwrap();
         }
+    }
+
+    #[test]
+    fn service_profiles_survive_reopen_with_equivalent_assessment() {
+        let p = path();
+        let service_id = ServiceId::new(77);
+        let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        observe_service_hour(&mut discovery, service_id, TrafficDirection::Ingress, 100);
+        observe_service_hour(&mut discovery, service_id, TrafficDirection::Ingress, 101);
+        let before = discovery
+            .assess_service(service_id, TrafficDirection::Ingress, 101)
+            .unwrap();
+        discovery.flush().unwrap();
+        drop(discovery);
+
+        let reopened = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        let after = reopened
+            .assess_service(service_id, TrafficDirection::Ingress, 101)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(after).unwrap()
+        );
+        assert_eq!(reopened.state.service_profiles.len(), 1);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn service_profiles_retain_only_the_adjacent_hour_pair() {
+        let p = path();
+        let service_id = ServiceId::new(78);
+        let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        for hour in 100..=102 {
+            observe_service_hour(&mut discovery, service_id, TrafficDirection::Ingress, hour);
+        }
+
+        let profile = discovery.state.service_profiles.get(&service_id).unwrap();
+        assert!(profile.assessment("78", TrafficDirection::Ingress, CountMetric::Packets, 100).is_none());
+        assert!(profile.assessment("78", TrafficDirection::Ingress, CountMetric::Packets, 101).is_some());
+        assert!(profile.assessment("78", TrafficDirection::Ingress, CountMetric::Packets, 102).is_some());
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn schema_three_snapshot_migrates_without_inventing_service_profiles() {
+        let p = path();
+        let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        discovery.observe(sample(1_700_000_000));
+        discovery.flush().unwrap();
+
+        let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
+        value["schema"] = serde_json::json!(LEGACY_SCHEMA);
+        value.as_object_mut().unwrap().remove("service_profiles");
+        fs::write(&p, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let migrated = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        assert_eq!(migrated.state.schema, SCHEMA);
+        assert!(migrated.state.service_profiles.is_empty());
+        migrated.flush().unwrap();
+        let reopened = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        assert_eq!(reopened.state.schema, SCHEMA);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn reopen_rejects_service_profile_with_mismatched_identity() {
+        let p = path();
+        let service_id = ServiceId::new(79);
+        let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        observe_service_hour(&mut discovery, service_id, TrafficDirection::Ingress, 100);
+        let mut value = serde_json::to_value(&discovery.state).unwrap();
+        value["service_profiles"][0][1]["profiles"][0][0]["service_id"] = serde_json::json!("999");
+        fs::write(&p, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let error = Discovery::open(&p, DiscoveryConfig::default()).err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn reopen_rejects_invalid_persisted_cardinality_estimator() {
+        let p = path();
+        let service_id = ServiceId::new(80);
+        let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        observe_service_hour(&mut discovery, service_id, TrafficDirection::Ingress, 100);
+        let mut value = serde_json::to_value(&discovery.state).unwrap();
+        value["service_profiles"][0][1]["source_cardinality"][0][1]["bit_count"] = serde_json::json!(0);
+        fs::write(&p, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let error = Discovery::open(&p, DiscoveryConfig::default()).err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn reopen_rejects_duplicate_metric_profile_keys() {
+        let p = path();
+        let service_id = ServiceId::new(81);
+        let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        observe_service_hour(&mut discovery, service_id, TrafficDirection::Ingress, 100);
+        let mut value = serde_json::to_value(&discovery.state).unwrap();
+        let entries = value["service_profiles"][0][1]["profiles"].as_array_mut().unwrap();
+        let duplicate = entries[0].clone();
+        entries.push(duplicate);
+        fs::write(&p, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        let error = Discovery::open(&p, DiscoveryConfig::default()).err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(p);
     }
 
     #[test]
@@ -1061,7 +1275,7 @@ mod tests {
             capture_drops: 1,
             ..HealthSample::default()
         });
-        assert!(d.service_profiles.is_empty());
+        assert!(d.state.service_profiles.is_empty());
 
         d.observe_with_quality(event, ObservationQuality::Degraded)
             .unwrap();
@@ -1086,7 +1300,7 @@ mod tests {
             assert!(d.observe_with_quality(sample(100 * 3600), quality).is_err());
         }
         assert_eq!(d.snapshot().observations_accepted, before);
-        assert!(d.service_profiles.is_empty());
+        assert!(d.state.service_profiles.is_empty());
         let _ = fs::remove_file(p);
     }
 
@@ -1145,7 +1359,7 @@ mod tests {
             d.observe_with_quality(event, ObservationQuality::Clean)
                 .unwrap();
         }
-        assert_eq!(d.service_profiles.len(), MAX_SERVICES);
+        assert_eq!(d.state.service_profiles.len(), MAX_SERVICES);
         assert_eq!(d.state.accepted, MAX_SERVICES as u64 + 1);
         assert_eq!(d.state.too_old, 0);
         let _ = fs::remove_file(p);
@@ -1194,7 +1408,7 @@ mod tests {
         observe_service_hour(&mut d, service, TrafficDirection::Ingress, 10_000);
         observe_service_hour(&mut d, service, TrafficDirection::Ingress, 10_001);
 
-        let profile = d.service_profiles.get(&service).unwrap();
+        let profile = d.state.service_profiles.get(&service).unwrap();
         for hour in [10_000, 10_001] {
             let packets = profile
                 .assessment("42", TrafficDirection::Ingress, CountMetric::Packets, hour)

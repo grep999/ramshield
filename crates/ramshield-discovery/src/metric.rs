@@ -5,7 +5,9 @@
 
 use crate::{CountMoments, TrafficDirection};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+const DEFAULT_CARDINALITY_BITS: usize = 4096;
 
 /// Stable metric identity used as part of a profile key.
 /// The initial release includes only metrics whose source data is actually available
@@ -41,7 +43,7 @@ pub struct ProfileKey {
     pub service_id: String,
     pub direction: TrafficDirection,
     pub metric: CountMetric,
-    pub calendar_slot: u64, // hour-of-week = weekday * 24 + hour_of_day
+    pub calendar_slot: u64, // absolute UTC hour used by D7/D8 profiles
 }
 
 impl ProfileKey {
@@ -49,13 +51,13 @@ impl ProfileKey {
         service_id: String,
         direction: TrafficDirection,
         metric: CountMetric,
-        hour_of_week: u64,
+        absolute_hour: u64,
     ) -> Self {
         ProfileKey {
             service_id,
             direction,
             metric,
-            calendar_slot: hour_of_week,
+            calendar_slot: absolute_hour,
         }
     }
 }
@@ -109,9 +111,9 @@ pub fn new_profile_key(
     service_id: String,
     direction: TrafficDirection,
     metric: CountMetric,
-    hour_of_week: u64,
+    absolute_hour: u64,
 ) -> ProfileKey {
-    ProfileKey::new(service_id, direction, metric, hour_of_week)
+    ProfileKey::new(service_id, direction, metric, absolute_hour)
 }
 
 /// Apply a clean observed value to a CountMoments instance.
@@ -231,6 +233,18 @@ impl CardinalityEstimator {
         self.observed = 0;
     }
 
+    fn valid_persisted_state(&self) -> bool {
+        self.bit_count == DEFAULT_CARDINALITY_BITS
+            && self.bitmap.len() == DEFAULT_CARDINALITY_BITS / 64
+            && self.observed > 0
+            && self.observed
+                >= self
+                    .bitmap
+                    .iter()
+                    .map(|word| u64::from(word.count_ones()))
+                    .sum::<u64>()
+    }
+
     fn zero_bits(&self) -> usize {
         let full_words = self.bit_count / 64;
         let mut zeros = 0;
@@ -249,7 +263,7 @@ impl CardinalityEstimator {
 
 impl Default for CardinalityEstimator {
     fn default() -> Self {
-        Self::new(4096)
+        Self::new(DEFAULT_CARDINALITY_BITS)
     }
 }
 
@@ -260,8 +274,11 @@ impl Default for CardinalityEstimator {
 /// The existing packet-only CalendarAssessment remains as a fallback.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MetricProfileStore {
+    #[serde(with = "crate::serde_map_as_vec")]
     profiles: BTreeMap<ProfileKey, MetricAssessment>,
+    #[serde(with = "crate::serde_map_as_vec")]
     source_cardinality: BTreeMap<(String, TrafficDirection, u64), CardinalityEstimator>,
+    #[serde(with = "crate::serde_map_as_vec")]
     dest_cardinality: BTreeMap<(String, TrafficDirection, u64), CardinalityEstimator>,
 }
 
@@ -556,13 +573,103 @@ impl MetricProfileStore {
             .retain(|(_, _, hour), _| *hour >= oldest_hour);
     }
 
-    /// Number of distinct profiles stored.
+    /// Validate the bounded service profile representation before persistence is trusted.
+    pub(crate) fn validate_for_service(
+        &self,
+        service_id: &str,
+        oldest_hour: u64,
+        newest_hour: u64,
+        retained_hours: &BTreeSet<u64>,
+        max_hours: usize,
+    ) -> bool {
+        let max_profiles = max_hours.saturating_mul(4).saturating_mul(2);
+        let max_cardinality = max_hours.saturating_mul(4);
+        if self.profiles.is_empty()
+            || self.profiles.len() > max_profiles
+            || self.source_cardinality.len() > max_cardinality
+            || self.dest_cardinality.len() > max_cardinality
+        {
+            return false;
+        }
+
+        let mut dimensions = BTreeMap::<(TrafficDirection, u64), u8>::new();
+        for (key, assessment) in &self.profiles {
+            if key.service_id != service_id
+                || key.calendar_slot < oldest_hour
+                || key.calendar_slot > newest_hour
+                || !retained_hours.contains(&key.calendar_slot)
+                || key.calendar_slot > u64::MAX / 3600
+                || !matches!(key.metric, CountMetric::Packets | CountMetric::Bytes)
+                || assessment.metric != key.metric
+                || !assessment.moments.is_valid()
+                || assessment.moments.observations() != assessment.clean_observations
+                || assessment
+                    .baseline_source
+                    .as_ref()
+                    .is_some_and(|source| source.len() > 128)
+                || assessment.last_updated_secs != key.calendar_slot * 3600
+                || (assessment.clean_observations == 0 && assessment.observed_packets != 0)
+            {
+                return false;
+            }
+
+            let quality_valid = match assessment.quality {
+                ObservationQuality::Clean => assessment.clean_observations > 0,
+                ObservationQuality::Degraded => assessment.degraded_observations > 0,
+                ObservationQuality::Missing | ObservationQuality::Invalid => false,
+            };
+            if !quality_valid {
+                return false;
+            }
+
+            let mask = dimensions
+                .entry((key.direction, key.calendar_slot))
+                .or_default();
+            *mask |= match key.metric {
+                CountMetric::Packets => 0b01,
+                CountMetric::Bytes => 0b10,
+                _ => return false,
+            };
+        }
+        if dimensions.values().any(|mask| *mask != 0b11) {
+            return false;
+        }
+
+        let has_packet_profile = |direction, hour| {
+            self.profiles.contains_key(&ProfileKey::new(
+                service_id.to_owned(),
+                direction,
+                CountMetric::Packets,
+                hour,
+            ))
+        };
+        let cardinality_valid = |entries: &BTreeMap<
+            (String, TrafficDirection, u64),
+            CardinalityEstimator,
+        >| {
+            entries.iter().all(|((key_service, direction, hour), estimator)| {
+                key_service == service_id
+                    && *hour >= oldest_hour
+                    && *hour <= newest_hour
+                    && retained_hours.contains(hour)
+                    && has_packet_profile(*direction, *hour)
+                    && estimator.valid_persisted_state()
+            })
+        };
+
+        cardinality_valid(&self.source_cardinality)
+            && cardinality_valid(&self.dest_cardinality)
+    }
+
+    /// Number of distinct metric profiles stored.
     pub fn len(&self) -> usize {
         self.profiles.len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.profiles.is_empty()
+            && self.source_cardinality.is_empty()
+            && self.dest_cardinality.is_empty()
     }
 }
 
