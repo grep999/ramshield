@@ -121,3 +121,61 @@ Use public network time-series data such as CESNET-TimeSeries24 as an external b
 - Salmon, Schumacher and Höhle, *Monitoring Count Time Series in R* (2016): count regression, overdispersion, predictive aberration detection and CUSUM. https://www.jstatsoft.org/article/view/v070i10
 
 These sources motivate candidate methods; they do not validate RamShield's implementation. Validation must be performed on RamShield's own data and evaluation harness.
+
+## 11. Optional machine-learning and adaptive-collection extension
+
+This section defines a future-compatible extension point. It does **not** claim that ML is implemented, enabled, trained or required by the current discovery crate. The deterministic collector and statistical assessments remain the source of truth.
+
+### 11.1 Purpose
+
+Use a small online model to improve the *allocation and compression* of telemetry, not to replace the observation contract. The model may recommend where more detail is valuable and where bounded summaries are sufficient:
+
+- stable, well-understood services can use compact counters and sketches;
+- novel, rapidly changing or uncertain services can temporarily receive higher-resolution windows or richer bounded feature summaries;
+- repeated, similar service profiles may be grouped into candidate cohorts for shared baseline estimation, while retaining service-specific identity and reporting;
+- redundant dimensions may be deprioritised only when the model records the resulting information loss and the core counters remain intact.
+
+The intended gain is lower average CPU, memory and persistence cost for a given level of statistical coverage, with more detail collected around uncertainty and change. It is not permission to discard evidence of suspicious activity.
+
+### 11.2 Proposed architecture
+
+Keep the packet/event hot path deterministic and model-free. Add a periodic, bounded control-plane component (candidate name: `AdaptiveCollectionPolicy`) that consumes completed-window summaries and emits a collection plan for *future* windows.
+
+The policy boundary should be a narrow trait or equivalent pure interface:
+
+- input: bounded per-service/window features, collector-health state, current resource budget and model version;
+- output: requested aggregation resolution, optional feature/sketch budgets and an explicit reason code;
+- state: bounded, versioned model state, updated outside the capture hot path;
+- fallback: deterministic fixed-budget policy whenever the model is disabled, unavailable, stale, invalid or over budget.
+
+A plan must never rewrite completed observations. Every observation must carry the effective collection-plan version and quality metadata so later analysis can distinguish actual zero from unobserved or sampled data.
+
+### 11.3 Candidate models, in increasing complexity
+
+1. **Adaptive sketches first (no ML dependency):** retain fixed-cost packet/byte counters and bounded Space-Saving / Count-Min / HyperLogLog-style summaries for heavy hitters and cardinality. Size and update work are configured and hard-capped. This is likely to deliver the largest immediate efficiency gain with the least operational risk.
+2. **Online novelty and drift signals:** use bounded robust baselines and change/novelty scores over completed-window feature vectors to request temporary higher detail. Keep drift detection separate from anomaly scoring; a drift signal must not automatically retrain or bless the new baseline.
+3. **Optional lightweight online clustering:** evaluate bounded micro-clusters (for example, streaming k-means over normalised service-window features) to identify similar workload regimes and support hierarchical baseline sharing. Preserve service-level residuals and never let cohort membership hide a service-specific deviation.
+4. **More complex models only after evidence:** consider streaming isolation/forecasting models only if benchmarks show a material improvement over the simpler methods under the same CPU, memory and false-alarm budget.
+
+Do not add a heavyweight inference runtime or external model download to the default RamShield build. Any future implementation should be pure Rust or an optional feature with explicit dependency, binary-size and compile-time budgets.
+
+### 11.4 Safety, poisoning and sampling rules
+
+- ML is advisory. It cannot change firewall/XDP state, detection thresholds, enforcement policy or workload allowlists.
+- Never reduce the fixed core telemetry needed for accounting, health, replay detection and minimum security visibility.
+- Never treat sampled-out, missing or degraded measurements as zero. Mark sampling probability, omitted dimensions and quality on every affected window.
+- Do not use adaptively sampled values as unbiased training data unless the estimator explicitly accounts for the sampling design; otherwise keep them out of trusted baseline fitting.
+- A suspicious or novel window must be eligible for *more* detail, never less. Collection budgets and per-service fairness caps remain hard limits.
+- Train/update only from eligible clean windows. Quarantine anomalous, degraded and low-confidence windows; protect model updates against poisoning and slow baseline absorption.
+- Bound all model state, update frequency, inference time and output ranges. Validate persisted model versions and state before use.
+- If model state fails validation or the model exceeds its budget, fall back to deterministic collection without blocking traffic.
+
+### 11.5 Evaluation and rollout gates
+
+Compare fixed collection against adaptive collection on identical chronological traces and equivalent resource budgets. Measure CPU per million observations, peak RSS, bytes persisted per service-day, sketch error, cardinality/heavy-hitter recall, detection/novelty recall, false alarms per service-day, detection delay, missingness and fairness across services.
+
+Require synthetic ground-truth traces and representative production replay, including low-rate attacks, sudden floods, slow ramps, flash crowds, new-service onboarding, collector loss, adversarial feature churn and model-state corruption. Report performance by service and regime; aggregate averages must not conceal a degraded service.
+
+Roll out in this order: shadow recommendations; compare proposed versus fixed collection plans; enable adaptive detail collection behind an explicit opt-in feature/configuration; retain a one-switch deterministic fallback. No automatic enforcement integration is in scope.
+
+The extension is ready for implementation only when the fixed collector is stable, quality propagation and idempotent completed-window ingestion are sound, and benchmarks demonstrate a measurable resource/coverage improvement. Until then this is an architectural seam and evaluation contract, not an additional runtime dependency or Stage 0 merge requirement.
