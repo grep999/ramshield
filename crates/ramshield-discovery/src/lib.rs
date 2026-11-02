@@ -21,7 +21,7 @@ pub use calendar::{
     ExecutionState, ExpectedWorkload, Recurrence, TrafficCalendar, WorkloadDeclaration,
     WorkloadExecution,
 };
-pub use ingest::{IngestConfig, IngestionEngine};
+pub use ingest::{CollectorHealth, IngestConfig, IngestionEngine};
 pub use metric::{
     CardinalityEstimate, CardinalityEstimator, CountMetric, MetricAssessment, MetricProfileStore,
     ObservationQuality, ProfileKey, extend_assessment, new_profile_key, observe_clean,

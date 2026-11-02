@@ -64,8 +64,8 @@ pub struct L7Metadata {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionEvent {
     pub ip: IpAddr,
-    /// Kernel-provided packet timestamp (capture time), if available.
-    /// Falls back to ingestion time when the kernel timestamp is absent.
+    /// Event timestamp in nanoseconds. Native TPACKET_V3 capture uses the
+    /// kernel packet timestamp; other producers supply their event timestamp.
     pub timestamp_ns: u64,
     /// Original packet length (wire size before capture truncation).
     /// Must be preserved end-to-end for measurement integrity.
