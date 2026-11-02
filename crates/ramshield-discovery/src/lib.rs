@@ -352,7 +352,10 @@ impl Discovery {
         sample: TrafficSample,
         quality: ObservationQuality,
     ) -> io::Result<()> {
-        if matches!(quality, ObservationQuality::Missing | ObservationQuality::Invalid) {
+        if matches!(
+            quality,
+            ObservationQuality::Missing | ObservationQuality::Invalid
+        ) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "traffic samples require Clean or Degraded quality",
@@ -452,12 +455,7 @@ impl Discovery {
         let direction_known = direction != TrafficDirection::Unknown;
         let quality_is_clean = |profile_hour| {
             profile
-                .assessment(
-                    &service_key,
-                    direction,
-                    CountMetric::Packets,
-                    profile_hour,
-                )
+                .assessment(&service_key, direction, CountMetric::Packets, profile_hour)
                 .is_some_and(|assessment| {
                     assessment.quality == ObservationQuality::Clean
                         && assessment.degraded_observations == 0
@@ -469,8 +467,7 @@ impl Discovery {
             Some(previous) => quality_is_clean(previous),
             None => false,
         };
-        let quality_qualified =
-            direction_known && current_quality_clean && baseline_quality_clean;
+        let quality_qualified = direction_known && current_quality_clean && baseline_quality_clean;
         let current_source = if quality_qualified {
             profile.source_cardinality_estimate(&service_key, direction, hour)
         } else {
@@ -831,10 +828,7 @@ mod tests {
         let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
         let before = d.snapshot().observations_accepted;
         for quality in [ObservationQuality::Missing, ObservationQuality::Invalid] {
-            assert!(
-                d.observe_with_quality(sample(100 * 3600), quality)
-                    .is_err()
-            );
+            assert!(d.observe_with_quality(sample(100 * 3600), quality).is_err());
         }
         assert_eq!(d.snapshot().observations_accepted, before);
         assert!(d.service_profiles.is_empty());
