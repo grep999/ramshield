@@ -1,5 +1,6 @@
 //! Explicit service-window semantics for passive learning.
 //! Missing and degraded windows are never represented as zero-valued traffic.
+use crate::TrafficDirection;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -14,7 +15,7 @@ const MAX_WINDOW_SECONDS: u32 = 86_400;
 const MAX_LEDGER_ENTRIES: usize = 1_000_000;
 
 /// Persistence format version for forward compatibility.
-const PERSISTENCE_VERSION: u32 = 1;
+const PERSISTENCE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct PersistenceEnvelope {
@@ -25,6 +26,7 @@ struct PersistenceEnvelope {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct WindowKey {
     pub service_id: String,
+    pub direction: TrafficDirection,
     pub window_start_secs: u64,
     pub window_seconds: u32,
 }
@@ -65,14 +67,17 @@ pub enum MissingReason {
 pub enum WindowState {
     Observed {
         packets: u64,
-        bytes: u64,
+        captured_bytes: u64,
+        wire_bytes: u64,
     },
     Missing {
         reason: MissingReason,
     },
     Degraded {
         packets: u64,
-        bytes: u64,
+        captured_bytes: u64,
+        wire_bytes: u64,
+        truncated_packets: u64,
         capture_drops: u64,
         ingest_drops: u64,
         malformed: u64,
@@ -249,6 +254,7 @@ mod tests {
         WindowObservation {
             key: WindowKey {
                 service_id: "billing-worker".into(),
+                direction: TrafficDirection::Unknown,
                 window_start_secs: start,
                 window_seconds: 60,
             },
@@ -262,7 +268,8 @@ mod tests {
         let zero = observation(
             WindowState::Observed {
                 packets: 0,
-                bytes: 0,
+                captured_bytes: 0,
+                wire_bytes: 0,
             },
             0,
         );
@@ -275,7 +282,8 @@ mod tests {
         let degraded = observation(
             WindowState::Degraded {
                 packets: 0,
-                bytes: 0,
+                captured_bytes: 0,
+                wire_bytes: 0,
                 capture_drops: 4,
                 ingest_drops: 0,
                 malformed: 0,
@@ -294,7 +302,8 @@ mod tests {
         let first = observation(
             WindowState::Observed {
                 packets: 10,
-                bytes: 100,
+                captured_bytes: 100,
+                wire_bytes: 100,
             },
             0,
         );
@@ -306,7 +315,8 @@ mod tests {
         let conflict = observation(
             WindowState::Observed {
                 packets: 11,
-                bytes: 100,
+                captured_bytes: 100,
+                wire_bytes: 100,
             },
             0,
         );
@@ -383,7 +393,8 @@ mod tests {
         let zero = observation(
             WindowState::Observed {
                 packets: 42,
-                bytes: 1000,
+                captured_bytes: 1000,
+                wire_bytes: 1000,
             },
             0,
         );
@@ -419,21 +430,24 @@ mod tests {
         let a = observation(
             WindowState::Observed {
                 packets: 1,
-                bytes: 1,
+                captured_bytes: 1,
+                wire_bytes: 1,
             },
             0,
         );
         let b = observation(
             WindowState::Observed {
                 packets: 2,
-                bytes: 2,
+                captured_bytes: 2,
+                wire_bytes: 2,
             },
             60,
         );
         let c = observation(
             WindowState::Observed {
                 packets: 3,
-                bytes: 3,
+                captured_bytes: 3,
+                wire_bytes: 3,
             },
             120,
         );
@@ -625,14 +639,16 @@ mod tests {
             key: first_key,
             state: WindowState::Observed {
                 packets: 10,
-                bytes: 100,
+                captured_bytes: 100,
+                wire_bytes: 100,
             },
         };
         let second = WindowObservation {
             key: second_key,
             state: WindowState::Observed {
                 packets: 20,
-                bytes: 200,
+                captured_bytes: 200,
+                wire_bytes: 200,
             },
         };
         // Build JSON payload with duplicate keys.
@@ -692,7 +708,8 @@ mod tests {
                 },
                 state: WindowState::Observed {
                     packets: 1,
-                    bytes: 1,
+                    captured_bytes: 1,
+                wire_bytes: 1,
                 },
             })
             .collect();

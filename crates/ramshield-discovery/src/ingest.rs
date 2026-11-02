@@ -1,24 +1,24 @@
-//! Ingestion bridge: ConnectionEvent → WindowObservation → WindowLedger.
-//! Authoritative, idempotent, crash-recoverable.
-
-use crate::ServiceId;
+//! Bounded ingestion bridge from captured packets to completed service windows.
+//!
+//! Service identity and direction are explicit caller inputs. Source IPs are
+//! never promoted to service identity, and incomplete windows are not sealed
+//! as clean observations.
 use crate::window::{
     MissingReason, RecordOutcome, WindowError, WindowKey, WindowLedger, WindowObservation,
     WindowState,
 };
+use crate::{ServiceId, TrafficDirection};
 use ramshield_types::ConnectionEvent;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// Default window size in seconds (1 minute for granular learning).
-const DEFAULT_WINDOW_SECONDS: u32 = 60;
+/// Default completed-window size (one hour).
+const DEFAULT_WINDOW_SECONDS: u32 = 3_600;
 
-/// Ingestion configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct IngestConfig {
-    /// Window size in seconds.
     pub window_seconds: u32,
-    /// Maximum services to track (bounds memory).
     pub max_services: usize,
+    pub max_pending_windows: usize,
 }
 
 impl Default for IngestConfig {
@@ -26,174 +26,231 @@ impl Default for IngestConfig {
         Self {
             window_seconds: DEFAULT_WINDOW_SECONDS,
             max_services: 64,
+            max_pending_windows: 4_096,
         }
     }
 }
 
-/// Per-service, per-window accumulator.
-#[derive(Debug, Default)]
-#[allow(dead_code)]
-struct WindowAccumulator {
-    packets: u64,
-    bytes_captured: u64,
-    bytes_wire: u64,
-    truncations: u64,
-    capture_drops: u64,
-    ingest_drops: u64,
-    malformed: u64,
-}
-
-/// Ingestion engine: batches ConnectionEvents into WindowObservations and records them.
-pub struct IngestionEngine {
-    config: IngestConfig,
-    ledger: WindowLedger,
-    /// Pending accumulators keyed by (ServiceId, window_start_secs).
-    pending: HashMap<(ServiceId, u64), WindowAccumulator>,
-    /// Count of events since last flush.
-    events_since_flush: usize,
-    /// Collector health counters.
-    pub collector_health: CollectorHealth,
-}
-
-/// Collector health snapshot for WindowState::Degraded.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CollectorHealth {
     pub capture_drops: u64,
     pub ingest_drops: u64,
     pub malformed: u64,
 }
 
+impl CollectorHealth {
+    fn is_clean(self) -> bool {
+        self.capture_drops == 0 && self.ingest_drops == 0 && self.malformed == 0
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct WindowAccumulator {
+    packets: u64,
+    captured_bytes: u64,
+    wire_bytes: u64,
+    truncated_packets: u64,
+    health: CollectorHealth,
+}
+
+impl WindowAccumulator {
+    fn absorb(&mut self, event: &ConnectionEvent) {
+        self.packets = self.packets.saturating_add(1);
+        self.captured_bytes = self.captured_bytes.saturating_add(event.captured_bytes);
+        self.wire_bytes = self.wire_bytes.saturating_add(event.wire_bytes);
+        if event.truncated {
+            self.truncated_packets = self.truncated_packets.saturating_add(1);
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.packets = self.packets.saturating_add(other.packets);
+        self.captured_bytes = self.captured_bytes.saturating_add(other.captured_bytes);
+        self.wire_bytes = self.wire_bytes.saturating_add(other.wire_bytes);
+        self.truncated_packets = self.truncated_packets.saturating_add(other.truncated_packets);
+        self.health.capture_drops = self.health.capture_drops.saturating_add(other.health.capture_drops);
+        self.health.ingest_drops = self.health.ingest_drops.saturating_add(other.health.ingest_drops);
+        self.health.malformed = self.health.malformed.saturating_add(other.health.malformed);
+    }
+}
+
+/// In-memory, bounded accumulator backed by an idempotent persistent ledger.
+pub struct IngestionEngine {
+    config: IngestConfig,
+    ledger: WindowLedger,
+    pending: BTreeMap<(ServiceId, TrafficDirection, u64), WindowAccumulator>,
+}
+
 impl IngestionEngine {
-    /// Create a new ingestion engine with the given ledger capacity.
     pub fn new(ledger_max_entries: usize, config: IngestConfig) -> Result<Self, WindowError> {
+        if config.window_seconds == 0 || config.window_seconds > 86_400 {
+            return Err(WindowError::InvalidWindow);
+        }
+        if config.max_services == 0 || config.max_pending_windows == 0 {
+            return Err(WindowError::InvalidCapacity);
+        }
         Ok(Self {
             config,
             ledger: WindowLedger::new(ledger_max_entries)?,
-            pending: HashMap::new(),
-            events_since_flush: 0,
-            collector_health: CollectorHealth::default(),
+            pending: BTreeMap::new(),
         })
     }
 
-    /// Record a batch of ConnectionEvents into pending accumulators.
-    pub fn record_batch(&mut self, events: &[ConnectionEvent]) -> Vec<RecordOutcome> {
-        for ev in events {
-            let service_id = ServiceId::from_ip(ev.ip);
-            let ts_secs = ev.timestamp_ns / 1_000_000_000;
-            let window_start = if self.config.window_seconds == 0 {
-                ts_secs
-            } else {
-                (ts_secs / self.config.window_seconds as u64) * self.config.window_seconds as u64
-            };
-
-            let key = (service_id, window_start);
-            let acc = self.pending.entry(key).or_default();
-
-            acc.packets = acc.packets.saturating_add(1);
-            acc.bytes_captured = acc.bytes_captured.saturating_add(ev.captured_bytes);
-            acc.bytes_wire = acc.bytes_wire.saturating_add(ev.wire_bytes);
-
-            if ev.truncated {
-                acc.truncations = acc.truncations.saturating_add(1);
-            }
+    /// Add packet events to an explicitly identified service and direction.
+    /// The batch is admitted atomically with respect to pending-capacity limits.
+    pub fn record_batch(
+        &mut self,
+        service_id: ServiceId,
+        direction: TrafficDirection,
+        events: &[ConnectionEvent],
+    ) -> Result<(), WindowError> {
+        let mut staged: BTreeMap<(ServiceId, TrafficDirection, u64), WindowAccumulator> =
+            BTreeMap::new();
+        for event in events {
+            let timestamp_secs = event.timestamp_ns / 1_000_000_000;
+            let window_seconds = u64::from(self.config.window_seconds);
+            let window_start = (timestamp_secs / window_seconds) * window_seconds;
+            staged
+                .entry((service_id, direction, window_start))
+                .or_default()
+                .absorb(event);
         }
-
-        self.events_since_flush = self.events_since_flush.saturating_add(events.len());
-        Vec::new()
+        self.check_capacity(staged.keys())?;
+        for (key, accumulator) in staged {
+            self.pending.entry(key).or_default().merge(accumulator);
+        }
+        Ok(())
     }
 
-    /// Flush all pending accumulators to the ledger.
-    pub fn flush_pending(&mut self) -> Result<Vec<RecordOutcome>, WindowError> {
-        let mut outcomes = Vec::new();
+    /// Attach loss/parser counters to one specific service-direction window.
+    /// Global lifetime counters must not contaminate every future window.
+    pub fn record_window_health(
+        &mut self,
+        service_id: ServiceId,
+        direction: TrafficDirection,
+        window_start_secs: u64,
+        health: CollectorHealth,
+    ) -> Result<(), WindowError> {
+        if !window_start_secs.is_multiple_of(u64::from(self.config.window_seconds)) {
+            return Err(WindowError::InvalidWindow);
+        }
+        let key = (service_id, direction, window_start_secs);
+        self.check_capacity(std::iter::once(&key))?;
+        let accumulator = self.pending.entry(key).or_default();
+        accumulator.health.capture_drops = accumulator.health.capture_drops.saturating_add(health.capture_drops);
+        accumulator.health.ingest_drops = accumulator.health.ingest_drops.saturating_add(health.ingest_drops);
+        accumulator.health.malformed = accumulator.health.malformed.saturating_add(health.malformed);
+        Ok(())
+    }
 
-        for ((service_id, window_start), acc) in self.pending.drain() {
+    fn check_capacity<'a>(
+        &self,
+        incoming: impl Iterator<Item = &'a (ServiceId, TrafficDirection, u64)>,
+    ) -> Result<(), WindowError> {
+        let mut new_keys = BTreeSet::new();
+        let mut services: BTreeSet<ServiceId> = self.pending.keys().map(|(id, _, _)| *id).collect();
+        for key in incoming {
+            services.insert(key.0);
+            if !self.pending.contains_key(key) {
+                new_keys.insert(*key);
+            }
+        }
+        if services.len() > self.config.max_services
+            || self.pending.len().saturating_add(new_keys.len()) > self.config.max_pending_windows
+        {
+            return Err(WindowError::InvalidCapacity);
+        }
+        Ok(())
+    }
+
+    /// Seal only windows whose end time is at or before now_secs.
+    pub fn seal_completed(&mut self, now_secs: u64) -> Result<Vec<RecordOutcome>, WindowError> {
+        let duration = u64::from(self.config.window_seconds);
+        let completed: Vec<_> = self
+            .pending
+            .keys()
+            .filter(|(_, _, start)| start.checked_add(duration).is_some_and(|end| end <= now_secs))
+            .copied()
+            .collect();
+        let mut outcomes = Vec::with_capacity(completed.len());
+        for (service_id, direction, window_start_secs) in completed {
+            let accumulator = self
+                .pending
+                .remove(&(service_id, direction, window_start_secs))
+                .expect("completed key was collected from pending map");
             let key = WindowKey {
                 service_id: service_id.as_string(),
-                window_start_secs: window_start,
+                direction,
+                window_start_secs,
                 window_seconds: self.config.window_seconds,
             };
-
-            // Determine window state based on data quality.
-            let state = if acc.packets == 0 {
+            let state = if accumulator.packets == 0
+                && accumulator.truncated_packets == 0
+                && accumulator.health.is_clean()
+            {
                 WindowState::Missing {
                     reason: MissingReason::NoTelemetry,
                 }
-            } else if acc.truncations > 0
-                || self.collector_health.capture_drops > 0
-                || self.collector_health.ingest_drops > 0
-                || self.collector_health.malformed > 0
-            {
+            } else if accumulator.truncated_packets > 0 || !accumulator.health.is_clean() {
                 WindowState::Degraded {
-                    packets: acc.packets,
-                    bytes: acc.bytes_captured,
-                    capture_drops: self.collector_health.capture_drops,
-                    ingest_drops: self.collector_health.ingest_drops,
-                    malformed: self.collector_health.malformed,
+                    packets: accumulator.packets,
+                    captured_bytes: accumulator.captured_bytes,
+                    wire_bytes: accumulator.wire_bytes,
+                    truncated_packets: accumulator.truncated_packets,
+                    capture_drops: accumulator.health.capture_drops,
+                    ingest_drops: accumulator.health.ingest_drops,
+                    malformed: accumulator.health.malformed,
                 }
             } else {
                 WindowState::Observed {
-                    packets: acc.packets,
-                    bytes: acc.bytes_captured,
+                    packets: accumulator.packets,
+                    captured_bytes: accumulator.captured_bytes,
+                    wire_bytes: accumulator.wire_bytes,
                 }
             };
-
-            let obs = WindowObservation { key, state };
-            let outcome = self.ledger.record(obs)?;
-            outcomes.push(outcome);
+            outcomes.push(self.ledger.record(WindowObservation { key, state })?);
         }
-
-        // Remove flushed entries (already drained).
-        self.events_since_flush = 0;
         Ok(outcomes)
     }
 
-    /// Persist the ledger atomically (temp file → fsync → rename → dir fsync).
+    /// Refuse to persist while unsealed windows remain, rather than silently
+    /// discarding them across restart.
     pub fn persist(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        if !self.pending.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "cannot persist with unsealed windows pending",
+            ));
+        }
         self.ledger.flush(path)
     }
 
-    /// Recover a ledger from disk and create a new engine.
     pub fn reopen(
         path: impl AsRef<std::path::Path>,
         max_entries: usize,
         config: IngestConfig,
     ) -> Result<Self, WindowError> {
-        let ledger = WindowLedger::reopen(path, max_entries)?;
+        if config.window_seconds == 0 || config.window_seconds > 86_400 {
+            return Err(WindowError::InvalidWindow);
+        }
+        if config.max_services == 0 || config.max_pending_windows == 0 {
+            return Err(WindowError::InvalidCapacity);
+        }
         Ok(Self {
             config,
-            ledger,
-            pending: HashMap::new(),
-            events_since_flush: 0,
-            collector_health: CollectorHealth::default(),
+            ledger: WindowLedger::reopen(path, max_entries)?,
+            pending: BTreeMap::new(),
         })
     }
 
-    /// Get a reference to the underlying ledger for inspection.
     pub fn ledger(&self) -> &WindowLedger {
         &self.ledger
     }
 
-    /// Get mutable reference to the ledger for advanced operations.
     pub fn ledger_mut(&mut self) -> &mut WindowLedger {
         &mut self.ledger
     }
 
-    /// Record collector health drop counters.
-    pub fn record_capture_drops(&mut self, count: u64) {
-        self.collector_health.capture_drops =
-            self.collector_health.capture_drops.saturating_add(count);
-    }
-
-    pub fn record_ingest_drops(&mut self, count: u64) {
-        self.collector_health.ingest_drops =
-            self.collector_health.ingest_drops.saturating_add(count);
-    }
-
-    pub fn record_malformed(&mut self, count: u64) {
-        self.collector_health.malformed = self.collector_health.malformed.saturating_add(count);
-    }
-
-    /// Number of pending windows not yet flushed.
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }
@@ -202,17 +259,10 @@ impl IngestionEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ramshield_types::ConnectionEvent;
     use std::net::{IpAddr, Ipv4Addr};
     use tempfile::tempdir;
 
-    fn sample_event(
-        ip: IpAddr,
-        ts_ns: u64,
-        captured: u64,
-        wire: u64,
-        truncated: bool,
-    ) -> ConnectionEvent {
+    fn sample_event(ip: IpAddr, ts_ns: u64, captured: u64, wire: u64, truncated: bool) -> ConnectionEvent {
         ConnectionEvent {
             ip,
             timestamp_ns: ts_ns,
@@ -225,198 +275,106 @@ mod tests {
         }
     }
 
-    #[test]
-    fn events_aggregate_into_windows_and_flush_to_ledger() {
-        let _dir = tempdir().unwrap();
-        let mut eng = IngestionEngine::new(100, IngestConfig::default()).unwrap();
+    fn engine(config: IngestConfig) -> IngestionEngine {
+        IngestionEngine::new(100, config).unwrap()
+    }
 
-        let ip: IpAddr = Ipv4Addr::new(10, 0, 0, 1).into();
-        let events = vec![
-            sample_event(ip, 1_000_000_000, 100, 100, false),
-            sample_event(ip, 1_000_000_500, 200, 200, false),
-            sample_event(ip, 1_000_000_999, 50, 50, false),
+    fn key(service_id: ServiceId, direction: TrafficDirection) -> WindowKey {
+        WindowKey {
+            service_id: service_id.as_string(),
+            direction,
+            window_start_secs: 0,
+            window_seconds: 3_600,
+        }
+    }
+
+    #[test]
+    fn explicit_service_and_direction_are_the_window_identity() {
+        let mut eng = engine(IngestConfig::default());
+        let service = ServiceId::new(7);
+        let event = sample_event(Ipv4Addr::new(10, 0, 0, 1).into(), 1_000_000_000, 100, 150, false);
+        eng.record_batch(service, TrafficDirection::Ingress, &[event.clone()]).unwrap();
+        eng.record_batch(service, TrafficDirection::Egress, &[event]).unwrap();
+        assert_eq!(eng.seal_completed(3_600).unwrap().len(), 2);
+        assert!(matches!(eng.ledger().get(&key(service, TrafficDirection::Ingress)), Some(WindowState::Observed { packets: 1, captured_bytes: 100, wire_bytes: 150 })));
+        assert!(matches!(eng.ledger().get(&key(service, TrafficDirection::Egress)), Some(WindowState::Observed { packets: 1, .. })));
+    }
+
+    #[test]
+    fn partial_windows_are_not_sealed_as_clean() {
+        let mut eng = engine(IngestConfig::default());
+        let service = ServiceId::new(8);
+        let event = sample_event(Ipv4Addr::new(10, 0, 0, 2).into(), 1_000_000_000, 100, 100, false);
+        eng.record_batch(service, TrafficDirection::Unknown, &[event]).unwrap();
+        assert!(eng.seal_completed(3_599).unwrap().is_empty());
+        assert_eq!(eng.pending_count(), 1);
+        assert_eq!(eng.seal_completed(3_600).unwrap(), vec![RecordOutcome::Inserted]);
+    }
+
+    #[test]
+    fn truncation_preserves_wire_and_captured_bytes_and_degrades_window() {
+        let mut eng = engine(IngestConfig::default());
+        let service = ServiceId::new(9);
+        let event = sample_event(Ipv4Addr::new(10, 0, 0, 3).into(), 1_000_000_000, 100, 150, true);
+        eng.record_batch(service, TrafficDirection::Ingress, &[event]).unwrap();
+        eng.seal_completed(3_600).unwrap();
+        assert!(matches!(eng.ledger().get(&key(service, TrafficDirection::Ingress)), Some(WindowState::Degraded { packets: 1, captured_bytes: 100, wire_bytes: 150, truncated_packets: 1, .. })));
+    }
+
+    #[test]
+    fn collector_health_is_scoped_to_one_service_window() {
+        let mut eng = engine(IngestConfig::default());
+        let a = ServiceId::new(10);
+        let b = ServiceId::new(11);
+        let event = sample_event(Ipv4Addr::new(10, 0, 0, 4).into(), 1_000_000_000, 100, 100, false);
+        eng.record_window_health(a, TrafficDirection::Ingress, 0, CollectorHealth { capture_drops: 5, ingest_drops: 3, malformed: 2 }).unwrap();
+        eng.record_batch(a, TrafficDirection::Ingress, &[event.clone()]).unwrap();
+        eng.record_batch(b, TrafficDirection::Ingress, &[event]).unwrap();
+        eng.seal_completed(3_600).unwrap();
+        assert!(matches!(eng.ledger().get(&key(a, TrafficDirection::Ingress)), Some(WindowState::Degraded { capture_drops: 5, ingest_drops: 3, malformed: 2, .. })));
+        assert!(matches!(eng.ledger().get(&key(b, TrafficDirection::Ingress)), Some(WindowState::Observed { .. })));
+    }
+
+    #[test]
+    fn duplicate_and_conflicting_completed_windows_are_reported() {
+        let mut eng = engine(IngestConfig::default());
+        let service = ServiceId::new(12);
+        let ip = Ipv4Addr::new(10, 0, 0, 5).into();
+        let event = sample_event(ip, 1_000_000_000, 100, 100, false);
+        eng.record_batch(service, TrafficDirection::Ingress, &[event.clone()]).unwrap();
+        assert_eq!(eng.seal_completed(3_600).unwrap(), vec![RecordOutcome::Inserted]);
+        eng.record_batch(service, TrafficDirection::Ingress, &[event]).unwrap();
+        assert_eq!(eng.seal_completed(3_600).unwrap(), vec![RecordOutcome::Duplicate]);
+        let conflict = sample_event(ip, 1_000_000_000, 200, 200, false);
+        eng.record_batch(service, TrafficDirection::Ingress, &[conflict]).unwrap();
+        assert_eq!(eng.seal_completed(3_600).unwrap(), vec![RecordOutcome::ConflictingDuplicate]);
+    }
+
+    #[test]
+    fn pending_capacity_is_bounded_and_batch_admission_is_atomic() {
+        let config = IngestConfig { max_pending_windows: 1, ..IngestConfig::default() };
+        let mut eng = engine(config);
+        let service = ServiceId::new(13);
+        let events = [
+            sample_event(Ipv4Addr::new(10, 0, 0, 6).into(), 1_000_000_000, 10, 10, false),
+            sample_event(Ipv4Addr::new(10, 0, 0, 6).into(), 4_000_000_000_000, 10, 10, false),
         ];
-        eng.record_batch(&events);
-        let outcomes = eng.flush_pending().unwrap();
-
-        assert_eq!(outcomes.len(), 1);
-        assert_eq!(outcomes[0], RecordOutcome::Inserted);
-
-        // Verify ledger content
-        let key = WindowKey {
-            service_id: ServiceId::from_ip(ip).as_string(),
-            window_start_secs: 0, // (1 / 60) * 60 = 0 for ts_secs=1
-            window_seconds: 60,
-        };
-        let state = eng
-            .ledger()
-            .get(&key)
-            .expect("window should exist after flush");
-        assert!(matches!(
-            state,
-            WindowState::Observed {
-                packets: 3,
-                bytes: 350
-            }
-        ));
+        assert_eq!(eng.record_batch(service, TrafficDirection::Ingress, &events), Err(WindowError::InvalidCapacity));
+        assert_eq!(eng.pending_count(), 0);
     }
 
     #[test]
-    fn truncation_marks_window_degraded() {
-        let _dir = tempdir().unwrap();
-        let mut eng = IngestionEngine::new(100, IngestConfig::default()).unwrap();
-
-        let ip: IpAddr = Ipv4Addr::new(10, 0, 0, 2).into();
-        let events = vec![
-            sample_event(ip, 1_000_000_000, 100, 150, true), // truncated
-        ];
-        eng.record_batch(&events);
-        eng.flush_pending().unwrap();
-        // No need to capture flush outcomes for this test - just verify window state
-        let key = WindowKey {
-            service_id: ServiceId::from_ip(ip).as_string(),
-            window_start_secs: 0, // (1 / 60) * 60 = 0 for ts_secs=1
-            window_seconds: 60,
-        };
-        let state = eng
-            .ledger()
-            .get(&key)
-            .expect("degraded window should exist after flush");
-        assert!(matches!(state, WindowState::Degraded { .. }));
-    }
-
-    #[test]
-    fn idempotent_duplicate_windows_are_detected() {
-        let _dir = tempdir().unwrap();
-        let mut eng = IngestionEngine::new(100, IngestConfig::default()).unwrap();
-
-        let ip: IpAddr = Ipv4Addr::new(10, 0, 0, 3).into();
-        let events = vec![sample_event(ip, 1_000_000_000, 100, 100, false)];
-        eng.record_batch(&events);
-        eng.flush_pending().unwrap();
-
-        // Flush same window again
-        eng.record_batch(&events);
-        let outcomes = eng.flush_pending().unwrap();
-
-        assert!(matches!(outcomes[0], RecordOutcome::Duplicate));
-    }
-
-    #[test]
-    fn conflicting_duplicate_is_visible() {
-        let _dir = tempdir().unwrap();
-        let mut eng = IngestionEngine::new(100, IngestConfig::default()).unwrap();
-
-        let ip: IpAddr = Ipv4Addr::new(10, 0, 0, 4).into();
-        let events = vec![sample_event(ip, 1_000_000_000, 100, 100, false)];
-        eng.record_batch(&events);
-        eng.flush_pending().unwrap();
-
-        // Different data for same window
-        let conflict = vec![sample_event(ip, 1_000_000_000, 200, 200, false)];
-        eng.record_batch(&conflict);
-        let outcomes = eng.flush_pending().unwrap();
-
-        assert!(matches!(outcomes[0], RecordOutcome::ConflictingDuplicate));
-    }
-
-    #[test]
-    fn persist_and_reopen_recovers_state() {
+    fn persistence_refuses_unsealed_data_and_recovers_sealed_ledger() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("ledger.json");
-
-        {
-            let mut eng = IngestionEngine::new(100, IngestConfig::default()).unwrap();
-            let ip: IpAddr = Ipv4Addr::new(10, 0, 0, 5).into();
-            let events = vec![sample_event(ip, 1_000_000_000, 100, 100, false)];
-            eng.record_batch(&events);
-            eng.flush_pending().unwrap();
-            eng.persist(&path).unwrap();
-        }
-
-        // Reopen and verify
+        let mut eng = engine(IngestConfig::default());
+        let service = ServiceId::new(14);
+        let event = sample_event(Ipv4Addr::new(10, 0, 0, 7).into(), 1_000_000_000, 100, 120, false);
+        eng.record_batch(service, TrafficDirection::Ingress, &[event]).unwrap();
+        assert_eq!(eng.persist(&path).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        eng.seal_completed(3_600).unwrap();
+        eng.persist(&path).unwrap();
         let recovered = IngestionEngine::reopen(&path, 100, IngestConfig::default()).unwrap();
-        let key = WindowKey {
-            service_id: ServiceId::from_ip(Ipv4Addr::new(10, 0, 0, 5).into()).as_string(),
-            window_start_secs: 0, // (1 / 60) * 60 = 0 for ts_secs=1
-            window_seconds: 60,
-        };
-        let state = recovered
-            .ledger()
-            .get(&key)
-            .expect("recovered window should exist after reopen");
-        assert!(matches!(
-            state,
-            WindowState::Observed {
-                packets: 1,
-                bytes: 100
-            }
-        ));
-    }
-
-    #[test]
-    fn collector_health_feeds_into_degraded_state() {
-        let mut eng = IngestionEngine::new(100, IngestConfig::default()).unwrap();
-
-        let ip: IpAddr = Ipv4Addr::new(10, 0, 0, 6).into();
-        eng.record_capture_drops(5);
-        eng.record_ingest_drops(3);
-        eng.record_malformed(2);
-
-        let events = vec![sample_event(ip, 1_000_000_000, 100, 100, false)];
-        eng.record_batch(&events);
-        eng.flush_pending().unwrap();
-
-        let key = WindowKey {
-            service_id: ServiceId::from_ip(ip).as_string(),
-            window_start_secs: 0, // (1 / 60) * 60 = 0 for ts_secs=1
-            window_seconds: 60,
-        };
-        let state = eng
-            .ledger()
-            .get(&key)
-            .expect("window with collector health should exist after flush");
-        if let WindowState::Degraded {
-            capture_drops,
-            ingest_drops,
-            malformed,
-            ..
-        } = state
-        {
-            assert_eq!(*capture_drops, 5);
-            assert_eq!(*ingest_drops, 3);
-            assert_eq!(*malformed, 2);
-        } else {
-            panic!("expected Degraded state");
-        }
-    }
-
-    #[test]
-    fn bounded_ledger_evicts_oldest() {
-        let mut eng = IngestionEngine::new(2, IngestConfig::default()).unwrap();
-
-        let ip1: IpAddr = Ipv4Addr::new(10, 0, 0, 10).into();
-        let ip2: IpAddr = Ipv4Addr::new(10, 0, 0, 11).into();
-
-        // Fill to capacity
-        for i in 0..2 {
-            let events = vec![sample_event(
-                ip1,
-                i as u64 * 60_000_000_000,
-                100,
-                100,
-                false,
-            )];
-            eng.record_batch(&events);
-            eng.flush_pending().unwrap();
-        }
-        assert_eq!(eng.ledger().len(), 2);
-
-        // Add third window -> evicts oldest
-        let events = vec![sample_event(ip2, 120_000_000_000, 100, 100, false)];
-        eng.record_batch(&events);
-        eng.flush_pending().unwrap();
-
-        assert_eq!(eng.ledger().len(), 2);
+        assert!(matches!(recovered.ledger().get(&key(service, TrafficDirection::Ingress)), Some(WindowState::Observed { wire_bytes: 120, captured_bytes: 100, .. })));
     }
 }

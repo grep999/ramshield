@@ -750,6 +750,11 @@ unsafe fn walk_block_packets(
         // authoritative capture time, not userspace processing time.
         let tp_sec = unsafe { (*hdr).tp_sec };
         let tp_nsec = unsafe { (*hdr).tp_nsec };
+        if tp_len < snaplen || tp_nsec >= 1_000_000_000 {
+            metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
+            warn!(worker, block_idx, packet_idx, tp_len, snaplen, tp_nsec, "rejecting inconsistent TPACKET_V3 length or timestamp");
+            return;
+        }
         let mac = unsafe { (*hdr).tp_mac as usize };
         let (_header_abs, packet_off) = match checked_tpacket_packet_offsets(
             block_idx, block_size, ring_len, blk_len, off, mac, snaplen,
@@ -1068,11 +1073,16 @@ fn process_packet(
     if !admitted {
         return;
     }
-    // B02: Use kernel-provided packet timestamp from TPACKET_V3 header.
-    // This represents the moment the kernel saw the packet, not userspace
-    // processing time. Under ring backlog or scheduling pressure, those can
-    // differ significantly.
-    let ts = (tp_sec as u64) * 1_000_000_000 + (tp_nsec as u64);
+    // Reject invalid nanoseconds and overflow rather than publishing a
+    // fabricated timestamp into event-time windows.
+    let Some(ts) = u64::from(tp_sec)
+        .checked_mul(1_000_000_000)
+        .and_then(|base| base.checked_add(u64::from(tp_nsec)))
+        .filter(|_| tp_nsec < 1_000_000_000)
+    else {
+        metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
     let truncated = (tp_len as usize) > packet.len();
     let mut fp = proto as u32;
     if syn {

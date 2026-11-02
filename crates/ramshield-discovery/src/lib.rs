@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    hash::{Hash, Hasher},
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -71,12 +70,6 @@ impl ServiceId {
 
     pub fn new(id: u64) -> Self {
         ServiceId(id)
-    }
-
-    pub fn from_ip(ip: std::net::IpAddr) -> Self {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        ip.hash(&mut hasher);
-        ServiceId(hasher.finish())
     }
 
     pub fn as_string(&self) -> String {
