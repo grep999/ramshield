@@ -717,5 +717,4 @@ mod retention_tests {
             assert_eq!(assessment.quality, ObservationQuality::Degraded);
         }
     }
-
 }
