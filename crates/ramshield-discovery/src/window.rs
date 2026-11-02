@@ -644,10 +644,7 @@ mod tests {
             },
             180,
         );
-        assert_eq!(
-            recovered.record(later).unwrap(),
-            RecordOutcome::Inserted
-        );
+        assert_eq!(recovered.record(later).unwrap(), RecordOutcome::Inserted);
         let _ = std::fs::remove_file(&p);
     }
 
@@ -882,7 +879,7 @@ mod tests {
         };
         // Build JSON payload with duplicate keys.
         let duplicate_payload = serde_json::json!({
-            "version": 2,
+            "version": PERSISTENCE_VERSION,
             "entries": [
                 (&first.key, &first.state),
                 (&second.key, &second.state),
@@ -910,7 +907,24 @@ mod tests {
                 .as_nanos()
         ));
         // Empty service_id is invalid.
-        let json = r#"{"version":2,"entries":[[{"window_start_secs":0,"service_id":"","window_seconds":60,"direction":"Unknown"},{"state":"observed","packets":1,"bytes":1}]],"eviction_watermark":null}"#;
+        let json = serde_json::json!({
+            "version": PERSISTENCE_VERSION,
+            "entries": [[
+                {
+                    "window_start_secs": 0,
+                    "service_id": "",
+                    "window_seconds": 60,
+                    "direction": "Unknown"
+                },
+                {
+                    "state": "observed",
+                    "packets": 1,
+                    "bytes": 1
+                }
+            ]],
+            "eviction_watermark": null
+        })
+        .to_string();
         fs::write(&p, json).unwrap();
         assert!(matches!(
             WindowLedger::reopen(&p, 8),
@@ -944,7 +958,7 @@ mod tests {
             })
             .collect();
         let payload = serde_json::json!({
-            "version": 2,
+            "version": PERSISTENCE_VERSION,
             "entries": entries.iter().map(|e| (&e.key, &e.state)).collect::<Vec<_>>(),
             "eviction_watermark": null
         });
