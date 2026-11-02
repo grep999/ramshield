@@ -334,8 +334,6 @@ impl Discovery {
     /// Aggregate a normalized observation. No enforcement or detection action is possible here.
     pub fn observe(&mut self, sample: TrafficSample) {
         let hour_utc = sample.timestamp_secs / 3600;
-        let weekday = (sample.timestamp_secs / (3600 * 24)) % 7;
-        let calendar_slot = weekday * 24 + hour_utc % 24;
         let port_limit = self.config.max_ports_per_hour;
         let Some(bucket) = self.bucket_mut(hour_utc) else {
             self.state.too_old = self.state.too_old.saturating_add(1);
@@ -373,10 +371,13 @@ impl Discovery {
                 let oldest_hour = hour_utc.saturating_sub(self.config.bucket_count() as u64 - 1);
                 profile.prune_before(oldest_hour);
                 let service_key = service_id.as_u64().to_string();
+                // D7/D8 compare adjacent absolute UTC hours and prune by the
+                // same absolute-hour key. A recurring hour-of-week slot would
+                // wrap every week and be incompatible with this retention floor.
                 profile.observe_cardinality(
                     service_key.clone(),
                     sample.direction,
-                    calendar_slot,
+                    hour_utc,
                     sample.source_key,
                     sample.destination_key,
                     quality,
@@ -384,7 +385,7 @@ impl Discovery {
                 profile.observe_volume(
                     service_key,
                     sample.direction,
-                    calendar_slot,
+                    hour_utc,
                     sample.packets,
                     sample.bytes,
                     quality,
@@ -414,14 +415,34 @@ impl Discovery {
         let service_key = service_id.as_u64().to_string();
         let previous_hour = hour.checked_sub(1);
 
-        let current_source = profile.source_cardinality_estimate(&service_key, direction, hour);
-        let baseline_source = previous_hour.and_then(|previous| {
-            profile.source_cardinality_estimate(&service_key, direction, previous)
-        });
-        let current_destination = profile.dest_cardinality_estimate(&service_key, direction, hour);
-        let baseline_destination = previous_hour.and_then(|previous| {
-            profile.dest_cardinality_estimate(&service_key, direction, previous)
-        });
+        // Unknown direction is not a comparable service series. Do not let
+        // cardinality evidence from the Unknown bucket produce a Normal or
+        // RequiresReview result when the caller requested a directional view.
+        let direction_known = direction != TrafficDirection::Unknown;
+        let current_source = if direction_known {
+            profile.source_cardinality_estimate(&service_key, direction, hour)
+        } else {
+            None
+        };
+        let baseline_source = if direction_known {
+            previous_hour.and_then(|previous| {
+                profile.source_cardinality_estimate(&service_key, direction, previous)
+            })
+        } else {
+            None
+        };
+        let current_destination = if direction_known {
+            profile.dest_cardinality_estimate(&service_key, direction, hour)
+        } else {
+            None
+        };
+        let baseline_destination = if direction_known {
+            previous_hour.and_then(|previous| {
+                profile.dest_cardinality_estimate(&service_key, direction, previous)
+            })
+        } else {
+            None
+        };
 
         let source_cardinality =
             current_source
@@ -639,6 +660,24 @@ mod tests {
             direction: TrafficDirection::Unknown,
         }
     }
+
+    fn observe_service_hour(
+        discovery: &mut Discovery,
+        service_id: ServiceId,
+        direction: TrafficDirection,
+        hour: u64,
+    ) {
+        for key in 0..12u64 {
+            let mut event = sample(hour * 3600 + key);
+            event.service_id = Some(service_id);
+            event.direction = direction;
+            event.source_key = Some(key + 1);
+            event.destination_key = Some(key + 100);
+            event.packets = 10 + (key % 2);
+            discovery.observe(event);
+        }
+    }
+
     #[test]
     fn aggregates_protocol_port_and_distribution() {
         let p = path();
@@ -764,20 +803,54 @@ mod tests {
     }
 
     #[test]
+    fn service_profiles_use_absolute_utc_hours_across_retention_pruning() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        let service = ServiceId::new(42);
+        // Beyond the 90-day retention horizon, profiles must remain keyed by
+        // absolute UTC hour so pruning does not erase every event in the hour.
+        observe_service_hour(&mut d, service, TrafficDirection::Ingress, 10_000);
+        observe_service_hour(&mut d, service, TrafficDirection::Ingress, 10_001);
+
+        let profile = d.service_profiles.get(&service).unwrap();
+        for hour in [10_000, 10_001] {
+            let packets = profile
+                .assessment("42", TrafficDirection::Ingress, CountMetric::Packets, hour)
+                .unwrap();
+            assert_eq!(packets.clean_observations, 12);
+            assert_eq!(packets.moments.observations(), 12);
+            let source = profile
+                .source_cardinality_estimate("42", TrafficDirection::Ingress, hour)
+                .unwrap();
+            assert_eq!(source.observations, 12);
+        }
+
+        let report = d
+            .assess_service(service, TrafficDirection::Ingress, 10_001)
+            .unwrap();
+        assert_eq!(report.source_cardinality, DistributionAssessment::Normal);
+        assert_eq!(report.destination_cardinality, DistributionAssessment::Normal);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
     fn d7_d8_service_assessment_rejects_unknown_direction() {
         let p = path();
         let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
-        for key in 0..12u64 {
-            let mut event = sample(100 * 3600 + key);
-            event.service_id = Some(ServiceId::new(10));
-            event.direction = TrafficDirection::Unknown;
-            event.source_key = Some(key + 1);
-            event.destination_key = Some(key + 100);
-            d.observe(event);
-        }
+        let service = ServiceId::new(10);
+        observe_service_hour(&mut d, service, TrafficDirection::Unknown, 10_000);
+        observe_service_hour(&mut d, service, TrafficDirection::Unknown, 10_001);
         let report = d
-            .assess_service(ServiceId::new(10), TrafficDirection::Unknown, 100)
+            .assess_service(service, TrafficDirection::Unknown, 10_001)
             .unwrap();
+        assert_eq!(
+            report.source_cardinality,
+            DistributionAssessment::InsufficientData
+        );
+        assert_eq!(
+            report.destination_cardinality,
+            DistributionAssessment::InsufficientData
+        );
         assert!(report.metrics.iter().all(|metric| {
             metric.assessment == DistributionAssessment::InsufficientData
                 && metric.calibration == DistributionAssessment::InsufficientData
