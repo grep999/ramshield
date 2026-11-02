@@ -64,12 +64,20 @@ pub struct L7Metadata {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionEvent {
     pub ip: IpAddr,
+    /// Kernel-provided packet timestamp (capture time), if available.
+    /// Falls back to ingestion time when the kernel timestamp is absent.
     pub timestamp_ns: u64,
-    pub bytes: u64,
+    /// Original packet length (wire size before capture truncation).
+    /// Must be preserved end-to-end for measurement integrity.
+    pub wire_bytes: u64,
+    /// Actual captured volume (tp_snaplen). This is the value previously
+    /// stored in the `bytes` field.
+    pub captured_bytes: u64,
+    /// Whether the original packet was truncated by the capture
+    /// configuration (tp_len > tp_snaplen).
+    pub truncated: bool,
     pub status_code: u16,
     pub proto_fingerprint: u32,
-    /// Optional application-layer telemetry. `None` preserves the legacy L3/L4
-    /// contract and keeps existing producers wire-compatible.
     #[serde(default)]
     pub l7: Option<L7Metadata>,
 }

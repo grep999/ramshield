@@ -15,7 +15,6 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info, warn};
 
 #[cfg(target_os = "linux")]
@@ -736,9 +735,24 @@ unsafe fn walk_block_packets(
                 return;
             }
         };
-        // SAFETY: same hdr validity as above.
-        // `tp_mac` is u16, which fits in `usize` on every supported Linux
-        // target. The range check below validates the value against the ring.
+        let tp_len = match usize::try_from(unsafe { (*hdr).tp_len }) {
+            Ok(v) => v,
+            Err(_) => {
+                metrics
+                    .native_tpacket_rejects
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    worker,
+                    block_idx, packet_idx, "tp_len does not fit usize"
+                );
+                return;
+            }
+        };
+        // Kernel-provided capture timestamp: seconds and nanoseconds since
+        // the epoch, directly from the TPACKET_V3 descriptor. This is the
+        // authoritative capture time, not userspace processing time.
+        let tp_sec = unsafe { (*hdr).tp_sec };
+        let tp_nsec = unsafe { (*hdr).tp_nsec };
         let mac = unsafe { (*hdr).tp_mac as usize };
         let (_header_abs, packet_off) = match checked_tpacket_packet_offsets(
             block_idx, block_size, ring_len, blk_len, off, mac, snaplen,
@@ -828,6 +842,9 @@ unsafe fn walk_block_packets(
         process_packet(
             fd,
             packet,
+            tp_len as u32,
+            tp_sec,
+            tp_nsec,
             max_eps,
             trusted_overlay_cidrs,
             tx,
@@ -979,6 +996,9 @@ fn set_sockopt<T>(fd: i32, level: i32, name: i32, value: &T) -> std::io::Result<
 fn process_packet(
     fd: i32,
     packet: &[u8],
+    tp_len: u32,
+    tp_sec: u32,
+    tp_nsec: u32,
     max_eps: u64,
     trusted_overlay_cidrs: &[IpNetwork],
     tx: &Sender<ConnectionEvent>,
@@ -1051,10 +1071,12 @@ fn process_packet(
     if !admitted {
         return;
     }
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
+    // B02: Use kernel-provided packet timestamp from TPACKET_V3 header.
+    // This represents the moment the kernel saw the packet, not userspace
+    // processing time. Under ring backlog or scheduling pressure, those can
+    // differ significantly.
+    let ts = (tp_sec as u64) * 1_000_000_000 + (tp_nsec as u64);
+    let truncated = (tp_len as usize) > packet.len();
     let mut fp = proto as u32;
     if syn {
         fp |= 0x4000_0000;
@@ -1065,7 +1087,9 @@ fn process_packet(
     let ev = ConnectionEvent {
         ip,
         timestamp_ns: ts,
-        bytes: packet.len() as u64,
+        wire_bytes: tp_len as u64,
+        captured_bytes: packet.len() as u64,
+        truncated,
         status_code: 0,
         proto_fingerprint: fp,
         l7: None,
@@ -1733,6 +1757,9 @@ mod tests {
                 process_packet(
                     0,
                     &frame,
+                    /*tp_len=*/ PACKETS_PER_SAMPLE as u32,
+                    /*tp_sec=*/ 1_700_000_000,
+                    /*tp_nsec=*/ 0,
                     PACKETS_PER_SAMPLE as u64,
                     &[],
                     &tx,
@@ -1817,7 +1844,9 @@ mod tests {
         tx.try_send(ConnectionEvent {
             ip: "198.51.100.7".parse().unwrap(),
             timestamp_ns: 0,
-            bytes: 1,
+            captured_bytes: 1,
+            wire_bytes: 1,
+            truncated: false,
             status_code: 0,
             proto_fingerprint: 0,
             l7: None,
@@ -1832,6 +1861,9 @@ mod tests {
         process_packet(
             0,
             &sample_frame(),
+            /*tp_len=*/ 1000,
+            /*tp_sec=*/ 1_700_000_000,
+            /*tp_nsec=*/ 0,
             1000,
             &[],
             &tx,
@@ -1880,6 +1912,9 @@ mod tests {
         process_packet(
             0,
             &sample_frame(),
+            /*tp_len=*/ 1000,
+            /*tp_sec=*/ 1_700_000_000,
+            /*tp_nsec=*/ 0,
             1000,
             &[],
             &tx,
@@ -1927,6 +1962,9 @@ mod tests {
             process_packet(
                 0,
                 &sample_frame(),
+                /*tp_len=*/ 1000,
+                /*tp_sec=*/ 1_700_000_000,
+                /*tp_nsec=*/ 0,
                 1000,
                 &[],
                 &tx,
@@ -1971,6 +2009,9 @@ mod tests {
         process_packet(
             0,
             &sample_frame(),
+            /*tp_len=*/ 1000,
+            /*tp_sec=*/ 1_700_000_000,
+            /*tp_nsec=*/ 0,
             1000,
             &[],
             &tx,
@@ -2022,6 +2063,9 @@ mod tests {
                     process_packet(
                         0,
                         &sample_frame(),
+                        /*tp_len=*/ 1_000_000,
+                        /*tp_sec=*/ 1_700_000_000,
+                        /*tp_nsec=*/ 0,
                         1_000_000,
                         &[],
                         &tx,

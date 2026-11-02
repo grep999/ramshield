@@ -50,6 +50,11 @@ name = "field_day"
 path = "benches/field_day.rs"
 harness = false
 
+[[bench]]
+name = "cardinality"
+path = "benches/cardinality.rs"
+harness = false
+
 [features]
 default = []
 full = ["tokio/full", "tracing-subscriber/env-filter", "tracing-subscriber/fmt", "tower-http/cors", "clap/derive", "xdp"]

@@ -254,9 +254,10 @@ impl Default for CardinalityEstimator {
 }
 
 /// Independent metric profiles for service-specific behavioural baselines.
-/// Maintains separate CountMoments per (service, direction, metric, calendar_slot).
+/// Maintains separate CountMoments per (service, direction, metric, calendar slot).
 /// Also tracks bounded cardinality estimators for source and destination
 /// distinct identities per service/direction/slot combination.
+/// Provides a baseline governance state machine: establish → promote → review → retire.
 /// The existing packet-only CalendarAssessment remains as a fallback.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MetricProfileStore {
@@ -653,5 +654,193 @@ mod retention_tests {
                 .source_cardinality_estimate("service-a", TrafficDirection::Ingress, 20)
                 .is_some()
         );
+    }
+}
+
+// ── Baseline governance state machine ──
+// Baseline lifecycle: Pending → Established → Promoted (or RequiresReview)
+// → Retired. Once Retired, the baseline is no longer used for assessment.
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BaselineState {
+    /// Baseline is being established; not yet trusted for anomaly detection.
+    #[default]
+    Pending,
+    /// Baseline established with sufficient clean observations; used in assess_*.
+    Established,
+    /// Baseline promoted — approved for production anomaly gating.
+    Promoted,
+    /// Baseline requires human review before further use.
+    RequiresReview,
+    /// Baseline retired — superseded or withdrawn.
+    Retired,
+}
+
+/// Transitions a baseline state. Returns Ok(new_state) or Err(reason) if the
+/// transition is invalid.
+#[allow(dead_code)]
+pub fn baseline_transition(current: BaselineState, event: BaselineEvent) -> Result<BaselineState, &'static str> {
+    use BaselineEvent::*;
+    Ok(match (current, event) {
+        (BaselineState::Pending, Establish) => BaselineState::Established,
+        (BaselineState::Pending, Retire) => BaselineState::Retired,
+
+        (BaselineState::Established, Promote) => BaselineState::Promoted,
+        (BaselineState::Established, RequireReview) => BaselineState::RequiresReview,
+        (BaselineState::Established, Retire) => BaselineState::Retired,
+
+        (BaselineState::Promoted, RequireReview) => BaselineState::RequiresReview,
+        (BaselineState::Promoted, Retire) => BaselineState::Retired,
+
+        (BaselineState::RequiresReview, Establish) => BaselineState::Established,
+        (BaselineState::RequiresReview, Retire) => BaselineState::Retired,
+
+        (BaselineState::Retired, _) => return Err("retired baseline cannot transition"),
+        (BaselineState::Established, Establish) => return Err("already established"),
+        (BaselineState::Promoted, Promote) => return Err("already promoted"),
+        (_current, _) => return Err("invalid transition"),
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BaselineEvent {
+    Establish,
+    Promote,
+    RequireReview,
+    Retire,
+}
+
+/// Governance state per profile key — tracks the baseline lifecycle for a
+/// (service, direction, metric, calendar slot) profile.
+#[derive(Debug, Clone, Default)]
+pub struct BaselineGovernance {
+    states: std::collections::BTreeMap<ProfileKey, BaselineState>,
+}
+
+impl BaselineGovernance {
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record that a baseline has been established for the given profile.
+    #[allow(dead_code)]
+    pub fn establish(&mut self, key: &ProfileKey) -> Result<BaselineState, &'static str> {
+        let current = self.states.entry(key.clone()).or_default();
+        let next = baseline_transition(*current, BaselineEvent::Establish)?;
+        *current = next;
+        Ok(next)
+    }
+
+    /// Promote a baseline to promoted state.
+    #[allow(dead_code)]
+    pub fn promote(&mut self, key: &ProfileKey) -> Result<BaselineState, &'static str> {
+        let current = self.states.entry(key.clone()).or_default();
+        let next = baseline_transition(*current, BaselineEvent::Promote)?;
+        *current = next;
+        Ok(next)
+    }
+
+    /// Mark a baseline as requiring review.
+    #[allow(dead_code)]
+    pub fn require_review(&mut self, key: &ProfileKey) -> Result<BaselineState, &'static str> {
+        let current = self.states.entry(key.clone()).or_default();
+        let next = baseline_transition(*current, BaselineEvent::RequireReview)?;
+        *current = next;
+        Ok(next)
+    }
+
+    /// Retire a baseline.
+    #[allow(dead_code)]
+    pub fn retire(&mut self, key: &ProfileKey) -> Result<BaselineState, &'static str> {
+        let current = self.states.entry(key.clone()).or_default();
+        let next = baseline_transition(*current, BaselineEvent::Retire)?;
+        *current = next;
+        Ok(next)
+    }
+
+    /// Get the current state of a baseline.
+    pub fn state(&self, key: &ProfileKey) -> BaselineState {
+        self.states.get(key).copied().unwrap_or_default()
+    }
+
+    /// True if the baseline is usable for anomaly assessment (Established or Promoted).
+    #[allow(dead_code)]
+    pub fn is_usable(&self, key: &ProfileKey) -> bool {
+        matches!(
+            self.state(key),
+            BaselineState::Established | BaselineState::Promoted
+        )
+    }
+
+    /// True if the baseline is promoted (approved for production gating).
+    #[allow(dead_code)]
+    pub fn is_promoted(&self, key: &ProfileKey) -> bool {
+        self.state(key) == BaselineState::Promoted
+    }
+}
+
+#[cfg(test)]
+mod baseline_governance_tests {
+    use super::*;
+
+    fn key() -> ProfileKey {
+        ProfileKey::new("svc-a".into(), TrafficDirection::Ingress, CountMetric::Packets, 0)
+    }
+
+    #[test]
+    fn pending_establishes_to_established() {
+        let mut gov = BaselineGovernance::new();
+        let key = key();
+        assert_eq!(gov.state(&key), BaselineState::Pending);
+        assert_eq!(gov.establish(&key).unwrap(), BaselineState::Established);
+    }
+
+    #[test]
+    fn established_promotes() {
+        let mut gov = BaselineGovernance::new();
+        let key = key();
+        gov.establish(&key).unwrap();
+        assert_eq!(gov.promote(&key).unwrap(), BaselineState::Promoted);
+    }
+
+    #[test]
+    fn established_requires_review() {
+        let mut gov = BaselineGovernance::new();
+        let key = key();
+        gov.establish(&key).unwrap();
+        assert_eq!(gov.require_review(&key).unwrap(), BaselineState::RequiresReview);
+    }
+
+    #[test]
+    fn review_can_reestablish() {
+        let mut gov = BaselineGovernance::new();
+        let key = key();
+        gov.establish(&key).unwrap();
+        gov.require_review(&key).unwrap();
+        assert_eq!(gov.establish(&key).unwrap(), BaselineState::Established);
+    }
+
+    #[test]
+    fn retired_cannot_transition() {
+        let mut gov = BaselineGovernance::new();
+        let key = key();
+        gov.establish(&key).unwrap();
+        gov.retire(&key).unwrap();
+        assert!(gov.establish(&key).is_err());
+        assert!(gov.promote(&key).is_err());
+    }
+
+    #[test]
+    fn is_usable_for_established_and_promoted() {
+        let mut gov = BaselineGovernance::new();
+        let key = key();
+        assert!(!gov.is_usable(&key));
+        gov.establish(&key).unwrap();
+        assert!(gov.is_usable(&key));
+        gov.promote(&key).unwrap();
+        assert!(gov.is_usable(&key));
+        gov.require_review(&key).unwrap();
+        assert!(!gov.is_usable(&key));
     }
 }

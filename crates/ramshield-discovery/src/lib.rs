@@ -7,11 +7,13 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
+    hash::{Hash, Hasher},
     io::{self, Write},
     path::{Path, PathBuf},
 };
 
 mod calendar;
+mod ingest;
 mod metric;
 mod stats;
 mod window;
@@ -20,6 +22,7 @@ pub use calendar::{
     ExecutionState, ExpectedWorkload, Recurrence, TrafficCalendar, WorkloadDeclaration,
     WorkloadExecution,
 };
+pub use ingest::{IngestionEngine, IngestConfig};
 pub use metric::{
     CardinalityEstimate, CardinalityEstimator, CountMetric, MetricAssessment, MetricProfileStore,
     ObservationQuality, ProfileKey, extend_assessment, new_profile_key, observe_clean,
@@ -68,6 +71,16 @@ impl ServiceId {
 
     pub fn new(id: u64) -> Self {
         ServiceId(id)
+    }
+
+    pub fn from_ip(ip: std::net::IpAddr) -> Self {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        ip.hash(&mut hasher);
+        ServiceId(hasher.finish())
+    }
+
+    pub fn as_string(&self) -> String {
+        format!("svc_{:016x}", self.0)
     }
 }
 

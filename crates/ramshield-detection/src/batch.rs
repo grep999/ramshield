@@ -38,7 +38,7 @@ impl IpAgg {
         // profile has `overflow-checks = true`, so an unguarded `+=` on a u64
         // is a panic — and with `panic = "abort"` that takes the daemon down.
         self.count = self.count.saturating_add(1);
-        self.bytes = self.bytes.saturating_add(ev.bytes);
+        self.bytes = self.bytes.saturating_add(ev.captured_bytes);
         // 600B L1-resident const table beats the /100 division per event.
         if ev.status_code < 600 {
             let b = super::STATUS_BUCKET[ev.status_code as usize];
@@ -281,7 +281,9 @@ mod tests {
         let ev = ConnectionEvent {
             ip: IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)),
             timestamp_ns: 1,
-            bytes: 10,
+            captured_bytes: 10,
+            wire_bytes: 10,
+            truncated: false,
             status_code: 0, // invalid — status_bucket returns 255
             proto_fingerprint: 0,
             l7: None,
@@ -298,7 +300,9 @@ mod tests {
         let ev = |n| ConnectionEvent {
             ip,
             timestamp_ns: n,
-            bytes: 100,
+            captured_bytes: 100,
+            wire_bytes: 100,
+            truncated: false,
             status_code: 200,
             proto_fingerprint: 0,
             l7: None,
@@ -322,7 +326,9 @@ mod tests {
         let ev = |ip, n| ConnectionEvent {
             ip,
             timestamp_ns: n,
-            bytes: 100,
+            captured_bytes: 100,
+            wire_bytes: 100,
+            truncated: false,
             status_code: 200,
             proto_fingerprint: 0,
             l7: None,
@@ -368,7 +374,9 @@ mod tests {
         let ev = ConnectionEvent {
             ip,
             timestamp_ns: 1,
-            bytes: 100,
+            captured_bytes: 100,
+            wire_bytes: 100,
+            truncated: false,
             status_code: 200,
             proto_fingerprint: 0,
             l7: Some(L7Metadata {

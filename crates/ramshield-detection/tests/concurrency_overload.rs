@@ -53,7 +53,9 @@ fn gen_events(ips: &[IpAddr], per_ip: u64, base_ts: u64) -> Vec<ConnectionEvent>
         out.push(ConnectionEvent {
             ip,
             timestamp_ns: base_ts + (idx as u64 * 1_000_000),
-            bytes: 256,
+            captured_bytes: 256,
+            wire_bytes: 256,
+            truncated: false,
             status_code: 200,
             proto_fingerprint: 1,
             l7: None,
@@ -347,7 +349,9 @@ fn recovery_after_overload() {
         let ev = ConnectionEvent {
             ip,
             timestamp_ns: ts,
-            bytes: 256,
+            captured_bytes: 256,
+            wire_bytes: 256,
+            truncated: false,
             status_code: 200,
             proto_fingerprint: 1,
             l7: None,
@@ -382,7 +386,9 @@ fn recovery_after_overload() {
             let ev = ConnectionEvent {
                 ip,
                 timestamp_ns: ts,
-                bytes: 256,
+                captured_bytes: 256,
+            wire_bytes: 256,
+            truncated: false,
                 status_code: 200,
                 proto_fingerprint: 1,
                 l7: None,

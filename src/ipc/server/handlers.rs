@@ -563,7 +563,9 @@ fn handle_report_connection(req: Request, ctx: &RequestContext<'_>) -> Response 
                     }
                 },
                 timestamp_ns: now_ms() * 1_000_000,
-                bytes,
+                captured_bytes: bytes,
+                wire_bytes: bytes,
+                truncated: false,
                 status_code,
                 proto_fingerprint: proto_fp,
                 l7,
@@ -632,7 +634,9 @@ fn handle_report_connections(req: Request, ctx: &RequestContext<'_>) -> Response
                 let ev = ConnectionEvent {
                     ip: cr.ip, // typed on the wire (item 2): no per-event String alloc + parse
                     timestamp_ns: now,
-                    bytes: cr.bytes,
+                    captured_bytes: cr.bytes,
+                    wire_bytes: cr.bytes,
+                    truncated: false,
                     status_code: cr.status_code,
                     proto_fingerprint: cr.proto_fp,
                     l7: cr.l7,
