@@ -265,8 +265,8 @@ impl WindowLedger {
         // Enforce the limit while reading as well as before parsing. The file
         // can grow after metadata() returns, so fs::read() would reintroduce an
         // unbounded allocation through that time-of-check/time-of-use window.
-        let bytes = read_bounded(file, max_bytes)
-            .map_err(|error| WindowError::Io(error.to_string()))?;
+        let bytes =
+            read_bounded(file, max_bytes).map_err(|error| WindowError::Io(error.to_string()))?;
         let envelope: PersistenceEnvelope =
             serde_json::from_slice(&bytes).map_err(|error| WindowError::Io(error.to_string()))?;
         if envelope.version != PERSISTENCE_VERSION {
