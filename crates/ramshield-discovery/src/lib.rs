@@ -682,7 +682,7 @@ fn create_temp_file(path: &Path) -> io::Result<(PathBuf, File)> {
     let file_name = path.file_name().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            "discovery snapshot path must name a file",
+            "snapshot path must name a file",
         )
     })?;
     let file_name = file_name.to_string_lossy();
@@ -707,7 +707,7 @@ fn create_temp_file(path: &Path) -> io::Result<(PathBuf, File)> {
 
     Err(io::Error::new(
         io::ErrorKind::AlreadyExists,
-        "could not allocate a unique discovery snapshot file",
+        "could not allocate a unique snapshot file",
     ))
 }
 
@@ -717,7 +717,7 @@ fn read_snapshot<T: serde::de::DeserializeOwned>(path: &Path, max_bytes: u64) ->
     if !metadata.is_file() || metadata.len() > max_bytes {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "discovery snapshot exceeds its configured size bound",
+            "snapshot exceeds its configured size bound",
         ));
     }
 
@@ -727,7 +727,7 @@ fn read_snapshot<T: serde::de::DeserializeOwned>(path: &Path, max_bytes: u64) ->
     if bytes.len() as u64 > max_bytes {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "discovery snapshot grew beyond its configured size bound",
+            "snapshot grew beyond its configured size bound",
         ));
     }
     serde_json::from_slice(&bytes)
@@ -738,7 +738,7 @@ fn write_snapshot<T: Serialize>(path: &Path, value: &T, max_bytes: u64) -> io::R
     if path.file_name().is_none() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "discovery snapshot path must name a file",
+            "snapshot path must name a file",
         ));
     }
     let parent = parent_dir(path);
@@ -751,7 +751,7 @@ fn write_snapshot<T: Serialize>(path: &Path, value: &T, max_bytes: u64) -> io::R
         if file.metadata()?.len() > max_bytes {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "discovery snapshot exceeds its configured size bound",
+                "snapshot exceeds its configured size bound",
             ));
         }
         file.sync_all()

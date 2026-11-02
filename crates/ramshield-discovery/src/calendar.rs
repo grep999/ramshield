@@ -9,7 +9,7 @@ use crate::{CountModelFit, CountMoments, fit_count_model};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    fs, io,
+    io,
     path::{Path, PathBuf},
 };
 
@@ -17,6 +17,9 @@ const WEEK_SLOTS: usize = 7 * 24;
 const MONTH_SLOTS: usize = 31 * 24;
 const SCHEMA: u32 = 3;
 const MAX_DECLARATIONS: usize = 512;
+// 512 bounded declarations and executions plus fixed slots fit below this
+// ceiling, including worst-case JSON string escaping.
+const MAX_CALENDAR_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Recurrence {
@@ -288,8 +291,7 @@ impl TrafficCalendar {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         let state = if path.exists() {
-            let state: CalendarState = serde_json::from_slice(&fs::read(&path)?)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            let state: CalendarState = super::read_snapshot(&path, MAX_CALENDAR_SNAPSHOT_BYTES)?;
             if state.schema != SCHEMA
                 || state.week.len() != WEEK_SLOTS
                 || state.month.len() != MONTH_SLOTS
@@ -669,30 +671,10 @@ impl TrafficCalendar {
         }
     }
 
-    /// Persist declarations and learned calendar atomically.
+    /// Persist declarations and learned calendar through the bounded atomic snapshot writer.
+    /// Concurrent writers to the same path must still be serialized by the caller.
     pub fn flush(&self) -> io::Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let bytes = serde_json::to_vec(&self.state)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let mut tmp = self.path.clone();
-        tmp.set_extension("tmp");
-        {
-            let mut file = fs::OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .open(&tmp)?;
-            use std::io::Write;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-        }
-        fs::rename(&tmp, &self.path)?;
-        if let Some(parent) = self.path.parent() {
-            fs::File::open(parent)?.sync_all()?;
-        }
-        Ok(())
+        super::write_snapshot(&self.path, &self.state, MAX_CALENDAR_SNAPSHOT_BYTES)
     }
 }
 
@@ -752,7 +734,10 @@ fn is_month_end(timestamp_secs: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
     fn path() -> PathBuf {
         let n = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -804,6 +789,102 @@ mod tests {
         c.flush().unwrap();
         let reopened = TrafficCalendar::open(&p).unwrap();
         assert_eq!(reopened.snapshot().declarations.len(), 1);
+        let _ = fs::remove_file(p);
+    }
+
+
+    #[test]
+    fn relative_snapshot_path_is_supported() {
+        let p = PathBuf::from(format!(
+            "ramshield-calendar-relative-{}-{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut calendar = TrafficCalendar::open(&p).unwrap();
+        calendar.observe_hour(1_700_000_000, 7, 70);
+        calendar.flush().unwrap();
+
+        let reopened = TrafficCalendar::open(&p).unwrap();
+        assert_eq!(
+            reopened
+                .snapshot()
+                .week
+                .iter()
+                .map(|slot| slot.observations)
+                .sum::<u64>(),
+            1
+        );
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn concurrent_flushes_use_independent_temporary_files() {
+        let p = path();
+        let mut calendar = TrafficCalendar::open(&p).unwrap();
+        calendar.observe_hour(1_700_000_000, 7, 70);
+
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let calendar = &calendar;
+                    scope.spawn(move || {
+                        for _ in 0..8 {
+                            calendar.flush().unwrap();
+                        }
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().unwrap();
+            }
+        });
+
+        let reopened = TrafficCalendar::open(&p).unwrap();
+        assert_eq!(
+            reopened
+                .snapshot()
+                .week
+                .iter()
+                .map(|slot| slot.observations)
+                .sum::<u64>(),
+            1
+        );
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn failed_flush_removes_temporary_snapshot() {
+        let dir = std::env::temp_dir().join(format!(
+            "calendar_flush_cleanup_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("snapshot.json");
+        let calendar = TrafficCalendar::open(&target).unwrap();
+        fs::create_dir(&target).unwrap();
+
+        assert!(calendar.flush().is_err());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reopen_rejects_oversized_snapshot_before_json_parsing() {
+        let p = path();
+        fs::File::create(&p)
+            .unwrap()
+            .set_len(MAX_CALENDAR_SNAPSHOT_BYTES + 1)
+            .unwrap();
+
+        let error = TrafficCalendar::open(&p).err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         let _ = fs::remove_file(p);
     }
 
