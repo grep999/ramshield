@@ -284,6 +284,7 @@ mod tests {
                 packets: 0,
                 captured_bytes: 0,
                 wire_bytes: 0,
+                truncated_packets: 0,
                 capture_drops: 4,
                 ingest_drops: 0,
                 malformed: 0,
@@ -404,6 +405,7 @@ mod tests {
         assert_eq!(recovered.len(), 1);
         let key = WindowKey {
             service_id: "billing-worker".into(),
+            direction: TrafficDirection::Unknown,
             window_start_secs: 0,
             window_seconds: 60,
         };
@@ -703,6 +705,7 @@ mod tests {
             .map(|i| WindowObservation {
                 key: WindowKey {
                     service_id: format!("svc-{i}"),
+                    direction: TrafficDirection::Unknown,
                     window_start_secs: i * 3600,
                     window_seconds: 60,
                 },
