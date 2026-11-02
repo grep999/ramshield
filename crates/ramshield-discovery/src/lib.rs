@@ -341,7 +341,7 @@ impl Discovery {
     pub fn open(path: impl AsRef<Path>, config: DiscoveryConfig) -> io::Result<Self> {
         config.validate()?;
         let path = path.as_ref().to_path_buf();
-        let mut state = if path.exists() {
+        let state = if path.exists() {
             let mut state: PersistedState =
                 read_snapshot(&path, max_discovery_snapshot_bytes(&config))?;
             validate_persisted_state(&state, &config)?;
@@ -447,8 +447,7 @@ impl Discovery {
                 .map(|bucket| bucket.hour)
                 .max()
                 .unwrap_or(hour_utc);
-            let oldest_profile_hour =
-                newest_hour.saturating_sub(MAX_SERVICE_PROFILE_HOURS - 1);
+            let oldest_profile_hour = newest_hour.saturating_sub(MAX_SERVICE_PROFILE_HOURS - 1);
             if hour_utc >= oldest_profile_hour {
                 let has_capacity = self.state.service_profiles.contains_key(&service_id)
                     || self.state.service_profiles.len() < MAX_SERVICES;
@@ -1029,9 +1028,21 @@ mod tests {
         }
 
         let profile = discovery.state.service_profiles.get(&service_id).unwrap();
-        assert!(profile.assessment("78", TrafficDirection::Ingress, CountMetric::Packets, 100).is_none());
-        assert!(profile.assessment("78", TrafficDirection::Ingress, CountMetric::Packets, 101).is_some());
-        assert!(profile.assessment("78", TrafficDirection::Ingress, CountMetric::Packets, 102).is_some());
+        assert!(
+            profile
+                .assessment("78", TrafficDirection::Ingress, CountMetric::Packets, 100)
+                .is_none()
+        );
+        assert!(
+            profile
+                .assessment("78", TrafficDirection::Ingress, CountMetric::Packets, 101)
+                .is_some()
+        );
+        assert!(
+            profile
+                .assessment("78", TrafficDirection::Ingress, CountMetric::Packets, 102)
+                .is_some()
+        );
         let _ = fs::remove_file(p);
     }
 
@@ -1066,7 +1077,9 @@ mod tests {
         value["service_profiles"][0][1]["profiles"][0][0]["service_id"] = serde_json::json!("999");
         fs::write(&p, serde_json::to_vec(&value).unwrap()).unwrap();
 
-        let error = Discovery::open(&p, DiscoveryConfig::default()).err().unwrap();
+        let error = Discovery::open(&p, DiscoveryConfig::default())
+            .err()
+            .unwrap();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         let _ = fs::remove_file(p);
     }
@@ -1078,10 +1091,13 @@ mod tests {
         let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
         observe_service_hour(&mut discovery, service_id, TrafficDirection::Ingress, 100);
         let mut value = serde_json::to_value(&discovery.state).unwrap();
-        value["service_profiles"][0][1]["source_cardinality"][0][1]["bit_count"] = serde_json::json!(0);
+        value["service_profiles"][0][1]["source_cardinality"][0][1]["bit_count"] =
+            serde_json::json!(0);
         fs::write(&p, serde_json::to_vec(&value).unwrap()).unwrap();
 
-        let error = Discovery::open(&p, DiscoveryConfig::default()).err().unwrap();
+        let error = Discovery::open(&p, DiscoveryConfig::default())
+            .err()
+            .unwrap();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         let _ = fs::remove_file(p);
     }
@@ -1093,12 +1109,16 @@ mod tests {
         let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
         observe_service_hour(&mut discovery, service_id, TrafficDirection::Ingress, 100);
         let mut value = serde_json::to_value(&discovery.state).unwrap();
-        let entries = value["service_profiles"][0][1]["profiles"].as_array_mut().unwrap();
+        let entries = value["service_profiles"][0][1]["profiles"]
+            .as_array_mut()
+            .unwrap();
         let duplicate = entries[0].clone();
         entries.push(duplicate);
         fs::write(&p, serde_json::to_vec(&value).unwrap()).unwrap();
 
-        let error = Discovery::open(&p, DiscoveryConfig::default()).err().unwrap();
+        let error = Discovery::open(&p, DiscoveryConfig::default())
+            .err()
+            .unwrap();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         let _ = fs::remove_file(p);
     }
@@ -1280,6 +1300,7 @@ mod tests {
         d.observe_with_quality(event, ObservationQuality::Degraded)
             .unwrap();
         let assessment = d
+            .state
             .service_profiles
             .get(&ServiceId::new(77))
             .unwrap()
@@ -1715,9 +1736,8 @@ mod tests {
         disc.flush().unwrap();
 
         let disc2 = Discovery::open(&path, config).unwrap();
-        // Service profiles are not persisted across restart in this implementation.
-        // Just verify the cycle completes without error and profiles start fresh.
-        assert!(disc2.service_profiles.is_empty());
+        // The latest service profile is part of the same atomic snapshot.
+        assert_eq!(disc2.state.service_profiles.get(&svc).unwrap().len(), 2);
     }
 
     #[test]
@@ -1730,6 +1750,7 @@ mod tests {
             buckets: vec![None; 10],
             accepted: 0,
             too_old: 0,
+            service_profiles: BTreeMap::new(),
         })
         .unwrap();
         std::fs::write(&path, &state).unwrap();

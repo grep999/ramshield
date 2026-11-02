@@ -643,22 +643,21 @@ impl MetricProfileStore {
                 hour,
             ))
         };
-        let cardinality_valid = |entries: &BTreeMap<
-            (String, TrafficDirection, u64),
-            CardinalityEstimator,
-        >| {
-            entries.iter().all(|((key_service, direction, hour), estimator)| {
-                key_service == service_id
-                    && *hour >= oldest_hour
-                    && *hour <= newest_hour
-                    && retained_hours.contains(hour)
-                    && has_packet_profile(*direction, *hour)
-                    && estimator.valid_persisted_state()
-            })
-        };
+        let cardinality_valid =
+            |entries: &BTreeMap<(String, TrafficDirection, u64), CardinalityEstimator>| {
+                entries
+                    .iter()
+                    .all(|((key_service, direction, hour), estimator)| {
+                        key_service == service_id
+                            && *hour >= oldest_hour
+                            && *hour <= newest_hour
+                            && retained_hours.contains(hour)
+                            && has_packet_profile(*direction, *hour)
+                            && estimator.valid_persisted_state()
+                    })
+            };
 
-        cardinality_valid(&self.source_cardinality)
-            && cardinality_valid(&self.dest_cardinality)
+        cardinality_valid(&self.source_cardinality) && cardinality_valid(&self.dest_cardinality)
     }
 
     /// Number of distinct metric profiles stored.
