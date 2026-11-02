@@ -684,20 +684,20 @@ mod retention_tests {
         let retained_hours = BTreeSet::from([100]);
         assert!(store.validate_for_service("service-a", 99, 100, &retained_hours, 2,));
 
-        let packet_key = ProfileKey::new(
-            "service-a".into(),
-            TrafficDirection::Ingress,
-            CountMetric::Packets,
-            100,
-        );
-        store
-            .profiles
-            .get_mut(&packet_key)
-            .expect("packet profile was inserted")
-            .moments
-            .m2 = 1.0;
+        let mut persisted = serde_json::to_value(&store).expect("profile store serializes");
+        let packet_profile = persisted["profiles"]
+            .as_array_mut()
+            .expect("profiles serialize as entries")
+            .iter_mut()
+            .find(|entry| {
+                entry[0]["service_id"] == "service-a"
+                    && entry[0]["metric"] == "Packets"
+                    && entry[0]["calendar_slot"] == 100
+            })
+            .expect("packet profile was serialized");
+        packet_profile[1]["moments"]["m2"] = serde_json::json!(1.0);
 
-        let bytes = serde_json::to_vec(&store).expect("profile store serializes");
+        let bytes = serde_json::to_vec(&persisted).expect("corrupted profile serializes");
         let restored: MetricProfileStore =
             serde_json::from_slice(&bytes).expect("profile store deserializes");
         assert!(!restored.validate_for_service("service-a", 99, 100, &retained_hours, 2,));

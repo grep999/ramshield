@@ -950,8 +950,9 @@ mod tests {
         let p = path();
         let mut calendar = TrafficCalendar::open(&p).unwrap();
         calendar.observe_hour(0, 7, 70);
-        calendar.state.week[72].moments.m2 = 1.0;
-        fs::write(&p, serde_json::to_vec(&calendar.state).unwrap()).unwrap();
+        let mut persisted = serde_json::to_value(&calendar.state).unwrap();
+        persisted["week"][72]["moments"]["m2"] = serde_json::json!(1.0);
+        fs::write(&p, serde_json::to_vec(&persisted).unwrap()).unwrap();
 
         let error = TrafficCalendar::open(&p).err().unwrap();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
