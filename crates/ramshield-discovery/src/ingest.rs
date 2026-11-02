@@ -51,6 +51,7 @@ struct WindowAccumulator {
     wire_bytes: u64,
     truncated_packets: u64,
     health: CollectorHealth,
+    zero_traffic_complete: bool,
 }
 
 impl WindowAccumulator {
@@ -79,6 +80,7 @@ impl WindowAccumulator {
             .ingest_drops
             .saturating_add(other.health.ingest_drops);
         self.health.malformed = self.health.malformed.saturating_add(other.health.malformed);
+        self.zero_traffic_complete |= other.zero_traffic_complete;
     }
 }
 
@@ -160,6 +162,23 @@ impl IngestionEngine {
         Ok(())
     }
 
+    /// Mark a service-direction window as completely observed with zero traffic.
+    /// This is distinct from an absent window, which remains Missing.
+    pub fn record_empty_window(
+        &mut self,
+        service_id: ServiceId,
+        direction: TrafficDirection,
+        window_start_secs: u64,
+    ) -> Result<(), WindowError> {
+        if !window_start_secs.is_multiple_of(u64::from(self.config.window_seconds)) {
+            return Err(WindowError::InvalidWindow);
+        }
+        let key = (service_id, direction, window_start_secs);
+        self.check_capacity(std::iter::once(&key))?;
+        self.pending.entry(key).or_default().zero_traffic_complete = true;
+        Ok(())
+    }
+
     fn check_capacity<'a>(
         &self,
         incoming: impl Iterator<Item = &'a (ServiceId, TrafficDirection, u64)>,
@@ -210,6 +229,7 @@ impl IngestionEngine {
             let state = if accumulator.packets == 0
                 && accumulator.truncated_packets == 0
                 && accumulator.health.is_clean()
+                && !accumulator.zero_traffic_complete
             {
                 WindowState::Missing {
                     reason: MissingReason::NoTelemetry,
@@ -366,6 +386,22 @@ mod tests {
             eng.seal_completed(3_600).unwrap(),
             vec![RecordOutcome::Inserted]
         );
+    }
+
+    #[test]
+    fn explicit_zero_traffic_is_observed_not_missing() {
+        let mut eng = engine(IngestConfig::default());
+        let service = ServiceId::new(15);
+        eng.record_empty_window(service, TrafficDirection::Ingress, 0).unwrap();
+        assert_eq!(eng.seal_completed(3_600).unwrap(), vec![RecordOutcome::Inserted]);
+        assert!(matches!(
+            eng.ledger().get(&key(service, TrafficDirection::Ingress)),
+            Some(WindowState::Observed {
+                packets: 0,
+                captured_bytes: 0,
+                wire_bytes: 0,
+            })
+        ));
     }
 
     #[test]
