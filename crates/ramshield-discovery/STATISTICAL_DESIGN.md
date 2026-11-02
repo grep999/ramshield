@@ -57,7 +57,7 @@ Candidate marginal families:
 
 The current `fit_count_model` is a method-of-moments diagnostic only. It is not a goodness-of-fit test, a predictive distribution, a p-value or an alert threshold. A future fit must test goodness-of-fit and residual dependence on chronological validation data.
 
-Use Welford-style online moments to avoid subtracting large nearly equal raw moments. Persist finite, validated numeric state. Reject corrupted, non-finite or inconsistent state on load.
+Use Welford-style online moments to avoid subtracting large nearly equal raw moments. Persist finite, validated numeric state. Reject corrupted, non-finite or inconsistent state on load. Aggregate snapshot validation also checks cross-counter conservation: the saturating sum of protocol packet counters must equal the bucket packet total; hashed source and destination bucket totals must not exceed it; and retained destination-port counters must not exceed the number of samples. Individual counters being in range is not sufficient when their combined totals are impossible.
 
 ## 5. Dependence and predictive assessment
 

@@ -897,6 +897,37 @@ fn validate_persisted_state(state: &PersistedState, config: &DiscoveryConfig) ->
             return Err(invalid());
         }
 
+        // Validate cross-counter invariants as well as individual bounds.
+        // Every accepted TrafficSample contributes its packet count to exactly
+        // one protocol, while optional endpoint keys and ports may be absent.
+        let protocol_total = bucket
+            .protocols
+            .iter()
+            .copied()
+            .fold(0u64, u64::saturating_add);
+        let source_total = bucket
+            .sources
+            .iter()
+            .copied()
+            .fold(0u64, u64::saturating_add);
+        let destination_total = bucket
+            .destinations
+            .iter()
+            .copied()
+            .fold(0u64, u64::saturating_add);
+        let port_total = bucket
+            .ports
+            .iter()
+            .map(|port| port.count)
+            .fold(0u64, u64::saturating_add);
+        if protocol_total != bucket.packets
+            || source_total > bucket.packets
+            || destination_total > bucket.packets
+            || port_total > bucket.samples
+        {
+            return Err(invalid());
+        }
+
         match retained_samples.checked_add(bucket.samples) {
             Some(total) => retained_samples = total,
             None => retained_samples_overflowed = true,
@@ -1176,6 +1207,85 @@ mod tests {
         let mut state = discovery.state.clone();
         let bucket = state.buckets.iter_mut().flatten().next().unwrap();
         bucket.sources[0] = bucket.packets.saturating_add(1);
+        fs::write(&p, serde_json::to_vec(&state).unwrap()).unwrap();
+
+        let error = Discovery::open(&p, DiscoveryConfig::default())
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn reopen_rejects_protocol_total_mismatch_even_when_each_counter_is_bounded() {
+        let p = path();
+        let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        discovery.observe(sample(1_700_000_000));
+        let mut state = discovery.state.clone();
+        let bucket = state.buckets.iter_mut().flatten().next().unwrap();
+        // The original TCP count is 3 and the packet total is 3. This
+        // individually valid value leaves an impossible protocol total of 2.
+        bucket.protocols[Protocol::Tcp as usize] = 2;
+        fs::write(&p, serde_json::to_vec(&state).unwrap()).unwrap();
+
+        let error = Discovery::open(&p, DiscoveryConfig::default())
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn reopen_rejects_protocol_total_above_packet_total() {
+        let p = path();
+        let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        discovery.observe(sample(1_700_000_000));
+        let mut state = discovery.state.clone();
+        let bucket = state.buckets.iter_mut().flatten().next().unwrap();
+        // Both protocol counters are individually <= packets, but their sum is not.
+        bucket.protocols[Protocol::Udp as usize] = 1;
+        fs::write(&p, serde_json::to_vec(&state).unwrap()).unwrap();
+
+        let error = Discovery::open(&p, DiscoveryConfig::default())
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn reopen_rejects_endpoint_distribution_totals_above_packet_total() {
+        let p = path();
+        let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        discovery.observe(sample(1_700_000_000));
+        let mut state = discovery.state.clone();
+        let bucket = state.buckets.iter_mut().flatten().next().unwrap();
+        // Existing source/destination bins each contain 3 packets. Each added
+        // bin remains individually in range, but the aggregate becomes 4.
+        bucket.sources[18] = 1;
+        bucket.destinations[30] = 1;
+        fs::write(&p, serde_json::to_vec(&state).unwrap()).unwrap();
+
+        let error = Discovery::open(&p, DiscoveryConfig::default())
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn reopen_rejects_port_counter_total_above_sample_total() {
+        let p = path();
+        let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        discovery.observe(sample(1_700_000_000));
+        let mut state = discovery.state.clone();
+        let bucket = state.buckets.iter_mut().flatten().next().unwrap();
+        // Each port count is <= samples, but one sample cannot carry two ports.
+        bucket.ports.push(PortCounter {
+            port: 80,
+            count: 1,
+            error_bound: 0,
+        });
         fs::write(&p, serde_json::to_vec(&state).unwrap()).unwrap();
 
         let error = Discovery::open(&p, DiscoveryConfig::default())
