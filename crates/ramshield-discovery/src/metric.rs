@@ -682,13 +682,7 @@ mod retention_tests {
             ObservationQuality::Clean,
         );
         let retained_hours = BTreeSet::from([100]);
-        assert!(store.validate_for_service(
-            "service-a",
-            99,
-            100,
-            &retained_hours,
-            2,
-        ));
+        assert!(store.validate_for_service("service-a", 99, 100, &retained_hours, 2,));
 
         let packet_key = ProfileKey::new(
             "service-a".into(),
@@ -706,13 +700,7 @@ mod retention_tests {
         let bytes = serde_json::to_vec(&store).expect("profile store serializes");
         let restored: MetricProfileStore =
             serde_json::from_slice(&bytes).expect("profile store deserializes");
-        assert!(!restored.validate_for_service(
-            "service-a",
-            99,
-            100,
-            &retained_hours,
-            2,
-        ));
+        assert!(!restored.validate_for_service("service-a", 99, 100, &retained_hours, 2,));
     }
 
     #[test]
