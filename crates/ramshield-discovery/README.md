@@ -6,7 +6,7 @@ Passive production-environment discovery for RamShield. This crate is deliberate
 
 - Aggregate bounded hourly traffic observations: packet/byte volume, protocol mix, approximate source/destination distributions and bounded destination-port heavy hitters.
 - Learn recurring traffic shape by UTC hour-of-week, hour-of-month and a dedicated month-end profile.
-- Maintain numerically stable online count moments and report Poisson / negative-binomial / underdispersed method-of-moments diagnostics.
+- Maintain numerically stable, count-domain-validated online moments and report Poisson / negative-binomial / underdispersed method-of-moments diagnostics.
 - Provide a provisional descriptive hourly band; it is not a calibrated prediction interval or a production alert threshold.
 - Return active operator-declared workload context alongside every assessment, without suppressing anomalies.
 - Record operator-declared services and workloads before onboarding or scheduling them, including daily, weekly, monthly-day, month-end and N-day recurrence.

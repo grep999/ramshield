@@ -54,7 +54,6 @@ pub use calendar::{
 pub use metric::{
     CardinalityEstimate, CardinalityEstimator, CountMetric, MetricAssessment, MetricProfileStore,
     ObservationQuality, ProfileKey, extend_assessment, new_profile_key, observe_clean,
-    reset_quality_counts,
 };
 pub use stats::{
     CountModelFit, CountMoments, DistributionAssessment, assess_cardinality_anomaly,

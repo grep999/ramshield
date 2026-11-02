@@ -946,6 +946,19 @@ mod tests {
     }
 
     #[test]
+    fn reopen_rejects_single_observation_with_nonzero_m2() {
+        let p = path();
+        let mut calendar = TrafficCalendar::open(&p).unwrap();
+        calendar.observe_hour(0, 7, 70);
+        calendar.state.week[72].moments.m2 = 1.0;
+        fs::write(&p, serde_json::to_vec(&calendar.state).unwrap()).unwrap();
+
+        let error = TrafficCalendar::open(&p).err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
     fn one_observation_is_never_treated_as_a_baseline() {
         let p = path();
         let mut c = TrafficCalendar::open(&p).unwrap();

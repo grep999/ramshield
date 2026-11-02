@@ -30,13 +30,33 @@ impl CountMoments {
     pub fn mean(&self) -> f64 {
         self.mean
     }
+    /// Validate the serialized Welford state against the non-negative u64
+    /// observation domain. M2 is the sum of squared deviations, so it must be
+    /// non-negative, zero for zero/one observations, and bounded by
+    /// n * mean * (u64::MAX - mean).
     pub fn is_valid(&self) -> bool {
-        self.mean.is_finite()
-            && self.mean >= 0.0
-            && self.m2.is_finite()
-            && self.m2 >= -f64::EPSILON
-            && (self.observations != 0 || (self.mean == 0.0 && self.m2 == 0.0))
-            && (self.mean != 0.0 || self.m2.abs() <= f64::EPSILON)
+        let max_count = u64::MAX as f64;
+        if !self.mean.is_finite()
+            || self.mean < 0.0
+            || self.mean > max_count
+            || !self.m2.is_finite()
+            || self.m2 < 0.0
+        {
+            return false;
+        }
+
+        if self.observations == 0 {
+            return self.mean == 0.0 && self.m2 == 0.0;
+        }
+        if self.observations == 1 || self.mean == 0.0 || self.mean == max_count {
+            return self.m2 == 0.0;
+        }
+
+        // Bhatia-Davis bounds the population variance for values in
+        // [0, u64::MAX]; Welford M2 is n times that variance. The tolerance
+        // covers floating-point rounding without admitting impossible state.
+        let max_m2 = self.observations as f64 * self.mean * (max_count - self.mean);
+        max_m2.is_finite() && self.m2 <= max_m2 * (1.0 + 1e-12)
     }
     pub fn sample_variance(&self) -> Option<f64> {
         (self.observations > 1).then(|| (self.m2 / (self.observations - 1) as f64).max(0.0))
@@ -217,6 +237,56 @@ mod tests {
         assert!((m.mean() - 1_000_000_002.0).abs() < 1e-6);
         assert!((m.sample_variance().unwrap() - 1.0).abs() < 1e-6);
     }
+    #[test]
+    fn rejects_nonzero_m2_for_zero_or_one_observation() {
+        let mut one = CountMoments::default();
+        one.push(7);
+        assert!(one.is_valid());
+        one.m2 = 1.0;
+        assert!(!one.is_valid());
+
+        let zero = CountMoments {
+            observations: 0,
+            mean: 0.0,
+            m2: f64::EPSILON,
+        };
+        assert!(!zero.is_valid());
+    }
+
+    #[test]
+    fn rejects_moments_outside_the_u64_count_domain() {
+        let negative_m2 = CountMoments {
+            observations: 2,
+            mean: 1.0,
+            m2: -f64::EPSILON / 2.0,
+        };
+        assert!(!negative_m2.is_valid());
+
+        let above_max = f64::from_bits((u64::MAX as f64).to_bits() + 1);
+        let excessive_mean = CountMoments {
+            observations: 2,
+            mean: above_max,
+            m2: 0.0,
+        };
+        assert!(!excessive_mean.is_valid());
+
+        let excessive_m2 = CountMoments {
+            observations: 2,
+            mean: 1.0,
+            m2: f64::MAX,
+        };
+        assert!(!excessive_m2.is_valid());
+    }
+
+    #[test]
+    fn accepts_extreme_valid_u64_observations() {
+        let mut moments = CountMoments::default();
+        moments.push(u64::MAX);
+        assert!(moments.is_valid());
+        moments.push(0);
+        assert!(moments.is_valid());
+    }
+
     #[test]
     fn detects_overdispersion_without_claiming_goodness_of_fit() {
         assert!(matches!(

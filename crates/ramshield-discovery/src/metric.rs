@@ -134,12 +134,6 @@ pub fn extend_assessment(assessment: &mut MetricAssessment, value: u64) {
     }
 }
 
-/// Reset quality counts to zero. Retains the moments state.
-pub fn reset_quality_counts(assessment: &mut MetricAssessment) {
-    assessment.clean_observations = 0;
-    assessment.degraded_observations = 0;
-}
-
 /// Result of a cardinality estimation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CardinalityEstimate {
@@ -675,6 +669,51 @@ impl MetricProfileStore {
 #[cfg(test)]
 mod retention_tests {
     use super::*;
+
+    #[test]
+    fn persisted_profile_validation_rejects_impossible_single_sample_moments() {
+        let mut store = MetricProfileStore::new();
+        store.observe_volume(
+            "service-a".into(),
+            TrafficDirection::Ingress,
+            100,
+            7,
+            700,
+            ObservationQuality::Clean,
+        );
+        let retained_hours = BTreeSet::from([100]);
+        assert!(store.validate_for_service(
+            "service-a",
+            99,
+            100,
+            &retained_hours,
+            2,
+        ));
+
+        let packet_key = ProfileKey::new(
+            "service-a".into(),
+            TrafficDirection::Ingress,
+            CountMetric::Packets,
+            100,
+        );
+        store
+            .profiles
+            .get_mut(&packet_key)
+            .expect("packet profile was inserted")
+            .moments
+            .m2 = 1.0;
+
+        let bytes = serde_json::to_vec(&store).expect("profile store serializes");
+        let restored: MetricProfileStore =
+            serde_json::from_slice(&bytes).expect("profile store deserializes");
+        assert!(!restored.validate_for_service(
+            "service-a",
+            99,
+            100,
+            &retained_hours,
+            2,
+        ));
+    }
 
     #[test]
     fn cardinality_estimator_handles_zero_and_partial_word_sizes() {
