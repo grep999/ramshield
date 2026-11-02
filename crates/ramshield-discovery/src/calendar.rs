@@ -253,7 +253,10 @@ impl WorkloadExecution {
             ));
         }
         if self.actual_duration_hours.is_some()
-            && !matches!(self.state, ExecutionState::Overrun | ExecutionState::Completed)
+            && !matches!(
+                self.state,
+                ExecutionState::Overrun | ExecutionState::Completed
+            )
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -310,9 +313,10 @@ impl TrafficCalendar {
                 .iter()
                 .all(|(id, declaration)| id == &declaration.id && declaration.validate().is_ok());
             let executions_valid = state.executions.len() <= MAX_DECLARATIONS
-                && state.executions.iter().all(|(id, execution)| {
-                    id == &execution.id && execution.validate().is_ok()
-                });
+                && state
+                    .executions
+                    .iter()
+                    .all(|(id, execution)| id == &execution.id && execution.validate().is_ok());
             if !slots_valid
                 || !declarations_valid
                 || !executions_valid
@@ -968,10 +972,10 @@ mod tests {
     fn persisted_execution_validation_rejects_overflowing_schedule() {
         let p = path();
         let mut calendar = TrafficCalendar::open(&p).unwrap();
-        calendar.state.executions.insert(
-            "overflow".into(),
-            execution("overflow", u64::MAX - 100, 1),
-        );
+        calendar
+            .state
+            .executions
+            .insert("overflow".into(), execution("overflow", u64::MAX - 100, 1));
         calendar.flush().unwrap();
         assert!(TrafficCalendar::open(&p).is_err());
         let _ = fs::remove_file(p);
