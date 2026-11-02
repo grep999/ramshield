@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::{self, Read, Write},
+    io::{self, Read},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -662,11 +662,9 @@ impl Discovery {
     }
 }
 
-
 fn max_discovery_snapshot_bytes(config: &DiscoveryConfig) -> u64 {
-    let per_bucket = MAX_BUCKET_FIXED_BYTES.saturating_add(
-        (config.max_ports_per_hour as u64).saturating_mul(MAX_PORT_ENTRY_BYTES),
-    );
+    let per_bucket = MAX_BUCKET_FIXED_BYTES
+        .saturating_add((config.max_ports_per_hour as u64).saturating_mul(MAX_PORT_ENTRY_BYTES));
     (config.bucket_count() as u64)
         .saturating_mul(per_bucket)
         .saturating_add(SNAPSHOT_ENVELOPE_BYTES)
@@ -713,10 +711,7 @@ fn create_temp_file(path: &Path) -> io::Result<(PathBuf, File)> {
     ))
 }
 
-fn read_snapshot<T: serde::de::DeserializeOwned>(
-    path: &Path,
-    max_bytes: u64,
-) -> io::Result<T> {
+fn read_snapshot<T: serde::de::DeserializeOwned>(path: &Path, max_bytes: u64) -> io::Result<T> {
     let file = File::open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.len() > max_bytes {
@@ -774,10 +769,7 @@ fn write_snapshot<T: Serialize>(path: &Path, value: &T, max_bytes: u64) -> io::R
     File::open(parent)?.sync_all()
 }
 
-fn validate_persisted_state(
-    state: &PersistedState,
-    config: &DiscoveryConfig,
-) -> io::Result<()> {
+fn validate_persisted_state(state: &PersistedState, config: &DiscoveryConfig) -> io::Result<()> {
     let invalid = || {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -929,11 +921,7 @@ mod tests {
         let mut discovery = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
         discovery.observe(sample(1_700_000_000));
         let mut state = discovery.state.clone();
-        let index = state
-            .buckets
-            .iter()
-            .position(Option::is_some)
-            .unwrap();
+        let index = state.buckets.iter().position(Option::is_some).unwrap();
         let bucket = state.buckets[index].take().unwrap();
         let wrong_index = (index + 1) % state.buckets.len();
         state.buckets[wrong_index] = Some(bucket);
