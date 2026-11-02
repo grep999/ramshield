@@ -792,7 +792,6 @@ mod tests {
         let _ = fs::remove_file(p);
     }
 
-
     #[test]
     fn relative_snapshot_path_is_supported() {
         let p = PathBuf::from(format!(
