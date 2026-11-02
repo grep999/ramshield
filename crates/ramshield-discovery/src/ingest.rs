@@ -67,9 +67,17 @@ impl WindowAccumulator {
         self.packets = self.packets.saturating_add(other.packets);
         self.captured_bytes = self.captured_bytes.saturating_add(other.captured_bytes);
         self.wire_bytes = self.wire_bytes.saturating_add(other.wire_bytes);
-        self.truncated_packets = self.truncated_packets.saturating_add(other.truncated_packets);
-        self.health.capture_drops = self.health.capture_drops.saturating_add(other.health.capture_drops);
-        self.health.ingest_drops = self.health.ingest_drops.saturating_add(other.health.ingest_drops);
+        self.truncated_packets = self
+            .truncated_packets
+            .saturating_add(other.truncated_packets);
+        self.health.capture_drops = self
+            .health
+            .capture_drops
+            .saturating_add(other.health.capture_drops);
+        self.health.ingest_drops = self
+            .health
+            .ingest_drops
+            .saturating_add(other.health.ingest_drops);
         self.health.malformed = self.health.malformed.saturating_add(other.health.malformed);
     }
 }
@@ -137,9 +145,18 @@ impl IngestionEngine {
         let key = (service_id, direction, window_start_secs);
         self.check_capacity(std::iter::once(&key))?;
         let accumulator = self.pending.entry(key).or_default();
-        accumulator.health.capture_drops = accumulator.health.capture_drops.saturating_add(health.capture_drops);
-        accumulator.health.ingest_drops = accumulator.health.ingest_drops.saturating_add(health.ingest_drops);
-        accumulator.health.malformed = accumulator.health.malformed.saturating_add(health.malformed);
+        accumulator.health.capture_drops = accumulator
+            .health
+            .capture_drops
+            .saturating_add(health.capture_drops);
+        accumulator.health.ingest_drops = accumulator
+            .health
+            .ingest_drops
+            .saturating_add(health.ingest_drops);
+        accumulator.health.malformed = accumulator
+            .health
+            .malformed
+            .saturating_add(health.malformed);
         Ok(())
     }
 
@@ -169,7 +186,11 @@ impl IngestionEngine {
         let completed: Vec<_> = self
             .pending
             .keys()
-            .filter(|(_, _, start)| start.checked_add(duration).is_some_and(|end| end <= now_secs))
+            .filter(|(_, _, start)| {
+                start
+                    .checked_add(duration)
+                    .is_some_and(|end| end <= now_secs)
+            })
             .copied()
             .collect();
         let mut outcomes = Vec::with_capacity(completed.len());
@@ -262,7 +283,13 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use tempfile::tempdir;
 
-    fn sample_event(ip: IpAddr, ts_ns: u64, captured: u64, wire: u64, truncated: bool) -> ConnectionEvent {
+    fn sample_event(
+        ip: IpAddr,
+        ts_ns: u64,
+        captured: u64,
+        wire: u64,
+        truncated: bool,
+    ) -> ConnectionEvent {
         ConnectionEvent {
             ip,
             timestamp_ns: ts_ns,
@@ -292,33 +319,77 @@ mod tests {
     fn explicit_service_and_direction_are_the_window_identity() {
         let mut eng = engine(IngestConfig::default());
         let service = ServiceId::new(7);
-        let event = sample_event(Ipv4Addr::new(10, 0, 0, 1).into(), 1_000_000_000, 100, 150, false);
-        eng.record_batch(service, TrafficDirection::Ingress, &[event.clone()]).unwrap();
-        eng.record_batch(service, TrafficDirection::Egress, &[event]).unwrap();
+        let event = sample_event(
+            Ipv4Addr::new(10, 0, 0, 1).into(),
+            1_000_000_000,
+            100,
+            150,
+            false,
+        );
+        eng.record_batch(service, TrafficDirection::Ingress, &[event.clone()])
+            .unwrap();
+        eng.record_batch(service, TrafficDirection::Egress, &[event])
+            .unwrap();
         assert_eq!(eng.seal_completed(3_600).unwrap().len(), 2);
-        assert!(matches!(eng.ledger().get(&key(service, TrafficDirection::Ingress)), Some(WindowState::Observed { packets: 1, captured_bytes: 100, wire_bytes: 150 })));
-        assert!(matches!(eng.ledger().get(&key(service, TrafficDirection::Egress)), Some(WindowState::Observed { packets: 1, .. })));
+        assert!(matches!(
+            eng.ledger().get(&key(service, TrafficDirection::Ingress)),
+            Some(WindowState::Observed {
+                packets: 1,
+                captured_bytes: 100,
+                wire_bytes: 150
+            })
+        ));
+        assert!(matches!(
+            eng.ledger().get(&key(service, TrafficDirection::Egress)),
+            Some(WindowState::Observed { packets: 1, .. })
+        ));
     }
 
     #[test]
     fn partial_windows_are_not_sealed_as_clean() {
         let mut eng = engine(IngestConfig::default());
         let service = ServiceId::new(8);
-        let event = sample_event(Ipv4Addr::new(10, 0, 0, 2).into(), 1_000_000_000, 100, 100, false);
-        eng.record_batch(service, TrafficDirection::Unknown, &[event]).unwrap();
+        let event = sample_event(
+            Ipv4Addr::new(10, 0, 0, 2).into(),
+            1_000_000_000,
+            100,
+            100,
+            false,
+        );
+        eng.record_batch(service, TrafficDirection::Unknown, &[event])
+            .unwrap();
         assert!(eng.seal_completed(3_599).unwrap().is_empty());
         assert_eq!(eng.pending_count(), 1);
-        assert_eq!(eng.seal_completed(3_600).unwrap(), vec![RecordOutcome::Inserted]);
+        assert_eq!(
+            eng.seal_completed(3_600).unwrap(),
+            vec![RecordOutcome::Inserted]
+        );
     }
 
     #[test]
     fn truncation_preserves_wire_and_captured_bytes_and_degrades_window() {
         let mut eng = engine(IngestConfig::default());
         let service = ServiceId::new(9);
-        let event = sample_event(Ipv4Addr::new(10, 0, 0, 3).into(), 1_000_000_000, 100, 150, true);
-        eng.record_batch(service, TrafficDirection::Ingress, &[event]).unwrap();
+        let event = sample_event(
+            Ipv4Addr::new(10, 0, 0, 3).into(),
+            1_000_000_000,
+            100,
+            150,
+            true,
+        );
+        eng.record_batch(service, TrafficDirection::Ingress, &[event])
+            .unwrap();
         eng.seal_completed(3_600).unwrap();
-        assert!(matches!(eng.ledger().get(&key(service, TrafficDirection::Ingress)), Some(WindowState::Degraded { packets: 1, captured_bytes: 100, wire_bytes: 150, truncated_packets: 1, .. })));
+        assert!(matches!(
+            eng.ledger().get(&key(service, TrafficDirection::Ingress)),
+            Some(WindowState::Degraded {
+                packets: 1,
+                captured_bytes: 100,
+                wire_bytes: 150,
+                truncated_packets: 1,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -326,13 +397,42 @@ mod tests {
         let mut eng = engine(IngestConfig::default());
         let a = ServiceId::new(10);
         let b = ServiceId::new(11);
-        let event = sample_event(Ipv4Addr::new(10, 0, 0, 4).into(), 1_000_000_000, 100, 100, false);
-        eng.record_window_health(a, TrafficDirection::Ingress, 0, CollectorHealth { capture_drops: 5, ingest_drops: 3, malformed: 2 }).unwrap();
-        eng.record_batch(a, TrafficDirection::Ingress, &[event.clone()]).unwrap();
-        eng.record_batch(b, TrafficDirection::Ingress, &[event]).unwrap();
+        let event = sample_event(
+            Ipv4Addr::new(10, 0, 0, 4).into(),
+            1_000_000_000,
+            100,
+            100,
+            false,
+        );
+        eng.record_window_health(
+            a,
+            TrafficDirection::Ingress,
+            0,
+            CollectorHealth {
+                capture_drops: 5,
+                ingest_drops: 3,
+                malformed: 2,
+            },
+        )
+        .unwrap();
+        eng.record_batch(a, TrafficDirection::Ingress, &[event.clone()])
+            .unwrap();
+        eng.record_batch(b, TrafficDirection::Ingress, &[event])
+            .unwrap();
         eng.seal_completed(3_600).unwrap();
-        assert!(matches!(eng.ledger().get(&key(a, TrafficDirection::Ingress)), Some(WindowState::Degraded { capture_drops: 5, ingest_drops: 3, malformed: 2, .. })));
-        assert!(matches!(eng.ledger().get(&key(b, TrafficDirection::Ingress)), Some(WindowState::Observed { .. })));
+        assert!(matches!(
+            eng.ledger().get(&key(a, TrafficDirection::Ingress)),
+            Some(WindowState::Degraded {
+                capture_drops: 5,
+                ingest_drops: 3,
+                malformed: 2,
+                ..
+            })
+        ));
+        assert!(matches!(
+            eng.ledger().get(&key(b, TrafficDirection::Ingress)),
+            Some(WindowState::Observed { .. })
+        ));
     }
 
     #[test]
@@ -341,25 +441,55 @@ mod tests {
         let service = ServiceId::new(12);
         let ip = Ipv4Addr::new(10, 0, 0, 5).into();
         let event = sample_event(ip, 1_000_000_000, 100, 100, false);
-        eng.record_batch(service, TrafficDirection::Ingress, &[event.clone()]).unwrap();
-        assert_eq!(eng.seal_completed(3_600).unwrap(), vec![RecordOutcome::Inserted]);
-        eng.record_batch(service, TrafficDirection::Ingress, &[event]).unwrap();
-        assert_eq!(eng.seal_completed(3_600).unwrap(), vec![RecordOutcome::Duplicate]);
+        eng.record_batch(service, TrafficDirection::Ingress, &[event.clone()])
+            .unwrap();
+        assert_eq!(
+            eng.seal_completed(3_600).unwrap(),
+            vec![RecordOutcome::Inserted]
+        );
+        eng.record_batch(service, TrafficDirection::Ingress, &[event])
+            .unwrap();
+        assert_eq!(
+            eng.seal_completed(3_600).unwrap(),
+            vec![RecordOutcome::Duplicate]
+        );
         let conflict = sample_event(ip, 1_000_000_000, 200, 200, false);
-        eng.record_batch(service, TrafficDirection::Ingress, &[conflict]).unwrap();
-        assert_eq!(eng.seal_completed(3_600).unwrap(), vec![RecordOutcome::ConflictingDuplicate]);
+        eng.record_batch(service, TrafficDirection::Ingress, &[conflict])
+            .unwrap();
+        assert_eq!(
+            eng.seal_completed(3_600).unwrap(),
+            vec![RecordOutcome::ConflictingDuplicate]
+        );
     }
 
     #[test]
     fn pending_capacity_is_bounded_and_batch_admission_is_atomic() {
-        let config = IngestConfig { max_pending_windows: 1, ..IngestConfig::default() };
+        let config = IngestConfig {
+            max_pending_windows: 1,
+            ..IngestConfig::default()
+        };
         let mut eng = engine(config);
         let service = ServiceId::new(13);
         let events = [
-            sample_event(Ipv4Addr::new(10, 0, 0, 6).into(), 1_000_000_000, 10, 10, false),
-            sample_event(Ipv4Addr::new(10, 0, 0, 6).into(), 4_000_000_000_000, 10, 10, false),
+            sample_event(
+                Ipv4Addr::new(10, 0, 0, 6).into(),
+                1_000_000_000,
+                10,
+                10,
+                false,
+            ),
+            sample_event(
+                Ipv4Addr::new(10, 0, 0, 6).into(),
+                4_000_000_000_000,
+                10,
+                10,
+                false,
+            ),
         ];
-        assert_eq!(eng.record_batch(service, TrafficDirection::Ingress, &events), Err(WindowError::InvalidCapacity));
+        assert_eq!(
+            eng.record_batch(service, TrafficDirection::Ingress, &events),
+            Err(WindowError::InvalidCapacity)
+        );
         assert_eq!(eng.pending_count(), 0);
     }
 
@@ -369,12 +499,31 @@ mod tests {
         let path = dir.path().join("ledger.json");
         let mut eng = engine(IngestConfig::default());
         let service = ServiceId::new(14);
-        let event = sample_event(Ipv4Addr::new(10, 0, 0, 7).into(), 1_000_000_000, 100, 120, false);
-        eng.record_batch(service, TrafficDirection::Ingress, &[event]).unwrap();
-        assert_eq!(eng.persist(&path).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        let event = sample_event(
+            Ipv4Addr::new(10, 0, 0, 7).into(),
+            1_000_000_000,
+            100,
+            120,
+            false,
+        );
+        eng.record_batch(service, TrafficDirection::Ingress, &[event])
+            .unwrap();
+        assert_eq!(
+            eng.persist(&path).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
         eng.seal_completed(3_600).unwrap();
         eng.persist(&path).unwrap();
         let recovered = IngestionEngine::reopen(&path, 100, IngestConfig::default()).unwrap();
-        assert!(matches!(recovered.ledger().get(&key(service, TrafficDirection::Ingress)), Some(WindowState::Observed { wire_bytes: 120, captured_bytes: 100, .. })));
+        assert!(matches!(
+            recovered
+                .ledger()
+                .get(&key(service, TrafficDirection::Ingress)),
+            Some(WindowState::Observed {
+                wire_bytes: 120,
+                captured_bytes: 100,
+                ..
+            })
+        ));
     }
 }

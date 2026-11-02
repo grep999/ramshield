@@ -751,8 +751,18 @@ unsafe fn walk_block_packets(
         let tp_sec = unsafe { (*hdr).tp_sec };
         let tp_nsec = unsafe { (*hdr).tp_nsec };
         if tp_len < snaplen || tp_nsec >= 1_000_000_000 {
-            metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
-            warn!(worker, block_idx, packet_idx, tp_len, snaplen, tp_nsec, "rejecting inconsistent TPACKET_V3 length or timestamp");
+            metrics
+                .native_tpacket_rejects
+                .fetch_add(1, Ordering::Relaxed);
+            warn!(
+                worker,
+                block_idx,
+                packet_idx,
+                tp_len,
+                snaplen,
+                tp_nsec,
+                "rejecting inconsistent TPACKET_V3 length or timestamp"
+            );
             return;
         }
         let mac = unsafe { (*hdr).tp_mac as usize };
@@ -1080,7 +1090,9 @@ fn process_packet(
         .and_then(|base| base.checked_add(u64::from(tp_nsec)))
         .filter(|_| tp_nsec < 1_000_000_000)
     else {
-        metrics.native_tpacket_rejects.fetch_add(1, Ordering::Relaxed);
+        metrics
+            .native_tpacket_rejects
+            .fetch_add(1, Ordering::Relaxed);
         return;
     };
     let truncated = (tp_len as usize) > packet.len();

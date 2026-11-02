@@ -714,7 +714,7 @@ mod tests {
                 state: WindowState::Observed {
                     packets: 1,
                     captured_bytes: 1,
-                wire_bytes: 1,
+                    wire_bytes: 1,
                 },
             })
             .collect();
