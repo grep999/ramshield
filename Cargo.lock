@@ -1459,8 +1459,10 @@ dependencies = [
 name = "ramshield-learning"
 version = "0.1.0"
 dependencies = [
+ "ramshield-types",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

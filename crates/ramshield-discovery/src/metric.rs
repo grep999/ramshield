@@ -679,7 +679,10 @@ pub enum BaselineState {
 /// Transitions a baseline state. Returns Ok(new_state) or Err(reason) if the
 /// transition is invalid.
 #[allow(dead_code)]
-pub fn baseline_transition(current: BaselineState, event: BaselineEvent) -> Result<BaselineState, &'static str> {
+pub fn baseline_transition(
+    current: BaselineState,
+    event: BaselineEvent,
+) -> Result<BaselineState, &'static str> {
     use BaselineEvent::*;
     Ok(match (current, event) {
         (BaselineState::Pending, Establish) => BaselineState::Established,
@@ -785,7 +788,12 @@ mod baseline_governance_tests {
     use super::*;
 
     fn key() -> ProfileKey {
-        ProfileKey::new("svc-a".into(), TrafficDirection::Ingress, CountMetric::Packets, 0)
+        ProfileKey::new(
+            "svc-a".into(),
+            TrafficDirection::Ingress,
+            CountMetric::Packets,
+            0,
+        )
     }
 
     #[test]
@@ -809,7 +817,10 @@ mod baseline_governance_tests {
         let mut gov = BaselineGovernance::new();
         let key = key();
         gov.establish(&key).unwrap();
-        assert_eq!(gov.require_review(&key).unwrap(), BaselineState::RequiresReview);
+        assert_eq!(
+            gov.require_review(&key).unwrap(),
+            BaselineState::RequiresReview
+        );
     }
 
     #[test]

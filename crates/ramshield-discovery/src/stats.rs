@@ -102,12 +102,12 @@ pub fn assess_cardinality_anomaly(
         return DistributionAssessment::InsufficientData;
     };
     // Both estimates must be finite and positive
-        if base.estimate == 0
-            || base.estimate == u64::MAX
-            || !base.standard_error.is_finite()
-            || base.standard_error < 0.0
-            || base.observations < 10
-        {
+    if base.estimate == 0
+        || base.estimate == u64::MAX
+        || !base.standard_error.is_finite()
+        || base.standard_error < 0.0
+        || base.observations < 10
+    {
         return DistributionAssessment::InsufficientData;
     }
     // Saturating arithmetic prevents a large but finite baseline from wrapping.

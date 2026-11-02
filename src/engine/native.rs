@@ -741,10 +741,7 @@ unsafe fn walk_block_packets(
                 metrics
                     .native_tpacket_rejects
                     .fetch_add(1, Ordering::Relaxed);
-                warn!(
-                    worker,
-                    block_idx, packet_idx, "tp_len does not fit usize"
-                );
+                warn!(worker, block_idx, packet_idx, "tp_len does not fit usize");
                 return;
             }
         };

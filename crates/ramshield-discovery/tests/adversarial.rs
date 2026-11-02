@@ -4,12 +4,10 @@
 //! baseline poisoning, slow ramps, flash crowds, high cardinality, clock skew.
 
 use ramshield_learning::{
-    assess_cardinality_anomaly, assess_metric_distribution, calibrate_threshold,
-    CardinalityEstimate, CardinalityEstimator, CountMetric, DistributionAssessment,
-    IngestionEngine, IngestConfig, MetricAssessment, MetricProfileStore,
-    ObservationQuality, RecordOutcome, ServiceId, TrafficDirection, WindowKey,
-    WindowLedger, WindowObservation, WindowState,
-    CountMoments,
+    CardinalityEstimate, CardinalityEstimator, CountMetric, CountMoments, DistributionAssessment,
+    IngestConfig, IngestionEngine, MetricAssessment, MetricProfileStore, ObservationQuality,
+    RecordOutcome, ServiceId, TrafficDirection, WindowKey, WindowLedger, WindowObservation,
+    WindowState, assess_cardinality_anomaly, assess_metric_distribution, calibrate_threshold,
 };
 use ramshield_types::ConnectionEvent;
 use std::net::{IpAddr, Ipv4Addr};
@@ -69,10 +67,16 @@ fn ground_truth_counts_match_input_exactly() {
     assert_eq!(outcomes[0], RecordOutcome::Inserted);
 
     let key = mk_key(&ServiceId::from_ip(ip).as_string(), 0, 60);
-    let state = eng.ledger().get(&key).expect("window should exist after flush");
+    let state = eng
+        .ledger()
+        .get(&key)
+        .expect("window should exist after flush");
     assert!(matches!(
         state,
-        WindowState::Observed { packets: 3, bytes: 350 }
+        WindowState::Observed {
+            packets: 3,
+            bytes: 350
+        }
     ));
 }
 
@@ -101,7 +105,13 @@ fn ring_drop_marks_window_degraded() {
     eng.flush_pending().unwrap();
     let key = mk_key(&ServiceId::from_ip(ip).as_string(), 0, 60);
     let state = eng.ledger().get(&key).expect("window should exist");
-    assert!(matches!(state, WindowState::Degraded { capture_drops: 5, .. }));
+    assert!(matches!(
+        state,
+        WindowState::Degraded {
+            capture_drops: 5,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -173,9 +183,22 @@ fn crash_recovery_preserves_committed_windows() {
         eng.persist(&path).unwrap();
     }
     let eng = IngestionEngine::reopen(&path, 100, IngestConfig::default()).unwrap();
-    let key = mk_key(&ServiceId::from_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))).as_string(), 0, 60);
-    let state = eng.ledger().get(&key).expect("committed window survives restart");
-    assert!(matches!(state, WindowState::Observed { packets: 1, bytes: 100 }));
+    let key = mk_key(
+        &ServiceId::from_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))).as_string(),
+        0,
+        60,
+    );
+    let state = eng
+        .ledger()
+        .get(&key)
+        .expect("committed window survives restart");
+    assert!(matches!(
+        state,
+        WindowState::Observed {
+            packets: 1,
+            bytes: 100
+        }
+    ));
 }
 
 #[test]
@@ -338,7 +361,9 @@ fn out_of_order_timestamps_does_not_panic() {
 #[test]
 fn degraded_quality_never_promotes_to_normal() {
     let mut moments = CountMoments::default();
-    for _ in 0..10 { moments.push(11); }
+    for _ in 0..10 {
+        moments.push(11);
+    }
     let assessment = MetricAssessment {
         metric: CountMetric::Packets,
         observed_packets: 113,
@@ -420,5 +445,8 @@ fn adversarial_traffic_one_service_does_not_poison_another() {
     let b_est = store
         .source_cardinality_estimate("svc-quiet", TrafficDirection::Ingress, 0)
         .unwrap();
-    assert!(a_est.estimate > b_est.estimate, "services must stay independent");
+    assert!(
+        a_est.estimate > b_est.estimate,
+        "services must stay independent"
+    );
 }

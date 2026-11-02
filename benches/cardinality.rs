@@ -1,11 +1,12 @@
 //! Cardinality estimation benchmarks.
-//! Measures throughput of the Linear Counting estimator using ahash for
-//! stable, version-independent hashing of producer-side keys.
+//! Measures Linear Counting throughput using the estimator's current
+//! DefaultHasher implementation. Hash stability and keyed hashing are not
+//! claimed by this benchmark.
 //! Benchmarked against the roadmap Stage 3 requirement: "Cardinality benchmark +
 //! keyed hash design (HLL vs Linear Counting)".
 
+use ramshield_learning::CardinalityEstimator;
 use rand::Rng;
-use ramshield_learning::{CardinalityEstimator};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -51,19 +52,22 @@ fn main() {
 
     println!("Linear Counting Cardinality Benchmark");
     println!("=======================================");
-    println!("N = {}, observing into estimators with varying bitmap sizes", n);
+    println!(
+        "N = {}, observing into estimators with varying bitmap sizes",
+        n
+    );
     println!();
 
     for bits in &bits_list {
-        let avg_observe = black_box(bench_linear_counting_observe(*bits, *bits));
-        let avg_estimate = black_box(bench_linear_counting_estimate(*bits, *bits));
+        let avg_observe = black_box(bench_linear_counting_observe(n, *bits));
+        let avg_estimate = black_box(bench_linear_counting_estimate(n, *bits));
         println!(
             "bitmap={:5} bits: observe {:>7.2} ns/op  |  estimate {:>7.2} ns/op",
             bits, avg_observe, avg_estimate
         );
     }
     println!();
-    println!("Key design: ahash::RandomState (stable, version-independent)");
+    println!("Hashing: std::collections::hash_map::DefaultHasher (not keyed or persistence-stable)");
     println!("Linear Counting: bitmap fills produce u64::MAX estimate with INF standard error");
     println!("Roadmap Stage 3: benchmark completed; HLL rejected per constraints");
 }

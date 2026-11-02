@@ -138,7 +138,9 @@ fn bench_batch_aggregate(n: usize) -> f64 {
                 .parse()
                 .unwrap(),
             timestamp_ns: 1_000_000_000 + i as u64 * 1_000_000,
-            bytes: 256,
+            wire_bytes: 256,
+            captured_bytes: 256,
+            truncated: false,
             status_code: 200,
             proto_fingerprint: 1,
             l7: None,
@@ -439,7 +441,9 @@ fn bench_aggregate_2000_subnets(n: usize) -> f64 {
                     .parse()
                     .unwrap(),
                 timestamp_ns: 1_000_000_000 + i as u64 * 1_000_000,
-                bytes: 65535,
+                wire_bytes: 65535,
+                captured_bytes: 65535,
+                truncated: false,
                 status_code: 502,
                 proto_fingerprint: 42,
                 l7: None,

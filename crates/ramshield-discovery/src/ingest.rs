@@ -1,8 +1,11 @@
 //! Ingestion bridge: ConnectionEvent → WindowObservation → WindowLedger.
 //! Authoritative, idempotent, crash-recoverable.
 
-use crate::window::{MissingReason, RecordOutcome, WindowError, WindowKey, WindowLedger, WindowObservation, WindowState};
 use crate::ServiceId;
+use crate::window::{
+    MissingReason, RecordOutcome, WindowError, WindowKey, WindowLedger, WindowObservation,
+    WindowState,
+};
 use ramshield_types::ConnectionEvent;
 use std::collections::HashMap;
 
@@ -150,7 +153,11 @@ impl IngestionEngine {
     }
 
     /// Recover a ledger from disk and create a new engine.
-    pub fn reopen(path: impl AsRef<std::path::Path>, max_entries: usize, config: IngestConfig) -> Result<Self, WindowError> {
+    pub fn reopen(
+        path: impl AsRef<std::path::Path>,
+        max_entries: usize,
+        config: IngestConfig,
+    ) -> Result<Self, WindowError> {
         let ledger = WindowLedger::reopen(path, max_entries)?;
         Ok(Self {
             config,
@@ -173,11 +180,13 @@ impl IngestionEngine {
 
     /// Record collector health drop counters.
     pub fn record_capture_drops(&mut self, count: u64) {
-        self.collector_health.capture_drops = self.collector_health.capture_drops.saturating_add(count);
+        self.collector_health.capture_drops =
+            self.collector_health.capture_drops.saturating_add(count);
     }
 
     pub fn record_ingest_drops(&mut self, count: u64) {
-        self.collector_health.ingest_drops = self.collector_health.ingest_drops.saturating_add(count);
+        self.collector_health.ingest_drops =
+            self.collector_health.ingest_drops.saturating_add(count);
     }
 
     pub fn record_malformed(&mut self, count: u64) {
@@ -197,7 +206,13 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use tempfile::tempdir;
 
-    fn sample_event(ip: IpAddr, ts_ns: u64, captured: u64, wire: u64, truncated: bool) -> ConnectionEvent {
+    fn sample_event(
+        ip: IpAddr,
+        ts_ns: u64,
+        captured: u64,
+        wire: u64,
+        truncated: bool,
+    ) -> ConnectionEvent {
         ConnectionEvent {
             ip,
             timestamp_ns: ts_ns,
@@ -230,11 +245,20 @@ mod tests {
         // Verify ledger content
         let key = WindowKey {
             service_id: ServiceId::from_ip(ip).as_string(),
-            window_start_secs: 0,  // (1 / 60) * 60 = 0 for ts_secs=1
+            window_start_secs: 0, // (1 / 60) * 60 = 0 for ts_secs=1
             window_seconds: 60,
         };
-        let state = eng.ledger().get(&key).expect("window should exist after flush");
-        assert!(matches!(state, WindowState::Observed { packets: 3, bytes: 350 }));
+        let state = eng
+            .ledger()
+            .get(&key)
+            .expect("window should exist after flush");
+        assert!(matches!(
+            state,
+            WindowState::Observed {
+                packets: 3,
+                bytes: 350
+            }
+        ));
     }
 
     #[test]
@@ -251,10 +275,13 @@ mod tests {
         // No need to capture flush outcomes for this test - just verify window state
         let key = WindowKey {
             service_id: ServiceId::from_ip(ip).as_string(),
-            window_start_secs: 0,  // (1 / 60) * 60 = 0 for ts_secs=1
+            window_start_secs: 0, // (1 / 60) * 60 = 0 for ts_secs=1
             window_seconds: 60,
         };
-        let state = eng.ledger().get(&key).expect("degraded window should exist after flush");
+        let state = eng
+            .ledger()
+            .get(&key)
+            .expect("degraded window should exist after flush");
         assert!(matches!(state, WindowState::Degraded { .. }));
     }
 
@@ -311,14 +338,20 @@ mod tests {
         let recovered = IngestionEngine::reopen(&path, 100, IngestConfig::default()).unwrap();
         let key = WindowKey {
             service_id: ServiceId::from_ip(Ipv4Addr::new(10, 0, 0, 5).into()).as_string(),
-            window_start_secs: 0,  // (1 / 60) * 60 = 0 for ts_secs=1
+            window_start_secs: 0, // (1 / 60) * 60 = 0 for ts_secs=1
             window_seconds: 60,
         };
         let state = recovered
-        .ledger()
-        .get(&key)
-        .expect("recovered window should exist after reopen");
-        assert!(matches!(state, WindowState::Observed { packets: 1, bytes: 100 }));
+            .ledger()
+            .get(&key)
+            .expect("recovered window should exist after reopen");
+        assert!(matches!(
+            state,
+            WindowState::Observed {
+                packets: 1,
+                bytes: 100
+            }
+        ));
     }
 
     #[test]
@@ -336,11 +369,20 @@ mod tests {
 
         let key = WindowKey {
             service_id: ServiceId::from_ip(ip).as_string(),
-            window_start_secs: 0,  // (1 / 60) * 60 = 0 for ts_secs=1
+            window_start_secs: 0, // (1 / 60) * 60 = 0 for ts_secs=1
             window_seconds: 60,
         };
-        let state = eng.ledger().get(&key).expect("window with collector health should exist after flush");
-        if let WindowState::Degraded { capture_drops, ingest_drops, malformed, .. } = state {
+        let state = eng
+            .ledger()
+            .get(&key)
+            .expect("window with collector health should exist after flush");
+        if let WindowState::Degraded {
+            capture_drops,
+            ingest_drops,
+            malformed,
+            ..
+        } = state
+        {
             assert_eq!(*capture_drops, 5);
             assert_eq!(*ingest_drops, 3);
             assert_eq!(*malformed, 2);
@@ -358,7 +400,13 @@ mod tests {
 
         // Fill to capacity
         for i in 0..2 {
-            let events = vec![sample_event(ip1, i as u64 * 60_000_000_000, 100, 100, false)];
+            let events = vec![sample_event(
+                ip1,
+                i as u64 * 60_000_000_000,
+                100,
+                100,
+                false,
+            )];
             eng.record_batch(&events);
             eng.flush_pending().unwrap();
         }
