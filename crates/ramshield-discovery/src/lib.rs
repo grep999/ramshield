@@ -829,7 +829,10 @@ mod tests {
             .assess_service(service, TrafficDirection::Ingress, 10_001)
             .unwrap();
         assert_eq!(report.source_cardinality, DistributionAssessment::Normal);
-        assert_eq!(report.destination_cardinality, DistributionAssessment::Normal);
+        assert_eq!(
+            report.destination_cardinality,
+            DistributionAssessment::Normal
+        );
         let _ = fs::remove_file(p);
     }
 
