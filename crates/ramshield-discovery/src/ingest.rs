@@ -195,10 +195,12 @@ impl IngestionEngine {
             .collect();
         let mut outcomes = Vec::with_capacity(completed.len());
         for (service_id, direction, window_start_secs) in completed {
-            let accumulator = self
+            let Some(accumulator) = self
                 .pending
                 .remove(&(service_id, direction, window_start_secs))
-                .expect("completed key was collected from pending map");
+            else {
+                continue;
+            };
             let key = WindowKey {
                 service_id: service_id.as_string(),
                 direction,
