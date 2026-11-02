@@ -413,11 +413,12 @@ impl MetricProfileStore {
         }
     }
 
-    /// Observe per-protocol packet counts using the existing Protocol classification array.
-    /// Takes `[u64; 5]` aligned with Protocol variant positions: [Other=0, Tcp=1, Udp=2, Icmp=3, IcmpV6=4].
-    /// Each protocol variant gets its own independent CountMoments profile. Does NOT update
-    /// the general `Packets` profile — every protocol observation is scoped exclusively to its
-    /// metric variant.
+    /// Observe a complete per-protocol packet-count vector aligned with Protocol:
+    /// [Other=0, Tcp=1, Udp=2, Icmp=3, IcmpV6=4]. Every element, including zero,
+    /// is retained as an observed value. Callers must not substitute zero when a
+    /// protocol counter is unavailable; report that quality separately instead.
+    /// Each variant gets its own CountMoments profile. Does NOT update the general
+    /// `Packets` profile — every observation is scoped exclusively to its metric.
     pub fn observe_protocol_packets(
         &mut self,
         service_id: String,
@@ -433,10 +434,9 @@ impl MetricProfileStore {
             CountMetric::IcmpPackets,
             CountMetric::IcmpV6Packets,
         ];
+        // The caller supplies a complete protocol-count vector. Zero is an
+        // observed value, not a missing metric, so retain every element.
         for (idx, &count) in protocol_packets.iter().enumerate() {
-            if count == 0 {
-                continue;
-            }
             let metric = metrics[idx];
             self.observe(
                 service_id.clone(),
@@ -654,4 +654,68 @@ mod retention_tests {
                 .is_some()
         );
     }
+    #[test]
+    fn protocol_zero_counts_are_recorded_as_observed_zero() {
+        let mut store = MetricProfileStore::new();
+        let service = "billing-worker";
+        let direction = TrafficDirection::Ingress;
+        let slot = 42;
+        let counts = [0, 7, 0, 0, 0];
+        let metrics = [
+            CountMetric::OtherPackets,
+            CountMetric::TcpPackets,
+            CountMetric::UdpPackets,
+            CountMetric::IcmpPackets,
+            CountMetric::IcmpV6Packets,
+        ];
+
+        store.observe_protocol_packets(
+            service.into(),
+            direction,
+            slot,
+            counts,
+            ObservationQuality::Clean,
+        );
+
+        for (metric, expected) in metrics.into_iter().zip(counts) {
+            let assessment = store
+                .assessment(service, direction, metric, slot)
+                .expect("every supplied protocol count must be retained");
+            assert_eq!(assessment.moments.observations(), 1);
+            assert_eq!(assessment.moments.mean(), expected as f64);
+            assert_eq!(assessment.clean_observations, 1);
+            assert_eq!(assessment.degraded_observations, 0);
+        }
+    }
+
+    #[test]
+    fn degraded_zero_protocol_counts_are_not_trained_as_clean() {
+        let mut store = MetricProfileStore::new();
+        let metrics = [
+            CountMetric::OtherPackets,
+            CountMetric::TcpPackets,
+            CountMetric::UdpPackets,
+            CountMetric::IcmpPackets,
+            CountMetric::IcmpV6Packets,
+        ];
+
+        store.observe_protocol_packets(
+            "billing-worker".into(),
+            TrafficDirection::Ingress,
+            42,
+            [0; 5],
+            ObservationQuality::Degraded,
+        );
+
+        for metric in metrics {
+            let assessment = store
+                .assessment("billing-worker", TrafficDirection::Ingress, metric, 42)
+                .expect("degraded vector quality must be represented");
+            assert_eq!(assessment.moments.observations(), 0);
+            assert_eq!(assessment.clean_observations, 0);
+            assert_eq!(assessment.degraded_observations, 1);
+            assert_eq!(assessment.quality, ObservationQuality::Degraded);
+        }
+    }
+
 }

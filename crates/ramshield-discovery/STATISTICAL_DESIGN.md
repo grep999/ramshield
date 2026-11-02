@@ -26,6 +26,8 @@ Represent at least these states distinctly. The bounded `WindowLedger` implement
 
 Never convert missing or degraded windows to zero. Record capture drops, ingest drops, queue saturation and parser rejects as quality covariates. Baseline training must be able to exclude or separately model degraded windows.
 
+`MetricProfileStore::observe_protocol_packets` treats its five-element vector as complete: each zero is an observed zero and contributes a sample. Callers must not synthesize zero for an unavailable protocol counter; they must preserve the missing/degraded quality distinction.
+
 All event timestamps are stored in UTC. The current `TrafficCalendar` recurrence implementation is UTC-only: workload declarations do not yet carry an IANA timezone or local recurrence. IANA timezone support, including daylight-saving gaps and repeated local times, remains a future requirement; do not represent a fixed UTC offset as a timezone.
 
 ## 3. Conditional calendar

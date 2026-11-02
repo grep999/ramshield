@@ -12,6 +12,7 @@ Passive production-environment discovery for RamShield. This crate is deliberate
 - Record operator-declared services and workloads before onboarding or scheduling them, including daily, weekly, monthly-day, month-end and N-day recurrence.
 - Represent observed-zero, missing and degraded service windows as distinct states, with bounded idempotent ingestion.
 - Track capture/ingestion quality and host resource observations.
+- Preserve zero-valued protocol counts as observed samples when the producer supplies a complete protocol-count vector; unavailable counters must not be represented as zero.
 - Persist aggregate observations and calendar declarations through explicit snapshots.
 
 See [STATISTICAL_DESIGN.md](STATISTICAL_DESIGN.md) for the model assumptions, validation protocol and Stage 0 acceptance gates.
