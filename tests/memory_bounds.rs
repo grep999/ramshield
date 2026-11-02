@@ -39,7 +39,9 @@ fn exhausted_ram_budget_refuses_net_new_and_is_observable() {
         .map(|i| ConnectionEvent {
             ip: IpAddr::V4(Ipv4Addr::new(10, 77, 0, i as u8)),
             timestamp_ns: i,
-            bytes: 64,
+            wire_bytes: 64,
+            captured_bytes: 64,
+            truncated: false,
             status_code: 200,
             proto_fingerprint: 0,
             l7: None,

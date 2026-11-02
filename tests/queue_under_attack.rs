@@ -45,7 +45,9 @@ fn crossbeam_channel_drops_at_16k_capacity() {
         let ev = ConnectionEvent {
             ip,
             timestamp_ns: i as u64,
-            bytes: 64,
+            wire_bytes: 64,
+            captured_bytes: 64,
+            truncated: false,
             status_code: 200,
             proto_fingerprint: 0,
             l7: None,
@@ -97,7 +99,9 @@ fn semantic_shedding_prioritizes_high_signal() {
         let ev = ConnectionEvent {
             ip,
             timestamp_ns: i as u64,
-            bytes: 64,
+            wire_bytes: 64,
+            captured_bytes: 64,
+            truncated: false,
             status_code: 200,
             proto_fingerprint: 0,
             l7: None,
@@ -110,7 +114,9 @@ fn semantic_shedding_prioritizes_high_signal() {
     let high = ConnectionEvent {
         ip,
         timestamp_ns: 99,
-        bytes: 64,
+        wire_bytes: 64,
+        captured_bytes: 64,
+        truncated: false,
         status_code: 401,
         proto_fingerprint: 0,
         l7: None,
@@ -126,7 +132,9 @@ fn semantic_shedding_prioritizes_high_signal() {
         let ev = ConnectionEvent {
             ip,
             timestamp_ns: 1000 + i as u64,
-            bytes: 64,
+            wire_bytes: 64,
+            captured_bytes: 64,
+            truncated: false,
             status_code: 200,
             proto_fingerprint: 0,
             l7: None,

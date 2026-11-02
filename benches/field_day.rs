@@ -44,7 +44,9 @@ fn events_for(
         out.push(ramshield_types::ConnectionEvent {
             ip: ips[ip_idx],
             timestamp_ns: base_ts_ns + ev_i as u64 * 1_000_000,
-            bytes: 256,
+            wire_bytes: 256,
+            captured_bytes: 256,
+            truncated: false,
             status_code: 200,
             proto_fingerprint: 1,
             l7: None,

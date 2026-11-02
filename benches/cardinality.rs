@@ -67,7 +67,9 @@ fn main() {
         );
     }
     println!();
-    println!("Hashing: std::collections::hash_map::DefaultHasher (not keyed or persistence-stable)");
+    println!(
+        "Hashing: std::collections::hash_map::DefaultHasher (not keyed or persistence-stable)"
+    );
     println!("Linear Counting: bitmap fills produce u64::MAX estimate with INF standard error");
     println!("Roadmap Stage 3: benchmark completed; HLL rejected per constraints");
 }

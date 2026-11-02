@@ -35,7 +35,9 @@ async fn detection_tracks_ip_through_engine_pipeline() {
         .map(|i| ramshield_types::ConnectionEvent {
             ip: target,
             timestamp_ns: 1_000 + i,
-            bytes: 512,
+            wire_bytes: 512,
+            captured_bytes: 512,
+            truncated: false,
             status_code: if i % 3 == 0 { 404 } else { 200 },
             proto_fingerprint: 42,
             l7: None,
