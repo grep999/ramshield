@@ -20,13 +20,13 @@ const MAX_WINDOW_SECONDS: u32 = 86_400;
 const MAX_LEDGER_ENTRIES: usize = 1_000_000;
 
 /// Persistence format version for forward compatibility.
-const PERSISTENCE_VERSION: u32 = 2;
+const PERSISTENCE_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct PersistenceEnvelope {
     version: u32,
     entries: Vec<(WindowKey, WindowState)>,
-    eviction_watermark: Option<WindowKey>,
+    eviction_watermark: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -114,12 +114,13 @@ pub enum WindowError {
 
 /// Bounded in-memory idempotency ledger. Snapshot persistence and runtime
 /// feeding are deliberately owned by the caller, not by the packet capture hot path.
-/// The watermark rejects any key at or below the greatest evicted key, including
-/// equal-timestamp replays from another service or direction.
+/// The watermark is a global event-time floor. Evicting one timestamp removes
+/// its entire cohort and rejects all later keys at or below that timestamp,
+/// regardless of service or direction.
 pub struct WindowLedger {
     max_entries: usize,
     entries: BTreeMap<WindowKey, WindowState>,
-    eviction_watermark: Option<WindowKey>,
+    eviction_watermark: Option<u64>,
 }
 
 impl WindowLedger {
@@ -145,24 +146,37 @@ impl WindowLedger {
         }
         if self
             .eviction_watermark
-            .as_ref()
-            .is_some_and(|watermark| &observation.key <= watermark)
+            .is_some_and(|watermark| observation.key.window_start_secs <= watermark)
         {
             return Ok(RecordOutcome::RejectedTooOld);
         }
 
         let mut outcome = RecordOutcome::Inserted;
         if self.entries.len() >= self.max_entries {
-            let Some(oldest_key) = self.entries.keys().next().cloned() else {
+            let Some(oldest_start_secs) =
+                self.entries.keys().next().map(|key| key.window_start_secs)
+            else {
                 return Err(WindowError::Io(
                     "ledger is at capacity but has no oldest entry".into(),
                 ));
             };
-            if observation.key <= oldest_key {
+            if observation.key.window_start_secs <= oldest_start_secs {
                 return Ok(RecordOutcome::RejectedTooOld);
             }
-            self.entries.remove(&oldest_key);
-            self.eviction_watermark = Some(oldest_key);
+
+            // Advance a global event-time floor, not a per-key floor. Remove
+            // the whole oldest timestamp cohort so persisted entries can all
+            // remain strictly newer than the watermark.
+            let evicted_keys: Vec<_> = self
+                .entries
+                .keys()
+                .take_while(|key| key.window_start_secs == oldest_start_secs)
+                .cloned()
+                .collect();
+            for key in evicted_keys {
+                self.entries.remove(&key);
+            }
+            self.eviction_watermark = Some(oldest_start_secs);
             outcome = RecordOutcome::InsertedAfterEviction;
         }
         self.entries.insert(observation.key, observation.state);
@@ -200,7 +214,7 @@ impl WindowLedger {
         let envelope = PersistenceEnvelope {
             version: PERSISTENCE_VERSION,
             entries: pairs,
-            eviction_watermark: self.eviction_watermark.clone(),
+            eviction_watermark: self.eviction_watermark,
         };
         let bytes = serde_json::to_vec(&envelope)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -254,12 +268,6 @@ impl WindowLedger {
         if envelope.entries.len() > max_entries {
             return Err(WindowError::InvalidCapacity);
         }
-        if let Some(watermark) = envelope.eviction_watermark.as_ref() {
-            watermark.validate().map_err(|error| {
-                WindowError::Io(format!("invalid eviction watermark: {error:?}"))
-            })?;
-        }
-
         let mut seen = BTreeMap::new();
         for (key, state) in envelope.entries {
             if seen.contains_key(&key) {
@@ -271,7 +279,7 @@ impl WindowLedger {
             if envelope
                 .eviction_watermark
                 .as_ref()
-                .is_some_and(|watermark| &key <= watermark)
+                .is_some_and(|watermark| key.window_start_secs <= *watermark)
             {
                 return Err(WindowError::Io(
                     "retained entry is at or below eviction watermark".into(),
@@ -547,11 +555,10 @@ mod tests {
         let _ = std::fs::remove_file(&p);
     }
 
-    /// Restart semantics: evicted entries must stay evicted after reopen,
-    /// and stale late arrivals must still be rejected.
-    /// Equal-timestamp eviction remains replay-safe after a restart.
+    /// Evicting one timestamp removes its full cross-service/direction cohort.
+    /// The global floor rejects old and previously unseen keys after restart.
     #[test]
-    fn restart_after_equal_timestamp_eviction_rejects_replay() {
+    fn restart_after_equal_timestamp_eviction_rejects_entire_cohort() {
         let p = std::env::temp_dir().join(format!(
             "ledger_equal_timestamp_{}.json",
             std::time::SystemTime::now()
@@ -560,7 +567,7 @@ mod tests {
                 .as_nanos()
         ));
         let mut ledger = WindowLedger::new(2).unwrap();
-        let evicted = observation_for(
+        let evicted_ingress = observation_for(
             "a-service",
             TrafficDirection::Ingress,
             WindowState::Observed {
@@ -569,9 +576,9 @@ mod tests {
             },
             60,
         );
-        let retained = observation_for(
+        let evicted_egress = observation_for(
             "b-service",
-            TrafficDirection::Ingress,
+            TrafficDirection::Egress,
             WindowState::Observed {
                 packets: 2,
                 bytes: 2,
@@ -587,28 +594,60 @@ mod tests {
             },
             120,
         );
+
         assert_eq!(
-            ledger.record(evicted.clone()).unwrap(),
+            ledger.record(evicted_ingress.clone()).unwrap(),
             RecordOutcome::Inserted
         );
         assert_eq!(
-            ledger.record(retained.clone()).unwrap(),
+            ledger.record(evicted_egress.clone()).unwrap(),
             RecordOutcome::Inserted
         );
         assert_eq!(
             ledger.record(incoming).unwrap(),
             RecordOutcome::InsertedAfterEviction
         );
-        assert!(ledger.get(&evicted.key).is_none());
-        assert_eq!(ledger.get(&retained.key), Some(&retained.state));
+        assert_eq!(ledger.len(), 1);
+        assert!(ledger.get(&evicted_ingress.key).is_none());
+        assert!(ledger.get(&evicted_egress.key).is_none());
+        assert_eq!(ledger.eviction_watermark, Some(60));
 
         ledger.flush(&p).unwrap();
         let mut recovered = WindowLedger::reopen(&p, 2).unwrap();
         assert_eq!(
-            recovered.record(evicted).unwrap(),
+            recovered.record(evicted_ingress).unwrap(),
             RecordOutcome::RejectedTooOld
         );
-        assert_eq!(recovered.get(&retained.key), Some(&retained.state));
+        assert_eq!(
+            recovered.record(evicted_egress).unwrap(),
+            RecordOutcome::RejectedTooOld
+        );
+        let unseen_same_time = observation_for(
+            "z-service",
+            TrafficDirection::Unknown,
+            WindowState::Observed {
+                packets: 4,
+                bytes: 4,
+            },
+            60,
+        );
+        assert_eq!(
+            recovered.record(unseen_same_time).unwrap(),
+            RecordOutcome::RejectedTooOld
+        );
+        let later = observation_for(
+            "z-service",
+            TrafficDirection::Unknown,
+            WindowState::Observed {
+                packets: 5,
+                bytes: 5,
+            },
+            180,
+        );
+        assert_eq!(
+            recovered.record(later).unwrap(),
+            RecordOutcome::Inserted
+        );
         let _ = std::fs::remove_file(&p);
     }
 
@@ -700,7 +739,7 @@ mod tests {
         let payload = PersistenceEnvelope {
             version: PERSISTENCE_VERSION,
             entries: vec![(retained.key.clone(), retained.state)],
-            eviction_watermark: Some(retained.key),
+            eviction_watermark: Some(retained.key.window_start_secs),
         };
         fs::write(&p, serde_json::to_vec(&payload).unwrap()).unwrap();
         assert!(matches!(
