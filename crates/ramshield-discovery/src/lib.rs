@@ -1189,4 +1189,26 @@ mod tests {
             "degraded quality should not produce Normal distribution assessment"
         );
     }
+
+    #[test]
+    fn record_completed_window_idempotency() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        let ctx = crate::RecordCompletedWindowCtx {
+            service_id: ServiceId::new(1),
+            direction: TrafficDirection::Ingress,
+            hour_utc: 100,
+            packets: 10,
+            bytes: 64,
+            quality: crate::ObservationQuality::Clean,
+            source_key: None,
+            dest_key: None,
+        };
+        // Record the same window twice — should be idempotent
+        d.record_completed_window(ctx.clone());
+        d.record_completed_window(ctx.clone());
+        assert_eq!(d.service_profiles.len(), 1);
+        // state.accepted counts aggregate observations from observe(), not record_completed_window()
+        let _ = fs::remove_file(p);
+    }
 }

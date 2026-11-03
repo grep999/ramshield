@@ -87,19 +87,38 @@ pub enum WindowState {
 impl WindowState {
     /// Validate counter relationships that cannot hold for real traffic:
     /// Observed must not have captured_bytes > wire_bytes; Degraded must not
-    /// have truncated_packets > packets.
+    /// have truncated_packets > packets. Also rejects bytes without packets
+    /// (bytes > 0 with packets == 0).
     pub fn validate(&self) -> Result<(), WindowError> {
         match self {
             WindowState::Observed {
                 captured_bytes,
                 wire_bytes,
+                packets,
                 ..
             } if captured_bytes > wire_bytes => Err(WindowError::InvalidObservation),
+            WindowState::Observed {
+                captured_bytes,
+                wire_bytes,
+                packets: 0,
+                ..
+            } if *captured_bytes > 0 || *wire_bytes > 0 => Err(WindowError::InvalidObservation),
             WindowState::Degraded {
-                packets,
                 truncated_packets,
+                packets,
+                captured_bytes,
+                wire_bytes,
                 ..
             } if truncated_packets > packets => Err(WindowError::InvalidObservation),
+            WindowState::Degraded {
+                packets: 0,
+                captured_bytes,
+                wire_bytes,
+                truncated_packets,
+                ..
+            } if *truncated_packets > 0 || *captured_bytes > 0 || *wire_bytes > 0 => {
+                Err(WindowError::InvalidObservation)
+            }
             _ => Ok(()),
         }
     }
