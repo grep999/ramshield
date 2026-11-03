@@ -1459,6 +1459,7 @@ dependencies = [
 name = "ramshield-learning"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "ramshield-types",
  "serde",
  "serde_json",

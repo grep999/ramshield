@@ -1225,11 +1225,65 @@ mod tests {
             source_key: None,
             dest_key: None,
         };
-        // Record the same window twice — should be idempotent
+        // Capture profile state before any training (empty)
+        let prof_before = d.service_profiles.get(&ctx.service_id).and_then(|s| {
+            s.all_assessments(
+                &ctx.service_id.as_u64().to_string(),
+                ctx.direction,
+                ctx.hour_utc,
+            )
+            .into_iter()
+            .next()
+            .map(|a| {
+                (
+                    a.observed_packets,
+                    a.clean_observations,
+                    a.degraded_observations,
+                )
+            })
+        });
+        // First call trains the profile
         d.record_completed_window(ctx.clone());
+        let prof_after_first = d.service_profiles.get(&ctx.service_id).and_then(|s| {
+            s.all_assessments(
+                &ctx.service_id.as_u64().to_string(),
+                ctx.direction,
+                ctx.hour_utc,
+            )
+            .into_iter()
+            .next()
+            .map(|a| {
+                (
+                    a.observed_packets,
+                    a.clean_observations,
+                    a.degraded_observations,
+                )
+            })
+        });
+        // Second call must not change profile state
         d.record_completed_window(ctx.clone());
+        let prof_after_second = d.service_profiles.get(&ctx.service_id).and_then(|s| {
+            s.all_assessments(
+                &ctx.service_id.as_u64().to_string(),
+                ctx.direction,
+                ctx.hour_utc,
+            )
+            .into_iter()
+            .next()
+            .map(|a| {
+                (
+                    a.observed_packets,
+                    a.clean_observations,
+                    a.degraded_observations,
+                )
+            })
+        });
+        // Second call must not change profile state
+        assert_eq!(prof_after_first, prof_after_second);
+        // First call must have trained (different from empty)
+        assert_ne!(prof_before, prof_after_first);
+        // Only one map entry
         assert_eq!(d.service_profiles.len(), 1);
-        // state.accepted counts aggregate observations from observe(), not record_completed_window()
         let _ = fs::remove_file(p);
     }
 }
