@@ -84,6 +84,27 @@ pub enum WindowState {
     },
 }
 
+impl WindowState {
+    /// Validate counter relationships that cannot hold for real traffic:
+    /// Observed must not have captured_bytes > wire_bytes; Degraded must not
+    /// have truncated_packets > packets.
+    pub fn validate(&self) -> Result<(), WindowError> {
+        match self {
+            WindowState::Observed {
+                captured_bytes,
+                wire_bytes,
+                ..
+            } if captured_bytes > wire_bytes => Err(WindowError::InvalidObservation),
+            WindowState::Degraded {
+                packets,
+                truncated_packets,
+                ..
+            } if truncated_packets > packets => Err(WindowError::InvalidObservation),
+            _ => Ok(()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowObservation {
     pub key: WindowKey,
@@ -128,6 +149,7 @@ impl WindowLedger {
 
     pub fn record(&mut self, observation: WindowObservation) -> Result<RecordOutcome, WindowError> {
         observation.key.validate()?;
+        observation.state.validate()?;
         if let Some(existing) = self.entries.get(&observation.key) {
             return Ok(if existing == &observation.state {
                 RecordOutcome::Duplicate
@@ -239,6 +261,7 @@ impl WindowLedger {
                 return Err(WindowError::Io("duplicate keys in persistence".into()));
             }
             key.validate()?;
+            state.validate()?;
             seen.insert(key, state);
         }
         Ok(Self {
@@ -702,6 +725,42 @@ mod tests {
             Err(WindowError::Io(_))
         ));
         let _ = std::fs::remove_file(&p);
+    }
+
+    /// Invalid WindowState in persistence must fail closed.
+    #[test]
+    fn reopen_rejects_invalid_state() {
+        let p = std::env::temp_dir().join(format!(
+            "ledger_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // captured_bytes > wire_bytes is impossible.
+        let json = r#"{"version":2,"entries":[[{"service_id":"svc","window_start_secs":3600,"window_seconds":60},{"Observed":{"packets":1,"captured_bytes":100,"wire_bytes":10}}]]}"#;
+        fs::write(&p, json).unwrap();
+        assert!(matches!(
+            WindowLedger::reopen(&p, 8),
+            Err(WindowError::Io(_))
+        ));
+        let _ = std::fs::remove_file(&p);
+
+        // truncated_packets > packets is impossible.
+        let p2 = std::env::temp_dir().join(format!(
+            "ledger_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let json = r#"{"version":2,"entries":[[{"service_id":"svc","window_start_secs":3600,"window_seconds":60},{"Degraded":{"packets":1,"captured_bytes":1,"wire_bytes":1,"truncated_packets":5,"capture_drops":0,"ingest_drops":0,"malformed":0}}]]}"#;
+        fs::write(&p2, json).unwrap();
+        assert!(matches!(
+            WindowLedger::reopen(&p2, 8),
+            Err(WindowError::Io(_))
+        ));
+        let _ = std::fs::remove_file(&p2);
     }
 
     /// Over-capacity snapshot must fail closed.
