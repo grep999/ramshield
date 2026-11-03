@@ -296,6 +296,10 @@ pub struct Discovery {
     state: PersistedState,
     path: PathBuf,
     service_profiles: BTreeMap<ServiceId, MetricProfileStore>,
+    /// Tracks (service_id, hour_utc) windows already trained into profiles.
+    /// Prevents double-training from duplicate record_completed_window() calls
+    /// within the same Discovery instance. Starts empty on reopen (runtime only).
+    recorded_windows: BTreeMap<(ServiceId, u64), bool>,
 }
 
 /// Context for recording a completed window into service profiles.
@@ -352,11 +356,13 @@ impl Discovery {
         let _profiles_raw = state.service_profiles.clone();
         let _profiles: Option<Vec<u8>> = None;
         let service_profiles: BTreeMap<ServiceId, MetricProfileStore> = BTreeMap::new();
+        let recorded_windows: BTreeMap<(ServiceId, u64), bool> = BTreeMap::new();
         Ok(Self {
             config,
             state,
             path,
             service_profiles,
+            recorded_windows,
         })
     }
 
@@ -402,7 +408,22 @@ impl Discovery {
     /// Record a completed, quality-qualified window into service profiles.
     /// Only sealed windows whose completeness has been independently determined
     /// train baseline state, preventing contaminated data from entering assessments.
+    /// Duplicate calls with the same (service_id, hour_utc) are idempotent —
+    /// the window is only trained once, even if record_completed_window() is
+    /// called multiple times with the same ctx.
+    /// PRECONDITION: The caller MUST ensure ctx represents a window that has been
+    /// independently verified as sealed and quality-qualified (e.g., via
+    /// IngestionEngine::flush() which only seals windows whose end time has passed
+    /// and whose capture health is known). This API does not cryptographically
+    /// prove provenance — it relies on the caller's correct usage.
     pub fn record_completed_window(&mut self, ctx: RecordCompletedWindowCtx) {
+        let key = (ctx.service_id, ctx.hour_utc);
+        // Idempotency guard: skip if this (service_id, hour_utc) was already trained
+        if self.recorded_windows.contains_key(&key) {
+            return;
+        }
+        self.recorded_windows.insert(key, true);
+
         let has_capacity = self.service_profiles.contains_key(&ctx.service_id)
             || self.service_profiles.len() < MAX_SERVICES;
         if !has_capacity {

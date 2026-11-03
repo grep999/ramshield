@@ -182,8 +182,11 @@ impl CardinalityEstimator {
     /// Observe a hashed identity key.
     pub fn observe(&mut self, key: u64) {
         use ahash::RandomState;
-        // Fixed-seed RandomState for deterministic, persistence-stable hashing.
-        // Same key always maps to same bit, across runs and versions.
+        // Fixed-seed RandomState for deterministic hashing within a crate version.
+        // Same key always maps to same bit within the same build of the same crate version.
+        // Cross-version persistence: if the ahash crate changes its internal hash format
+        // between major versions, persisted bitmap indexes would require migration.
+        // Within a single long-running process or same-crate-version restarts, stability is guaranteed.
         let hash = RandomState::with_seeds(0, 0, 0, 0).hash_one(key);
         let bit = (hash as usize) % self.bit_count;
         let word = bit / 64;

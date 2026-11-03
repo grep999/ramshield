@@ -111,6 +111,11 @@ impl WindowState {
                 ..
             } if truncated_packets > packets => Err(WindowError::InvalidObservation),
             WindowState::Degraded {
+                captured_bytes,
+                wire_bytes,
+                ..
+            } if captured_bytes > wire_bytes => Err(WindowError::InvalidObservation),
+            WindowState::Degraded {
                 packets: 0,
                 captured_bytes,
                 wire_bytes,
