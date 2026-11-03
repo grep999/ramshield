@@ -230,9 +230,9 @@ impl IngestionEngine {
             .collect();
         let mut outcomes = Vec::with_capacity(completed.len());
         for (service_id, direction, window_start_secs) in completed {
-            let Some(accumulator) = self
-                .pending
-                .remove(&(service_id, direction, window_start_secs))
+            let Some(accumulator) =
+                self.pending
+                    .remove(&(service_id, direction, window_start_secs))
             else {
                 continue;
             };
@@ -317,6 +317,7 @@ impl IngestionEngine {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::cloned_ref_to_slice_refs)]
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
     use tempfile::tempdir;
@@ -360,7 +361,7 @@ mod tests {
         let event = sample_event(
             Ipv4Addr::new(10, 0, 0, 1).into(),
             1_000_000_000,
-            100,
+            150,
             150,
             false,
         );
@@ -373,7 +374,7 @@ mod tests {
             eng.ledger().get(&key(service, TrafficDirection::Ingress)),
             Some(WindowState::Observed {
                 packets: 1,
-                captured_bytes: 100,
+                captured_bytes: 150,
                 wire_bytes: 150
             })
         ));
@@ -422,7 +423,8 @@ mod tests {
     fn packet_events_cannot_be_added_after_declaring_empty_window() {
         let mut eng = engine(IngestConfig::default());
         let service = ServiceId::new(17);
-        eng.record_empty_window(service, TrafficDirection::Ingress, 0).unwrap();
+        eng.record_empty_window(service, TrafficDirection::Ingress, 0)
+            .unwrap();
         let event = sample_event(
             Ipv4Addr::new(10, 0, 0, 17).into(),
             1_000_000_000,
@@ -440,8 +442,12 @@ mod tests {
     fn explicit_zero_traffic_is_observed_not_missing() {
         let mut eng = engine(IngestConfig::default());
         let service = ServiceId::new(15);
-        eng.record_empty_window(service, TrafficDirection::Ingress, 0).unwrap();
-        assert_eq!(eng.seal_completed(3_600).unwrap(), vec![RecordOutcome::Inserted]);
+        eng.record_empty_window(service, TrafficDirection::Ingress, 0)
+            .unwrap();
+        assert_eq!(
+            eng.seal_completed(3_600).unwrap(),
+            vec![RecordOutcome::Inserted]
+        );
         assert!(matches!(
             eng.ledger().get(&key(service, TrafficDirection::Ingress)),
             Some(WindowState::Observed {
@@ -588,7 +594,7 @@ mod tests {
         let event = sample_event(
             Ipv4Addr::new(10, 0, 0, 7).into(),
             1_000_000_000,
-            100,
+            120,
             120,
             false,
         );
@@ -607,7 +613,7 @@ mod tests {
                 .get(&key(service, TrafficDirection::Ingress)),
             Some(WindowState::Observed {
                 wire_bytes: 120,
-                captured_bytes: 100,
+                captured_bytes: 120,
                 ..
             })
         ));

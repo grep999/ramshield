@@ -730,7 +730,7 @@ mod tests {
             })
             .collect();
         let payload = serde_json::json!({
-            "version": 1,
+            "version": 2,
             "entries": entries.iter().map(|e| (&e.key, &e.state)).collect::<Vec<_>>()
         });
         let json = serde_json::to_string(&payload).unwrap();

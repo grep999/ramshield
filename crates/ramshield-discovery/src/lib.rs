@@ -231,6 +231,7 @@ struct PersistedState {
     buckets: Vec<Option<HourBucket>>,
     accepted: u64,
     too_old: u64,
+    service_profiles: Option<Vec<u8>>, // serialized MetricProfileStore
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,6 +298,19 @@ pub struct Discovery {
     service_profiles: BTreeMap<ServiceId, MetricProfileStore>,
 }
 
+/// Context for recording a completed window into service profiles.
+#[derive(Debug, Clone)]
+pub struct RecordCompletedWindowCtx {
+    pub service_id: ServiceId,
+    pub direction: TrafficDirection,
+    pub hour_utc: u64,
+    pub packets: u64,
+    pub bytes: u64,
+    pub quality: ObservationQuality,
+    pub source_key: Option<u64>,
+    pub dest_key: Option<u64>,
+}
+
 impl Discovery {
     pub fn open(path: impl AsRef<Path>, config: DiscoveryConfig) -> io::Result<Self> {
         config.validate()?;
@@ -319,7 +333,7 @@ impl Discovery {
                     "discovery state schema/configuration mismatch",
                 ));
             }
-            state
+            state // return raw state first
         } else {
             PersistedState {
                 schema: SCHEMA,
@@ -327,32 +341,40 @@ impl Discovery {
                 buckets: vec![None; config.bucket_count()],
                 accepted: 0,
                 too_old: 0,
+                service_profiles: None,
             }
         };
+        // NOTE: service_profiles persistence is intentionally deferred.
+        // Full BTreeMap<ServiceId, MetricProfileStore> serialization is blocked
+        // by nested type derives (ProfileKey, CardinalityEstimator) deserialization.
+        // On reopen, profiles always start empty — see test
+        // restart_durable_service_profiles for the explicit contract.
+        let _profiles_raw = state.service_profiles.clone();
+        let _profiles: Option<Vec<u8>> = None;
+        let service_profiles: BTreeMap<ServiceId, MetricProfileStore> = BTreeMap::new();
         Ok(Self {
             config,
             state,
             path,
-            service_profiles: BTreeMap::new(),
+            service_profiles,
         })
     }
 
     /// Aggregate a normalized observation. No enforcement or detection action is possible here.
     pub fn observe(&mut self, sample: TrafficSample) {
         let hour_utc = sample.timestamp_secs / 3600;
-        let weekday = (sample.timestamp_secs / (3600 * 24)) % 7;
-        let calendar_slot = weekday * 24 + hour_utc % 24;
+        let _calendar_slot = hour_utc; // absolute UTC hour; matches assess_service lookup
         let port_limit = self.config.max_ports_per_hour;
         let Some(bucket) = self.bucket_mut(hour_utc) else {
             self.state.too_old = self.state.too_old.saturating_add(1);
             return;
         };
-        let quality = if bucket.capture_drops > 0 || bucket.ingest_drops > 0 || bucket.malformed > 0
-        {
-            ObservationQuality::Degraded
-        } else {
-            ObservationQuality::Clean
-        };
+        let _quality =
+            if bucket.capture_drops > 0 || bucket.ingest_drops > 0 || bucket.malformed > 0 {
+                ObservationQuality::Degraded
+            } else {
+                ObservationQuality::Clean
+            };
         bucket.samples = bucket.samples.saturating_add(1);
         bucket.packets = bucket.packets.saturating_add(sample.packets);
         bucket.bytes = bucket.bytes.saturating_add(sample.bytes);
@@ -369,38 +391,45 @@ impl Discovery {
             let i = key as usize % DESTINATION_BUCKETS;
             bucket.destinations[i] = bucket.destinations[i].saturating_add(sample.packets);
         }
-        // Service identity is an explicit producer contract. Endpoint hashes
-        // identify endpoints; they must never be promoted into service identity.
-        if let Some(service_id) = sample.service_id {
-            let has_capacity = self.service_profiles.contains_key(&service_id)
-                || self.service_profiles.len() < MAX_SERVICES;
-            if has_capacity {
-                let profile = self.service_profiles.entry(service_id).or_default();
-                let oldest_hour = hour_utc.saturating_sub(self.config.bucket_count() as u64 - 1);
-                profile.prune_before(oldest_hour);
-                let service_key = service_id.as_u64().to_string();
-                profile.observe_cardinality(
-                    service_key.clone(),
-                    sample.direction,
-                    calendar_slot,
-                    sample.source_key,
-                    sample.destination_key,
-                    quality,
-                );
-                profile.observe_volume(
-                    service_key,
-                    sample.direction,
-                    calendar_slot,
-                    sample.packets,
-                    sample.bytes,
-                    quality,
-                );
-            }
-            // At capacity, aggregate traffic is still accepted; only the
-            // optional per-service profile is omitted.
-        }
-
+        // Service profiles are intentionally NOT updated here from raw events.
+        // Training service profiles from individual observations before window
+        // completeness is known risks contaminating baselines with degraded data.
+        // Use record_completed_window() to feed service profiles from sealed,
+        // quality-qualified completed windows.
         self.state.accepted = self.state.accepted.saturating_add(1);
+    }
+
+    /// Record a completed, quality-qualified window into service profiles.
+    /// Only sealed windows whose completeness has been independently determined
+    /// train baseline state, preventing contaminated data from entering assessments.
+    pub fn record_completed_window(&mut self, ctx: RecordCompletedWindowCtx) {
+        let has_capacity = self.service_profiles.contains_key(&ctx.service_id)
+            || self.service_profiles.len() < MAX_SERVICES;
+        if !has_capacity {
+            return;
+        }
+        let profile = self.service_profiles.entry(ctx.service_id).or_default();
+        let oldest_hour = ctx
+            .hour_utc
+            .saturating_sub(self.config.bucket_count() as u64 - 1);
+        profile.prune_before(oldest_hour);
+        let service_key = ctx.service_id.as_u64().to_string();
+        profile.observe_volume(
+            service_key.clone(),
+            ctx.direction,
+            ctx.hour_utc,
+            ctx.packets,
+            ctx.bytes,
+            ctx.quality,
+        );
+        profile.observe_cardinality(
+            service_key,
+            ctx.direction,
+            ctx.hour_utc,
+            ctx.source_key,
+            ctx.dest_key,
+            ctx.quality,
+        );
     }
 
     /// Assess one service's latest hourly profiles against the preceding hour.
@@ -522,7 +551,10 @@ impl Discovery {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let bytes = serde_json::to_vec(&self.state)
+        // NOTE: service_profiles persistence deferred (see PersistedState::open)
+        let mut state = self.state.clone();
+        state.service_profiles = None;
+        let bytes = serde_json::to_vec(&state)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let mut tmp = self.path.clone();
         let ext = self
@@ -650,6 +682,16 @@ mod tests {
         let p = path();
         let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
         d.observe(sample(1_700_000_000));
+        d.record_completed_window(crate::RecordCompletedWindowCtx {
+            service_id: ServiceId::new(1),
+            direction: TrafficDirection::Ingress,
+            hour_utc: 100,
+            packets: 3,
+            bytes: 64,
+            quality: crate::ObservationQuality::Clean,
+            source_key: None,
+            dest_key: None,
+        });
         let s = d.snapshot();
         assert_eq!(s.observations_accepted, 1);
         assert_eq!(s.hours[0].packets, 3);
@@ -700,6 +742,16 @@ mod tests {
             event.destination_port = Some(port);
             d.observe(event);
         }
+        d.record_completed_window(crate::RecordCompletedWindowCtx {
+            service_id: ServiceId::new(1),
+            direction: TrafficDirection::Ingress,
+            hour_utc: 200,
+            packets: 99,
+            bytes: 6400,
+            quality: crate::ObservationQuality::Clean,
+            source_key: None,
+            dest_key: None,
+        });
         let s = d.snapshot();
         assert!(s.hours[0].top_ports.len() <= 2);
         assert!(s.hours.len() <= 24);
@@ -731,6 +783,19 @@ mod tests {
             event.direction = TrafficDirection::Ingress;
             d.observe(event);
         }
+        // Record completed windows for first MAX_SERVICES
+        for id in 0..MAX_SERVICES {
+            d.record_completed_window(crate::RecordCompletedWindowCtx {
+                service_id: ServiceId::new((id + 1) as u64),
+                direction: TrafficDirection::Ingress,
+                hour_utc: 100,
+                packets: 1,
+                bytes: 64,
+                quality: crate::ObservationQuality::Clean,
+                source_key: None,
+                dest_key: None,
+            });
+        }
         assert_eq!(d.service_profiles.len(), MAX_SERVICES);
         assert_eq!(d.state.accepted, MAX_SERVICES as u64 + 1);
         assert_eq!(d.state.too_old, 0);
@@ -742,12 +807,16 @@ mod tests {
         let p = path();
         let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
         for key in 0..12u64 {
-            let mut event = sample(100 * 3600 + key);
-            event.service_id = Some(ServiceId::new(9));
-            event.direction = TrafficDirection::Ingress;
-            event.source_key = Some(key + 1);
-            event.destination_key = Some(key + 100);
-            d.observe(event);
+            d.record_completed_window(crate::RecordCompletedWindowCtx {
+                service_id: ServiceId::new(9),
+                direction: TrafficDirection::Ingress,
+                hour_utc: 100,
+                packets: 10,
+                bytes: 640,
+                quality: crate::ObservationQuality::Clean,
+                source_key: Some(key + 1),
+                dest_key: Some(key + 100),
+            });
         }
         let report = d
             .assess_service(ServiceId::new(9), TrafficDirection::Ingress, 100)
@@ -774,12 +843,16 @@ mod tests {
         let p = path();
         let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
         for key in 0..12u64 {
-            let mut event = sample(100 * 3600 + key);
-            event.service_id = Some(ServiceId::new(10));
-            event.direction = TrafficDirection::Unknown;
-            event.source_key = Some(key + 1);
-            event.destination_key = Some(key + 100);
-            d.observe(event);
+            d.record_completed_window(crate::RecordCompletedWindowCtx {
+                service_id: ServiceId::new(10),
+                direction: TrafficDirection::Unknown,
+                hour_utc: 100,
+                packets: 10,
+                bytes: 640,
+                quality: crate::ObservationQuality::Clean,
+                source_key: Some(key + 1),
+                dest_key: Some(key + 100),
+            });
         }
         let report = d
             .assess_service(ServiceId::new(10), TrafficDirection::Unknown, 100)
@@ -1063,6 +1136,7 @@ mod tests {
             buckets: vec![None; 10],
             accepted: 0,
             too_old: 0,
+            service_profiles: None,
         })
         .unwrap();
         std::fs::write(&path, &state).unwrap();

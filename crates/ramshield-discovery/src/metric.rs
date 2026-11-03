@@ -8,9 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Stable metric identity used as part of a profile key.
-/// The initial release includes only metrics whose source data is actually available
-/// from RamShield's packet/event pipeline. New variants may be added later but
-/// must not be silently interchanged with existing ones.
+/// The calendar_slot is an absolute UTC hour since epoch, not a
+/// hour-of-week slot. This ensures observe() and assess_service()
+/// use the same key domain, enabling correct retention and
+/// previous-hour comparison.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
@@ -49,13 +50,13 @@ impl ProfileKey {
         service_id: String,
         direction: TrafficDirection,
         metric: CountMetric,
-        hour_of_week: u64,
+        hour_utc: u64,
     ) -> Self {
         ProfileKey {
             service_id,
             direction,
             metric,
-            calendar_slot: hour_of_week,
+            calendar_slot: hour_utc, // absolute UTC hour
         }
     }
 }
@@ -109,9 +110,9 @@ pub fn new_profile_key(
     service_id: String,
     direction: TrafficDirection,
     metric: CountMetric,
-    hour_of_week: u64,
+    hour_utc: u64,
 ) -> ProfileKey {
-    ProfileKey::new(service_id, direction, metric, hour_of_week)
+    ProfileKey::new(service_id, direction, metric, hour_utc)
 }
 
 /// Apply a clean observed value to a CountMoments instance.

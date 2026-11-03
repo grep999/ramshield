@@ -45,7 +45,9 @@ fn ev(ip: IpAddr, ts: u64) -> ConnectionEvent {
     ConnectionEvent {
         ip,
         timestamp_ns: ts,
-        bytes: 512,
+        wire_bytes: 512,
+        captured_bytes: 512,
+        truncated: false,
         status_code: 200,
         proto_fingerprint: 0,
         l7: None,
