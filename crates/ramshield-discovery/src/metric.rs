@@ -181,10 +181,10 @@ impl CardinalityEstimator {
 
     /// Observe a hashed identity key.
     pub fn observe(&mut self, key: u64) {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        key.hash(&mut hasher);
-        let hash = hasher.finish();
+        use ahash::RandomState;
+        // Fixed-seed RandomState for deterministic, persistence-stable hashing.
+        // Same key always maps to same bit, across runs and versions.
+        let hash = RandomState::with_seeds(0, 0, 0, 0).hash_one(key);
         let bit = (hash as usize) % self.bit_count;
         let word = bit / 64;
         let mask = 1u64 << (bit % 64);
