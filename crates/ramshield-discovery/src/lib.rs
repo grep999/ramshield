@@ -1211,7 +1211,8 @@ mod tests {
         let slot = sample.timestamp_secs / 3600;
         let svc = disc2.service_profiles.get(&ServiceId::new(42)).unwrap();
         assert!(
-            !svc.all_assessments("42", TrafficDirection::Ingress, slot).is_empty()
+            !svc.all_assessments("42", TrafficDirection::Ingress, slot)
+                .is_empty()
         );
     }
 
@@ -1735,10 +1736,12 @@ mod tests {
         {
             let svc = d.service_profiles.get(&ServiceId::new(1)).unwrap();
             assert!(
-                !svc.all_assessments("1", TrafficDirection::Ingress, 100).is_empty()
+                !svc.all_assessments("1", TrafficDirection::Ingress, 100)
+                    .is_empty()
             );
             assert!(
-                !svc.all_assessments("1", TrafficDirection::Egress, 100).is_empty()
+                !svc.all_assessments("1", TrafficDirection::Egress, 100)
+                    .is_empty()
             );
         }
 
