@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
@@ -299,7 +299,8 @@ pub struct Discovery {
     /// Tracks (service_id, direction, hour_utc) windows already trained into
     /// profiles. Prevents double-training from duplicate record_completed_window()
     /// calls within the same Discovery instance. Starts empty on reopen (runtime only).
-    recorded_windows: BTreeMap<(ServiceId, TrafficDirection, u64), bool>,
+    /// Grouped by hour so retention pruning removes whole expired hour buckets.
+    recorded_windows: BTreeMap<u64, BTreeSet<(ServiceId, TrafficDirection)>>,
 }
 
 /// Context for recording a completed window into service profiles.
@@ -359,7 +360,8 @@ impl Discovery {
                 })?,
                 None => BTreeMap::new(),
             };
-        let recorded_windows: BTreeMap<(ServiceId, TrafficDirection, u64), bool> = BTreeMap::new();
+        let recorded_windows: BTreeMap<u64, BTreeSet<(ServiceId, TrafficDirection)>> =
+            BTreeMap::new();
         Ok(Self {
             config,
             state,
@@ -420,10 +422,13 @@ impl Discovery {
     /// and whose capture health is known). This API does not cryptographically
     /// prove provenance — it relies on the caller's correct usage.
     pub fn record_completed_window(&mut self, ctx: RecordCompletedWindowCtx) {
-        let key = (ctx.service_id, ctx.direction, ctx.hour_utc);
         // Idempotency guard: skip if this (service_id, direction, hour_utc)
-        // was already trained
-        if self.recorded_windows.contains_key(&key) {
+        // was already trained.
+        if self
+            .recorded_windows
+            .get(&ctx.hour_utc)
+            .is_some_and(|set| set.contains(&(ctx.service_id, ctx.direction)))
+        {
             return;
         }
         // Service capacity gate: reject new service IDs before touching the map.
@@ -432,29 +437,37 @@ impl Discovery {
         if !has_capacity {
             return;
         }
-        // Monotonic retention horizon: uses the newest observed hour so an
-        // old out-of-order event cannot move the horizon backwards.
-        let newest = self
+        // Monotonic retention horizon: newest hour is the last key in the
+        // ordered map, so no full-map scan is needed.
+        let newest_hour = self
             .recorded_windows
-            .keys()
-            .map(|k| k.2)
-            .max()
-            .unwrap_or(0)
+            .last_key_value()
+            .map(|(&hour, _)| hour)
+            .unwrap_or(ctx.hour_utc)
             .max(ctx.hour_utc);
-        let retention_hour = newest.saturating_sub(self.config.bucket_count() as u64 - 1);
-        self.recorded_windows.retain(|&k, _| k.2 >= retention_hour);
+        let retention_hour = newest_hour.saturating_sub(self.config.bucket_count() as u64 - 1);
+        // Drop entire expired hour buckets (O(expired buckets), not O(all keys)).
+        while self
+            .recorded_windows
+            .first_key_value()
+            .is_some_and(|(&hour, _)| hour < retention_hour)
+        {
+            self.recorded_windows.pop_first();
+        }
         // Reject windows older than the retention horizon entirely so an
         // out-of-order old event cannot re-enter after being pruned.
         if ctx.hour_utc < retention_hour {
             return;
         }
-        self.recorded_windows.insert(key, true);
-
-        let has_capacity = self.service_profiles.contains_key(&ctx.service_id)
-            || self.service_profiles.len() < MAX_SERVICES;
-        if !has_capacity {
+        if !self
+            .recorded_windows
+            .entry(ctx.hour_utc)
+            .or_default()
+            .insert((ctx.service_id, ctx.direction))
+        {
             return;
         }
+
         let profile = self.service_profiles.entry(ctx.service_id).or_default();
         let oldest_hour = ctx
             .hour_utc
@@ -1275,22 +1288,22 @@ mod tests {
         // The map must be bounded by the 24-hour retention window, not 200.
         let retention = d.config.bucket_count() as usize;
         assert_eq!(retention, 24);
+        // Hour-bucket count stays bounded by retention (each bucket holds
+        // all services/directions seen in that hour).
         assert!(
             d.recorded_windows.len() <= retention,
-            "recorded_windows len {} exceeds retention {}",
+            "hour buckets len {} exceeds retention {}",
             d.recorded_windows.len(),
             retention
         );
         // The most recent window must still be present (idempotency intact).
         assert!(
             d.recorded_windows
-                .contains_key(&(svc, TrafficDirection::Ingress, 10_199))
+                .get(&10_199)
+                .is_some_and(|set| set.contains(&(svc, TrafficDirection::Ingress)))
         );
         // The oldest window must have been pruned.
-        assert!(
-            !d.recorded_windows
-                .contains_key(&(svc, TrafficDirection::Ingress, 10_000))
-        );
+        assert!(d.recorded_windows.get(&10_000).is_none());
         let _ = fs::remove_file(p);
     }
 
@@ -1317,7 +1330,12 @@ mod tests {
             });
         }
         // Only 64 services should be admitted; the rest silently dropped.
-        assert_eq!(d.recorded_windows.len(), 64);
+        let recorded_count: usize = d.recorded_windows.values().map(|set| set.len()).sum();
+        assert_eq!(
+            recorded_count, MAX_SERVICES,
+            "recorded_windows count {} exceeds max services {}",
+            recorded_count, MAX_SERVICES
+        );
         let _ = fs::remove_file(p);
     }
 
@@ -1357,14 +1375,146 @@ mod tests {
         // must still be present.
         assert!(
             d.recorded_windows
-                .contains_key(&(svc, TrafficDirection::Ingress, 100))
+                .get(&100)
+                .is_some_and(|set| set.contains(&(svc, TrafficDirection::Ingress)))
         );
         // Hour 0 should be pruned because it's outside the 24-hour horizon
         // from the newest hour (100).
+        assert!(d.recorded_windows.get(&0).is_none());
+        let _ = fs::remove_file(p);
+    }
+
+    fn mk_ctx(
+        svc: u64,
+        direction: TrafficDirection,
+        hour: u64,
+        packets: u64,
+    ) -> crate::RecordCompletedWindowCtx {
+        crate::RecordCompletedWindowCtx {
+            service_id: ServiceId::new(svc),
+            direction,
+            hour_utc: hour,
+            packets,
+            bytes: packets * 64,
+            quality: crate::ObservationQuality::Clean,
+            source_key: None,
+            dest_key: None,
+        }
+    }
+
+    fn total_recorded(d: &Discovery) -> usize {
+        d.recorded_windows.values().map(|set| set.len()).sum()
+    }
+
+    #[test]
+    fn recorded_windows_duplicate_is_idempotent() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        let ctx = mk_ctx(1, TrafficDirection::Ingress, 100, 10);
+        d.record_completed_window(ctx.clone());
+        let after_first = d
+            .service_profiles
+            .get(&ServiceId::new(1))
+            .and_then(|s| {
+                s.all_assessments("1", TrafficDirection::Ingress, 100)
+                    .into_iter()
+                    .next()
+            })
+            .map(|a| (a.observed_packets, a.clean_observations));
+        d.record_completed_window(ctx);
+        let after_second = d
+            .service_profiles
+            .get(&ServiceId::new(1))
+            .and_then(|s| {
+                s.all_assessments("1", TrafficDirection::Ingress, 100)
+                    .into_iter()
+                    .next()
+            })
+            .map(|a| (a.observed_packets, a.clean_observations));
+        assert_eq!(after_first, after_second, "duplicate must not re-train");
+        assert_eq!(total_recorded(&d), 1);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn recorded_windows_allows_retention_boundary() {
+        let p = path();
+        let config = DiscoveryConfig {
+            observation_days: 1, // 24 buckets
+            max_ports_per_hour: 256,
+        };
+        let mut d = Discovery::open(&p, config).unwrap();
+        // Newest hour 100, retention 24 => horizon = 100 - 23 = 77 (inclusive).
+        d.record_completed_window(mk_ctx(1, TrafficDirection::Ingress, 100, 1));
+        d.record_completed_window(mk_ctx(1, TrafficDirection::Ingress, 77, 1));
         assert!(
-            !d.recorded_windows
-                .contains_key(&(svc, TrafficDirection::Ingress, 0))
+            d.recorded_windows
+                .get(&77)
+                .is_some_and(|s| s.contains(&(ServiceId::new(1), TrafficDirection::Ingress))),
+            "hour at the exact retention boundary must be accepted"
         );
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn recorded_windows_rejects_before_retention_boundary() {
+        let p = path();
+        let config = DiscoveryConfig {
+            observation_days: 1,
+            max_ports_per_hour: 256,
+        };
+        let mut d = Discovery::open(&p, config).unwrap();
+        d.record_completed_window(mk_ctx(1, TrafficDirection::Ingress, 100, 1));
+        // 76 is one hour before the horizon (77) and must be rejected.
+        d.record_completed_window(mk_ctx(1, TrafficDirection::Ingress, 76, 1));
+        assert!(d.recorded_windows.get(&76).is_none());
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn recorded_windows_prunes_multiple_hour_buckets() {
+        let p = path();
+        let config = DiscoveryConfig {
+            observation_days: 1, // 24 buckets
+            max_ports_per_hour: 256,
+        };
+        let mut d = Discovery::open(&p, config).unwrap();
+        // Insert at hour 0, then jump forward far enough that many buckets expire.
+        d.record_completed_window(mk_ctx(1, TrafficDirection::Ingress, 0, 1));
+        assert!(d.recorded_windows.contains_key(&0));
+        d.record_completed_window(mk_ctx(1, TrafficDirection::Ingress, 1000, 1));
+        // All buckets older than 1000 - 23 = 977 are gone.
+        assert_eq!(d.recorded_windows.len(), 1);
+        assert!(d.recorded_windows.contains_key(&1000));
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn recorded_windows_separates_directions() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        d.record_completed_window(mk_ctx(1, TrafficDirection::Ingress, 100, 10));
+        d.record_completed_window(mk_ctx(1, TrafficDirection::Egress, 100, 20));
+        let set = d.recorded_windows.get(&100).unwrap();
+        assert!(set.contains(&(ServiceId::new(1), TrafficDirection::Ingress)));
+        assert!(set.contains(&(ServiceId::new(1), TrafficDirection::Egress)));
+        assert_eq!(total_recorded(&d), 2);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn recorded_windows_reopens_with_empty_runtime_dedup() {
+        let p = path();
+        let config = DiscoveryConfig::default();
+        {
+            let mut d = Discovery::open(&p, config.clone()).unwrap();
+            d.record_completed_window(mk_ctx(1, TrafficDirection::Ingress, 100, 10));
+            d.flush().unwrap();
+            assert_eq!(total_recorded(&d), 1);
+        }
+        // Reopen: runtime-only idempotency state must be empty.
+        let d2 = Discovery::open(&p, config).unwrap();
+        assert_eq!(total_recorded(&d2), 0);
         let _ = fs::remove_file(p);
     }
 
