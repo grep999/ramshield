@@ -296,10 +296,10 @@ pub struct Discovery {
     state: PersistedState,
     path: PathBuf,
     service_profiles: BTreeMap<ServiceId, MetricProfileStore>,
-    /// Tracks (service_id, hour_utc) windows already trained into profiles.
-    /// Prevents double-training from duplicate record_completed_window() calls
-    /// within the same Discovery instance. Starts empty on reopen (runtime only).
-    recorded_windows: BTreeMap<(ServiceId, u64), bool>,
+    /// Tracks (service_id, direction, hour_utc) windows already trained into
+    /// profiles. Prevents double-training from duplicate record_completed_window()
+    /// calls within the same Discovery instance. Starts empty on reopen (runtime only).
+    recorded_windows: BTreeMap<(ServiceId, TrafficDirection, u64), bool>,
 }
 
 /// Context for recording a completed window into service profiles.
@@ -348,15 +348,18 @@ impl Discovery {
                 service_profiles: None,
             }
         };
-        // NOTE: service_profiles persistence is intentionally deferred.
-        // Full BTreeMap<ServiceId, MetricProfileStore> serialization is blocked
-        // by nested type derives (ProfileKey, CardinalityEstimator) deserialization.
-        // On reopen, profiles always start empty — see test
-        // restart_durable_service_profiles for the explicit contract.
-        let _profiles_raw = state.service_profiles.clone();
-        let _profiles: Option<Vec<u8>> = None;
-        let service_profiles: BTreeMap<ServiceId, MetricProfileStore> = BTreeMap::new();
-        let recorded_windows: BTreeMap<(ServiceId, u64), bool> = BTreeMap::new();
+        // Rehydrate service profiles stored on disk (if any).
+        let service_profiles: BTreeMap<ServiceId, MetricProfileStore> =
+            match &state.service_profiles {
+                Some(bytes) => serde_json::from_slice(bytes).map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("corrupt service profiles: {e}"),
+                    )
+                })?,
+                None => BTreeMap::new(),
+            };
+        let recorded_windows: BTreeMap<(ServiceId, TrafficDirection, u64), bool> = BTreeMap::new();
         Ok(Self {
             config,
             state,
@@ -417,8 +420,9 @@ impl Discovery {
     /// and whose capture health is known). This API does not cryptographically
     /// prove provenance — it relies on the caller's correct usage.
     pub fn record_completed_window(&mut self, ctx: RecordCompletedWindowCtx) {
-        let key = (ctx.service_id, ctx.hour_utc);
-        // Idempotency guard: skip if this (service_id, hour_utc) was already trained
+        let key = (ctx.service_id, ctx.direction, ctx.hour_utc);
+        // Idempotency guard: skip if this (service_id, direction, hour_utc)
+        // was already trained
         if self.recorded_windows.contains_key(&key) {
             return;
         }
@@ -572,9 +576,11 @@ impl Discovery {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
-        // NOTE: service_profiles persistence deferred (see PersistedState::open)
         let mut state = self.state.clone();
-        state.service_profiles = None;
+        state.service_profiles = Some(
+            serde_json::to_vec(&self.service_profiles)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+        );
         let bytes = serde_json::to_vec(&state)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let mut tmp = self.path.clone();
@@ -642,6 +648,16 @@ impl Discovery {
     }
 
     fn bucket_mut(&mut self, hour: u64) -> Option<&mut HourBucket> {
+        // Cap the observed hour at wall time plus a 1-hour skew tolerance so that
+        // a single future timestamp cannot advance the retention horizon and evict
+        // valid historical buckets. The tolerance accommodates legitimate clock skew.
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // `hour` is an hour index; convert wall time to hours and allow 1h skew.
+        let max_hour = (now_secs / 3600).saturating_add(1);
+        let effective_hour = hour.min(max_hour);
         let retention = self.config.bucket_count() as u64;
         if let Some(newest) = self
             .state
@@ -651,9 +667,9 @@ impl Discovery {
             .map(|bucket| bucket.hour)
             .max()
         {
-            let newest = newest.max(hour);
+            let newest = newest.max(effective_hour);
             let oldest = newest.saturating_sub(retention - 1);
-            if hour < oldest {
+            if effective_hour < oldest {
                 return None;
             }
             for bucket in &mut self.state.buckets {
@@ -663,12 +679,12 @@ impl Discovery {
             }
         }
         let len = self.state.buckets.len();
-        let index = (hour % len as u64) as usize;
+        let index = (effective_hour % len as u64) as usize;
         if self.state.buckets[index]
             .as_ref()
-            .is_none_or(|bucket| bucket.hour != hour)
+            .is_none_or(|bucket| bucket.hour != effective_hour)
         {
-            self.state.buckets[index] = Some(HourBucket::new(hour));
+            self.state.buckets[index] = Some(HourBucket::new(effective_hour));
         }
         self.state.buckets[index].as_mut()
     }
@@ -1139,12 +1155,95 @@ mod tests {
         for _ in 0..5 {
             disc.observe(sample.clone());
         }
+        disc.record_completed_window(crate::RecordCompletedWindowCtx {
+            service_id: svc,
+            direction: TrafficDirection::Ingress,
+            hour_utc: sample.timestamp_secs / 3600,
+            packets: 500,
+            bytes: 50_000,
+            quality: crate::ObservationQuality::Clean,
+            source_key: Some(1),
+            dest_key: Some(2),
+        });
         disc.flush().unwrap();
 
         let disc2 = Discovery::open(&path, config).unwrap();
-        // Service profiles are not persisted across restart in this implementation.
-        // Just verify the cycle completes without error and profiles start fresh.
-        assert!(disc2.service_profiles.is_empty());
+        // Service profiles must survive restart (durability).
+        assert!(
+            !disc2.service_profiles.is_empty(),
+            "profiles must persist across restart"
+        );
+        let slot = sample.timestamp_secs / 3600;
+        let svc = disc2.service_profiles.get(&ServiceId::new(42)).unwrap();
+        assert!(
+            svc.all_assessments("42", TrafficDirection::Ingress, slot)
+                .len()
+                > 0
+        );
+    }
+
+    #[test]
+    fn future_timestamp_does_not_advance_retention_horizon() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let now_hour = now_secs / 3600;
+        let recent_hour = now_hour - 10;
+        // Normal recent observation trains successfully.
+        d.observe(sample(recent_hour * 3600));
+        assert!(d.state.buckets.iter().flatten().any(|b| b.hour == recent_hour));
+        // Far-future observation must not advance the retention horizon.
+        let future_hour = now_hour + 100_000;
+        d.observe(sample(future_hour * 3600));
+        let newest_hour = d
+            .state
+            .buckets
+            .iter()
+            .flatten()
+            .map(|b| b.hour)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            newest_hour < future_hour,
+            "future hour {future_hour} must not advance retention horizon"
+        );
+        assert!(
+            d.state.buckets.iter().flatten().any(|b| b.hour == recent_hour),
+            "recent bucket must survive future timestamp"
+        );
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn recorded_windows_map_stays_bounded() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        let svc = ServiceId::new(1);
+        // Record many hours spanning well beyond retention.
+        for hour in 0..500u64 {
+            d.record_completed_window(crate::RecordCompletedWindowCtx {
+                service_id: svc,
+                direction: TrafficDirection::Ingress,
+                hour_utc: 10_000 + hour,
+                packets: 1,
+                bytes: 64,
+                quality: crate::ObservationQuality::Clean,
+                source_key: None,
+                dest_key: None,
+            });
+        }
+        // The map should be bounded by the retention window, not grow to 500.
+        let retention = d.config.bucket_count() as usize;
+        assert!(
+            d.recorded_windows.len() <= retention + 1,
+            "recorded_windows len {} exceeds retention {}",
+            d.recorded_windows.len(),
+            retention
+        );
+        let _ = fs::remove_file(p);
     }
 
     #[test]
@@ -1284,6 +1383,79 @@ mod tests {
         assert_ne!(prof_before, prof_after_first);
         // Only one map entry
         assert_eq!(d.service_profiles.len(), 1);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn record_completed_window_direction_isolation() {
+        let p = path();
+        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        let ingress_ctx = crate::RecordCompletedWindowCtx {
+            service_id: ServiceId::new(1),
+            direction: TrafficDirection::Ingress,
+            hour_utc: 100,
+            packets: 10,
+            bytes: 64,
+            quality: crate::ObservationQuality::Clean,
+            source_key: None,
+            dest_key: None,
+        };
+        let egress_ctx = crate::RecordCompletedWindowCtx {
+            service_id: ServiceId::new(1),
+            direction: TrafficDirection::Egress,
+            hour_utc: 100,
+            packets: 10,
+            bytes: 64,
+            quality: crate::ObservationQuality::Clean,
+            source_key: None,
+            dest_key: None,
+        };
+
+        d.record_completed_window(ingress_ctx.clone());
+        d.record_completed_window(egress_ctx.clone());
+
+        // Both ingress and egress profiles must be populated for the same
+        // service + hour.
+        assert_eq!(d.service_profiles.len(), 1);
+        {
+            let svc = d.service_profiles.get(&ServiceId::new(1)).unwrap();
+            assert!(
+                svc.all_assessments("1", TrafficDirection::Ingress, 100)
+                    .len()
+                    > 0
+            );
+            assert!(
+                svc.all_assessments("1", TrafficDirection::Egress, 100)
+                    .len()
+                    > 0
+            );
+        }
+
+        // Duplicate calls per direction must remain idempotent.
+        let (ing_before, egr_before) = {
+            let svc = d.service_profiles.get(&ServiceId::new(1)).unwrap();
+            (
+                svc.all_assessments("1", TrafficDirection::Ingress, 100)
+                    .len(),
+                svc.all_assessments("1", TrafficDirection::Egress, 100)
+                    .len(),
+            )
+        };
+        d.record_completed_window(ingress_ctx.clone());
+        d.record_completed_window(egress_ctx.clone());
+        {
+            let svc = d.service_profiles.get(&ServiceId::new(1)).unwrap();
+            assert_eq!(
+                svc.all_assessments("1", TrafficDirection::Ingress, 100)
+                    .len(),
+                ing_before
+            );
+            assert_eq!(
+                svc.all_assessments("1", TrafficDirection::Egress, 100)
+                    .len(),
+                egr_before
+            );
+        }
         let _ = fs::remove_file(p);
     }
 }

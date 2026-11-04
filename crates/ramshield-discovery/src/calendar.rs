@@ -323,6 +323,24 @@ impl TrafficCalendar {
                 "execution start_time_secs must be nonzero",
             ));
         }
+        // Bound expected duration and use checked arithmetic to prevent overflow.
+        // 8760 hours = 1 year; arbitrary but conservative.
+        if execution.expected_duration_hours == 0 || execution.expected_duration_hours > 8760 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "execution expected_duration_hours must be 1..=8760",
+            ));
+        }
+        // Validate start_time + expected_duration_hours won't overflow u64.
+        let _expected_end = execution
+            .start_time_secs
+            .checked_add(execution.expected_duration_hours * 3600)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "execution start_time + duration overflows",
+                )
+            })?;
         if self.state.executions.len() >= MAX_DECLARATIONS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -381,7 +399,10 @@ impl TrafficCalendar {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_err(io::Error::other)?
                     .as_secs();
-                let expected = e.start_time_secs + (e.expected_duration_hours * 3600);
+                let expected = e
+                    .expected_duration_hours
+                    .saturating_mul(3600)
+                    .saturating_add(e.start_time_secs);
                 e.actual_duration_hours = if now > expected {
                     Some((now - expected) / 3600)
                 } else {
@@ -408,7 +429,10 @@ impl TrafficCalendar {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_err(io::Error::other)?
                     .as_secs();
-                let expected = e.start_time_secs + (e.expected_duration_hours * 3600);
+                let expected = e
+                    .expected_duration_hours
+                    .saturating_mul(3600)
+                    .saturating_add(e.start_time_secs);
                 e.actual_duration_hours = if now > expected {
                     Some((now - expected) / 3600)
                 } else {
@@ -774,6 +798,85 @@ mod tests {
         c.observe_hour(t, 100, 10_000);
         let assessment = c.assess(t + 4 * 7 * 86_400, 1_000, 1, 3.0);
         assert_eq!(assessment.kind, CalendarAssessmentKind::InsufficientData);
+        let _ = fs::remove_file(p);
+    }
+    #[test]
+    fn workload_execution_duration_bounds() {
+        let p = path();
+        let mut calendar = TrafficCalendar::open(&p).unwrap();
+        let id: String = "test-exec".into();
+        // Valid duration accepted
+        let valid = WorkloadExecution {
+            id: id.clone(),
+            description: "valid".into(),
+            state: ExecutionState::Scheduled,
+            start_time_secs: 1_700_000_000,
+            expected_duration_hours: 100,
+            actual_duration_hours: None,
+            declared_by: "ops".into(),
+            notes: None,
+        };
+        assert!(calendar.declare_execution(valid).is_ok());
+        // Duration of 0 rejected
+        let zero = WorkloadExecution {
+            id: id.clone(),
+            description: "zero".into(),
+            state: ExecutionState::Scheduled,
+            start_time_secs: 1_700_000_000,
+            expected_duration_hours: 0,
+            actual_duration_hours: None,
+            declared_by: "ops".into(),
+            notes: None,
+        };
+        assert!(calendar.declare_execution(zero).is_err());
+        // Duration of 8761 rejected (exceeds 1 year)
+        let one_year_plus = WorkloadExecution {
+            id: id.clone(),
+            description: "one-year-plus".into(),
+            state: ExecutionState::Scheduled,
+            start_time_secs: 1_700_000_000,
+            expected_duration_hours: 8761,
+            actual_duration_hours: None,
+            declared_by: "ops".into(),
+            notes: None,
+        };
+        assert!(calendar.declare_execution(one_year_plus).is_err());
+        // Duration of 8760 accepted (exactly 1 year)
+        let exactly_one_year = WorkloadExecution {
+            id: id.clone(),
+            description: "exactly-one-year".into(),
+            state: ExecutionState::Scheduled,
+            start_time_secs: 1_700_000_000,
+            expected_duration_hours: 8760,
+            actual_duration_hours: None,
+            declared_by: "ops".into(),
+            notes: None,
+        };
+        assert!(calendar.declare_execution(exactly_one_year).is_ok());
+        // Start_time_secs == 0 rejected
+        let zero_start = WorkloadExecution {
+            id: id.clone(),
+            description: "zero-start".into(),
+            state: ExecutionState::Scheduled,
+            start_time_secs: 0,
+            expected_duration_hours: 100,
+            actual_duration_hours: None,
+            declared_by: "ops".into(),
+            notes: None,
+        };
+        assert!(calendar.declare_execution(zero_start).is_err());
+        // Overflow start_time + duration
+        let overflow = WorkloadExecution {
+            id: id.clone(),
+            description: "overflow".into(),
+            state: ExecutionState::Scheduled,
+            start_time_secs: u64::MAX,
+            expected_duration_hours: 1,
+            actual_duration_hours: None,
+            declared_by: "ops".into(),
+            notes: None,
+        };
+        assert!(calendar.declare_execution(overflow).is_err());
         let _ = fs::remove_file(p);
     }
 }

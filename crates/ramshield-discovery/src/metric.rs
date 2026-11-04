@@ -7,6 +7,33 @@ use crate::{CountMoments, TrafficDirection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Serde helper: BTreeMap<K,V> → Vec<(K,V)> for JSON-friendly map serialization.
+/// Works for any K,V that implement Serialize/Deserialize, even non-string keys.
+mod map_as_vec {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
+    use std::collections::BTreeMap;
+
+    pub fn serialize<S, K, V>(map: &BTreeMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        K: Serialize + Ord,
+        V: Serialize,
+    {
+        let vec: Vec<(&K, &V)> = map.iter().collect();
+        vec.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D, K, V>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
+    where
+        D: Deserializer<'de>,
+        K: DeserializeOwned + Ord,
+        V: DeserializeOwned,
+    {
+        let vec: Vec<(K, V)> = Vec::deserialize(deserializer)?;
+        Ok(vec.into_iter().collect())
+    }
+}
+
 /// Stable metric identity used as part of a profile key.
 /// The calendar_slot is an absolute UTC hour since epoch, not a
 /// hour-of-week slot. This ensures observe() and assess_service()
@@ -265,8 +292,11 @@ impl Default for CardinalityEstimator {
 /// The existing packet-only CalendarAssessment remains as a fallback.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MetricProfileStore {
+    #[serde(with = "map_as_vec")]
     profiles: BTreeMap<ProfileKey, MetricAssessment>,
+    #[serde(with = "map_as_vec")]
     source_cardinality: BTreeMap<(String, TrafficDirection, u64), CardinalityEstimator>,
+    #[serde(with = "map_as_vec")]
     dest_cardinality: BTreeMap<(String, TrafficDirection, u64), CardinalityEstimator>,
 }
 

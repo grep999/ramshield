@@ -14,7 +14,10 @@ use rand::RngCore;
 use serde::Deserialize;
 use std::{
     net::{IpAddr, Ipv6Addr, SocketAddr},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::Semaphore;
@@ -37,6 +40,11 @@ pub struct AuthState {
     /// Argon2 PHC string from config. RwLock so a hot-reloaded config can
     /// swap it without restarting the dashboard server (D4 audit fix).
     password_hash: Arc<std::sync::RwLock<Option<String>>>,
+    /// Monotonic epoch bumped on every password change. A login captures it
+    /// before Argon2 verification and refuses to register a session if it
+    /// changed meanwhile — closes the verify/register race where an old
+    /// password could mint a session after sessions were cleared.
+    pub(crate) auth_generation: Arc<AtomicU64>,
     ttl: Duration,
     sessions: Arc<DashMap<String, Instant, ahash::RandomState>>,
     max_login_attempts: u32,
@@ -151,6 +159,7 @@ impl AuthState {
         let min_ttl = 1u64;
         Self {
             password_hash: Arc::new(std::sync::RwLock::new(password_hash)),
+            auth_generation: Arc::new(AtomicU64::new(0)),
             ttl: Duration::from_secs(ttl_secs.max(min_ttl)),
             sessions: Arc::new(DashMap::with_hasher(ahash::RandomState::new())),
             max_login_attempts,
@@ -185,6 +194,9 @@ impl AuthState {
     /// The replacement is written while holding the recovered write guard,
     /// then poison is cleared so readers can resume with the known-good value.
     pub fn set_password_hash(&self, new_hash: Option<String>) {
+        // Bump the epoch BEFORE swapping the hash so any in-flight login that
+        // verified against the old hash cannot register a session afterwards.
+        self.auth_generation.fetch_add(1, Ordering::AcqRel);
         match self.password_hash.write() {
             Ok(mut guard) => *guard = new_hash,
             Err(poisoned) => {
@@ -281,10 +293,15 @@ impl AuthState {
         Some(hex::encode(token))
     }
 
-    /// Record a verified token as an active session. Split out of the login
-    /// flow so the async handler can verify on a blocking thread and register
-    /// here.
-    pub(crate) fn register_session(&self, token: &str) {
+    /// Record a verified token as an active session iff the auth epoch
+    /// hasn't changed since verification started. If the epoch changed
+    /// (password was rotated), the session is discarded — closes the
+    /// verify/register race where an old password could mint a session
+    /// after set_password_hash cleared the map.
+    pub(crate) fn register_session(&self, token: &str, expected_gen: u64) {
+        if self.auth_generation.load(Ordering::Acquire) != expected_gen {
+            return;
+        }
         self.sessions.insert(token.to_string(), Instant::now());
     }
 
@@ -463,6 +480,10 @@ async fn login_submit(
     };
     // Qual metric: time the Argon2 verify to surface overload (auth_verification_wait_ms).
     let verify_start = Instant::now();
+    // Capture the auth epoch BEFORE Argon2 verification starts; if
+    // set_password_hash bumps it during verification, the resulting session
+    // will be rejected by register_session.
+    let verified_gen = auth.auth_generation.load(Ordering::Acquire);
     let blocking_auth = auth.clone();
     let password = form.password.clone();
     let verified = tokio::task::spawn_blocking(move || {
@@ -476,7 +497,7 @@ async fn login_submit(
         .set_auth_verification_wait_ms(elapsed.as_millis() as u64);
     match verified {
         Some(token) => {
-            auth.register_session(&token);
+            auth.register_session(&token, verified_gen);
             let cookie = session_cookie_value(&token, auth.ttl.as_secs(), auth.secure_cookie);
             // ponytail: cookie value is a hex token (header::HeaderValue::from_str
             // accepts it); attrs are ASCII constants. The match is
@@ -536,8 +557,9 @@ mod tests {
     /// Helper mirroring what login_submit does: verify on (here: inline),
     /// then register.
     fn login(a: &AuthState, pw: &str) -> Option<String> {
+        let generation = a.auth_generation.load(Ordering::Acquire);
         let tok = a.verify_password(pw)?;
-        a.register_session(&tok);
+        a.register_session(&tok, generation);
         Some(tok)
     }
 
@@ -768,6 +790,42 @@ mod tests {
             a.verify_password("new-password").is_some(),
             "explicit replacement should clear poison and restore login"
         );
+    }
+
+    #[test]
+    fn password_change_aborts_in_flight_session_registration() {
+        let a = AuthState::new(
+            Some(hash_of("old-password")),
+            3600,
+            50,
+            1024,
+            vec![],
+            true,
+            Arc::new(ramshield_metrics::Metrics::new()),
+            4,
+        );
+
+        // Verify against old password — captures generation 0.
+        let generation = a.auth_generation.load(Ordering::Acquire);
+        assert_eq!(generation, 0);
+        assert!(a.verify_password("old-password").is_some());
+
+        // Rotate password — bumps generation to 1 and clears sessions.
+        a.set_password_hash(Some(hash_of("new-password")));
+        assert_eq!(a.auth_generation.load(Ordering::Acquire), 1);
+        assert!(a.verify_password("old-password").is_none());
+        assert_eq!(a.sessions.len(), 0);
+
+        // Registering with the stale generation must be rejected.
+        let fake_token = hex::encode([0u8; 32]);
+        a.register_session(&fake_token, generation);
+        assert_eq!(a.sessions.len(), 0, "stale-generation session must not survive");
+
+        // Fresh-generation registrations still work.
+        let new_gen = a.auth_generation.load(Ordering::Acquire);
+        let fresh = a.verify_password("new-password").unwrap();
+        a.register_session(&fresh, new_gen);
+        assert_eq!(a.sessions.len(), 1);
     }
 
     #[test]

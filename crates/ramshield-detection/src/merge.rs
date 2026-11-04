@@ -132,6 +132,7 @@ impl DetectionEngine {
                         profile,
                     };
 
+                    let was_breached = rec.detector_mode == DetectorMode::Breached as u8;
                     match tracker.update(rate, now, None) {
                         Ok(outcome) => {
                             // Write adaptive state back to IpRecord.
@@ -142,6 +143,12 @@ impl DetectionEngine {
                             rec.recovery_count = tracker.recovery_count;
                             rec.last_bucket_ns = tracker.last_bucket_ns;
                             rec.detector_mode = outcome.mode as u8;
+                            let now_breached = outcome.mode == DetectorMode::Breached;
+                            if !was_breached && now_breached {
+                                self.metrics.inc_baseline_frozen_ips();
+                            } else if was_breached && !now_breached {
+                                self.metrics.dec_baseline_frozen_ips();
+                            }
                             if outcome.is_breached {
                                 self.metrics.inc_adaptive_breach();
                             }

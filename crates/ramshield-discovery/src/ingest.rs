@@ -116,7 +116,19 @@ impl IngestionEngine {
     ) -> Result<(), WindowError> {
         let mut staged: BTreeMap<(ServiceId, TrafficDirection, u64), WindowAccumulator> =
             BTreeMap::new();
+        // Reject events with timestamps too far in the future to prevent
+        // pending-capacity exhaustion from a single far-future sample.
+        // Use a 1-hour tolerance measured in seconds.
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let max_future_secs = now_secs + 3_600; // 1 hour tolerance
         for event in events {
+            let timestamp_secs = event.timestamp_ns / 1_000_000_000;
+            if timestamp_secs > max_future_secs {
+                return Err(WindowError::InvalidObservation);
+            }
             if event.captured_bytes > event.wire_bytes
                 || event.truncated != (event.wire_bytes > event.captured_bytes)
             {
@@ -382,6 +394,30 @@ mod tests {
             eng.ledger().get(&key(service, TrafficDirection::Egress)),
             Some(WindowState::Observed { packets: 1, .. })
         ));
+    }
+
+    #[test]
+    fn future_timestamp_rejected() {
+        let mut eng = engine(IngestConfig::default());
+        let service = ServiceId::new(7);
+        // Record a valid event first
+        let valid_event = sample_event(
+            Ipv4Addr::new(10, 0, 0, 1).into(),
+            1_000_000_000,
+            150,
+            150,
+            false,
+        );
+        eng.record_batch(service, TrafficDirection::Ingress, &[valid_event]).unwrap();
+        // Now reject an event with a timestamp beyond the 1-hour tolerance
+        let far_future_event = sample_event(
+            Ipv4Addr::new(10, 0, 0, 1).into(),
+            u64::MAX, // far beyond any plausible wall time
+            150,
+            150,
+            false,
+        );
+        assert!(eng.record_batch(service, TrafficDirection::Ingress, &[far_future_event]).is_err());
     }
 
     #[test]

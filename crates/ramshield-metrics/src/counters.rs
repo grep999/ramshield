@@ -225,6 +225,16 @@ impl Metrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Decrement the baseline-frozen IPs gauge (IP recovered from Breached mode).
+    pub fn dec_baseline_frozen_ips(&self) {
+        // Never let the counter go negative — defensive guard.
+        let current = self.baseline_frozen_ips_gauge.load(Ordering::Relaxed);
+        if current > 0 {
+            self.baseline_frozen_ips_gauge
+                .fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
     /// Record a dashboard API request blocked by the cross-origin CSRF guard.
     pub fn inc_csrf_blocked(&self) {
         self.csrf_blocked_total.fetch_add(1, Ordering::Relaxed);

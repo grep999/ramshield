@@ -581,6 +581,12 @@ impl Metrics {
             "Samples dropped because they arrived before the 1-second bucket boundary.",
             "counter"
         ));
+        out.push_str(&emit!(
+            "ramshield_baseline_frozen_ips_gauge",
+            self.baseline_frozen_ips_gauge.load(Ordering::Relaxed),
+            "IPs currently with a frozen baseline (in Breached mode).",
+            "gauge"
+        ));
         // No trailing println! here — every emit stanza already ends in '\n',
         // and stdout writes from a render fn were a stray-syscall bug (2026-09).
         out
@@ -599,5 +605,29 @@ mod tpacket_reject_metric_tests {
         let rendered = metrics.render_prometheus();
         assert!(rendered.contains("# TYPE ramshield_native_tpacket_rejects_total counter"));
         assert!(rendered.contains("ramshield_native_tpacket_rejects_total 7"));
+    }
+
+    #[test]
+    fn detector_metrics_are_exported() {
+        let metrics = Metrics::new();
+        metrics.inc_adaptive_breach();
+        metrics.inc_numerical_calculation_failure();
+        metrics.inc_non_monotonic_timestamp();
+        metrics.inc_detector_invalid_input();
+        metrics.inc_baseline_frozen_ips();
+
+        let rendered = metrics.render_prometheus();
+        assert!(rendered.contains("# TYPE ramshield_adaptive_breach_total counter"));
+        assert!(rendered.contains("ramshield_adaptive_breach_total 1"));
+        assert!(rendered.contains("# TYPE ramshield_numerical_calculation_failure_total counter"));
+        assert!(rendered.contains("# TYPE ramshield_non_monotonic_timestamp_total counter"));
+        assert!(rendered.contains("# TYPE ramshield_detector_invalid_input_total counter"));
+        assert!(rendered.contains("# TYPE ramshield_baseline_frozen_ips_gauge gauge"));
+        assert!(rendered.contains("ramshield_baseline_frozen_ips_gauge 1"));
+
+        // Recovery decrements the gauge.
+        metrics.dec_baseline_frozen_ips();
+        let rendered = metrics.render_prometheus();
+        assert!(rendered.contains("ramshield_baseline_frozen_ips_gauge 0"));
     }
 }
