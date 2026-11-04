@@ -262,7 +262,7 @@ enables it.
 reason-string mapping, the CIDR normalisation and the ring buffer are
 all in it.
 
-**Read by:** `ramshield`, `ramshield-bgp`, `ramshield-config`, `ramshield-detection`, `ramshield-enforcement`, `ramshield-forecasting`, `ramshield-learning`, `ramshield-protocol`, `ramshield-storage`.
+**Read by:** `ramshield`, `ramshield-config`, `ramshield-detection`, `ramshield-enforcement`, `ramshield-forecasting`, `ramshield-learning`, `ramshield-protocol`, `ramshield-storage`.
 
 ## Testing
 
