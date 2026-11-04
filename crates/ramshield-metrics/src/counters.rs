@@ -206,10 +206,34 @@ impl Metrics {
         self.adaptive_breach_total.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record a non-monotonic timestamp error (wall-clock stepped backward).
+    pub fn inc_non_monotonic_timestamp(&self) {
+        self.non_monotonic_timestamp_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record an invalid-input detector error (bad rate, profile, baseline,
+    /// variance, cusum, sample count, or context confidence).
+    pub fn inc_detector_invalid_input(&self) {
+        self.detector_invalid_input_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Increment the baseline-frozen IPs gauge (current count of IPs in Breached mode).
     pub fn inc_baseline_frozen_ips(&self) {
         self.baseline_frozen_ips_gauge
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Decrement the baseline-frozen IPs gauge (IP recovered from Breached mode).
+    /// Uses an atomic conditional update so concurrent decrements cannot wrap
+    /// the unsigned counter below zero.
+    pub fn dec_baseline_frozen_ips(&self) {
+        let _ =
+            self.baseline_frozen_ips_gauge
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                    if v > 0 { Some(v - 1) } else { None }
+                });
     }
 
     /// Record a dashboard API request blocked by the cross-origin CSRF guard.

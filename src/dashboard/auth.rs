@@ -13,8 +13,11 @@ use dashmap::DashMap;
 use rand::RngCore;
 use serde::Deserialize;
 use std::{
-    net::{IpAddr, SocketAddr},
-    sync::Arc,
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::Semaphore;
@@ -37,6 +40,15 @@ pub struct AuthState {
     /// Argon2 PHC string from config. RwLock so a hot-reloaded config can
     /// swap it without restarting the dashboard server (D4 audit fix).
     password_hash: Arc<std::sync::RwLock<Option<String>>>,
+    /// Monotonic epoch bumped on every password change. A login captures it
+    /// before Argon2 verification and refuses to register a session if it
+    /// changed meanwhile — closes the verify/register race where an old
+    /// password could mint a session after sessions were cleared.
+    pub(crate) auth_generation: Arc<AtomicU64>,
+    /// Serializes password changes and session registration so that
+    /// a generation check and session insert cannot interleave with a
+    /// concurrent password rotation.
+    auth_lock: Arc<std::sync::Mutex<()>>,
     ttl: Duration,
     sessions: Arc<DashMap<String, Instant, ahash::RandomState>>,
     max_login_attempts: u32,
@@ -74,6 +86,20 @@ pub struct AuthState {
 struct FailureWindow {
     count: u32,
     first_fail: Instant,
+}
+
+/// Compute the lockout key for an IP address, keying IPv6 by /64 so that
+/// an attacker cannot rotate the host bits of their IPv6 address to obtain
+/// fresh lockout buckets. IPv4 addresses are used as-is.
+fn lockout_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => {
+            let mut octets = v6.octets();
+            octets[8..].fill(0);
+            IpAddr::V6(Ipv6Addr::from(octets))
+        }
+    }
 }
 
 /// Failed attempts older than this decay to zero — transient brute force
@@ -137,6 +163,8 @@ impl AuthState {
         let min_ttl = 1u64;
         Self {
             password_hash: Arc::new(std::sync::RwLock::new(password_hash)),
+            auth_generation: Arc::new(AtomicU64::new(0)),
+            auth_lock: Arc::new(std::sync::Mutex::new(())),
             ttl: Duration::from_secs(ttl_secs.max(min_ttl)),
             sessions: Arc::new(DashMap::with_hasher(ahash::RandomState::new())),
             max_login_attempts,
@@ -171,6 +199,13 @@ impl AuthState {
     /// The replacement is written while holding the recovered write guard,
     /// then poison is cleared so readers can resume with the known-good value.
     pub fn set_password_hash(&self, new_hash: Option<String>) {
+        // Hold the auth lock across the epoch bump, hash swap and session
+        // clear so a concurrent register_session() cannot slip a stale
+        // session in between the generation check and the clear.
+        let _guard = self.auth_lock.lock().unwrap();
+        // Bump the epoch BEFORE swapping the hash so any in-flight login that
+        // verified against the old hash cannot register a session afterwards.
+        self.auth_generation.fetch_add(1, Ordering::AcqRel);
         match self.password_hash.write() {
             Ok(mut guard) => *guard = new_hash,
             Err(poisoned) => {
@@ -179,22 +214,25 @@ impl AuthState {
                 self.password_hash.clear_poison();
             }
         }
+        // A stolen session must not survive a password change.
+        self.sessions.clear();
     }
 
     /// True when this IP is currently locked out. Entries for IPs whose
     /// window has fully decayed are removed here (opportunistic sweep —
     /// the map is bounded by distinct IPs that actually POST /login).
     fn is_locked(&self, ip: IpAddr) -> bool {
-        let expired = match self.failures.get(&ip) {
+        let key = lockout_key(ip);
+        let expired = match self.failures.get(&key) {
             None => return false,
             Some(e) => e.first_fail.elapsed() >= LOCKOUT_WINDOW,
         };
         if expired {
-            self.failures.remove(&ip);
+            self.failures.remove(&key);
             return false;
         }
         self.failures
-            .get(&ip)
+            .get(&key)
             .is_some_and(|e| e.count >= self.max_login_attempts)
     }
 
@@ -208,8 +246,9 @@ impl AuthState {
             .failure_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let key = lockout_key(ip);
 
-        if let Some(mut window) = self.failures.get_mut(&ip) {
+        if let Some(mut window) = self.failures.get_mut(&key) {
             if window.first_fail.elapsed() >= LOCKOUT_WINDOW {
                 window.count = 1;
                 window.first_fail = Instant::now();
@@ -228,7 +267,7 @@ impl AuthState {
             self.failures.remove(&victim);
         }
         self.failures.insert(
-            ip,
+            key,
             FailureWindow {
                 count: 1,
                 first_fail: Instant::now(),
@@ -263,10 +302,19 @@ impl AuthState {
         Some(hex::encode(token))
     }
 
-    /// Record a verified token as an active session. Split out of the login
-    /// flow so the async handler can verify on a blocking thread and register
-    /// here.
-    pub(crate) fn register_session(&self, token: &str) {
+    /// Record a verified token as an active session iff the auth epoch
+    /// hasn't changed since verification started. If the epoch changed
+    /// (password was rotated), the session is discarded — closes the
+    /// verify/register race where an old password could mint a session
+    /// after set_password_hash cleared the map.
+    /// This method is thread-safe: it acquires the auth mutex before
+    /// checking the generation and inserting the session, so no
+    /// interleaving with set_password_hash() can produce a stale session.
+    pub(crate) fn register_session(&self, token: &str, expected_gen: u64) {
+        let _guard = self.auth_lock.lock().unwrap();
+        if self.auth_generation.load(Ordering::Acquire) != expected_gen {
+            return;
+        }
         self.sessions.insert(token.to_string(), Instant::now());
     }
 
@@ -401,10 +449,20 @@ async fn login_submit(
     let ip = if let Some(c) = addr {
         let peer = c.0.ip();
         if ramshield_config::peer_is_trusted_proxy(peer, &auth.trusted_proxies) {
-            // Trusted proxy — use X-Forwarded-For client IP (first entry = original client)
+            // Trusted proxy — use X-Forwarded-For client IP. Walk right-to-left,
+            // skipping trusted proxies, so a client-supplied leftmost value
+            // cannot rotate its way into a fresh lockout bucket.
             let xff_name = axum::http::header::HeaderName::from_static("x-forwarded-for");
-            let xff = headers.get(&xff_name).and_then(|v| v.to_str().ok());
-            ramshield_config::xff_client(xff).unwrap_or(peer)
+            // A proxy may append a new header line instead of extending the
+            // client's line. `get()` would return only the first line (the
+            // client-controlled one), so join every line before walking.
+            let xff = headers
+                .get_all(&xff_name)
+                .iter()
+                .filter_map(|v| v.to_str().ok())
+                .collect::<Vec<_>>()
+                .join(", ");
+            ramshield_config::xff_client(Some(&xff), &auth.trusted_proxies).unwrap_or(peer)
         } else {
             // Untrusted peer — key by direct TCP address only
             peer
@@ -435,6 +493,10 @@ async fn login_submit(
     };
     // Qual metric: time the Argon2 verify to surface overload (auth_verification_wait_ms).
     let verify_start = Instant::now();
+    // Capture the auth epoch BEFORE Argon2 verification starts; if
+    // set_password_hash bumps it during verification, the resulting session
+    // will be rejected by register_session.
+    let verified_gen = auth.auth_generation.load(Ordering::Acquire);
     let blocking_auth = auth.clone();
     let password = form.password.clone();
     let verified = tokio::task::spawn_blocking(move || {
@@ -448,7 +510,7 @@ async fn login_submit(
         .set_auth_verification_wait_ms(elapsed.as_millis() as u64);
     match verified {
         Some(token) => {
-            auth.register_session(&token);
+            auth.register_session(&token, verified_gen);
             let cookie = session_cookie_value(&token, auth.ttl.as_secs(), auth.secure_cookie);
             // ponytail: cookie value is a hex token (header::HeaderValue::from_str
             // accepts it); attrs are ASCII constants. The match is
@@ -508,8 +570,9 @@ mod tests {
     /// Helper mirroring what login_submit does: verify on (here: inline),
     /// then register.
     fn login(a: &AuthState, pw: &str) -> Option<String> {
+        let generation = a.auth_generation.load(Ordering::Acquire);
         let tok = a.verify_password(pw)?;
-        a.register_session(&tok);
+        a.register_session(&tok, generation);
         Some(tok)
     }
 
@@ -739,6 +802,107 @@ mod tests {
         assert!(
             a.verify_password("new-password").is_some(),
             "explicit replacement should clear poison and restore login"
+        );
+    }
+
+    #[test]
+    fn password_change_aborts_in_flight_session_registration() {
+        let a = AuthState::new(
+            Some(hash_of("old-password")),
+            3600,
+            50,
+            1024,
+            vec![],
+            true,
+            Arc::new(ramshield_metrics::Metrics::new()),
+            4,
+        );
+
+        // Verify against old password — captures generation 0.
+        let generation = a.auth_generation.load(Ordering::Acquire);
+        assert_eq!(generation, 0);
+        assert!(a.verify_password("old-password").is_some());
+
+        // Rotate password — bumps generation to 1 and clears sessions.
+        a.set_password_hash(Some(hash_of("new-password")));
+        assert_eq!(a.auth_generation.load(Ordering::Acquire), 1);
+        assert!(a.verify_password("old-password").is_none());
+        assert_eq!(a.sessions.len(), 0);
+
+        // Registering with the stale generation must be rejected.
+        let fake_token = hex::encode([0u8; 32]);
+        a.register_session(&fake_token, generation);
+        assert_eq!(
+            a.sessions.len(),
+            0,
+            "stale-generation session must not survive"
+        );
+
+        // Fresh-generation registrations still work.
+        let new_gen = a.auth_generation.load(Ordering::Acquire);
+        let fresh = a.verify_password("new-password").unwrap();
+        a.register_session(&fresh, new_gen);
+        assert_eq!(a.sessions.len(), 1);
+    }
+
+    #[test]
+    fn password_change_serializes_with_session_registration() {
+        use std::sync::{Arc, Barrier, atomic::Ordering};
+        use std::thread;
+
+        let a = AuthState::new(
+            Some(hash_of("old-password")),
+            3600,
+            50,
+            1024,
+            vec![],
+            true,
+            Arc::new(ramshield_metrics::Metrics::new()),
+            4,
+        );
+
+        // Capture generation 0 before any rotation.
+        let generation = a.auth_generation.load(Ordering::Acquire);
+
+        // Barrier so the concurrent workers and the reader start together.
+        let barrier = Arc::new(Barrier::new(3));
+        let a_clone1 = a.clone();
+        let a_clone2 = a.clone();
+        let a_clone3 = a.clone();
+        let barrier1 = barrier.clone();
+        let barrier2 = barrier.clone();
+
+        // Worker 1: continuously rotate the password (gen increments each time).
+        let worker1 = thread::spawn(move || {
+            barrier1.wait();
+            for i in 0..10 {
+                a_clone1.set_password_hash(Some(hash_of(if i % 2 == 0 {
+                    "pass-a"
+                } else {
+                    "pass-b"
+                })));
+            }
+        });
+
+        // Worker 2: continuously register sessions with the stale generation 0.
+        let worker2 = thread::spawn(move || {
+            barrier2.wait();
+            for _ in 0..10 {
+                let fake_token = format!("{:x}", rand::random::<u64>());
+                a_clone2.register_session(&fake_token, generation);
+            }
+        });
+
+        let _ = barrier.wait();
+        worker1.join().unwrap();
+        worker2.join().unwrap();
+
+        // No session from the stale generation may survive concurrent rotations.
+        // All registrations with generation 0 must have been rejected.
+        assert_eq!(
+            a_clone3.sessions.len(),
+            0,
+            "concurrent password rotations must not leave a stale session"
         );
     }
 
