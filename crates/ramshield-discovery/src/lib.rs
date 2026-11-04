@@ -1194,7 +1194,13 @@ mod tests {
         let recent_hour = now_hour - 10;
         // Normal recent observation trains successfully.
         d.observe(sample(recent_hour * 3600));
-        assert!(d.state.buckets.iter().flatten().any(|b| b.hour == recent_hour));
+        assert!(
+            d.state
+                .buckets
+                .iter()
+                .flatten()
+                .any(|b| b.hour == recent_hour)
+        );
         // Far-future observation must not advance the retention horizon.
         let future_hour = now_hour + 100_000;
         d.observe(sample(future_hour * 3600));
@@ -1211,7 +1217,11 @@ mod tests {
             "future hour {future_hour} must not advance retention horizon"
         );
         assert!(
-            d.state.buckets.iter().flatten().any(|b| b.hour == recent_hour),
+            d.state
+                .buckets
+                .iter()
+                .flatten()
+                .any(|b| b.hour == recent_hour),
             "recent bucket must survive future timestamp"
         );
         let _ = fs::remove_file(p);

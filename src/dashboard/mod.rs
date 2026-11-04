@@ -1041,7 +1041,10 @@ mod tests {
     async fn post_config_same_origin_allowed() {
         let state = test_app_state();
         let token = "b".repeat(64);
-        let generation = state.auth.auth_generation.load(std::sync::atomic::Ordering::Acquire);
+        let generation = state
+            .auth
+            .auth_generation
+            .load(std::sync::atomic::Ordering::Acquire);
         state.auth.register_session(&token, generation);
         let app = Router::new()
             .route("/api/config", post(api_set_config))

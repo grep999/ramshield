@@ -408,7 +408,8 @@ mod tests {
             150,
             false,
         );
-        eng.record_batch(service, TrafficDirection::Ingress, &[valid_event]).unwrap();
+        eng.record_batch(service, TrafficDirection::Ingress, &[valid_event])
+            .unwrap();
         // Now reject an event with a timestamp beyond the 1-hour tolerance
         let far_future_event = sample_event(
             Ipv4Addr::new(10, 0, 0, 1).into(),
@@ -417,7 +418,10 @@ mod tests {
             150,
             false,
         );
-        assert!(eng.record_batch(service, TrafficDirection::Ingress, &[far_future_event]).is_err());
+        assert!(
+            eng.record_batch(service, TrafficDirection::Ingress, &[far_future_event])
+                .is_err()
+        );
     }
 
     #[test]

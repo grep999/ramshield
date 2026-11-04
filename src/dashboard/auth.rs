@@ -819,7 +819,11 @@ mod tests {
         // Registering with the stale generation must be rejected.
         let fake_token = hex::encode([0u8; 32]);
         a.register_session(&fake_token, generation);
-        assert_eq!(a.sessions.len(), 0, "stale-generation session must not survive");
+        assert_eq!(
+            a.sessions.len(),
+            0,
+            "stale-generation session must not survive"
+        );
 
         // Fresh-generation registrations still work.
         let new_gen = a.auth_generation.load(Ordering::Acquire);
