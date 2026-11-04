@@ -1406,6 +1406,15 @@ mod tests {
         d.recorded_windows.values().map(|set| set.len()).sum()
     }
 
+    /// Count trained assessments for a service/direction/hour. Zero means the
+    /// window never trained a profile — the behavioural signal these tests need.
+    fn assessment_count(d: &Discovery, svc: u64, dir: TrafficDirection, hour: u64) -> usize {
+        d.service_profiles
+            .get(&ServiceId::new(svc))
+            .map(|s| s.all_assessments(&svc.to_string(), dir, hour).len())
+            .unwrap_or(0)
+    }
+
     #[test]
     fn recorded_windows_duplicate_is_idempotent() {
         let p = path();
@@ -1431,8 +1440,13 @@ mod tests {
                     .next()
             })
             .map(|a| (a.observed_packets, a.clean_observations));
+        assert!(
+            after_first.is_some(),
+            "first call must actually train a profile"
+        );
         assert_eq!(after_first, after_second, "duplicate must not re-train");
         assert_eq!(total_recorded(&d), 1);
+        assert_eq!(assessment_count(&d, 1, TrafficDirection::Ingress, 100), 2);
         let _ = fs::remove_file(p);
     }
 
@@ -1453,6 +1467,10 @@ mod tests {
                 .is_some_and(|s| s.contains(&(ServiceId::new(1), TrafficDirection::Ingress))),
             "hour at the exact retention boundary must be accepted"
         );
+        assert!(
+            assessment_count(&d, 1, TrafficDirection::Ingress, 77) > 0,
+            "boundary window must train a profile, not just a dedup key"
+        );
         let _ = fs::remove_file(p);
     }
 
@@ -1468,6 +1486,11 @@ mod tests {
         // 76 is one hour before the horizon (77) and must be rejected.
         d.record_completed_window(mk_ctx(1, TrafficDirection::Ingress, 76, 1));
         assert!(d.recorded_windows.get(&76).is_none());
+        assert_eq!(
+            assessment_count(&d, 1, TrafficDirection::Ingress, 76),
+            0,
+            "rejected window must not train a profile"
+        );
         let _ = fs::remove_file(p);
     }
 
@@ -1486,6 +1509,15 @@ mod tests {
         // All buckets older than 1000 - 23 = 977 are gone.
         assert_eq!(d.recorded_windows.len(), 1);
         assert!(d.recorded_windows.contains_key(&1000));
+        assert_eq!(
+            assessment_count(&d, 1, TrafficDirection::Ingress, 0),
+            0,
+            "expired hour profile must be pruned"
+        );
+        assert!(
+            assessment_count(&d, 1, TrafficDirection::Ingress, 1000) > 0,
+            "new hour profile must be trained"
+        );
         let _ = fs::remove_file(p);
     }
 
@@ -1499,6 +1531,14 @@ mod tests {
         assert!(set.contains(&(ServiceId::new(1), TrafficDirection::Ingress)));
         assert!(set.contains(&(ServiceId::new(1), TrafficDirection::Egress)));
         assert_eq!(total_recorded(&d), 2);
+        assert!(
+            assessment_count(&d, 1, TrafficDirection::Ingress, 100) > 0,
+            "ingress profile must be trained"
+        );
+        assert!(
+            assessment_count(&d, 1, TrafficDirection::Egress, 100) > 0,
+            "egress profile must be trained independently"
+        );
         let _ = fs::remove_file(p);
     }
 
@@ -1512,9 +1552,14 @@ mod tests {
             d.flush().unwrap();
             assert_eq!(total_recorded(&d), 1);
         }
-        // Reopen: runtime-only idempotency state must be empty.
+        // Reopen: runtime-only idempotency state must be empty...
         let d2 = Discovery::open(&p, config).unwrap();
         assert_eq!(total_recorded(&d2), 0);
+        // ...but the persisted profile state must survive.
+        assert!(
+            assessment_count(&d2, 1, TrafficDirection::Ingress, 100) > 0,
+            "profile must persist across reopen even though dedup state resets"
+        );
         let _ = fs::remove_file(p);
     }
 
