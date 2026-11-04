@@ -226,13 +226,14 @@ impl Metrics {
     }
 
     /// Decrement the baseline-frozen IPs gauge (IP recovered from Breached mode).
+    /// Uses an atomic conditional update so concurrent decrements cannot wrap
+    /// the unsigned counter below zero.
     pub fn dec_baseline_frozen_ips(&self) {
-        // Never let the counter go negative — defensive guard.
-        let current = self.baseline_frozen_ips_gauge.load(Ordering::Relaxed);
-        if current > 0 {
+        let _ =
             self.baseline_frozen_ips_gauge
-                .fetch_sub(1, Ordering::Relaxed);
-        }
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                    if v > 0 { Some(v - 1) } else { None }
+                });
     }
 
     /// Record a dashboard API request blocked by the cross-origin CSRF guard.

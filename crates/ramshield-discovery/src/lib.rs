@@ -426,6 +426,13 @@ impl Discovery {
         if self.recorded_windows.contains_key(&key) {
             return;
         }
+        // Prune stale idempotency entries outside the retention horizon.
+        // The retention is bucket_count hours; any entry older than
+        // (ctx.hour_utc - bucket_count + 1) cannot be duplicated again.
+        let retention_hour = ctx
+            .hour_utc
+            .saturating_sub(self.config.bucket_count() as u64 - 1);
+        self.recorded_windows.retain(|&k, _| k.2 >= retention_hour);
         self.recorded_windows.insert(key, true);
 
         let has_capacity = self.service_profiles.contains_key(&ctx.service_id)
@@ -1230,10 +1237,15 @@ mod tests {
     #[test]
     fn recorded_windows_map_stays_bounded() {
         let p = path();
-        let mut d = Discovery::open(&p, DiscoveryConfig::default()).unwrap();
+        // 1-day retention = 24 hourly buckets. Record 200 hours so the map
+        // must prune, not merely stay under a large default.
+        let config = DiscoveryConfig {
+            observation_days: 1,
+            max_ports_per_hour: 256,
+        };
+        let mut d = Discovery::open(&p, config).unwrap();
         let svc = ServiceId::new(1);
-        // Record many hours spanning well beyond retention.
-        for hour in 0..500u64 {
+        for hour in 0..200u64 {
             d.record_completed_window(crate::RecordCompletedWindowCtx {
                 service_id: svc,
                 direction: TrafficDirection::Ingress,
@@ -1245,13 +1257,24 @@ mod tests {
                 dest_key: None,
             });
         }
-        // The map should be bounded by the retention window, not grow to 500.
+        // The map must be bounded by the 24-hour retention window, not 200.
         let retention = d.config.bucket_count() as usize;
+        assert_eq!(retention, 24);
         assert!(
-            d.recorded_windows.len() <= retention + 1,
+            d.recorded_windows.len() <= retention,
             "recorded_windows len {} exceeds retention {}",
             d.recorded_windows.len(),
             retention
+        );
+        // The most recent window must still be present (idempotency intact).
+        assert!(
+            d.recorded_windows
+                .contains_key(&(svc, TrafficDirection::Ingress, 10_199))
+        );
+        // The oldest window must have been pruned.
+        assert!(
+            !d.recorded_windows
+                .contains_key(&(svc, TrafficDirection::Ingress, 10_000))
         );
         let _ = fs::remove_file(p);
     }

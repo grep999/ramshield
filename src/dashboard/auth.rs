@@ -45,6 +45,10 @@ pub struct AuthState {
     /// changed meanwhile — closes the verify/register race where an old
     /// password could mint a session after sessions were cleared.
     pub(crate) auth_generation: Arc<AtomicU64>,
+    /// Serializes password changes and session registration so that
+    /// a generation check and session insert cannot interleave with a
+    /// concurrent password rotation.
+    auth_lock: Arc<std::sync::Mutex<()>>,
     ttl: Duration,
     sessions: Arc<DashMap<String, Instant, ahash::RandomState>>,
     max_login_attempts: u32,
@@ -160,6 +164,7 @@ impl AuthState {
         Self {
             password_hash: Arc::new(std::sync::RwLock::new(password_hash)),
             auth_generation: Arc::new(AtomicU64::new(0)),
+            auth_lock: Arc::new(std::sync::Mutex::new(())),
             ttl: Duration::from_secs(ttl_secs.max(min_ttl)),
             sessions: Arc::new(DashMap::with_hasher(ahash::RandomState::new())),
             max_login_attempts,
@@ -194,6 +199,10 @@ impl AuthState {
     /// The replacement is written while holding the recovered write guard,
     /// then poison is cleared so readers can resume with the known-good value.
     pub fn set_password_hash(&self, new_hash: Option<String>) {
+        // Hold the auth lock across the epoch bump, hash swap and session
+        // clear so a concurrent register_session() cannot slip a stale
+        // session in between the generation check and the clear.
+        let _guard = self.auth_lock.lock().unwrap();
         // Bump the epoch BEFORE swapping the hash so any in-flight login that
         // verified against the old hash cannot register a session afterwards.
         self.auth_generation.fetch_add(1, Ordering::AcqRel);
@@ -298,7 +307,11 @@ impl AuthState {
     /// (password was rotated), the session is discarded — closes the
     /// verify/register race where an old password could mint a session
     /// after set_password_hash cleared the map.
+    /// This method is thread-safe: it acquires the auth mutex before
+    /// checking the generation and inserting the session, so no
+    /// interleaving with set_password_hash() can produce a stale session.
     pub(crate) fn register_session(&self, token: &str, expected_gen: u64) {
+        let _guard = self.auth_lock.lock().unwrap();
         if self.auth_generation.load(Ordering::Acquire) != expected_gen {
             return;
         }
@@ -830,6 +843,67 @@ mod tests {
         let fresh = a.verify_password("new-password").unwrap();
         a.register_session(&fresh, new_gen);
         assert_eq!(a.sessions.len(), 1);
+    }
+
+    #[test]
+    fn password_change_serializes_with_session_registration() {
+        use std::sync::{Arc, Barrier, atomic::Ordering};
+        use std::thread;
+
+        let a = AuthState::new(
+            Some(hash_of("old-password")),
+            3600,
+            50,
+            1024,
+            vec![],
+            true,
+            Arc::new(ramshield_metrics::Metrics::new()),
+            4,
+        );
+
+        // Capture generation 0 before any rotation.
+        let generation = a.auth_generation.load(Ordering::Acquire);
+
+        // Barrier so the concurrent workers and the reader start together.
+        let barrier = Arc::new(Barrier::new(3));
+        let a_clone1 = a.clone();
+        let a_clone2 = a.clone();
+        let a_clone3 = a.clone();
+        let barrier1 = barrier.clone();
+        let barrier2 = barrier.clone();
+
+        // Worker 1: continuously rotate the password (gen increments each time).
+        let worker1 = thread::spawn(move || {
+            barrier1.wait();
+            for i in 0..10 {
+                a_clone1.set_password_hash(Some(hash_of(if i % 2 == 0 {
+                    "pass-a"
+                } else {
+                    "pass-b"
+                })));
+            }
+        });
+
+        // Worker 2: continuously register sessions with the stale generation 0.
+        let worker2 = thread::spawn(move || {
+            barrier2.wait();
+            for _ in 0..10 {
+                let fake_token = format!("{:x}", rand::random::<u64>());
+                a_clone2.register_session(&fake_token, generation);
+            }
+        });
+
+        let _ = barrier.wait();
+        worker1.join().unwrap();
+        worker2.join().unwrap();
+
+        // No session from the stale generation may survive concurrent rotations.
+        // All registrations with generation 0 must have been rejected.
+        assert_eq!(
+            a_clone3.sessions.len(),
+            0,
+            "concurrent password rotations must not leave a stale session"
+        );
     }
 
     #[test]
