@@ -275,15 +275,32 @@ impl AuthState {
         );
     }
 
-    /// Pure password verification — no shared state, safe to run on a
-    /// blocking thread. Argon2 verify burns ~50-100ms of CPU; calling it
-    /// inline on an async handler blocks the Tokio worker for every other
-    /// request on that thread.
+    /// Test-only convenience: snapshot then verify. Production login uses
+    /// `snapshot_auth` + `verify_password_with_hash` explicitly so it can
+    /// register with the same generation it verified under.
+    #[cfg(test)]
     fn verify_password(&self, password: &str) -> Option<String> {
-        // A poisoned lock means the hash may have been left in an unknown
-        // state. Deny login until set_password_hash installs a known-good hash.
+        let (_, hash) = self.snapshot_auth()?;
+        self.verify_password_with_hash(password, &hash)
+    }
+
+    /// Capture a consistent `(generation, password_hash)` snapshot under the
+    /// auth lock. A login must verify against *this* hash and later register
+    /// with *this* generation; otherwise a rotation that increments the epoch
+    /// before swapping the hash lets an old password verify and then register
+    /// against the new epoch. Returns None when auth is disabled/unreadable.
+    fn snapshot_auth(&self) -> Option<(u64, String)> {
+        let _guard = self.auth_lock.lock().unwrap();
+        let generation = self.auth_generation.load(Ordering::Acquire);
         let hash = self.password_hash.read().ok()?.as_ref()?.clone();
-        let parsed = argon2::PasswordHash::new(&hash).ok()?;
+        Some((generation, hash))
+    }
+
+    /// Pure password verification against a captured hash — no shared state,
+    /// safe to run on a blocking thread. Argon2 verify burns ~50-100ms of CPU;
+    /// calling it inline on an async handler blocks the Tokio worker.
+    fn verify_password_with_hash(&self, password: &str, hash: &str) -> Option<String> {
+        let parsed = argon2::PasswordHash::new(hash).ok()?;
         // Constant-time verify inside argon2; cap work on garbage input.
         if password.len() > self.max_password_length {
             return None;
@@ -310,12 +327,15 @@ impl AuthState {
     /// This method is thread-safe: it acquires the auth mutex before
     /// checking the generation and inserting the session, so no
     /// interleaving with set_password_hash() can produce a stale session.
-    pub(crate) fn register_session(&self, token: &str, expected_gen: u64) {
+    /// Returns true when the session was registered; false when the epoch
+    /// changed (password rotated) and the session was rejected.
+    pub(crate) fn register_session(&self, token: &str, expected_gen: u64) -> bool {
         let _guard = self.auth_lock.lock().unwrap();
         if self.auth_generation.load(Ordering::Acquire) != expected_gen {
-            return;
+            return false;
         }
         self.sessions.insert(token.to_string(), Instant::now());
+        true
     }
 
     fn validate(&self, token: &str) -> bool {
@@ -493,15 +513,29 @@ async fn login_submit(
     };
     // Qual metric: time the Argon2 verify to surface overload (auth_verification_wait_ms).
     let verify_start = Instant::now();
-    // Capture the auth epoch BEFORE Argon2 verification starts; if
-    // set_password_hash bumps it during verification, the resulting session
-    // will be rejected by register_session.
-    let verified_gen = auth.auth_generation.load(Ordering::Acquire);
+    // Capture a consistent (generation, password_hash) snapshot under the
+    // auth lock. If auth is disabled/unreadable, reject.
+    let snapshot = match auth.snapshot_auth() {
+        Some(s) => s,
+        None => {
+            auth.note_failure(ip);
+            let page = include_str!("login.html").replace(
+                "{{ERR}}",
+                &format!(
+                    r#"<p class="err">{}</p>"#,
+                    sanitize_html("Authentication unavailable.")
+                ),
+            );
+            return (StatusCode::UNAUTHORIZED, Html(page)).into_response();
+        }
+    };
+    let verified_gen = snapshot.0;
+    let password_hash_snapshot = snapshot.1;
     let blocking_auth = auth.clone();
     let password = form.password.clone();
     let verified = tokio::task::spawn_blocking(move || {
         let _ = argon2_permit; // hold permit through blocking work
-        blocking_auth.verify_password(&password)
+        blocking_auth.verify_password_with_hash(&password, &password_hash_snapshot)
     })
     .await
     .unwrap_or(None);
@@ -510,7 +544,20 @@ async fn login_submit(
         .set_auth_verification_wait_ms(elapsed.as_millis() as u64);
     match verified {
         Some(token) => {
-            auth.register_session(&token, verified_gen);
+            let registered = auth.register_session(&token, verified_gen);
+            if !registered {
+                // Generation changed during verification — reject to prevent
+                // stale-password session after rotation.
+                auth.note_failure(ip);
+                let page = include_str!("login.html").replace(
+                    "{{ERR}}",
+                    &format!(
+                        r#"<p class="err">{}</p>"#,
+                        sanitize_html("Invalid credentials.")
+                    ),
+                );
+                return (StatusCode::UNAUTHORIZED, Html(page)).into_response();
+            }
             let cookie = session_cookie_value(&token, auth.ttl.as_secs(), auth.secure_cookie);
             // ponytail: cookie value is a hex token (header::HeaderValue::from_str
             // accepts it); attrs are ASCII constants. The match is
@@ -843,6 +890,34 @@ mod tests {
         let fresh = a.verify_password("new-password").unwrap();
         a.register_session(&fresh, new_gen);
         assert_eq!(a.sessions.len(), 1);
+    }
+
+    #[test]
+    fn login_snapshot_rejects_rotation_between_verify_and_register() {
+        let a = AuthState::new(
+            Some(hash_of("old-password")),
+            3600,
+            50,
+            1024,
+            vec![],
+            true,
+            Arc::new(ramshield_metrics::Metrics::new()),
+            4,
+        );
+        // Step 1: login captures (generation=0, old hash) atomically.
+        let (generation, hash) = a.snapshot_auth().unwrap();
+        assert_eq!(generation, 0);
+        // Step 2: password rotation happens while login verifies.
+        a.set_password_hash(Some(hash_of("new-password")));
+        // Step 3: login verifies old password against the captured old hash —
+        // succeeds, because the snapshot is self-consistent.
+        let token = a
+            .verify_password_with_hash("old-password", &hash)
+            .expect("old password must verify against captured hash");
+        // Step 4: registration with the stale generation must be rejected.
+        let registered = a.register_session(&token, generation);
+        assert!(!registered, "stale-generation registration must fail");
+        assert_eq!(a.sessions.len(), 0, "no stale session may be inserted");
     }
 
     #[test]

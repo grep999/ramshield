@@ -630,4 +630,39 @@ mod tpacket_reject_metric_tests {
         let rendered = metrics.render_prometheus();
         assert!(rendered.contains("ramshield_baseline_frozen_ips_gauge 0"));
     }
+
+    #[test]
+    fn concurrent_decrement_does_not_wrap() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let metrics = Metrics::new();
+        for _ in 0..100 {
+            metrics.inc_baseline_frozen_ips();
+        }
+        assert_eq!(
+            metrics.baseline_frozen_ips_gauge.load(Ordering::Relaxed),
+            100
+        );
+
+        let barrier = Arc::new(Barrier::new(11));
+        let m = Arc::new(metrics);
+        let mut handles = vec![];
+        for _ in 0..10 {
+            let m_clone = m.clone();
+            let b = barrier.clone();
+            handles.push(thread::spawn(move || {
+                b.wait();
+                for _ in 0..10 {
+                    m_clone.dec_baseline_frozen_ips();
+                }
+            }));
+        }
+        barrier.wait();
+        for h in handles {
+            h.join().unwrap();
+        }
+        // All 100 decrements applied exactly; no unsigned wrap.
+        assert_eq!(m.baseline_frozen_ips_gauge.load(Ordering::Relaxed), 0);
+    }
 }

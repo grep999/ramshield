@@ -426,13 +426,28 @@ impl Discovery {
         if self.recorded_windows.contains_key(&key) {
             return;
         }
-        // Prune stale idempotency entries outside the retention horizon.
-        // The retention is bucket_count hours; any entry older than
-        // (ctx.hour_utc - bucket_count + 1) cannot be duplicated again.
-        let retention_hour = ctx
-            .hour_utc
-            .saturating_sub(self.config.bucket_count() as u64 - 1);
+        // Service capacity gate: reject new service IDs before touching the map.
+        let has_capacity = self.service_profiles.contains_key(&ctx.service_id)
+            || self.service_profiles.len() < MAX_SERVICES;
+        if !has_capacity {
+            return;
+        }
+        // Monotonic retention horizon: uses the newest observed hour so an
+        // old out-of-order event cannot move the horizon backwards.
+        let newest = self
+            .recorded_windows
+            .keys()
+            .map(|k| k.2)
+            .max()
+            .unwrap_or(0)
+            .max(ctx.hour_utc);
+        let retention_hour = newest.saturating_sub(self.config.bucket_count() as u64 - 1);
         self.recorded_windows.retain(|&k, _| k.2 >= retention_hour);
+        // Reject windows older than the retention horizon entirely so an
+        // out-of-order old event cannot re-enter after being pruned.
+        if ctx.hour_utc < retention_hour {
+            return;
+        }
         self.recorded_windows.insert(key, true);
 
         let has_capacity = self.service_profiles.contains_key(&ctx.service_id)
@@ -1275,6 +1290,80 @@ mod tests {
         assert!(
             !d.recorded_windows
                 .contains_key(&(svc, TrafficDirection::Ingress, 10_000))
+        );
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn recorded_windows_respects_max_services() {
+        let p = path();
+        let config = DiscoveryConfig {
+            observation_days: 1,
+            max_ports_per_hour: 256,
+        };
+        let mut d = Discovery::open(&p, config).unwrap();
+        // Try to record for more distinct services than MAX_SERVICES (64).
+        for i in 0..70u64 {
+            let svc = ServiceId::new(i);
+            d.record_completed_window(crate::RecordCompletedWindowCtx {
+                service_id: svc,
+                direction: TrafficDirection::Ingress,
+                hour_utc: 10_000,
+                packets: 1,
+                bytes: 64,
+                quality: crate::ObservationQuality::Clean,
+                source_key: None,
+                dest_key: None,
+            });
+        }
+        // Only 64 services should be admitted; the rest silently dropped.
+        assert_eq!(d.recorded_windows.len(), 64);
+        let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn recorded_windows_old_after_new_does_not_move_horizon() {
+        let p = path();
+        let config = DiscoveryConfig {
+            observation_days: 1,
+            max_ports_per_hour: 256,
+        };
+        let mut d = Discovery::open(&p, config).unwrap();
+        let svc = ServiceId::new(1);
+        // Record a new window at hour 100.
+        d.record_completed_window(crate::RecordCompletedWindowCtx {
+            service_id: svc,
+            direction: TrafficDirection::Ingress,
+            hour_utc: 100,
+            packets: 1,
+            bytes: 64,
+            quality: crate::ObservationQuality::Clean,
+            source_key: None,
+            dest_key: None,
+        });
+        // Record a very old window (hour 0) — should NOT move the retention
+        // horizon backwards, so hour 100 must stay.
+        d.record_completed_window(crate::RecordCompletedWindowCtx {
+            service_id: svc,
+            direction: TrafficDirection::Ingress,
+            hour_utc: 0,
+            packets: 1,
+            bytes: 64,
+            quality: crate::ObservationQuality::Clean,
+            source_key: None,
+            dest_key: None,
+        });
+        // The retention horizon is based on the newest hour (100), so 100
+        // must still be present.
+        assert!(
+            d.recorded_windows
+                .contains_key(&(svc, TrafficDirection::Ingress, 100))
+        );
+        // Hour 0 should be pruned because it's outside the 24-hour horizon
+        // from the newest hour (100).
+        assert!(
+            !d.recorded_windows
+                .contains_key(&(svc, TrafficDirection::Ingress, 0))
         );
         let _ = fs::remove_file(p);
     }
