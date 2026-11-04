@@ -549,6 +549,44 @@ impl Metrics {
             "Dashboard API requests allowed through the CSRF guard.",
             "counter"
         ));
+        out.push_str(&emit!(
+            "ramshield_adaptive_breach_total",
+            self.adaptive_breach_total.load(Ordering::Relaxed),
+            "Adaptive CUSUM breaches triggered.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_numerical_calculation_failure_total",
+            self.numerical_calculation_failure_total
+                .load(Ordering::Relaxed),
+            "Detector numerical calculation failures (non-finite CUSUM/variance).",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_non_monotonic_timestamp_total",
+            self.non_monotonic_timestamp_total.load(Ordering::Relaxed),
+            "Detector samples rejected for a non-monotonic timestamp (clock stepped backward).",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_detector_invalid_input_total",
+            self.detector_invalid_input_total.load(Ordering::Relaxed),
+            "Detector samples rejected for invalid input or corrupted internal state.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_out_of_order_sample_dropped_total",
+            self.out_of_order_sample_dropped_total
+                .load(Ordering::Relaxed),
+            "Samples dropped because they arrived before the 1-second bucket boundary.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_baseline_frozen_ips_gauge",
+            self.baseline_frozen_ips_gauge.load(Ordering::Relaxed),
+            "IPs currently with a frozen baseline (in Breached mode).",
+            "gauge"
+        ));
         // No trailing println! here — every emit stanza already ends in '\n',
         // and stdout writes from a render fn were a stray-syscall bug (2026-09).
         out
@@ -567,5 +605,64 @@ mod tpacket_reject_metric_tests {
         let rendered = metrics.render_prometheus();
         assert!(rendered.contains("# TYPE ramshield_native_tpacket_rejects_total counter"));
         assert!(rendered.contains("ramshield_native_tpacket_rejects_total 7"));
+    }
+
+    #[test]
+    fn detector_metrics_are_exported() {
+        let metrics = Metrics::new();
+        metrics.inc_adaptive_breach();
+        metrics.inc_numerical_calculation_failure();
+        metrics.inc_non_monotonic_timestamp();
+        metrics.inc_detector_invalid_input();
+        metrics.inc_baseline_frozen_ips();
+
+        let rendered = metrics.render_prometheus();
+        assert!(rendered.contains("# TYPE ramshield_adaptive_breach_total counter"));
+        assert!(rendered.contains("ramshield_adaptive_breach_total 1"));
+        assert!(rendered.contains("# TYPE ramshield_numerical_calculation_failure_total counter"));
+        assert!(rendered.contains("# TYPE ramshield_non_monotonic_timestamp_total counter"));
+        assert!(rendered.contains("# TYPE ramshield_detector_invalid_input_total counter"));
+        assert!(rendered.contains("# TYPE ramshield_baseline_frozen_ips_gauge gauge"));
+        assert!(rendered.contains("ramshield_baseline_frozen_ips_gauge 1"));
+
+        // Recovery decrements the gauge.
+        metrics.dec_baseline_frozen_ips();
+        let rendered = metrics.render_prometheus();
+        assert!(rendered.contains("ramshield_baseline_frozen_ips_gauge 0"));
+    }
+
+    #[test]
+    fn concurrent_decrement_does_not_wrap() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let metrics = Metrics::new();
+        for _ in 0..100 {
+            metrics.inc_baseline_frozen_ips();
+        }
+        assert_eq!(
+            metrics.baseline_frozen_ips_gauge.load(Ordering::Relaxed),
+            100
+        );
+
+        let barrier = Arc::new(Barrier::new(11));
+        let m = Arc::new(metrics);
+        let mut handles = vec![];
+        for _ in 0..10 {
+            let m_clone = m.clone();
+            let b = barrier.clone();
+            handles.push(thread::spawn(move || {
+                b.wait();
+                for _ in 0..10 {
+                    m_clone.dec_baseline_frozen_ips();
+                }
+            }));
+        }
+        barrier.wait();
+        for h in handles {
+            h.join().unwrap();
+        }
+        // All 100 decrements applied exactly; no unsigned wrap.
+        assert_eq!(m.baseline_frozen_ips_gauge.load(Ordering::Relaxed), 0);
     }
 }
