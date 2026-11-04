@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, develop, master, audit-branch]
+    branches: [main, develop, master, audit-branch, feat/passive-discovery-stage0]
   pull_request:
-    branches: [main, develop, master, audit-branch]
+    branches: [main, develop, master, audit-branch, feat/passive-discovery-stage0]
 
 jobs:
   dependency-audit:
