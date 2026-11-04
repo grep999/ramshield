@@ -549,6 +549,38 @@ impl Metrics {
             "Dashboard API requests allowed through the CSRF guard.",
             "counter"
         ));
+        out.push_str(&emit!(
+            "ramshield_adaptive_breach_total",
+            self.adaptive_breach_total.load(Ordering::Relaxed),
+            "Adaptive CUSUM breaches triggered.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_numerical_calculation_failure_total",
+            self.numerical_calculation_failure_total
+                .load(Ordering::Relaxed),
+            "Detector numerical calculation failures (non-finite CUSUM/variance).",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_non_monotonic_timestamp_total",
+            self.non_monotonic_timestamp_total.load(Ordering::Relaxed),
+            "Detector samples rejected for a non-monotonic timestamp (clock stepped backward).",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_detector_invalid_input_total",
+            self.detector_invalid_input_total.load(Ordering::Relaxed),
+            "Detector samples rejected for invalid input or corrupted internal state.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_out_of_order_sample_dropped_total",
+            self.out_of_order_sample_dropped_total
+                .load(Ordering::Relaxed),
+            "Samples dropped because they arrived before the 1-second bucket boundary.",
+            "counter"
+        ));
         // No trailing println! here — every emit stanza already ends in '\n',
         // and stdout writes from a render fn were a stray-syscall bug (2026-09).
         out

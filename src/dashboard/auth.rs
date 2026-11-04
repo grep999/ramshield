@@ -246,7 +246,7 @@ impl AuthState {
             self.failures.remove(&victim);
         }
         self.failures.insert(
-            ip,
+            key,
             FailureWindow {
                 count: 1,
                 first_fail: Instant::now(),
@@ -423,8 +423,16 @@ async fn login_submit(
             // skipping trusted proxies, so a client-supplied leftmost value
             // cannot rotate its way into a fresh lockout bucket.
             let xff_name = axum::http::header::HeaderName::from_static("x-forwarded-for");
-            let xff = headers.get(&xff_name).and_then(|v| v.to_str().ok());
-            ramshield_config::xff_client(xff, &auth.trusted_proxies).unwrap_or(peer)
+            // A proxy may append a new header line instead of extending the
+            // client's line. `get()` would return only the first line (the
+            // client-controlled one), so join every line before walking.
+            let xff = headers
+                .get_all(&xff_name)
+                .iter()
+                .filter_map(|v| v.to_str().ok())
+                .collect::<Vec<_>>()
+                .join(", ");
+            ramshield_config::xff_client(Some(&xff), &auth.trusted_proxies).unwrap_or(peer)
         } else {
             // Untrusted peer — key by direct TCP address only
             peer

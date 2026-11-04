@@ -102,7 +102,9 @@ impl DetectionEngine {
                     let prev_accum = rec.bucket_accum_pps;
                     let prev_bucket_ns = rec.last_bucket_ns;
                     rec.bucket_accum_pps = 0.0;
-                    rec.last_bucket_ns = now;
+                    // Do NOT pre-set last_bucket_ns here; let tracker.update validate
+                    // against its own state. We will persist the advanced timestamp
+                    // on success (Ok arm) or restore on specific errors.
 
                     // Build PerIpRecord from IpRecord state.
                     let profile = DetectorProfile {
@@ -138,6 +140,7 @@ impl DetectionEngine {
                             rec.variance = tracker.variance;
                             rec.adaptive_sample_count = tracker.sample_count;
                             rec.recovery_count = tracker.recovery_count;
+                            rec.last_bucket_ns = tracker.last_bucket_ns;
                             rec.detector_mode = outcome.mode as u8;
                             if outcome.is_breached {
                                 self.metrics.inc_adaptive_breach();
@@ -169,7 +172,10 @@ impl DetectionEngine {
                                 | crate::rate_tracker::DetectorError::InvalidProfile => {
                                     rec.last_bucket_ns = prev_bucket_ns;
                                     self.metrics.inc_detector_invalid_input();
-                                    false
+                                    // Corrupted internal state must not silently
+                                    // mean "not breached": fall back to the
+                                    // static threshold check.
+                                    is_exceeded(rec.ewma_rps, det_thr)
                                 }
                                 crate::rate_tracker::DetectorError::NumericalCalculationFailure => {
                                     // Numerical failure — fail closed: fall back

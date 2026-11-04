@@ -1,14 +1,17 @@
-//! IPC frame authentication. HMAC-SHA256 over `<ts_ms>.<payload>` with a
-//! shared key. Optional per-frame envelope field:
-//! `"auth":{"key_id":"k1","ts_ms":...,"sig":"<hex>"}`.
+//! IPC frame authentication. HMAC-SHA256 over
+//! `<ts_ms>.<key_id_len_be64><key_id><payload>` with a shared key. Optional
+//! per-frame envelope field: `"auth":{"key_id":"k1","ts_ms":...,"sig":"<hex>"}`.
 //! Server enforces only when `[ipc] auth_keys` is configured; senders without
 //! the field keep working against open servers (zero-config compat).
 //!
 //! Replay protection: when a `&ReplayStore` is supplied, the verifier records
 //! each accepted frame's HMAC digest in the store and rejects subsequent
-//! identical frames within the store's TTL window. The signature scheme
-//! itself is unchanged — the digest is checked *separately* after constant-
-//! time compare, so existing senders and on-the-wire bytes are unaffected.
+//! identical frames within the store's TTL window. The signature scheme binds
+//! key_id into the MAC input so two key_ids holding identical key bytes
+//! produce different signatures — a frame captured under `k1` can't be
+//! accepted under `k2`. Digest verification uses constant-time
+//! `Mac::verify_slice`. Senders using the prior format are rejected until
+//! upgraded.
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
