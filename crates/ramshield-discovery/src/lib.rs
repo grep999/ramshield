@@ -1211,9 +1211,7 @@ mod tests {
         let slot = sample.timestamp_secs / 3600;
         let svc = disc2.service_profiles.get(&ServiceId::new(42)).unwrap();
         assert!(
-            svc.all_assessments("42", TrafficDirection::Ingress, slot)
-                .len()
-                > 0
+            !svc.all_assessments("42", TrafficDirection::Ingress, slot).is_empty()
         );
     }
 
@@ -1286,7 +1284,7 @@ mod tests {
             });
         }
         // The map must be bounded by the 24-hour retention window, not 200.
-        let retention = d.config.bucket_count() as usize;
+        let retention = d.config.bucket_count();
         assert_eq!(retention, 24);
         // Hour-bucket count stays bounded by retention (each bucket holds
         // all services/directions seen in that hour).
@@ -1303,7 +1301,7 @@ mod tests {
                 .is_some_and(|set| set.contains(&(svc, TrafficDirection::Ingress)))
         );
         // The oldest window must have been pruned.
-        assert!(d.recorded_windows.get(&10_000).is_none());
+        assert!(!d.recorded_windows.contains_key(&10_000));
         let _ = fs::remove_file(p);
     }
 
@@ -1380,7 +1378,7 @@ mod tests {
         );
         // Hour 0 should be pruned because it's outside the 24-hour horizon
         // from the newest hour (100).
-        assert!(d.recorded_windows.get(&0).is_none());
+        assert!(!d.recorded_windows.contains_key(&0));
         let _ = fs::remove_file(p);
     }
 
@@ -1485,7 +1483,7 @@ mod tests {
         d.record_completed_window(mk_ctx(1, TrafficDirection::Ingress, 100, 1));
         // 76 is one hour before the horizon (77) and must be rejected.
         d.record_completed_window(mk_ctx(1, TrafficDirection::Ingress, 76, 1));
-        assert!(d.recorded_windows.get(&76).is_none());
+        assert!(!d.recorded_windows.contains_key(&76));
         assert_eq!(
             assessment_count(&d, 1, TrafficDirection::Ingress, 76),
             0,
@@ -1737,14 +1735,10 @@ mod tests {
         {
             let svc = d.service_profiles.get(&ServiceId::new(1)).unwrap();
             assert!(
-                svc.all_assessments("1", TrafficDirection::Ingress, 100)
-                    .len()
-                    > 0
+                !svc.all_assessments("1", TrafficDirection::Ingress, 100).is_empty()
             );
             assert!(
-                svc.all_assessments("1", TrafficDirection::Egress, 100)
-                    .len()
-                    > 0
+                !svc.all_assessments("1", TrafficDirection::Egress, 100).is_empty()
             );
         }
 
