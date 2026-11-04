@@ -258,7 +258,7 @@ workspace-crate dependency — it never touches `Store`.
 (`inc_requests`, `inc_rejected`) and the root engine's native ingest
 (`inc_native_ingest_drop`).
 
-**Read by:** `ramshield` (the root package — its `src/dashboard/` module serves `/api/snapshot`, `/metrics` and `/api/history/*` from it, and `src/ipc/` is the other consumer), `ramshield-bgp`, `ramshield-detection`, `ramshield-enforcement` and `ramshield-forecasting`. The dashboard and the IPC server are modules of the root crate, not crates of their own.
+**Read by:** `ramshield` (the root package — its `src/dashboard/` module serves `/api/snapshot`, `/metrics` and `/api/history/*` from it, and `src/ipc/` is the other consumer), `ramshield-detection`, `ramshield-enforcement` and `ramshield-forecasting`. The dashboard and the IPC server are modules of the root crate, not crates of their own.
 
 ## Benchmarks
 
