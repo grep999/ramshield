@@ -448,6 +448,28 @@ impl Config {
                 anyhow::bail!("ipc.auth_keys[{id}] hex key must be >= 32 chars (16 bytes)");
             }
         }
+
+        // Reject the well-known development key that ships in config.baseline.toml.
+        // Installers must replace it with a unique key before deployment.
+        // A copied baseline config leaves loopback Admin capability active.
+        const DEV_KEY_ID: &str = "k1";
+        const DEV_KEY_HEX_PREFIX: &str = "0123456789abcdef";
+        for entry in &self.ipc.auth_keys {
+            let (id, hex_str) = match entry.split_once(':') {
+                Some((k, v)) => (k, v),
+                None => continue,
+            };
+            if id == DEV_KEY_ID && hex_str.starts_with(DEV_KEY_HEX_PREFIX) {
+                for kr in &self.ipc.key_roles {
+                    if kr.key_id == DEV_KEY_ID && kr.role == KeyRole::Admin {
+                        anyhow::bail!(
+                            "ipc.auth_keys contains the well-known development key 'k1:0123456789abcdef...' with Admin role — replace it before deployment"
+                        );
+                    }
+                }
+            }
+        }
+
         if let Some(mll) = self.ipc.max_line_length
             && mll < 256
         {

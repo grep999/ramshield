@@ -10,9 +10,12 @@ STATE_DIR=/var/lib/ramshield
 USER_NAME=ramshield
 GROUP_NAME=ramshield
 COSIGN_BIN="${COSIGN_BIN:-cosign}"
-LOG="/tmp/ramshield-install-$(date +%Y%m%d-%H%M%S).log"
+# mktemp gives an unpredictable name and O_EXCL creation, so a planted
+# symlink in /tmp cannot redirect this root-owned log. ponytail: still /tmp;
+# upgrade to /var/log/ramshield if log persistence across reboots matters.
+LOG="$(mktemp -t ramshield-install.XXXXXX.log)"
 log(){ printf '[ramshield-install] %s\n' "$*" | tee -a "$LOG"; }
-die(){ printf '[ramshield-install] ERROR: %s\n' "$*" >&2 | tee -a "$LOG"; exit 1; }
+die(){ printf '[ramshield-install] ERROR: %s\n' "$*" | tee -a "$LOG"; exit 1; }
 need(){ command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 
 exec > >(tee -a "$LOG") 2>&1
@@ -55,10 +58,13 @@ mkdir -p "$PREFIX/bin"
 install -o root -g root -m 0755 "$TMP/unpack/ramshield" "$PREFIX/bin/ramshield"
 install -o root -g root -m 0755 "$TMP/unpack/ramshield-cli" "$PREFIX/bin/ramshield-cli"
 if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
-  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$BASE/config.baseline.toml" -o "$CONFIG_DIR/config.toml"
+  # Ship the config inside the signed archive: its checksum and Sigstore
+  # signature are already verified above. A separate curl download would
+  # bypass both and let a compromised CDN swap the admin key.
+  cp "$TMP/unpack/config.baseline.toml" "$CONFIG_DIR/config.toml"
   # Replace the tracked development credential with a unique 256-bit key.
   # The installed config remains HMAC-authenticated even on loopback.
-  IPC_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+  IPC_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \\n')"
   [[ "$IPC_KEY" =~ ^[0-9a-f]{64}$ ]] || die 'failed to generate IPC authentication key'
   sed -i "s/k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/k1:$IPC_KEY/" "$CONFIG_DIR/config.toml"
   # Persistent WAL directory for production installs: never /tmp under systemd PrivateTmp.
@@ -72,7 +78,7 @@ elif grep -q 'dir = "/tmp/ramshield-wal"' "$CONFIG_DIR/config.toml" 2>/dev/null;
     log "refusing legacy WAL path migration: /tmp/ramshield-wal contains unrecovered data; move data to ${STATE_DIR}/wal manually"
   else
     sed -i "s|dir = \"/tmp/ramshield-wal\"|dir = \"${STATE_DIR}/wal\"|" "$CONFIG_DIR/config.toml"
-    chown root:\"$GROUP_NAME\" \"$CONFIG_DIR/config.toml\"; chmod 0640 "$CONFIG_DIR/config.toml"
+    chown root:"$GROUP_NAME" "$CONFIG_DIR/config.toml"; chmod 0640 "$CONFIG_DIR/config.toml"
     log "migrated legacy WAL directory to ${STATE_DIR}/wal"
   fi
 fi

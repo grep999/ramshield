@@ -13,7 +13,7 @@ use dashmap::DashMap;
 use rand::RngCore;
 use serde::Deserialize;
 use std::{
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv6Addr, SocketAddr},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -74,6 +74,20 @@ pub struct AuthState {
 struct FailureWindow {
     count: u32,
     first_fail: Instant,
+}
+
+/// Compute the lockout key for an IP address, keying IPv6 by /64 so that
+/// an attacker cannot rotate the host bits of their IPv6 address to obtain
+/// fresh lockout buckets. IPv4 addresses are used as-is.
+fn lockout_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => {
+            let mut octets = v6.octets();
+            octets[8..].fill(0);
+            IpAddr::V6(Ipv6Addr::from(octets))
+        }
+    }
 }
 
 /// Failed attempts older than this decay to zero — transient brute force
@@ -179,22 +193,25 @@ impl AuthState {
                 self.password_hash.clear_poison();
             }
         }
+        // A stolen session must not survive a password change.
+        self.sessions.clear();
     }
 
     /// True when this IP is currently locked out. Entries for IPs whose
     /// window has fully decayed are removed here (opportunistic sweep —
     /// the map is bounded by distinct IPs that actually POST /login).
     fn is_locked(&self, ip: IpAddr) -> bool {
-        let expired = match self.failures.get(&ip) {
+        let key = lockout_key(ip);
+        let expired = match self.failures.get(&key) {
             None => return false,
             Some(e) => e.first_fail.elapsed() >= LOCKOUT_WINDOW,
         };
         if expired {
-            self.failures.remove(&ip);
+            self.failures.remove(&key);
             return false;
         }
         self.failures
-            .get(&ip)
+            .get(&key)
             .is_some_and(|e| e.count >= self.max_login_attempts)
     }
 
@@ -208,8 +225,9 @@ impl AuthState {
             .failure_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let key = lockout_key(ip);
 
-        if let Some(mut window) = self.failures.get_mut(&ip) {
+        if let Some(mut window) = self.failures.get_mut(&key) {
             if window.first_fail.elapsed() >= LOCKOUT_WINDOW {
                 window.count = 1;
                 window.first_fail = Instant::now();
@@ -401,10 +419,12 @@ async fn login_submit(
     let ip = if let Some(c) = addr {
         let peer = c.0.ip();
         if ramshield_config::peer_is_trusted_proxy(peer, &auth.trusted_proxies) {
-            // Trusted proxy — use X-Forwarded-For client IP (first entry = original client)
+            // Trusted proxy — use X-Forwarded-For client IP. Walk right-to-left,
+            // skipping trusted proxies, so a client-supplied leftmost value
+            // cannot rotate its way into a fresh lockout bucket.
             let xff_name = axum::http::header::HeaderName::from_static("x-forwarded-for");
             let xff = headers.get(&xff_name).and_then(|v| v.to_str().ok());
-            ramshield_config::xff_client(xff).unwrap_or(peer)
+            ramshield_config::xff_client(xff, &auth.trusted_proxies).unwrap_or(peer)
         } else {
             // Untrusted peer — key by direct TCP address only
             peer

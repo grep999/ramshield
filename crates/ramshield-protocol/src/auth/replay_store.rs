@@ -133,7 +133,10 @@ impl ReplayStore {
 
 impl Default for ReplayStore {
     fn default() -> Self {
-        Self::new(10, Duration::from_secs(1))
+        // Match the production skew window (65s > 10s MAX_CLOCK_SKEW_MS). A
+        // 1s TTL here would be a silent replay window trap for any caller
+        // that used `ReplayStore::default()`.
+        Self::new(10, Duration::from_secs(65))
     }
 }
 

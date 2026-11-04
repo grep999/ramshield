@@ -36,6 +36,14 @@ fn the_readme_template_loads() {
         "the template block in README.md is empty"
     );
 
+    // The README ships the documented dev key so operators can copy a working
+    // example. Validation rejects it on purpose (finding 7); sanitize it the
+    // same way the installers do, then check the template's structure loads.
+    let template = template.replace(
+        "k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "k1:1111111111111111111111111111111111111111111111111111111111111111",
+    );
+
     // `Config::from_toml_file` reads a file, so write the block to one.
     // stdlib only: no tempfile dependency for a single file.
     let path = std::env::temp_dir().join(format!(

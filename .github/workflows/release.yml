@@ -47,13 +47,18 @@ jobs:
           set -euo pipefail
           V="${GITHUB_REF_NAME#v}"
           cargo build --release --locked --features full
-          tar -czf "ramshield-${V}-x86_64-unknown-linux-gnu.tar.gz" -C target/release ramshield ramshield-cli
+          # The baseline config ships INSIDE the signed archive so its checksum
+          # and Sigstore signature cover it. Downloading it as a separate
+          # unsigned release asset let a compromised CDN swap the admin key.
+          cp config.baseline.toml target/release/config.baseline.toml
+          tar -czf "ramshield-${V}-x86_64-unknown-linux-gnu.tar.gz" -C target/release ramshield ramshield-cli config.baseline.toml
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
           rustup target add aarch64-unknown-linux-gnu
           export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
           cargo build --release --locked --features full --target aarch64-unknown-linux-gnu
-          tar -czf "ramshield-${V}-aarch64-unknown-linux-gnu.tar.gz" -C target/aarch64-unknown-linux-gnu/release ramshield ramshield-cli
+          cp config.baseline.toml target/aarch64-unknown-linux-gnu/release/config.baseline.toml
+          tar -czf "ramshield-${V}-aarch64-unknown-linux-gnu.tar.gz" -C target/aarch64-unknown-linux-gnu/release ramshield ramshield-cli config.baseline.toml
       - name: Generate SBOM
         run: python3 scripts/generate_sbom.py --version "${GITHUB_REF_NAME#v}" -o "ramshield-${GITHUB_REF_NAME#v}.spdx.json"
       - name: Checksums and per-artifact sidecars

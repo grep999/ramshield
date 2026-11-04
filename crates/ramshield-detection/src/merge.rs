@@ -144,12 +144,43 @@ impl DetectionEngine {
                             }
                             outcome.is_breached
                         }
-                        Err(_) => {
-                            // Numerical failure — restore pre-update state per D-06 atomicity.
+                        Err(e) => {
+                            // Restore pre-update state per D-06 atomicity, but do
+                            // not restore last_bucket_ns: a backwards wall-clock
+                            // step (NonMonotonicTimestamp) must not keep the
+                            // record failing until wall time catches up.
                             rec.bucket_accum_pps = prev_accum;
-                            rec.last_bucket_ns = prev_bucket_ns;
-                            self.metrics.inc_numerical_calculation_failure();
-                            false
+                            match e {
+                                crate::rate_tracker::DetectorError::NonMonotonicTimestamp => {
+                                    // Accept the current timestamp so future
+                                    // samples are monotonic again; clock skew is
+                                    // not, by itself, an attack signal — skip
+                                    // the adaptive decision this bucket.
+                                    rec.last_bucket_ns = now;
+                                    self.metrics.inc_non_monotonic_timestamp();
+                                    false
+                                }
+                                crate::rate_tracker::DetectorError::InvalidCurrentRate
+                                | crate::rate_tracker::DetectorError::InvalidInternalBaseline
+                                | crate::rate_tracker::DetectorError::InvalidInternalVariance
+                                | crate::rate_tracker::DetectorError::InvalidInternalCusum
+                                | crate::rate_tracker::DetectorError::InvalidInternalSampleCount
+                                | crate::rate_tracker::DetectorError::InvalidContextConfidence
+                                | crate::rate_tracker::DetectorError::InvalidProfile => {
+                                    rec.last_bucket_ns = prev_bucket_ns;
+                                    self.metrics.inc_detector_invalid_input();
+                                    false
+                                }
+                                crate::rate_tracker::DetectorError::NumericalCalculationFailure => {
+                                    // Numerical failure — fail closed: fall back
+                                    // to the static threshold check rather than
+                                    // treating every detector error as "not
+                                    // breached".
+                                    rec.last_bucket_ns = prev_bucket_ns;
+                                    self.metrics.inc_numerical_calculation_failure();
+                                    is_exceeded(rec.ewma_rps, det_thr)
+                                }
+                            }
                         }
                     }
                 } else {

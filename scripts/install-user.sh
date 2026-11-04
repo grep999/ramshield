@@ -9,9 +9,9 @@ PREFIX="${PREFIX:-$HOME/.local}"
 CONFIG_DIR="$HOME/.config/ramshield"
 STATE_DIR="$HOME/.local/share/ramshield"
 COSIGN_BIN="${COSIGN_BIN:-cosign}"
-LOG="/tmp/ramshield-user-install-$(date +%Y%m%d-%H%M%S).log"
+LOG="$(mktemp -t ramshield-user-install.XXXXXX.log)"
 log(){ printf '[ramshield-user-install] %s\n' "$*" | tee -a "$LOG"; }
-die(){ printf '[ramshield-user-install] ERROR: %s\n' "$*" >&2 | tee -a "$LOG"; exit 1; }
+die(){ printf '[ramshield-user-install] ERROR: %s\n' "$*" | tee -a "$LOG"; exit 1; }
 need(){ command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 
 exec > >(tee -a "$LOG") 2>&1
@@ -47,7 +47,10 @@ mkdir -p "$TMP/unpack"; tar -xzf "$TMP/$ART" -C "$TMP/unpack"
 mkdir -p "$CONFIG_DIR"
 chmod 0700 "$CONFIG_DIR"
 if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
-  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$BASE/config.baseline.toml" -o "$CONFIG_DIR/config.toml"
+  # Ship the config inside the signed archive: its checksum and Sigstore
+  # signature are already verified above. A separate curl download would
+  # bypass both and let a compromised CDN swap the admin key.
+  cp "$TMP/unpack/config.baseline.toml" "$CONFIG_DIR/config.toml"
   IPC_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
   [[ "$IPC_KEY" =~ ^[0-9a-f]{64}$ ]] || die 'failed to generate IPC authentication key'
   sed -i "s/k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/k1:$IPC_KEY/" "$CONFIG_DIR/config.toml"

@@ -149,8 +149,11 @@ tls_enabled = false
 enabled = true
 dir = "/tmp/ramshield-wal"
 # GroupCommit = fsync amortized across concurrent commits (~100ms window).
-# Flush = fdatasync per write (slower, safer). Use "flush" only when every
-# block must survive power loss.
+# Flush = flush userspace buffers only (no fsync). Use "flush" only for
+# scenarios where data loss on power failure is acceptable; block commits
+# in enforcement and mesh call wal.sync() explicitly for durability.
+# Fsync = fsync per write (slowest, safest). Use "fsync" only when
+# every block must survive power loss.
 durability = "GroupCommit"
 compress = true
 # Segment rotation threshold in bytes.

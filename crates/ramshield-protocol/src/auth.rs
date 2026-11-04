@@ -35,6 +35,7 @@ pub fn sign(key: &[u8], key_id: &str, ts_ms: u64, payload: &[u8]) -> Result<Stri
     let mut mac = HmacSha256::new_from_slice(key).map_err(|_| "bad key")?;
     mac.update(ts_ms.to_string().as_bytes());
     mac.update(b".");
+    mac.update(&(key_id.len() as u64).to_be_bytes());
     mac.update(key_id.as_bytes());
     mac.update(payload);
     Ok(hex::encode(mac.finalize().into_bytes()))
@@ -69,25 +70,26 @@ pub fn verify(
     let mut mac = HmacSha256::new_from_slice(key).map_err(|_| "bad key")?;
     mac.update(ts_ms.to_string().as_bytes());
     mac.update(b".");
+    mac.update(&(key_id.len() as u64).to_be_bytes());
     mac.update(key_id.as_bytes());
     mac.update(payload);
-    let expected = mac.finalize().into_bytes();
-    // Constant-time compare.
+    // Constant-time compare via Mac::verify_slice (same primitive the mesh code uses).
     let got = decode_hex(sig_hex).ok_or("malformed signature")?;
+    // The expected digest is still needed for replay recording; recompute from
+    // a fresh clone (Hmac<Sha256> is Clone). The digest never leaves memory.
+    let expected = {
+        let mut mac2 = HmacSha256::new_from_slice(key).map_err(|_| "bad key")?;
+        mac2.update(ts_ms.to_string().as_bytes());
+        mac2.update(b".");
+        mac2.update(&(key_id.len() as u64).to_be_bytes());
+        mac2.update(key_id.as_bytes());
+        mac2.update(payload);
+        mac2.finalize().into_bytes()
+    };
     if got.len() != expected.len() {
         return Err("signature length mismatch");
     }
-    let mut diff = 0u8;
-    for (a, b) in got.iter().zip(expected.iter()) {
-        diff |= a ^ b;
-    }
-    if diff != 0 {
-        return Err("signature mismatch");
-    }
-    // Replay check runs *after* constant-time compare so an attacker
-    // can't use timing to probe the store for seen digests. The store is a
-    // mandatory parameter: a caller cannot opt out of replay protection by
-    // passing None (compile-time enforced).
+    mac.verify_slice(&got).map_err(|_| "signature mismatch")?;
     replay.check_and_record(key_id, &expected)?;
     Ok(())
 }
@@ -151,7 +153,7 @@ mod tests {
 
     /// I-024: the MAC input layout is a wire protocol, so pin it byte for
     /// byte. The digest below was computed independently of this crate
-    /// (HMAC-SHA256 over `ts_ms` ++ "." ++ key_id ++ payload), not by calling
+    /// (HMAC-SHA256 over `ts_ms` ++ "." ++ key_id_len_be64 ++ key_id ++ payload), not by calling
     /// `sign` - a test that recomputes the value with the same code it is
     /// testing proves nothing.
     ///
@@ -164,12 +166,12 @@ mod tests {
         const KEY_ID: &str = "k1";
         const TS_MS: u64 = 1_700_000_000_000;
         const PAYLOAD: &[u8] = br#"{"type":"check_ip","ip":"1.2.3.4"}"#;
-        const EXPECTED: &str = "3bba49ffd4684df1846e0a7af7568d43805e25daffebb33f22f911cc0a8cad8a";
+        const EXPECTED: &str = "4eded5d0ccb69acb1457dcbd986cac12d7e40bccfc5458c6216d555aa1d7ef80";
 
         let sig = sign(KEY, KEY_ID, TS_MS, PAYLOAD).expect("test key non-empty");
         assert_eq!(
             sig, EXPECTED,
-            "the MAC input layout changed: ts_ms ++ \".\" ++ key_id ++ payload"
+            "the MAC input layout changed: ts_ms ++ . ++ key_id_len_be64 ++ key_id ++ payload"
         );
 
         // The layout is not incidental: binding key_id means two key_ids

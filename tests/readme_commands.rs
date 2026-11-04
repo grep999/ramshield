@@ -55,9 +55,19 @@ fn quickstart_ramshield_invocations_use_supported_flags() {
 #[cfg(feature = "full")]
 fn quickstart_validate_invocation_passes_end_to_end() {
     let bin = env!("CARGO_BIN_EXE_ramshield");
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let baseline = std::fs::read_to_string(format!("{manifest_dir}/config.baseline.toml"))
+        .expect("baseline config readable");
+    // Dev key is rejected by validate(); swap in a benign key for the test.
+    let safe_key = "k1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let config = baseline.replace(
+        "k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        safe_key,
+    );
+    let temp = std::env::temp_dir().join("ramshield-quickstart-test.toml");
+    std::fs::write(&temp, config).expect("write temp config");
     let out = Command::new(bin)
-        .args(["--config", "config.baseline.toml", "--validate"])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args(["--config", temp.to_str().unwrap(), "--validate"])
         .output()
         .expect("failed to execute ramshield binary");
     assert!(

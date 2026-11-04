@@ -206,6 +206,19 @@ impl Metrics {
         self.adaptive_breach_total.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record a non-monotonic timestamp error (wall-clock stepped backward).
+    pub fn inc_non_monotonic_timestamp(&self) {
+        self.non_monotonic_timestamp_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record an invalid-input detector error (bad rate, profile, baseline,
+    /// variance, cusum, sample count, or context confidence).
+    pub fn inc_detector_invalid_input(&self) {
+        self.detector_invalid_input_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Increment the baseline-frozen IPs gauge (current count of IPs in Breached mode).
     pub fn inc_baseline_frozen_ips(&self) {
         self.baseline_frozen_ips_gauge
