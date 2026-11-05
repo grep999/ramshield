@@ -413,9 +413,9 @@ impl Discovery {
     /// Record a completed, quality-qualified window into service profiles.
     /// Only sealed windows whose completeness has been independently determined
     /// train baseline state, preventing contaminated data from entering assessments.
-    /// Duplicate calls with the same (service_id, hour_utc) are idempotent —
-    /// the window is only trained once, even if record_completed_window() is
-    /// called multiple times with the same ctx.
+    /// Duplicate calls with the same (service_id, direction, hour_utc)
+    /// are idempotent — the window is only trained once, even if
+    /// record_completed_window() is called multiple times with the same ctx.
     /// PRECONDITION: The caller MUST ensure ctx represents a window that has been
     /// independently verified as sealed and quality-qualified (e.g., via
     /// IngestionEngine::flush() which only seals windows whose end time has passed
@@ -1334,6 +1334,20 @@ mod tests {
             recorded_count, MAX_SERVICES,
             "recorded_windows count {} exceeds max services {}",
             recorded_count, MAX_SERVICES
+        );
+        // First 64 services must have profile entries.
+        for i in 0..MAX_SERVICES as u64 {
+            let svc = ServiceId::new(i);
+            assert!(
+                d.service_profiles.contains_key(&svc),
+                "service {} must have profile entry",
+                i
+            );
+        }
+        // 65th service must NOT have a profile.
+        assert!(
+            !d.service_profiles.contains_key(&ServiceId::new(64)),
+            "service 65 must be rejected due to capacity"
         );
         let _ = fs::remove_file(p);
     }
