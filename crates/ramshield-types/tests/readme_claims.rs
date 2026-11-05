@@ -93,12 +93,19 @@ fn the_readme_dependency_list_is_the_crate_dependency_list() {
 #[test]
 fn the_readme_read_by_list_is_the_actual_dependent_list() {
     let root = repo_root();
+    let root_manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
     let mut actual = BTreeSet::new();
     let mut manifests = Vec::new();
     if let Ok(entries) = std::fs::read_dir(root.join("crates")) {
         for entry in entries.flatten() {
             let manifest = entry.path().join("Cargo.toml");
-            if manifest.is_file() {
+            // Only count crates that are workspace members: an untracked
+            // directory under crates/ is not part of the committed workspace
+            // and must not change the README's read-by list.
+            // ponytail: explicit member paths, add glob expansion if members
+            // ever use wildcards.
+            let member = format!("crates/{}", entry.file_name().to_string_lossy());
+            if manifest.is_file() && root_manifest.contains(&format!("\"{member}\"")) {
                 manifests.push(manifest);
             }
         }
