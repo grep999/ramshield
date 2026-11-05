@@ -414,8 +414,11 @@ impl Discovery {
     /// Only sealed windows whose completeness has been independently determined
     /// train baseline state, preventing contaminated data from entering assessments.
     /// Duplicate calls with the same (service_id, direction, hour_utc)
-    /// are idempotent — the window is only trained once, even if
-    /// record_completed_window() is called multiple times with the same ctx.
+    /// are idempotent within one Discovery instance — the window is only
+    /// trained once, even if record_completed_window() is called multiple
+    /// times with the same ctx. The deduplication ledger is runtime-only and
+    /// resets on reopen; replaying a window after a restart retrains the
+    /// persisted profile.
     /// PRECONDITION: The caller MUST ensure ctx represents a window that has been
     /// independently verified as sealed and quality-qualified (e.g., via
     /// IngestionEngine::flush() which only seals windows whose end time has passed
