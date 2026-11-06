@@ -6,11 +6,26 @@ pub fn peer_is_trusted_proxy(peer: IpAddr, trusted: &[String]) -> bool {
     trusted.iter().any(|e| cidr_contains(e, peer))
 }
 
-/// Extract the leftmost client IP from an X-Forwarded-For header value.
-/// Leftmost = original client; proxies append to the right. Returns None
-/// when absent or unparseable (caller falls back to peer).
-pub fn xff_client(header: Option<&str>) -> Option<IpAddr> {
-    header?.split(',').next()?.trim().parse().ok()
+/// Extract the real client IP from an X-Forwarded-For header value by walking
+/// right-to-left and skipping trusted proxies. Returns None when absent,
+/// unparseable, or all entries are trusted (caller falls back to peer).
+pub fn xff_client(header: Option<&str>, trusted: &[String]) -> Option<IpAddr> {
+    let header = header?;
+    // Join is already done by caller; walk right-to-left.
+    for entry in header.split(',').rev() {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let ip = entry.parse::<IpAddr>().ok()?;
+        // Skip if this hop is a trusted proxy; the next one left is the real client.
+        if peer_is_trusted_proxy(ip, trusted) {
+            continue;
+        }
+        // First untrusted hop from the right is the original client.
+        return Some(ip);
+    }
+    None
 }
 
 fn cidr_contains(entry: &str, peer: IpAddr) -> bool {

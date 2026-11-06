@@ -447,6 +447,14 @@ impl Config {
             if hex_str.len() < 32 {
                 anyhow::bail!("ipc.auth_keys[{id}] hex key must be >= 32 chars (16 bytes)");
             }
+            // Reject the well-known default admin key that ships in baseline config,
+            // which if left in place would let any local user sign admin commands.
+            // The installers replace it, but a copied baseline config preserves it.
+            if entry == "k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" {
+                anyhow::bail!(
+                    "ipc.auth_keys contains the well-known default admin key; generate a new key via the installer"
+                );
+            }
         }
         if let Some(mll) = self.ipc.max_line_length
             && mll < 256
