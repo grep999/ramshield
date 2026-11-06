@@ -103,11 +103,10 @@ impl DetectionEngine {
                     let prev_bucket_ns = rec.last_bucket_ns;
                     rec.bucket_accum_pps = 0.0;
                     // B1: do NOT advance the bucket clock before update() runs.
-                    // tracker.update(now, now) always returns NonMonotonic once
-                    // sample_count > 0, so every bucket after the first failed
-                    // and the caller treated that as "not breached" (fail-open).
-                    // Build the tracker from the previous bucket and only move
-                    // last_bucket_ns forward on success.
+                    // tracker.update(rate, now, None) advances the bucket only on success;
+                    // sample_count > 0 returns NonMonotonic when the timestamp is not
+                    // strictly greater than last_bucket_ns. The caller advances last_bucket_ns
+                    // only on the Ok(outcome) arm, so successive buckets advance cleanly.
 
                     // Build PerIpRecord from IpRecord state.
                     let profile = DetectorProfile {

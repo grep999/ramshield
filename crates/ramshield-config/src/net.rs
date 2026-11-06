@@ -17,7 +17,13 @@ pub fn xff_client(header: Option<&str>, trusted: &[String]) -> Option<IpAddr> {
         if entry.is_empty() {
             continue;
         }
-        let ip = entry.parse::<IpAddr>().ok()?;
+        let ip = match entry.parse::<IpAddr>() {
+            Ok(i) => i,
+            // Fail closed: a non-empty malformed hop terminates the trust walk.
+            // Continuing left could expose an attacker-controlled address past
+            // a broken link in the chain. Caller falls back to the direct peer.
+            Err(_) => return None,
+        };
         // Skip if this hop is a trusted proxy; the next one left is the real client.
         if peer_is_trusted_proxy(ip, trusted) {
             continue;
@@ -115,5 +121,95 @@ pub fn is_loopback_bind(addr: &str) -> bool {
         // harmless extra warning; a LAN hostname missing the warning is
         // the dangerous direction).
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod xff_tests {
+    use super::*;
+
+    #[test]
+    fn no_header_returns_none() {
+        assert_eq!(xff_client(None, &[]), None);
+    }
+
+    #[test]
+    fn single_untrusted_peer_is_client() {
+        assert_eq!(
+            xff_client(Some("203.0.113.5"), &[]),
+            Some("203.0.113.5".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn trusted_proxy_is_skipped() {
+        // Client 203.0.113.5, proxy 10.0.0.1 (trusted)
+        assert_eq!(
+            xff_client(Some("203.0.113.5, 10.0.0.1"), &["10.0.0.1".to_string()]),
+            Some("203.0.113.5".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn multiple_trusted_proxies_skipped() {
+        // Client 203.0.113.5, P1 10.0.0.1, P2 10.0.0.2 (both trusted)
+        assert_eq!(
+            xff_client(
+                Some("203.0.113.5, 10.0.0.1, 10.0.0.2"),
+                &["10.0.0.1".to_string(), "10.0.0.2".to_string()],
+            ),
+            Some("203.0.113.5".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn all_trusted_returns_none() {
+        assert_eq!(
+            xff_client(
+                Some("10.0.0.1, 10.0.0.2"),
+                &["10.0.0.1".to_string(), "10.0.0.2".to_string()]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn untrusted_hop_returns_first_untrusted_from_right() {
+        // Client 203.0.113.5, proxy 10.0.0.1 (trusted), rogue 192.168.1.1 (untrusted)
+        assert_eq!(
+            xff_client(
+                Some("203.0.113.5, 10.0.0.1, 192.168.1.1"),
+                &["10.0.0.1".to_string()]
+            ),
+            Some("192.168.1.1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn malformed_hop_terminates_trust_walk() {
+        // X-Forwarded-For: 198.51.100.77, malformed, 10.0.0.10
+        // Trusted proxy range: 10.0.0.0/8
+        // A malformed hop cannot be skipped and the chain must terminate;
+        // the caller falls back to the direct peer (10.0.0.10).
+        assert_eq!(
+            xff_client(
+                Some("198.51.100.77, malformed, 10.0.0.10"),
+                &["10.0.0.10/8".to_string()],
+            ),
+            None,
+            // fall back to direct peer
+        );
+    }
+
+    #[test]
+    fn ipv6_cidr_trusted_proxy_skipped() {
+        // Client 2001:db8::1, proxy 2001:db8::100/120 trusted
+        assert_eq!(
+            xff_client(
+                Some("2001:db8::1, 2001:db8::100"),
+                &["2001:db8::100/120".to_string()],
+            ),
+            Some("2001:db8::1".parse().unwrap())
+        );
     }
 }

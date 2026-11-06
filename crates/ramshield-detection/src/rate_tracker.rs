@@ -1306,4 +1306,36 @@ mod adaptive_tests {
         );
         assert_eq!(record, before);
     }
+
+    #[test]
+    fn multi_bucket_advancement_succeeds() {
+        let mut record = PerIpRecord::new(100.0, DetectorProfile::default()).unwrap();
+        record.update(100.0, SECOND_NS, None).unwrap();
+        record.update(100.0, 2 * SECOND_NS, None).unwrap();
+        record.update(100.0, 3 * SECOND_NS, None).unwrap();
+        assert!(record.sample_count >= 3);
+    }
+
+    #[test]
+    fn test_bucket_clock_advancement_guard() {
+        // Simulate the guard: last_bucket_ns should only advance after
+        // tracker.update() succeeds (the B1 fix). Calling update with a
+        // timestamp > last_bucket_ns should succeed; otherwise it should fail
+        // with NonMonotonicTimestamp.
+        let mut record = PerIpRecord::new(100.0, DetectorProfile::default()).unwrap();
+        // Setup a prior sample so that timestamp non-monotonicity is checked.
+        record.sample_count = 1;
+        record.last_bucket_ns = SECOND_NS;
+
+        // Calling update with a timestamp greater than last_bucket_ns should succeed,
+        // advancing sample_count and updating last_bucket_ns implicitly in the caller.
+        let result = record.update(100.0, 2 * SECOND_NS, None);
+        assert!(
+            result.is_ok(),
+            "update should succeed when timestamp > last_bucket_ns"
+        );
+
+        // After success, sample_count should have incremented.
+        assert_eq!(record.sample_count, 2);
+    }
 }

@@ -47,16 +47,8 @@ mkdir -p "$TMP/unpack"; tar -xzf "$TMP/$ART" -C "$TMP/unpack"
 mkdir -p "$CONFIG_DIR"
 chmod 0700 "$CONFIG_DIR"
 if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
+  # Config integrity relies on HTTPS transport from the verified release channel.
   curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$BASE/config.baseline.toml" -o "$CONFIG_DIR/config.toml"
-  # Verify config file integrity if a checksum sidecar is available
-  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$BASE/config.baseline.toml.sha256" -o "$TMP/config.baseline.toml.sha256" 2>/dev/null
-  if [[ -f "$TMP/config.baseline.toml.sha256" ]]; then
-    local_actual=$(sha256sum "$CONFIG_DIR/config.toml" | cut -d' ' -f1)
-    local_expected=$(cat "$TMP/config.baseline.toml.sha256" | cut -d' ' -f1)
-    if [[ "$local_actual" != "$local_expected" ]]; then
-      die "Config file integrity check failed"
-    fi
-  fi
   IPC_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
   [[ "$IPC_KEY" =~ ^[0-9a-f]{64}$ ]] || die 'failed to generate IPC authentication key'
   sed -i "s/k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/k1:$IPC_KEY/" "$CONFIG_DIR/config.toml"

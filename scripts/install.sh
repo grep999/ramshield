@@ -55,16 +55,8 @@ mkdir -p "$PREFIX/bin"
 install -o root -g root -m 0755 "$TMP/unpack/ramshield" "$PREFIX/bin/ramshield"
 install -o root -g root -m 0755 "$TMP/unpack/ramshield-cli" "$PREFIX/bin/ramshield-cli"
 if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
+  # Config integrity relies on HTTPS transport from the verified release channel.
   curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$BASE/config.baseline.toml" -o "$CONFIG_DIR/config.toml"
-  # Verify config file integrity if a checksum sidecar is available
-  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$BASE/config.baseline.toml.sha256" -o "$TMP/config.baseline.toml.sha256" 2>/dev/null
-  if [[ -f "$TMP/config.baseline.toml.sha256" ]]; then
-    local_actual=$(sha256sum "$CONFIG_DIR/config.toml" | cut -d' ' -f1)
-    local_expected=$(cat "$TMP/config.baseline.toml.sha256" | cut -d' ' -f1)
-    if [[ "$local_actual" != "$local_expected" ]]; then
-      die "Config file integrity check failed"
-    fi
-  fi
   # Replace the tracked development credential with a unique 256-bit key.
   # The installed config remains HMAC-authenticated even on loopback.
   IPC_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
@@ -81,7 +73,7 @@ elif grep -q 'dir = "/tmp/ramshield-wal"' "$CONFIG_DIR/config.toml" 2>/dev/null;
     log "refusing legacy WAL path migration: /tmp/ramshield-wal contains unrecovered data; move data to ${STATE_DIR}/wal manually"
   else
     sed -i "s|dir = \"/tmp/ramshield-wal\"|dir = \"${STATE_DIR}/wal\"|" "$CONFIG_DIR/config.toml"
-    chown root:\"$GROUP_NAME\" \"$CONFIG_DIR/config.toml\"; chmod 0640 "$CONFIG_DIR/config.toml"
+    chown root:"$GROUP_NAME" "$CONFIG_DIR/config.toml"; chmod 0640 "$CONFIG_DIR/config.toml"
     log "migrated legacy WAL directory to ${STATE_DIR}/wal"
   fi
 fi

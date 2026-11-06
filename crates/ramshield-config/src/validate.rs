@@ -447,10 +447,12 @@ impl Config {
             if hex_str.len() < 32 {
                 anyhow::bail!("ipc.auth_keys[{id}] hex key must be >= 32 chars (16 bytes)");
             }
-            // Reject the well-known default admin key that ships in baseline config,
-            // which if left in place would let any local user sign admin commands.
-            // The installers replace it, but a copied baseline config preserves it.
-            if entry == "k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" {
+            // Reject the well-known default admin key. Hex bytes have exactly
+            // one string representation per case; a case-insensitive compare is
+            // complete for hex and has no decode/panic path.
+            const DEV_KEY_HEX: &str =
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+            if hex_str.eq_ignore_ascii_case(DEV_KEY_HEX) {
                 anyhow::bail!(
                     "ipc.auth_keys contains the well-known default admin key; generate a new key via the installer"
                 );
@@ -552,5 +554,35 @@ mod mesh_peer_identity_tests {
                 .to_string()
                 .contains("keys must all be unique")
         );
+    }
+}
+
+#[cfg(test)]
+mod ipc_key_tests {
+    use super::*;
+
+    const DEFAULT_KEY: &str = "k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn rejects_lowercase_default_key() {
+        let mut config = Config::default();
+        config.ipc.auth_keys = vec![DEFAULT_KEY.into()];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_uppercase_default_key() {
+        let mut config = Config::default();
+        config.ipc.auth_keys =
+            vec!["k1:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF".into()];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn accepts_different_key() {
+        let mut config = Config::default();
+        config.ipc.auth_keys =
+            vec!["k2:abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567".into()];
+        assert!(config.validate().is_ok());
     }
 }
