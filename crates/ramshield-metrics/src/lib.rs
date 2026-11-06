@@ -144,6 +144,10 @@ pub struct Metrics {
     pub numerical_calculation_failure_total: Arc<AtomicU64>,
     /// Number of times an adaptive breach was triggered via the CUSUM detector.
     pub adaptive_breach_total: Arc<AtomicU64>,
+    /// Number of non-monotonic timestamp errors (wall-clock stepped backward).
+    pub non_monotonic_timestamp_total: Arc<AtomicU64>,
+    /// Number of invalid-input detector errors (bad rate, profile, etc.).
+    pub detector_invalid_input_total: Arc<AtomicU64>,
     /// Number of IPs currently in Breached mode (frozen baseline). Gauge for
     /// operators monitoring active breach state.
     pub baseline_frozen_ips_gauge: Arc<AtomicU64>,
@@ -300,6 +304,8 @@ impl Metrics {
             out_of_order_sample_dropped_total: Arc::new(AtomicU64::new(0)),
             numerical_calculation_failure_total: Arc::new(AtomicU64::new(0)),
             adaptive_breach_total: Arc::new(AtomicU64::new(0)),
+            non_monotonic_timestamp_total: Arc::new(AtomicU64::new(0)),
+            detector_invalid_input_total: Arc::new(AtomicU64::new(0)),
             baseline_frozen_ips_gauge: Arc::new(AtomicU64::new(0)),
             cgnat_classify_ticks: Arc::new(AtomicU64::new(0)),
             cgnat_tier_allow: Arc::new(AtomicU64::new(0)),

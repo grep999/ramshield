@@ -482,7 +482,7 @@ async fn login_submit(
                 .filter_map(|v| v.to_str().ok())
                 .collect::<Vec<_>>()
                 .join(", ");
-            ramshield_config::xff_client(Some(&xff), &auth.trusted_proxies).unwrap_or(peer)
+            ramshield_config::xff_client(Some(&xff)).unwrap_or(peer)
         } else {
             // Untrusted peer — key by direct TCP address only
             peer

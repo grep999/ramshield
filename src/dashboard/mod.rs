@@ -1041,7 +1041,7 @@ mod tests {
     async fn post_config_same_origin_allowed() {
         let state = test_app_state();
         let token = "b".repeat(64);
-        state.auth.register_session(&token);
+        state.auth.register_session(&token, 0);
         let app = Router::new()
             .route("/api/config", post(api_set_config))
             .with_state(state.clone());
