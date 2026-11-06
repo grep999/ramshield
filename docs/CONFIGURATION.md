@@ -14,35 +14,35 @@ The baseline file intentionally contains explicit values for development/testing
 
 | Key | Baseline | Built-in default | Notes |
 |---|---:|---:|---|
-| `ram_limit_mb` | `1024` | `1024` | Hard store budget; validation requires at least 64 MB. |
-| `shard_count` | `8` | `4` | Must be a power of two. |
+| `ram_limit_mb` | `1024` | `512` | Hard store budget; validation requires at least 64 MB. |
+| `shard_count` | `256` | `256` | Must be a power of two. |
 | `worker_threads` | `0` | `0` | `0` lets Tokio choose worker count. |
 
 ## `[detection]`
 
 | Key | Baseline | Built-in default |
 |---|---:|---:|
-| `rps_threshold` | `500` | `1000` |
+| `rps_threshold` | `500` | `500` |
 | `rate_window_secs` | `10` | `10` |
-| `promote_min_events` | `4` | `8` |
+| `promote_min_events` | `4` | `4` |
 | `relative_enabled` | `false` | `false` |
 | `relative_factor` | `5.0` | `5.0` |
 | `relative_floor_rps` | `3.0` | `3.0` |
 | `relative_min_samples` | `8` | `8` |
 | `emergency_burst_threshold` | `500` | `500` |
-| `batch_window_ms` | `25` | `50` |
+| `batch_window_ms` | `25` | `25` |
 | `batch_max_events` | `4096` | `4096` |
-| `pre_aggs_flush_interval_ms` | `250` | `1000` |
+| `pre_aggs_flush_interval_ms` | `250` | `250` |
 | `pre_aggs_max_size` | `1000000` | `1000000` |
 | `bloom_bits` | `8000000` | `8000000` |
-| `subnet_batch_threshold` | `64` | `50` |
-| `subnet_batch_min_events` | `500` | `100` |
-| `subnet_window_threshold` | `12` | `500` |
+| `subnet_batch_threshold` | `64` | `64` |
+| `subnet_batch_min_events` | `500` | `500` |
+| `subnet_window_threshold` | `12` | `12` |
 | `batch_block_enabled` | `true` | `true` |
-| `block_ttl_secs` | `300` | `3600` |
-| `subnet_burst_ttl_secs` | `60` | `120` |
-| `pulse_window_secs` | `5` | `6` |
-| `pulse_threshold_samples` | `3` | `2` |
+| `block_ttl_secs` | `300` | `300` |
+| `subnet_burst_ttl_secs` | `60` | `60` |
+| `pulse_window_secs` | `5` | `5` |
+| `pulse_threshold_samples` | `3` | `3` |
 
 Use the baseline values only when they are appropriate for your workload. Detection thresholds are policy, not universal safe values.
 
@@ -51,12 +51,12 @@ Use the baseline values only when they are appropriate for your workload. Detect
 | Key | Baseline | Built-in default |
 |---|---|---:|
 | `tcp_addr` | `127.0.0.1:7890` | `127.0.0.1:7890` |
-| `max_connections` | `128` | `256` |
-| `max_line_length` | `262144` | 256 KiB when serde default is applied |
-| `max_connection_bytes` | `1048576` | 1 MiB |
-| `read_timeout_ms` | `5000` | 5000 |
-| `write_timeout_ms` | `5000` | 5000 |
-| `connection_idle_timeout_ms` | `30000` | 30000 |
+| `max_connections` | `128` | `1024` |
+| `max_line_length` | `262144` | `None` |
+| `max_connection_bytes` | `1048576` | `None` |
+| `read_timeout_ms` | `5000` | `None` |
+| `write_timeout_ms` | `5000` | `None` |
+| `connection_idle_timeout_ms` | `30000` | `None` |
 | `auth_keys` | `[]` | `[]` |
 | `require_auth` | `false` | `false` |
 | `require_auth_for_mutations` | `true` | `true` |
@@ -75,7 +75,7 @@ For a non-loopback IPC bind, configuration validation requires authentication an
 
 | Key | Baseline | Built-in default |
 |---|---:|---:|
-| `enabled` | `true` | `false` |
+| `enabled` | `true` | `true` |
 | `http_addr` | `127.0.0.1:9999` | `127.0.0.1:9999` |
 | `block_log_size` | `1000` | `1000` |
 | `admin_password_hash` | unset | unset |
