@@ -202,7 +202,13 @@ impl AuthState {
         // Hold the auth lock across the epoch bump, hash swap and session
         // clear so a concurrent register_session() cannot slip a stale
         // session in between the generation check and the clear.
-        let _guard = self.auth_lock.lock().unwrap();
+        // Recover a poisoned lock (unwind builds only; release is panic=abort).
+        // `Mutex<()>` carries no data — recovering and completing the rotation
+        // is fail-closed repair; failing here would leave the old password live.
+        let _guard = self
+            .auth_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Bump the epoch BEFORE swapping the hash so any in-flight login that
         // verified against the old hash cannot register a session afterwards.
         self.auth_generation.fetch_add(1, Ordering::AcqRel);
@@ -216,6 +222,10 @@ impl AuthState {
         }
         // A stolen session must not survive a password change.
         self.sessions.clear();
+
+        // Release poison so subsequent reads are not permanently fail-closed;
+        // the replacement hash is now the known-good state.
+        self.auth_lock.clear_poison();
     }
 
     /// True when this IP is currently locked out. Entries for IPs whose
@@ -290,7 +300,9 @@ impl AuthState {
     /// before swapping the hash lets an old password verify and then register
     /// against the new epoch. Returns None when auth is disabled/unreadable.
     fn snapshot_auth(&self) -> Option<(u64, String)> {
-        let _guard = self.auth_lock.lock().unwrap();
+        // Fail closed on poisoned lock — a torn (generation, hash) pair
+        // could reopen the F1 stale-session race. Return None ⇒ login 401.
+        let _guard = self.auth_lock.lock().ok()?;
         let generation = self.auth_generation.load(Ordering::Acquire);
         let hash = self.password_hash.read().ok()?.as_ref()?.clone();
         Some((generation, hash))
@@ -330,7 +342,12 @@ impl AuthState {
     /// Returns true when the session was registered; false when the epoch
     /// changed (password rotated) and the session was rejected.
     pub(crate) fn register_session(&self, token: &str, expected_gen: u64) -> bool {
-        let _guard = self.auth_lock.lock().unwrap();
+        // Fail closed on poisoned lock: the generation check cannot be
+        // trusted, so refuse the session rather than risk a stale insert.
+        let _guard = match self.auth_lock.lock() {
+            Ok(guard) => guard,
+            Err(_) => return false,
+        };
         if self.auth_generation.load(Ordering::Acquire) != expected_gen {
             return false;
         }
@@ -850,6 +867,37 @@ mod tests {
             a.verify_password("new-password").is_some(),
             "explicit replacement should clear poison and restore login"
         );
+    }
+
+    #[test]
+    fn auth_lock_poison_is_fail_closed() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let a = AuthState::new(
+            Some(hash_of("old-password")),
+            3600,
+            50,
+            1024,
+            vec![],
+            true,
+            Arc::new(ramshield_metrics::Metrics::new()),
+            4,
+        );
+
+        // Poison auth_lock by panicking while holding the guard.
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = a.auth_lock.lock().unwrap();
+            panic!("simulate panic while holding auth lock");
+        }));
+
+        // Readers fail closed while poisoned.
+        assert!(a.snapshot_auth().is_none());
+        assert!(!a.register_session("tok", 0));
+
+        // Explicit replacement repairs the lock (recover + clear_poison).
+        a.set_password_hash(Some(hash_of("new-password")));
+        assert!(a.snapshot_auth().is_some());
+        assert!(a.verify_password("new-password").is_some());
     }
 
     #[test]
