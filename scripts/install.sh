@@ -55,7 +55,9 @@ mkdir -p "$PREFIX/bin"
 install -o root -g root -m 0755 "$TMP/unpack/ramshield" "$PREFIX/bin/ramshield"
 install -o root -g root -m 0755 "$TMP/unpack/ramshield-cli" "$PREFIX/bin/ramshield-cli"
 if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
-  # Config integrity relies on HTTPS transport from the verified release channel.
+  # Config integrity: HTTPS transport only. The baseline config is a separate
+  # release asset — it is NOT covered by the archive's checksum/Sigstore check,
+  # so transport encryption is the only guarantee for this file.
   curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$BASE/config.baseline.toml" -o "$CONFIG_DIR/config.toml"
   # Replace the tracked development credential with a unique 256-bit key.
   # The installed config remains HMAC-authenticated even on loopback.

@@ -212,4 +212,15 @@ mod xff_tests {
             Some("2001:db8::1".parse().unwrap())
         );
     }
+
+    #[test]
+    fn empty_entries_are_skipped() {
+        // Multiple empty entries should be skipped; first non-empty untrusted wins.
+        assert_eq!(
+            xff_client(Some("203.0.113.5, , , 192.168.1.1"), &[]),
+            Some("192.168.1.1".parse().unwrap())
+        );
+        // All empty → None
+        assert_eq!(xff_client(Some(", , , "), &[]), None);
+    }
 }

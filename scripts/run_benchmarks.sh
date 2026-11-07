@@ -22,11 +22,4 @@ echo "Binary size: $(stat -c%s target/release/ramshield 2>/dev/null || echo 'N/A
 echo "Workspace crates: $(ls -d crates/*/src 2>/dev/null | wc -l)"
 echo "Total Rust LOC: $(find crates src -name '*.rs' -exec wc -l {} + 2>/dev/null | tail -1 | awk '{print $1}')"
 echo
-echo "═══ Packet Capture Benchmark (A-037 gap) ═══"
-if [ -f scripts/packet_capture_bench.c ]; then
-  gcc -O2 -o /tmp/capture_bench scripts/packet_capture_bench.c && /tmp/capture_bench || true
-else
-  echo "⚠ packet_capture_bench.c not found; skip bench"
-fi
-echo
 echo "Batch 6 complete — review ns/op values above for regressions."

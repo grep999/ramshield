@@ -47,7 +47,9 @@ mkdir -p "$TMP/unpack"; tar -xzf "$TMP/$ART" -C "$TMP/unpack"
 mkdir -p "$CONFIG_DIR"
 chmod 0700 "$CONFIG_DIR"
 if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
-  # Config integrity relies on HTTPS transport from the verified release channel.
+  # Config integrity: HTTPS transport only. The baseline config is a separate
+  # release asset — it is NOT covered by the archive's checksum/Sigstore check,
+  # so transport encryption is the only guarantee for this file.
   curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$BASE/config.baseline.toml" -o "$CONFIG_DIR/config.toml"
   IPC_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
   [[ "$IPC_KEY" =~ ^[0-9a-f]{64}$ ]] || die 'failed to generate IPC authentication key'
