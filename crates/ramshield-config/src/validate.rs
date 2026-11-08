@@ -417,6 +417,10 @@ impl Config {
         // P1e: validate auth_keys shape (key_id:hex) + PHC hash format,
         // before any IPC server binds with them. No new deps — std hex check.
         let mut auth_key_ids = std::collections::HashSet::new();
+        // Well-known default admin key shipped in the baseline config; the
+        // installers replace it. Rejected only on a public IPC bind.
+        const DEV_KEY_HEX: &str =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         for entry in &self.ipc.auth_keys {
             let (id, hex_str) = match entry.split_once(':') {
                 Some((k, v)) => (k, v),
@@ -446,6 +450,14 @@ impl Config {
             }
             if hex_str.len() < 32 {
                 anyhow::bail!("ipc.auth_keys[{id}] hex key must be >= 32 chars (16 bytes)");
+            }
+            // Reject the well-known default admin key regardless of bind.
+            // The shipped baseline config carries this key; the installer replaces it.
+            // Running --validate on the raw baseline is not supported — use the installer.
+            if hex_str.eq_ignore_ascii_case(DEV_KEY_HEX) {
+                anyhow::bail!(
+                    "ipc.auth_keys contains the well-known default admin key; generate a new key via the installer"
+                );
             }
         }
         if let Some(mll) = self.ipc.max_line_length
@@ -544,5 +556,45 @@ mod mesh_peer_identity_tests {
                 .to_string()
                 .contains("keys must all be unique")
         );
+    }
+}
+
+#[cfg(test)]
+mod ipc_key_tests {
+    use super::*;
+
+    const DEFAULT_KEY: &str = "k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn rejects_lowercase_default_key() {
+        let mut config = Config::default();
+        config.ipc.auth_keys = vec![DEFAULT_KEY.into()];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_uppercase_default_key() {
+        let mut config = Config::default();
+        config.ipc.auth_keys =
+            vec!["k1:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF".into()];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_default_key_even_on_loopback() {
+        // Loopback TCP is not protected by filesystem permissions; a local
+        // process can connect. The known dev key must be rejected on any bind.
+        let mut config = Config::default();
+        assert_eq!(config.ipc.tcp_addr, "127.0.0.1:7890");
+        config.ipc.auth_keys = vec![DEFAULT_KEY.into()];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn accepts_different_key() {
+        let mut config = Config::default();
+        config.ipc.auth_keys =
+            vec!["k2:abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567".into()];
+        assert!(config.validate().is_ok());
     }
 }

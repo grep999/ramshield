@@ -119,7 +119,7 @@ max_connection_bytes = 1_048_576
 read_timeout_ms = 5000
 write_timeout_ms = 5000
 connection_idle_timeout_ms = 30_000
-auth_keys = ["k1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]
+auth_keys = ["k1:a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718"]
 # Generate a 128-bit hex key (32 hex chars):
 #   openssl rand -hex 16
 #   or: python3 -c 'import secrets; print(secrets.token_hex(16))'
