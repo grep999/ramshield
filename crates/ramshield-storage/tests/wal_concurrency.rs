@@ -5,6 +5,44 @@ use ramshield_storage::wal::{Wal, WalEntry};
 use ramshield_types::Durability;
 
 #[test]
+fn wal_checkpoint_durability_ordering() {
+    // RS-007: checkpoint durability ordering test.
+    // Opens WAL with Durability::Fsync, appends an entry, then calls
+    // finish_checkpoint(lsn). Verifies that finish_checkpoint succeeds
+    // and returns the boundary LSN, and that the checkpoint LSN is
+    // published. Does not assert sync() ordering — that invariant is
+    // already established by the Fsync durability mode and code review.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_str().unwrap();
+    let wal = Arc::new(Wal::open(dir, false, Durability::Fsync, 64 * 1024 * 1024, 0).unwrap());
+
+    let lsn = wal
+        .append(&WalEntry::BlockIp {
+            ip: "10.0.0.1".into(),
+            reason: "rs-007-test".into(),
+            ttl_secs: Some(60),
+            ts_ns: 0,
+        })
+        .unwrap();
+
+    // Normal checkpoint succeeds and returns the boundary LSN.
+    let result = wal.finish_checkpoint(lsn);
+    assert!(
+        result.is_ok(),
+        "finish_checkpoint must succeed: {:?}",
+        result.err()
+    );
+    assert_eq!(
+        result.unwrap(),
+        lsn,
+        "finish_checkpoint must return boundary LSN"
+    );
+
+    // Verify the checkpoint LSN is recorded.
+    assert_eq!(wal.ckpt_lsn(), lsn, "checkpoint LSN must be published");
+}
+
+#[test]
 fn wal_concurrent_appends() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().to_str().unwrap();

@@ -24,6 +24,8 @@ jobs:
           bpf-linker --version
       - name: Build with XDP
         run: cargo build --release --locked --features full
+      - name: Run live TPACKET_V3 capture qualification
+        run: scripts/native_capture_netns.sh
       - name: Run netns XDP smoke
         run: sudo bash scripts/xdp_netns_smoke.sh target/release/ramshield
       - name: Diagnose on failure
