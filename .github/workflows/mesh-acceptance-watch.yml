@@ -5,7 +5,7 @@ name: Mesh Acceptance Watch
 # the remaining diagnostics.
 on:
   push:
-    branches: [audit-branch, 'mesh/**', 'automation/mesh-acceptance-watch-**']
+    branches: [master, 'mesh/**', 'automation/mesh-acceptance-watch-**']
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -19,9 +19,12 @@ on:
       - '.cargo/**'
       - 'scripts/**'
       - 'config/**'
+      - 'docs/development/MESH_TEST_MATRIX.md'
+      - 'docs/development/MESH_RECOVERY_ACCEPTANCE_MATRIX.md'
+      - '.github/workflows/mesh-promotion.yml'
       - '.github/workflows/mesh-acceptance-watch.yml'
   pull_request:
-    branches: [audit-branch]
+    branches: [master]
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -35,6 +38,9 @@ on:
       - '.cargo/**'
       - 'scripts/**'
       - 'config/**'
+      - 'docs/development/MESH_TEST_MATRIX.md'
+      - 'docs/development/MESH_RECOVERY_ACCEPTANCE_MATRIX.md'
+      - '.github/workflows/mesh-promotion.yml'
       - '.github/workflows/mesh-acceptance-watch.yml'
   schedule:
     - cron: '17 3 * * *'
@@ -43,9 +49,11 @@ permissions:
   contents: read
 
 concurrency:
-  # Keep concurrency deterministic without conditional expression parsing.
+  # A newer PR commit supersedes its in-flight PR check. Master pushes and
+  # scheduled evidence runs are never cancelled: they are durable acceptance
+  # records for already-published candidates.
   group: mesh-acceptance-watch-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -63,7 +71,7 @@ jobs:
       - name: Checkout candidate ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'schedule' && 'audit-branch' || github.sha }}
+          ref: ${{ github.event_name == 'schedule' && 'master' || github.sha }}
           persist-credentials: false
       - name: Verify and publish candidate identity
         id: candidate
