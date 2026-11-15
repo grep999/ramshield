@@ -1,66 +1,74 @@
-# Mesh Test Matrix
+# Mesh Test and Security Acceptance Matrix
 
-**Purpose:** make mesh feature acceptance evidence explicit. This matrix supplements, rather than replaces, the core production backlog.
+**Baseline reviewed:** `master` at `2c225d572a26f6f040b2dd8d5b987e0595e0fa87`.
+**Purpose:** distinguish behavior present in source from acceptance evidence still required. A checked item means the described narrow regression coverage exists; it does not imply production readiness.
 
-**Current candidate baseline:** `master` at the exact base SHA recorded in PR #97; this matrix is a requirements ledger, not evidence that every item has passed.
+## Current authentication boundary — release-blocking
 
-**Authentication note (current master):** transport frames are authenticated with unique per-peer keys selected by the claimed node ID. The current listener does not bind the TCP source IP to the configured peer address. F-01's separate edge-secret/source-IP patch is not included in this PR: it changes key-provisioning semantics and requires coordinated config, boot, transport, tests, and operator documentation. Its independent review identified an IPv4-mapped-IPv6 source comparison defect and a residual inability to distinguish endpoints sharing one symmetric edge secret. Do not treat F-01 as merged or accepted.
+The current transport uses a per-node HMAC signing key, not pairwise edge secrets or asymmetric node signatures:
+
+- `MeshHandle::bind` builds `trusted_keys` from each configured peer's `MeshPeer.auth_key`, keyed by peer node ID.
+- `send_to_ack` signs outbound envelopes with the local node's `self.auth_key`.
+- `read_stream` selects the verification key using the envelope's claimed `node_id`; it does not compare the TCP remote IP with the configured peer address.
+- The configuration therefore distributes each node's signing key to its peers as a verification secret. A configured node that possesses another node's verification key can forge an envelope claiming that other node's ID to a receiver that trusts that key. The same trust issue applies to HMAC-authenticated ACKs. Unique key values in one node's config do **not** prevent this cross-peer impersonation when those keys are shared with verifiers.
+- There is no source-IP binding and no F-01 pairwise edge-secret model in this baseline. Source-IP binding alone would be defense-in-depth, not a replacement for non-repudiable node identity; F-01's shared edge secret also cannot distinguish the two endpoints that possess the same edge secret.
+
+**Do not describe the present design as cryptographically isolating peer identities.** Treat cross-peer impersonation by a compromised configured node as an open, release-blocking trust-boundary risk until the key model is redesigned and independently reviewed.
+
+F-01 is not included in PR #97. Its review identified IPv4-mapped-IPv6 address normalization as a source-binding compatibility issue; the F-01 branch later reported a `same_ip()` normalization fix, but that implementation and its tests are not present in this PR. Any future source-IP binding must include IPv4, IPv6, dual-stack and mapped-address positive/negative tests. F-01's review also left a P2 weakness: negative tests need their own positive controls.
 
 ## Stage A — executable transport tests
 
-- [x] Real TCP happy path: a configured sender broadcasts an authenticated block to a receiver and the receiver queues it.
+- [x] Real TCP happy path: configured sender sends an authenticated block and receiver queues it.
 - [x] Invalid-MAC frame is rejected before it enters the receive queue.
-- [x] Existing unit coverage: frame cap and delimiter accounting, incomplete-frame timeout, sync chunk size, bind-argument validation, send timeout, listener socket release, invalid future creation time, and oversized sync rejection.
+- [x] Narrow unit coverage exists for frame bounds/delimiter accounting, incomplete-frame timeout, sync chunk size, bind validation, send timeout, listener socket release, invalid future creation time, and oversized sync rejection.
+- [ ] Positive control paired with every negative authentication/source rejection test.
+- [ ] Cross-peer impersonation test proving the current per-node-key weakness, followed by regression tests for the replacement identity model.
+- [ ] Source-address binding, if adopted, with ephemeral source-port handling and IPv4-mapped-IPv6 normalization tests.
 
 ## Stage B — CRDT correctness (release-blocking)
 
-- [x] Add/remove/re-add for the same IP and node (same-process operation sequence).
-- [x] Concurrent bans from different nodes; merge order independence.
-- [x] Duplicate and reordered deltas are idempotent.
-- [x] Old ban after unban is rejected; a genuinely newer ban after unban is accepted (same process).
-- [x] HLC physical-time advance cannot reuse a dot counter (64-bit process-local operation counter).
-- [x] Restart/incarnation changes cannot collide with old dots in the same configured node ID: each blocklist instance gets a random UUID incarnation, and nil/missing incarnations are rejected.
-- [x] Regression: explicit-unban high-water mark survives the former GC horizon and rejects a replay.
-- [x] Regression: an expired active entry is converted to a high-water mark before pruning.
-- [ ] Expiry and purge cannot resurrect stale state after a peer is offline in every delivery ordering; requires multi-peer/offline convergence tests.
-- [ ] Tombstone GC has a causal-stability/epoch/repair argument, not only a timer. **Current safe fallback:** timer-only deletion is removed; high-water marks are retained indefinitely, so bounded-memory GC is still blocked.
-- [ ] Property-style merge permutations converge to the same state.
+- [x] Same-process add/remove/re-add, concurrent-origin merge order, duplicate/reordered delta idempotency, and stale-ban rejection regressions.
+- [x] Incarnation identity and missing/nil-incarnation rejection regressions.
+- [x] High-water-mark regressions for explicit unban and expiry conversion.
+- [ ] Offline-peer expiry/purge convergence across all delivery orderings.
+- [ ] Causal-stability/epoch/repair argument for tombstone GC. Current safe fallback retains high-water marks indefinitely; bounded-memory GC remains unresolved.
+- [ ] Property-style merge permutations and multi-process convergence.
 
-## Stage C — anti-entropy completeness (release-blocking)
+## Stage C — anti-entropy and recovery completeness (release-blocking)
 
-- [x] More than 4,096 active entries: repeated snapshots visit all 5,000 entries in stable-state regression coverage.
-- [x] More than 4,096 mixed active entries and tombstones: repeated snapshots visit all 2,500 of each kind in stable-state regression coverage.
-- [ ] Pagination progress is fair and deterministic, even while the map changes.
-- [ ] Multi-chunk state converges after loss, duplicate delivery, reordering, and reconnect.
-- [ ] Stale tombstones and later legitimate re-bans converge correctly.
-- [ ] Sync repair remains effective after queue overflow.
+- [x] Stable-state snapshot pagination regressions above 4,096 entries (5,000 active; 2,500 active plus 2,500 tombstones).
+- [x] Current transport implements fixed recovery snapshots, generation/recovery-ID/boundary/digest-bound frames, bounded frame assembly, receiver-side digest verification, and a receiver proof checked by the sender.
+- [ ] Deterministic multi-process fault injection for loss, duplication, reordering, disconnect/reconnect, and concurrent mutation.
+- [ ] Process restart behavior: recovery assembly and peer sync state are currently in-memory; prove restart recovery and cursor reconstruction from durable state.
+- [ ] Fairness/progress under concurrent state mutation and multi-chunk repair after queue overflow.
+- [ ] Stale tombstones and legitimate re-bans converge after offline periods.
 
 ## Stage D — protocol and trust boundary
 
-- [ ] Invalid HMAC, truncated/invalid HMAC encoding, modified body, malformed JSON.
-- [ ] Replay of a previously valid envelope; duplicate semantics are explicit.
-- [x] Nil/missing incarnation is rejected for block, unblock, and sync deltas.
-- [ ] Self-origin, unknown node ID, counter extremes, invalid tier, invalid expiry, and timestamp boundaries.
-- [ ] Same-key node impersonation and key rotation are either prevented or documented as accepted trust assumptions.
-- [ ] Frame exactly at limit, one byte over, delimiter split across reads, clean EOF, partial EOF, CRLF, and multiple frames on one connection.
-- [ ] Reader/peer caps and malformed-frame floods remain bounded.
+- [ ] Replace or formally disposition the shared per-node HMAC trust model; prevent one configured peer from forging another peer's identity or ACK.
+- [ ] Key provisioning, rotation, revocation, compromise recovery, and cluster membership-change tests.
+- [ ] Replay semantics and envelope freshness boundaries under clock skew and restart.
+- [ ] Self-origin, unknown node ID, counter extremes, invalid tier/expiry and timestamp boundaries.
+- [ ] Frame exactly at limit, one byte over, delimiter split across reads, clean/partial EOF, CRLF and multiple frames per connection.
+- [ ] Reader/peer caps, malformed-frame floods and queue saturation remain bounded.
 
-## Stage E — overload, lifecycle, and service projection
+## Stage E — overload, lifecycle and enforcement projection
 
-- [ ] Incoming queue saturation reports drops and then demonstrably repairs state.
-- [ ] Outbound semaphore saturation, stalled peers, permit release, and unreachable peers.
-- [ ] Shutdown while idle, blocked on a partial frame, broadcasting, and processing sync.
-- [ ] All mesh-owned tasks terminate; listener and sockets release; startup errors propagate.
-- [ ] Feature-off build and tests do not start mesh; mesh-feature startup failures are surfaced.
-- [ ] Service-level block/unblock, operator suppression, TTL, expiry, WAL/storage failure, XDP failure, and retry/reconciliation.
-- [ ] IP and CIDR semantics are explicit; current wire deltas are IP-only.
+- [ ] Queue saturation reports drops and demonstrates subsequent state repair.
+- [ ] Outbound semaphore saturation, stalled peers, permit release and unreachable peers.
+- [ ] Shutdown while idle, blocked on partial frame, broadcasting and processing recovery.
+- [ ] All mesh-owned tasks terminate; listener/sockets release; startup failures propagate.
+- [ ] Feature-off build proves mesh is not started; feature-on startup failures are surfaced.
+- [ ] Store/WAL/XDP projection convergence across block, unblock, suppression, TTL, expiry, persistence failure and retry.
+- [ ] Explicit IP/CIDR semantics; current wire deltas are IP-only.
 
 ## Stage F — performance and operations
 
-- [ ] Reproducible multi-node tests with 3+ peers, loss/reconnect, large state, and skew.
-- [ ] Throughput, convergence latency, memory at configured limits, and slow-peer behavior have baselines.
-- [ ] Threat model, key provisioning/rotation, network exposure, operational runbook, rollback, and known limitations reviewed.
+- [ ] Reproducible 3+ node tests with loss/reconnect, large state and clock skew.
+- [ ] Throughput, convergence latency, peak memory (including snapshot cloning), and slow-peer baselines.
+- [ ] Threat model, key provisioning/rotation, network exposure, operational runbook and rollback reviewed.
 
 ## Acceptance rule
 
-The feature stays optional and disabled in production until Stages B–F are closed or explicitly dispositioned by an independent reviewer, and the full feature-off/mesh/full/all-feature test matrix, formatting, strict Clippy, and relevant workspace checks pass on one exact SHA. A green unit-test run alone is not acceptance.
+Mesh remains optional and production-disabled until release-blocking items are closed or explicitly dispositioned by an independent reviewer. Require feature-off, mesh, full and all-feature tests; formatting; strict Clippy; dependency audit; lifecycle/fault evidence; and security review on one exact SHA. A green unit-test run or a workflow qualification receipt alone is not production onboarding approval.
