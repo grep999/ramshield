@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - audit-branch
+      - master
       - 'mesh/**'
       - ops/mesh-environment-promotion
     paths:
@@ -18,7 +18,7 @@ on:
       - 'src/**'
       - '.github/workflows/mesh-promotion.yml'
   pull_request:
-    branches: [audit-branch]
+    branches: [master]
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
