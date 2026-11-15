@@ -1,9 +1,8 @@
 # Mesh Recovery Acceptance Matrix
 
-**Status:** active work ledger for PR #19; acceptance is not yet complete.
-**Target branch:** `prototype/condition-driven-mesh-sync-20261011`
-**Baseline observed before this document commit:** `9f24516c61f40df79d25536988b67251dfcba933`
-**Safety:** keep PR #19 Draft; keep production mesh disabled. No merge, deploy, force-push, or rebase.
+**Status:** active acceptance ledger for the current master mesh implementation; acceptance is not yet complete.
+**Target branch:** `master` (changes to this ledger are consolidated in PR #97).
+**Safety:** keep mesh optional and production-disabled until every release-blocking gate is closed on one exact SHA. This document records required behavior; it does not assert unverified test results.
 
 This document is the durable handoff contract for the recovery-protocol coder, test coder, coordinator, and independent reviewer. It records required behavior; it does not claim that unimplemented behavior or unrun tests have passed.
 
@@ -80,3 +79,12 @@ Append a short PR #19 handoff for every meaningful change with:
 - **Acceptance rows covered:** refer to the matrix above.
 - **Open risks:** what remains unproved.
 - **Next owner/action:** one bounded task.
+
+
+## Current implementation boundary (reviewed against master)
+
+- The current transport uses a unique configured key per peer node ID for inbound frame verification and outbound application-ACK verification; outbound frames are signed with the local node key. This is a per-node-key trust model, not F-01's pairwise edge-secret model.
+- The listener currently discards the accepted TCP remote address and `read_stream` authenticates by claimed node ID plus that peer's configured key. Source-IP binding is therefore not currently enforced.
+- F-01's edge-secret/source-IP patch is deliberately not transplanted by PR #97. It also changes config validation, boot-time key decoding, two-node test provisioning, and operator docs; transplanting only its transport changes would create an inconsistent contract.
+- F-01's independent review found an IPv4-mapped-IPv6 comparison defect and a P2 weakness in negative tests lacking in-test positive controls. Its own report says within-edge endpoint attribution remains impossible with a shared symmetric key. These must be resolved and explicitly accepted before any F-01 adoption.
+- PR #97 is a CI/workflow and acceptance-documentation consolidation. It does not claim to complete the multi-process fault-injection, key-rotation, source-address binding, or service-projection acceptance work below.
