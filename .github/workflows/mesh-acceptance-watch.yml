@@ -49,9 +49,11 @@ permissions:
   contents: read
 
 concurrency:
-  # Keep concurrency deterministic without conditional expression parsing.
+  # A newer PR commit supersedes its in-flight PR check. Master pushes and
+  # scheduled evidence runs are never cancelled: they are durable acceptance
+  # records for already-published candidates.
   group: mesh-acceptance-watch-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
