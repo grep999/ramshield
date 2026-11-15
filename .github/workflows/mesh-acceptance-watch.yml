@@ -21,6 +21,7 @@ on:
       - 'config/**'
       - 'docs/development/MESH_TEST_MATRIX.md'
       - 'docs/development/MESH_RECOVERY_ACCEPTANCE_MATRIX.md'
+      - '.github/workflows/mesh-promotion.yml'
       - '.github/workflows/mesh-acceptance-watch.yml'
   pull_request:
     branches: [master]
@@ -39,6 +40,7 @@ on:
       - 'config/**'
       - 'docs/development/MESH_TEST_MATRIX.md'
       - 'docs/development/MESH_RECOVERY_ACCEPTANCE_MATRIX.md'
+      - '.github/workflows/mesh-promotion.yml'
       - '.github/workflows/mesh-acceptance-watch.yml'
   schedule:
     - cron: '17 3 * * *'
