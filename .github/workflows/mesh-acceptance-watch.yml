@@ -5,7 +5,7 @@ name: Mesh Acceptance Watch
 # the remaining diagnostics.
 on:
   push:
-    branches: [audit-branch, 'mesh/**', 'automation/mesh-acceptance-watch-**']
+    branches: [master, 'mesh/**', 'automation/mesh-acceptance-watch-**']
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
