@@ -149,7 +149,7 @@ jobs:
   prod:
     name: PROD — approved release qualification
     needs: [dev, preprod]
-    if: ${{ needs.dev.result == 'success' && needs.preprod.result == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master' && needs.dev.result == 'success' && needs.preprod.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Configure required reviewers and prevent self-review in GitHub Settings.
