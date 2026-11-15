@@ -86,6 +86,8 @@ jobs:
   preprod:
     name: PREPROD — feature-off and mesh-integrated matrix
     needs: [dev]
+    # Guard this environment independently; never rely only on DEV's gate.
+    if: ${{ success() && github.ref == 'refs/heads/master' }}
     runs-on: ubuntu-latest
     timeout-minutes: 55
     environment:
