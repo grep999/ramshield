@@ -2,7 +2,9 @@
 
 **Purpose:** make mesh feature acceptance evidence explicit. This matrix supplements, rather than replaces, the core production backlog.
 
-**Current candidate baseline:** `audit-branch` at `967f388513c4feff71db225207efff608c4f47d9`.
+**Current candidate baseline:** `master` at the exact base SHA recorded in PR #97; this matrix is a requirements ledger, not evidence that every item has passed.
+
+**Authentication note (current master):** transport frames are authenticated with unique per-peer keys selected by the claimed node ID. The current listener does not bind the TCP source IP to the configured peer address. F-01's separate edge-secret/source-IP patch is not included in this PR: it changes key-provisioning semantics and requires coordinated config, boot, transport, tests, and operator documentation. Its independent review identified an IPv4-mapped-IPv6 source comparison defect and a residual inability to distinguish endpoints sharing one symmetric edge secret. Do not treat F-01 as merged or accepted.
 
 ## Stage A — executable transport tests
 
