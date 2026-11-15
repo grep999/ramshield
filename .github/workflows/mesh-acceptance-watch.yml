@@ -21,7 +21,7 @@ on:
       - 'config/**'
       - '.github/workflows/mesh-acceptance-watch.yml'
   pull_request:
-    branches: [audit-branch]
+    branches: [master]
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -63,7 +63,7 @@ jobs:
       - name: Checkout candidate ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'schedule' && 'audit-branch' || github.sha }}
+          ref: ${{ github.event_name == 'schedule' && 'master' || github.sha }}
           persist-credentials: false
       - name: Verify and publish candidate identity
         id: candidate
