@@ -5,19 +5,9 @@ name: Mesh Environment Promotion
 # service: ramshield-mesh is a library feature compiled into RamShield.
 on:
   workflow_dispatch:
+  # Promotion qualification is deliberately master-only. PRs are tested by
+  # Mesh Acceptance Watch and workspace CI, never in deployment environments.
   push:
-    branches:
-      - master
-      - 'mesh/**'
-      - ops/mesh-environment-promotion
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'crates/ramshield-mesh/**'
-      - 'crates/ramshield-enforcement/**'
-      - 'src/**'
-      - '.github/workflows/mesh-promotion.yml'
-  pull_request:
     branches: [master]
     paths:
       - 'Cargo.toml'
@@ -43,6 +33,9 @@ env:
 jobs:
   dev:
     name: DEV — mesh unit and boundary tests
+    # workflow_dispatch is also restricted to master; never execute unreviewed
+    # branch code in an environment that may contain secrets.
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment:
