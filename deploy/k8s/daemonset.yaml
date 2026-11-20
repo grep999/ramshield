@@ -50,6 +50,10 @@ spec:
                 #   probes used by the capture/telemetry path.
                 # Filesystem access comes from the explicit hostPath mounts
                 # below; no other capability is granted.
+                # - NET_RAW: native capture path requires AF_PACKET + SOCK_RAW
+                #   for TPACKET_V3 ring operation (counts drops, documents
+                #   max_events_per_sec as an admission cap rather than a
+                #   delivery guarantee).
                 - NET_ADMIN
                 - BPF
                 - PERFMON
