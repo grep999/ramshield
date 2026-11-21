@@ -136,15 +136,7 @@ struct RequestContext<'a> {
 }
 
 fn handle_check_ip(req: Request, ctx: &RequestContext<'_>) -> Response {
-    #[allow(unused_variables)]
-    let RequestContext {
-        engine,
-        event_tx,
-        store,
-        enforcement_tx,
-        dropped_events,
-        actor,
-    } = ctx;
+    let RequestContext { store, .. } = ctx;
     match req {
         Request::CheckIp { ip } => {
             let ip_addr = match ip.parse() {
@@ -195,14 +187,11 @@ fn handle_check_ip(req: Request, ctx: &RequestContext<'_>) -> Response {
 }
 
 fn handle_block_ip(req: Request, ctx: &RequestContext<'_>) -> Response {
-    #[allow(unused_variables)]
     let RequestContext {
         engine,
-        event_tx,
-        store,
         enforcement_tx,
-        dropped_events,
         actor,
+        ..
     } = ctx;
     match req {
         Request::BlockIp {
@@ -271,14 +260,10 @@ fn handle_block_ip(req: Request, ctx: &RequestContext<'_>) -> Response {
 }
 
 fn handle_block_cidr(req: Request, ctx: &RequestContext<'_>) -> Response {
-    #[allow(unused_variables)]
     let RequestContext {
-        engine,
-        event_tx,
-        store,
         enforcement_tx,
-        dropped_events,
         actor,
+        ..
     } = ctx;
     match req {
         Request::BlockCidr {
@@ -340,14 +325,10 @@ fn handle_block_cidr(req: Request, ctx: &RequestContext<'_>) -> Response {
 }
 
 fn handle_unblock_ip(req: Request, ctx: &RequestContext<'_>) -> Response {
-    #[allow(unused_variables)]
     let RequestContext {
-        engine,
-        event_tx,
-        store,
         enforcement_tx,
-        dropped_events,
         actor,
+        ..
     } = ctx;
     match req {
         Request::UnblockIp { ip } => {
@@ -390,14 +371,10 @@ fn handle_unblock_ip(req: Request, ctx: &RequestContext<'_>) -> Response {
 }
 
 fn handle_unblock_cidr(req: Request, ctx: &RequestContext<'_>) -> Response {
-    #[allow(unused_variables)]
     let RequestContext {
-        engine,
-        event_tx,
-        store,
         enforcement_tx,
-        dropped_events,
         actor,
+        ..
     } = ctx;
     match req {
         Request::UnblockCidr { cidr } => {
@@ -439,15 +416,7 @@ fn handle_unblock_cidr(req: Request, ctx: &RequestContext<'_>) -> Response {
 }
 
 fn handle_get_ip_stats(req: Request, ctx: &RequestContext<'_>) -> Response {
-    #[allow(unused_variables)]
-    let RequestContext {
-        engine,
-        event_tx,
-        store,
-        enforcement_tx,
-        dropped_events,
-        actor,
-    } = ctx;
+    let RequestContext { store, .. } = ctx;
     match req {
         Request::GetIpStats { ip } => {
             let ip_addr = match ip.parse() {
@@ -489,15 +458,7 @@ fn handle_get_ip_stats(req: Request, ctx: &RequestContext<'_>) -> Response {
 }
 
 fn handle_get_stats(req: Request, ctx: &RequestContext<'_>) -> Response {
-    #[allow(unused_variables)]
-    let RequestContext {
-        engine,
-        event_tx,
-        store,
-        enforcement_tx,
-        dropped_events,
-        actor,
-    } = ctx;
+    let RequestContext { store, .. } = ctx;
     match req {
         Request::GetStats => {
             let stats = store.get_stats();
@@ -515,15 +476,7 @@ fn handle_get_stats(req: Request, ctx: &RequestContext<'_>) -> Response {
 }
 
 fn handle_get_status(req: Request, ctx: &RequestContext<'_>) -> Response {
-    #[allow(unused_variables)]
-    let RequestContext {
-        engine,
-        event_tx,
-        store,
-        enforcement_tx,
-        dropped_events,
-        actor,
-    } = ctx;
+    let _ = ctx;
     match req {
         Request::GetStatus => Response::Ok {
             message: "ok".into(),
@@ -534,14 +487,11 @@ fn handle_get_status(req: Request, ctx: &RequestContext<'_>) -> Response {
 }
 
 fn handle_report_connection(req: Request, ctx: &RequestContext<'_>) -> Response {
-    #[allow(unused_variables)]
     let RequestContext {
         engine,
         event_tx,
-        store,
-        enforcement_tx,
         dropped_events,
-        actor,
+        ..
     } = ctx;
     match req {
         Request::ReportConnection {
@@ -611,14 +561,11 @@ fn handle_report_connection(req: Request, ctx: &RequestContext<'_>) -> Response 
 }
 
 fn handle_report_connections(req: Request, ctx: &RequestContext<'_>) -> Response {
-    #[allow(unused_variables)]
     let RequestContext {
         engine,
         event_tx,
-        store,
-        enforcement_tx,
         dropped_events,
-        actor,
+        ..
     } = ctx;
     match req {
         Request::ReportConnections { events } => {
@@ -722,15 +669,7 @@ fn handle_report_connections(req: Request, ctx: &RequestContext<'_>) -> Response
 }
 
 fn handle_flush(req: Request, ctx: &RequestContext<'_>) -> Response {
-    #[allow(unused_variables)]
-    let RequestContext {
-        engine,
-        event_tx,
-        store,
-        enforcement_tx,
-        dropped_events,
-        actor,
-    } = ctx;
+    let _ = ctx;
     match req {
         Request::Flush => Response::Ok {
             message: "no-op: flush is automatic (pre_aggs window)".into(),
