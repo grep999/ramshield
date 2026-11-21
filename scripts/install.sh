@@ -10,9 +10,15 @@ STATE_DIR=/var/lib/ramshield
 USER_NAME=ramshield
 GROUP_NAME=ramshield
 COSIGN_BIN="${COSIGN_BIN:-cosign}"
-LOG="/tmp/ramshield-install-$(date +%Y%m%d-%H%M%S).log"
+# Root install: log under /var/log (root-owned, no symlink-follow race in /tmp).
+# mktemp -d creates a unique 0700 dir; set -e aborts if it fails (mktemp
+# reports the cause). The log file inside inherits umask 027 → 0600.
+LOG_DIR=$(mktemp -d /var/log/ramshield-install.XXXXXX)
+LOG="$LOG_DIR/install.log"
 log(){ printf '[ramshield-install] %s\n' "$*" | tee -a "$LOG"; }
-die(){ printf '[ramshield-install] ERROR: %s\n' "$*" >&2 | tee -a "$LOG"; exit 1; }
+# die(): write to stderr AND the log file directly (the tee redirect on the
+# script body would otherwise lose the message that went only to stderr).
+die(){ printf '[ramshield-install] ERROR: %s\n' "$*" | tee -a "$LOG" >&2; exit 1; }
 need(){ command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 
 exec > >(tee -a "$LOG") 2>&1
