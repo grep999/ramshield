@@ -9,9 +9,13 @@ PREFIX="${PREFIX:-$HOME/.local}"
 CONFIG_DIR="$HOME/.config/ramshield"
 STATE_DIR="$HOME/.local/share/ramshield"
 COSIGN_BIN="${COSIGN_BIN:-cosign}"
-LOG="/tmp/ramshield-user-install-$(date +%Y%m%d-%H%M%S).log"
+# Non-root install: unique 0700 dir under XDG_RUNTIME_DIR (or /tmp fallback).
+# mktemp -d uses O_EXCL — no symlink-follow race. set -e aborts on failure.
+LOG_DIR=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/ramshield-user-install.XXXXXX")
+LOG="$LOG_DIR/install.log"
 log(){ printf '[ramshield-user-install] %s\n' "$*" | tee -a "$LOG"; }
-die(){ printf '[ramshield-user-install] ERROR: %s\n' "$*" >&2 | tee -a "$LOG"; exit 1; }
+# die(): write to stderr AND the log file directly (see install.sh).
+die(){ printf '[ramshield-user-install] ERROR: %s\n' "$*" | tee -a "$LOG" >&2; exit 1; }
 need(){ command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 
 exec > >(tee -a "$LOG") 2>&1
