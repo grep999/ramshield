@@ -586,6 +586,10 @@ fn run_socket(
         };
         let block_ptr = unsafe { (map as *mut u8).add(block_offset) as *mut TpacketBlockDesc };
         // B02: Read block status safely and re-validate before proceeding.
+        // ponytail: volatile is deliberate — block_status is written by the
+        // kernel into this shared mmap ring, not by Rust code. Volatile
+        // read/write is the correct TPACKET_V3 protocol idiom (same as
+        // libpcap); swapping to atomics would break the kernel contract.
         let status =
             unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*block_ptr).hdr.block_status)) };
         if status & TP_STATUS_USER == 0 {
