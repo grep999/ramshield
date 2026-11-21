@@ -34,10 +34,11 @@ static BLOCKLIST6: LruHashMap<[u64; 2], u64> = LruHashMap::with_max_entries(bloc
 // expiry capped any block at 4.3s, and a 1-byte userspace value made the
 // map type-check fail at open (InvalidValueSize) → XDP never blocked.
 #[map]
-static BLOCKCIDR: LpmTrie<[u64; 2], u8> = LpmTrie::with_max_entries(102_400, 0);
+// F-10: u64 absolute expiry ns (CLOCK_MONOTONIC), matching BLOCKLIST.
+static BLOCKCIDR: LpmTrie<[u64; 2], u64> = LpmTrie::with_max_entries(102_400, 0);
 
 #[map]
-static BLOCKCIDR6: LpmTrie<[u64; 2], u8> = LpmTrie::with_max_entries(102_400, 0);
+static BLOCKCIDR6: LpmTrie<[u64; 2], u64> = LpmTrie::with_max_entries(102_400, 0);
 
 // RingBuf for kernel→userspace drop events. 64KB default.
 // Event: { ip: [u8; 16], ts_ns: u64, action: u8, slot: u8 }
@@ -183,10 +184,14 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
             }
         }
         // CIDR fallback: LPM_TRIE — one /64 entry replaces 256 flat entries in BLOCKLIST6
-        if BLOCKCIDR6.get(&Key::new(128, key)).is_some() {
-            inc_counter(counter::V6_DROP);
-            emit_drop_event(counter::V6_DROP, &key_bytes);
-            return Ok(xdp_action::XDP_DROP);
+        if let Some(expiry) = BLOCKCIDR6.get(&Key::new(128, key)) {
+            // SAFETY: bpf_ktime_get_ns takes no arguments, has no preconditions.
+            let now = unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() };
+            if now < *expiry {
+                inc_counter(counter::V6_DROP);
+                emit_drop_event(counter::V6_DROP, &key_bytes);
+                return Ok(xdp_action::XDP_DROP);
+            }
         }
         inc_counter(counter::PASS);
         return Ok(xdp_action::XDP_PASS);
@@ -227,10 +232,14 @@ fn try_ramshield_xdp(ctx: XdpContext) -> Result<u32, ()> {
         }
     }
     // CIDR fallback: LPM_TRIE — one /24 entry replaces 256 flat entries in BLOCKLIST
-    if BLOCKCIDR.get(&Key::new(32, key)).is_some() {
-        inc_counter(counter::V4_DROP);
-        emit_drop_event(counter::V4_DROP, &ipb);
-        return Ok(xdp_action::XDP_DROP);
+    if let Some(expiry) = BLOCKCIDR.get(&Key::new(32, key)) {
+        // SAFETY: bpf_ktime_get_ns takes no arguments, has no preconditions.
+        let now = unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() };
+        if now < *expiry {
+            inc_counter(counter::V4_DROP);
+            emit_drop_event(counter::V4_DROP, &ipb);
+            return Ok(xdp_action::XDP_DROP);
+        }
     }
     inc_counter(counter::PASS);
     Ok(xdp_action::XDP_PASS)
