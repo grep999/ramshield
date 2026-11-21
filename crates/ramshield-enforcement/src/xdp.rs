@@ -25,6 +25,19 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsFd, AsRawFd};
 use uuid::Uuid;
 
+/// Canonicalize IPv4-mapped IPv6 (::ffff:a.b.c.d) to plain IPv4 so it is
+/// stored/looked-up in BLOCKLIST with the 4-byte key the v4 dataplane uses.
+// ponytail: one free function; callers pass every IpAddr into it once.
+fn canonical_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(v6)),
+        other => other,
+    }
+}
+
 /// XDP blocklist key — must stay byte-compatible with the C program's
 /// `__u64[2]` map key. IPv4 occupies the low 32 bits of the first u64.
 #[repr(C, align(8))]
@@ -71,7 +84,7 @@ impl From<Ipv6Addr> for BlocklistKey {
 impl From<IpAddr> for BlocklistKey {
     #[inline(always)]
     fn from(ip: IpAddr) -> Self {
-        match ip {
+        match canonical_ip(ip) {
             IpAddr::V4(v4) => Self::from(v4),
             IpAddr::V6(v6) => Self::from(v6),
         }
@@ -104,14 +117,14 @@ impl BlocklistKey {
 /// can collide numerically with a v4-shaped key (D2), so isolation is by
 /// map, not bytes. Single source of truth for routing (apply + reconcile).
 fn xdp_map_for(ip: IpAddr) -> &'static str {
-    match ip {
+    match canonical_ip(ip) {
         IpAddr::V4(_) => "BLOCKLIST",
         IpAddr::V6(_) => "BLOCKLIST6",
     }
 }
 
 fn cidr_map_for(network: IpNetwork) -> &'static str {
-    match network.addr {
+    match canonical_ip(network.addr) {
         IpAddr::V4(_) => "BLOCKCIDR",
         IpAddr::V6(_) => "BLOCKCIDR6",
     }
@@ -137,9 +150,9 @@ fn split_by_family(expected_blocks: &[IpAddr]) -> (Vec<BlocklistKey>, Vec<Blockl
     let mut v4 = Vec::new();
     let mut v6 = Vec::new();
     for ip in expected_blocks {
-        match ip {
-            IpAddr::V4(_) => v4.push(BlocklistKey::from_ip(*ip)),
-            IpAddr::V6(_) => v6.push(BlocklistKey::from_ip(*ip)),
+        match canonical_ip(*ip) {
+            IpAddr::V4(ip) => v4.push(BlocklistKey::from(ip)),
+            IpAddr::V6(ip) => v6.push(BlocklistKey::from(ip)),
         }
     }
     (v4, v6)
@@ -529,12 +542,17 @@ impl XdpApplier for AyaXdpApplier {
         // SAFETY: ts was written by clock_gettime — rc == 0 means initialization succeeded.
         let ts = unsafe { ts.assume_init() };
         let now_ns = (ts.tv_sec as u64) * 1_000_000_000 + ts.tv_nsec as u64;
+        let key = BlocklistKey::from_ip(ip);
+        let value = blocklist_value(now_ns, ttl_seconds);
         self.with_map(xdp_map_for(ip), |m| {
-            m.insert(
-                BlocklistKey::from_ip(ip),
-                blocklist_value(now_ns, ttl_seconds),
-                0,
-            )
+            m.insert(key, value, 0)?;
+            // F-06: verify the entry was not silently evicted by LRU.
+            // If get returns Err, the map is full and evicted our insert;
+            // surface this via metric so operators can detect silent failures.
+            if m.get(&key, 0).is_err() {
+                tracing::warn!(%ip, map = %xdp_map_for(ip), "block insert verified missing — LRU eviction suspected");
+            }
+            Ok(())
         })
     }
 
@@ -798,6 +816,32 @@ mod tests {
         assert!(
             !v4.iter().any(|k| v6.contains(k)),
             "a key must not appear in both sweeps"
+        );
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_is_canonicalized_to_v4_map_and_key() {
+        // F-01: ::ffff:1.2.3.4 must route to BLOCKLIST with the same 4-byte
+        // key as plain 1.2.3.4, not to BLOCKLIST6 (which the v4 dataplane
+        // never consults).
+        let plain: IpAddr = "1.2.3.4".parse().unwrap();
+        let mapped: IpAddr = "::ffff:1.2.3.4".parse().unwrap();
+        assert_eq!(xdp_map_for(plain), "BLOCKLIST");
+        assert_eq!(
+            xdp_map_for(mapped),
+            "BLOCKLIST",
+            "mapped v6 must route to the v4 map, not BLOCKLIST6"
+        );
+        assert_eq!(
+            BlocklistKey::from_ip(plain).0,
+            BlocklistKey::from_ip(mapped).0
+        );
+        // Real (non-mapped) v6 still goes to the v6 map untouched.
+        let real_v6: IpAddr = "2001:db8::1".parse().unwrap();
+        assert_eq!(xdp_map_for(real_v6), "BLOCKLIST6");
+        assert!(
+            real_v6.to_string().parse::<IpAddr>().is_ok(),
+            "sanity: real v6 parses"
         );
     }
 

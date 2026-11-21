@@ -10,7 +10,7 @@ use super::hlc::Hlc;
 use dashmap::DashMap;
 use std::net::IpAddr;
 use std::sync::{
-    RwLock,
+    Mutex, RwLock,
     atomic::{AtomicU64, Ordering},
 };
 use uuid::Uuid;
@@ -222,6 +222,12 @@ pub struct AworsetBlocklist {
     /// is invisible and cannot hold collection back.
     expected_peers: dashmap::DashSet<u32>,
     next_dot_counter: AtomicU64,
+    /// Serializes `merge_delta` / `merge_unblock_delta` so the tombstone check
+    /// and entry publish cannot interleave with an unblock/tombstone insert.
+    ///
+    /// ponytail: one global mutation lock — serializes all delta merges.
+    /// Per-key locks if mesh merge throughput ever becomes a bottleneck.
+    mutation_lock: Mutex<()>,
     /// Snapshot export takes the exclusive side; mutations hold the shared side.
     /// This freezes the CRDT maps for the duration of a fixed recovery capture.
     snapshot_barrier: RwLock<()>,
@@ -239,6 +245,7 @@ impl AworsetBlocklist {
             expected_peers: dashmap::DashSet::new(),
             // Dot counters are 1-based: counter 0 is an invalid CRDT dot.
             next_dot_counter: AtomicU64::new(1),
+            mutation_lock: Mutex::new(()),
             snapshot_barrier: RwLock::new(()),
         }
     }
@@ -364,6 +371,10 @@ impl AworsetBlocklist {
             .snapshot_barrier
             .read()
             .unwrap_or_else(|e| e.into_inner());
+        // Hold the mutation lock across the tombstone check + entry publish so
+        // a concurrent merge_unblock_delta cannot insert a tombstone between
+        // them and then have this stale block resurrected (RS-REV-003).
+        let _mutation_guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
         if delta.dot.node_id == 0 || delta.dot.incarnation.is_nil() {
             return false;
         }
@@ -575,6 +586,10 @@ impl AworsetBlocklist {
             .snapshot_barrier
             .read()
             .unwrap_or_else(|e| e.into_inner());
+        // Same mutation lock as merge_delta: the tombstone insert + entry remove
+        // must be atomic against a concurrent block that already checked for a
+        // tombstone (RS-REV-003).
+        let _mutation_guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
         if delta.dot.node_id == 0 || delta.dot.incarnation.is_nil() {
             return false;
         }
@@ -1069,6 +1084,47 @@ mod tests {
             .unwrap();
         assert_eq!(entry.value().0, newer.dot.counter);
         assert_eq!(entry.value().2, newer.expires_at_ms);
+    }
+
+    #[test]
+    fn merge_delta_and_merge_unblock_delta_are_serialized() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Barrier};
+        use std::time::Duration;
+
+        let mesh = Arc::new(AworsetBlocklist::new(1));
+        let ip = IpAddr::from([198, 51, 100, 40]);
+        let ban = mesh.record_ban(ip, 60_000, 1);
+        let unblock = ClusterUnblockDelta { ip, dot: ban.dot };
+
+        // Main thread holds the mutation lock; the worker must block on it.
+        let lock = mesh.mutation_lock.lock().unwrap();
+        let receiver = mesh.clone();
+        let barrier = Arc::new(Barrier::new(2));
+        let b2 = barrier.clone();
+        let done = Arc::new(AtomicBool::new(false));
+        let done_w = done.clone();
+        let handle = std::thread::spawn(move || {
+            b2.wait();
+            receiver.merge_unblock_delta(&unblock);
+            done_w.store(true, Ordering::SeqCst);
+        });
+        barrier.wait();
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(
+            !done.load(Ordering::SeqCst),
+            "worker must block while mutation lock is held"
+        );
+        drop(lock);
+        handle.join().unwrap();
+        assert!(
+            done.load(Ordering::SeqCst),
+            "worker must complete once lock released"
+        );
+        assert!(
+            !mesh.is_blocked(&ip, now_ms()),
+            "unblock counter >= block counter: must be unblocked"
+        );
     }
 
     #[test]
