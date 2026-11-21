@@ -74,6 +74,18 @@ fn inc_counter(slot: u32) {
 fn emit_drop_event(slot: u32, ip: &[u8; 16]) {
     // SAFETY: bpf_ktime_get_ns takes no arguments and has no preconditions.
     let ts = unsafe { aya_ebpf::helpers::bpf_ktime_get_ns() };
+    // F-05: bound ringbuf pressure under flood — sample every 64th drop per CPU.
+    // The drop counter was just incremented by the caller on this CPU (per-CPU
+    // array, no cross-CPU contention), so its value is a stable ticket.
+    // ponytail: counter-based sampling; upgrade to a dedicated ticket counter
+    // if emit sites ever diverge from drop-counter increments.
+    if let Some(p) = COUNTERS.get_ptr(slot) {
+        // SAFETY: get_ptr returned a valid pointer to this CPU's slot; XDP
+        // runs non-preemptibly per CPU, so no other writer aliases it here.
+        if unsafe { *p } & 0x3F != 0 {
+            return;
+        }
+    }
     let mut buf = [0u8; 26];
     buf[0..16].copy_from_slice(ip);
     buf[16..24].copy_from_slice(&ts.to_ne_bytes());
