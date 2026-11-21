@@ -108,7 +108,7 @@ pub(crate) fn process_request(
         dropped_events: &dropped_events,
         actor: principal
             .map(|p| p.key_id.clone())
-            .unwrap_or_else(|| "admin".to_string()),
+            .unwrap_or_else(|| "unauthenticated".to_string()),
     };
 
     match req {

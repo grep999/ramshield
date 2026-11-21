@@ -414,6 +414,18 @@ impl EnforcementService {
                 "unspecified IP is not blockable".into(),
             ));
         }
+        // F-02: never-block address classes. Blocking loopback or multicast is
+        // meaningless at the dataplane and can only mask real traffic.
+        if cmd.ip.is_loopback() || cmd.ip.is_multicast() {
+            trace!(
+                ip = %cmd.ip,
+                reason = %cmd.reason,
+                "enforce rejected: loopback/multicast IP"
+            );
+            return Err(EnforcementError::InvalidCommand(
+                "loopback/multicast IP is not blockable".into(),
+            ));
+        }
 
         // Checkpoint barrier: serialize [WAL append + store mutation] against
         // the checkpoint loop's [begin_checkpoint + store capture]. Without it

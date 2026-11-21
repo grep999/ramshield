@@ -1,5 +1,5 @@
 use super::*;
-use crate::rate_tracker::{DetectorMode, DetectorProfile, PerIpRecord};
+use crate::rate_tracker::{DetectorError, DetectorMode, DetectorProfile, PerIpRecord};
 
 impl DetectionEngine {
     /// ponytail: returns the 5-tuple `(ewma_rps, threat, should_block, was_blocked, stored)`.
@@ -149,11 +149,30 @@ impl DetectionEngine {
                             }
                             outcome.is_breached
                         }
-                        Err(_) => {
-                            // Numerical failure — restore pre-update state per D-06 atomicity.
+                        Err(error) => {
+                            // Numerical/adversarial input failure — restore pre-update state per
+                            // D-06 atomicity, then attribute to the correct counter so
+                            // non-monotonic timestamps and invalid inputs are not mislabeled as
+                            // numerical calculation failures (F-07).
+                            match error {
+                                DetectorError::NonMonotonicTimestamp => {
+                                    self.metrics.inc_non_monotonic_timestamp()
+                                }
+                                DetectorError::NumericalCalculationFailure => {
+                                    self.metrics.inc_numerical_calculation_failure()
+                                }
+                                DetectorError::InvalidCurrentRate
+                                | DetectorError::InvalidInternalBaseline
+                                | DetectorError::InvalidInternalVariance
+                                | DetectorError::InvalidInternalCusum
+                                | DetectorError::InvalidContextConfidence
+                                | DetectorError::InvalidProfile
+                                | DetectorError::InvalidInternalSampleCount => {
+                                    self.metrics.inc_detector_invalid_input()
+                                }
+                            }
                             rec.bucket_accum_pps = prev_accum;
                             rec.last_bucket_ns = prev_bucket_ns;
-                            self.metrics.inc_numerical_calculation_failure();
                             false
                         }
                     }
