@@ -378,7 +378,7 @@ impl AyaXdpApplier {
     fn with_cidr_map<R>(
         &mut self,
         name: &str,
-        f: impl FnOnce(&mut LpmTrie<&mut aya::maps::MapData, [u64; 2], u8>) -> Result<R, MapError>,
+        f: impl FnOnce(&mut LpmTrie<&mut aya::maps::MapData, [u64; 2], u64>) -> Result<R, MapError>,
     ) -> Result<R, EnforcementError> {
         let bpf = self
             .bpf
@@ -564,10 +564,23 @@ impl XdpApplier for AyaXdpApplier {
         &mut self,
         network: IpNetwork,
         _decision_id: Uuid,
-        _ttl_seconds: u64,
+        ttl_seconds: u64,
     ) -> Result<(), EnforcementError> {
+        // F-10: store absolute expiry ns (CLOCK_MONOTONIC) so the BPF
+        // dataplane can enforce CIDR TTL, matching the IP blocklist map.
+        let mut ts = std::mem::MaybeUninit::<libc::timespec>::uninit();
+        // SAFETY: ts.as_mut_ptr() points at writable timespec storage.
+        let rc = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, ts.as_mut_ptr()) };
+        if rc != 0 {
+            return Err(map_err(std::io::Error::last_os_error()));
+        }
+        // SAFETY: rc == 0 means clock_gettime initialized ts.
+        let ts = unsafe { ts.assume_init() };
+        let now_ns = (ts.tv_sec as u64) * 1_000_000_000 + ts.tv_nsec as u64;
         let key = cidr_key(network);
-        self.with_cidr_map(cidr_map_for(network), |m| m.insert(&key, 1u8, 0))
+        self.with_cidr_map(cidr_map_for(network), |m| {
+            m.insert(&key, blocklist_value(now_ns, ttl_seconds), 0)
+        })
     }
 
     fn apply_cidr_unblock(
@@ -691,7 +704,7 @@ impl XdpApplier for AyaXdpApplier {
                     }
                 }
                 for key in &expected {
-                    trie.insert(key, 1u8, 0)?;
+                    trie.insert(key, PERMANENT, 0)?;
                 }
                 Ok(())
             })?;

@@ -250,8 +250,9 @@ pub fn spawn(
         // reached ready state with zero capture workers running, without
         // a word about it. Creating them here means the outcome is known
         // before the daemon is told the capture path started.
+        // RS-REV-001: epoch and count share one atomic so reset+increment
+        // are a single CAS; no separate budget_epoch to race.
         let budget = Arc::new(AtomicU64::new(0));
-        let budget_epoch = Arc::new(AtomicU64::new(0));
         let epoch_base = std::time::Instant::now();
         // Counts how many times the "downstream channel is closed"
         // error was actually EMITTED, shared by every worker so the
@@ -267,7 +268,6 @@ pub fn spawn(
             let stop = shutdown.clone();
             let trusted = trusted_overlay_cidrs.clone();
             let b = budget.clone();
-            let be = budget_epoch.clone();
             // RS-004: per-worker epoch so every socket is sampled independently.
             let e = Arc::new(AtomicU64::new(0));
             let base = epoch_base;
@@ -293,7 +293,6 @@ pub fn spawn(
                                 txc.clone(),
                                 stop.clone(),
                                 b.clone(),
-                                be.clone(),
                                 e.clone(),
                                 base,
                                 worker,
@@ -406,7 +405,6 @@ fn run_linux(
     tx: Sender<ConnectionEvent>,
     shutdown: Arc<AtomicBool>,
     budget: Arc<AtomicU64>,
-    budget_epoch: Arc<AtomicU64>,
     epoch: Arc<AtomicU64>,
     epoch_base: std::time::Instant,
     worker: usize,
@@ -452,7 +450,6 @@ fn run_linux(
         &tx,
         &shutdown,
         &budget,
-        &budget_epoch,
         &epoch,
         epoch_base,
         worker,
@@ -475,7 +472,6 @@ fn run_socket(
     tx: &Sender<ConnectionEvent>,
     shutdown: &Arc<AtomicBool>,
     budget: &Arc<AtomicU64>,
-    budget_epoch: &Arc<AtomicU64>,
     epoch: &Arc<AtomicU64>,
     epoch_base: std::time::Instant,
     worker: usize,
@@ -652,7 +648,6 @@ fn run_socket(
                     trusted_overlay_cidrs,
                     tx,
                     budget,
-                    budget_epoch,
                     epoch,
                     epoch_base,
                     metrics,
@@ -691,7 +686,6 @@ unsafe fn walk_block_packets(
     trusted_overlay_cidrs: &[IpNetwork],
     tx: &Sender<ConnectionEvent>,
     budget: &Arc<AtomicU64>,
-    budget_epoch: &Arc<AtomicU64>,
     epoch: &Arc<AtomicU64>,
     epoch_base: std::time::Instant,
     metrics: &Metrics,
@@ -812,18 +806,6 @@ unsafe fn walk_block_packets(
         // packet_off + snaplen) lies in the current block and mapped ring.
         let packet =
             unsafe { std::slice::from_raw_parts((map as *const u8).add(packet_off), snaplen) };
-
-        // The event budget is shared by all capture workers.
-        // Only one worker may reset it for each elapsed second.
-        let second = epoch_base.elapsed().as_secs();
-        let seen = budget_epoch.load(Ordering::Relaxed);
-        if seen != second
-            && budget_epoch
-                .compare_exchange(seen, second, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-        {
-            budget.store(0, Ordering::Relaxed);
-        }
 
         process_packet(
             fd,
@@ -1042,10 +1024,24 @@ fn process_packet(
         // supply the real client identity separately.
         return;
     }
+    // RS-REV-001: budget packs (epoch_secs << 32) | count in one atomic.
+    // A new second resets the count via the same CAS that increments it —
+    // no separate epoch/store(0) interleaving (the old lost-increment race).
     let admitted = budget
-        .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-            let next = n.checked_add(1)?;
-            if next <= max_eps { Some(next) } else { None }
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |packed| {
+            let epoch = packed >> 32;
+            let count = packed & 0xFFFF_FFFF;
+            let (epoch, count) = if epoch == second {
+                (epoch, count)
+            } else {
+                (second, 0)
+            };
+            let next = count.checked_add(1)?;
+            if next <= max_eps {
+                Some((epoch << 32) | next)
+            } else {
+                None
+            }
         })
         .is_ok();
     if !admitted {
@@ -2056,41 +2052,48 @@ mod tests {
         );
     }
 
-    /// Regression for RS-004: the global rate budget must reset at most once per
-    /// second even when multiple workers' walker calls contend within the same second.
-    /// Only one worker may win the shared budget_epoch compare-exchange and call
-    /// budget.store(0). The per-worker stats_epoch (passed separately to process_packet)
-    /// may each independently win their own sampling CAS for local PACKET_STATISTICS.
+    /// RS-REV-001: all workers share one wall-clock second. With epoch folded
+    /// into the budget atomic, the first admission at a new second resets the
+    /// count and the rest increment it — one CAS, no separate store(0) that
+    /// could erase a concurrent increment (the old lost-increment race).
     #[test]
-    fn shared_budget_epoch_resets_once_under_concurrent_walker_contention() {
-        // Protocol test for the reset performed in walk_block_packets: for one
-        // fixed second, exactly one worker wins the shared budget_epoch CAS and
-        // resets the shared budget. This is not an integration test of the
-        // packet walker (that needs a live TPACKET_V3 ring).
-        let budget = Arc::new(AtomicU64::new(42));
-        // Start on a different second so every worker's `seen != second` holds.
-        let budget_epoch = Arc::new(AtomicU64::new(u64::MAX));
-        let winners = Arc::new(AtomicU64::new(0));
+    fn budget_epoch_rollover_never_loses_increments() {
+        const MAX_EPS: u64 = 1_000_000;
+        let old_second = 0u64;
+        let new_second = 1234u64;
+        // Budget starts in the old second with a stale count.
+        let budget = Arc::new(AtomicU64::new((old_second << 32) | 5));
+        let admitted = Arc::new(AtomicU64::new(0));
         let barrier = Arc::new(std::sync::Barrier::new(8));
-        // Compute the second once so all workers contend for the same epoch.
-        let second = 1234u64;
+
+        let admit_at = |b: &AtomicU64, second: u64| -> bool {
+            b.try_update(Ordering::Relaxed, Ordering::Relaxed, |packed| {
+                let epoch = packed >> 32;
+                let count = packed & 0xFFFF_FFFF;
+                let (epoch, count) = if epoch == second {
+                    (epoch, count)
+                } else {
+                    (second, 0)
+                };
+                let next = count.checked_add(1)?;
+                if next <= MAX_EPS {
+                    Some((epoch << 32) | next)
+                } else {
+                    None
+                }
+            })
+            .is_ok()
+        };
 
         let mut handles = Vec::new();
         for _ in 0..8 {
-            let budget_epoch_i = budget_epoch.clone();
             let budget_i = budget.clone();
-            let winners_i = winners.clone();
+            let admitted_i = admitted.clone();
             let barrier_i = barrier.clone();
             handles.push(std::thread::spawn(move || {
                 barrier_i.wait();
-                let seen = budget_epoch_i.load(Ordering::Relaxed);
-                if seen != second
-                    && budget_epoch_i
-                        .compare_exchange(seen, second, Ordering::AcqRel, Ordering::Relaxed)
-                        .is_ok()
-                {
-                    budget_i.store(0, Ordering::Relaxed);
-                    winners_i.fetch_add(1, Ordering::Relaxed);
+                if admit_at(&budget_i, new_second) {
+                    admitted_i.fetch_add(1, Ordering::Relaxed);
                 }
             }));
         }
@@ -2099,19 +2102,16 @@ mod tests {
         }
 
         assert_eq!(
-            winners.load(Ordering::Relaxed),
-            1,
-            "exactly one worker claims the epoch"
+            admitted.load(Ordering::Relaxed),
+            8,
+            "all 8 concurrent admissions at the rollover must be counted"
         );
+        let packed = budget.load(Ordering::Relaxed);
+        assert_eq!(packed >> 32, new_second, "epoch advanced to the new second");
         assert_eq!(
-            budget.load(Ordering::Relaxed),
-            0,
-            "budget reset exactly once"
-        );
-        assert_eq!(
-            budget_epoch.load(Ordering::Relaxed),
-            second,
-            "shared epoch advanced once"
+            packed & 0xFFFF_FFFF,
+            8,
+            "final count is the 8 admissions in the new second"
         );
     }
 
@@ -2244,7 +2244,6 @@ mod tests {
         let metrics = Metrics::default();
         let (tx, _rx) = crossbeam_channel::unbounded::<ConnectionEvent>();
         let budget = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
-        let budget_epoch = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let epoch = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let emissions = std::sync::atomic::AtomicU64::new(0);
 
@@ -2265,7 +2264,6 @@ mod tests {
                 &[],
                 &tx,
                 &budget,
-                &budget_epoch,
                 &epoch,
                 std::time::Instant::now(),
                 &metrics,
