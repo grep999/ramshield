@@ -1,0 +1,27 @@
+[package]
+name = "ramshield-bgp"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+thiserror = "1"
+bytes = "1"
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros"] }
+tracing = "0.1"
+ipnet = "2"
+subtle = "2"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+ramshield-types = { path = "../ramshield-types" }
+ramshield-metrics = { path = "../ramshield-metrics" }
+
+[dev-dependencies]
+tokio-test = "0.4"
+# Standalone workspace (same pattern as ramshield-xdp-bpf): WIP crate,
+# not yet a parent-workspace member. Builds/tests standalone; parent
+# cargo commands skip it. Remove when the owner gates integration.
+[workspace]
