@@ -112,6 +112,10 @@ Definition of done:
 
 ### Phase 2 — Decide the IPC replay-cap override
 
+Decision recorded 2026-11-23: keep demo-only. Effective cap is logged at
+startup; invalid env input falls back to 256; default behavior unchanged.
+Promote to config only if a real deployment needs it.
+
 Impact: replay capacity for IPC-authenticated requests; conditional on local
 environment. Default path unchanged.
 

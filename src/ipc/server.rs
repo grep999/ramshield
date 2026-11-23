@@ -31,6 +31,11 @@ use auth::{authorize, parse_ipc_keys, verify_frame_auth};
 use connection::handle_connection;
 use handlers::process_request;
 
+/// Demo-only replay cap override. Invalid input preserves the fixed 256 cap.
+fn parse_replay_cap_override(value: Option<String>) -> usize {
+    value.and_then(|v| v.parse::<usize>().ok()).unwrap_or(256)
+}
+
 /// Authenticated principal resolved from the IPC auth envelope. Carries the
 /// key identity and role so enforcement commands are attributed to the real
 /// caller and authorization can be enforced (P2).
@@ -174,6 +179,10 @@ impl IpcServer {
         let listener = TcpListener::bind(&addr).await?;
         info!("IPC server bound to {}", addr);
 
+        let per_key_cap =
+            parse_replay_cap_override(std::env::var("RAMSHIELD_REPLAY_PER_KEY_CAP").ok());
+        info!("IPC replay per-key cap: {}", per_key_cap);
+
         Ok(Self {
             listener,
             engine,
@@ -205,7 +214,7 @@ impl IpcServer {
             // replay window.
             replay_store: Arc::new(ramshield_protocol::auth::ReplayStore::with_per_key_cap(
                 1024, // global cap
-                256,  // per-key cap
+                per_key_cap,
                 Duration::from_secs(65),
             )),
         })

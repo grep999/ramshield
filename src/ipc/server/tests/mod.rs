@@ -1,3 +1,4 @@
+use super::parse_replay_cap_override;
 use super::sanitize_ttl;
 use super::verify_frame_auth;
 use ramshield_protocol::auth::{self, ReplayStore};
@@ -15,6 +16,13 @@ fn sanitize_ttl_clamps_overflow_class() {
     assert_eq!(sanitize_ttl(Some(31_536_000)), Ok(31_536_000));
     assert_eq!(sanitize_ttl(Some(60)), Ok(60));
     assert_eq!(sanitize_ttl(None), Ok(0));
+}
+
+#[test]
+fn replay_cap_override_invalid_falls_back_to_256() {
+    assert_eq!(parse_replay_cap_override(None), 256);
+    assert_eq!(parse_replay_cap_override(Some("nope".into())), 256);
+    assert_eq!(parse_replay_cap_override(Some("512".into())), 512);
 }
 
 #[test]
