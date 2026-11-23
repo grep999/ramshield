@@ -1,0 +1,101 @@
+name: Master Commit Watch
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: master-commit-watch
+  cancel-in-progress: false
+
+jobs:
+  report-each-commit:
+    name: Record per-commit handoff
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout pushed history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Write a report for every commit in the push
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          SERVER_URL: ${{ github.server_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p master-commit-reports
+          if [[ "$BEFORE_SHA" =~ ^0+$ ]] || ! git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
+            mapfile -t COMMITS < <(git rev-list --max-count=1 "$AFTER_SHA")
+          else
+            mapfile -t COMMITS < <(git rev-list --reverse "$BEFORE_SHA..$AFTER_SHA")
+          fi
+          if [ "${#COMMITS[@]}" -eq 0 ]; then
+            echo "No new commits found in push range." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          for SHA in "${COMMITS[@]}"; do
+            SUBJECT="$(git show -s --format=%s "$SHA")"
+            AUTHOR="$(git show -s --format='%an <%ae>' "$SHA")"
+            COMMITTED_AT="$(git show -s --format=%cI "$SHA")"
+            PARENTS="$(git show -s --format=%P "$SHA")"
+            SHORT="${SHA:0:12}"
+            REPORT="master-commit-reports/${SHORT}.md"
+            {
+              echo "# Master commit handoff: $SHORT"
+              echo
+              echo "- Repository: $REPOSITORY"
+              echo "- Commit: [$SHA]($SERVER_URL/$REPOSITORY/commit/$SHA)"
+              echo "- Subject: $SUBJECT"
+              echo "- Author: $AUTHOR"
+              echo "- Commit time: $COMMITTED_AT"
+              echo "- Parent(s): ${PARENTS:-none}"
+              echo
+              echo "## Changed paths"
+              git show --format= --name-status --first-parent "$SHA" | sed '/^$/d' | head -100
+              echo
+              echo "## Diffstat"
+              git show --format= --stat --first-parent "$SHA" | head -60
+              echo
+              echo "## Agent review instructions"
+              echo "- Inspect this exact SHA, not a moving branch head."
+              echo "- Review the diff and relevant surrounding source; separate confirmed defects from hypotheses."
+              echo "- Check required workflow results for this SHA after they finish; pending checks are not passes."
+              echo "- Record severity, file/line, impact, reproduction or regression-test evidence, and a bounded recommendation."
+              echo "- Do not edit, merge, force-push, or deploy as part of this monitoring handoff."
+              echo
+              echo "## Scope limitation"
+              echo "This workflow records commit metadata and diff paths. It is not an AI semantic code review and makes no claim that the commit is safe."
+            } > "$REPORT"
+
+            {
+              echo "## Master commit $SHORT"
+              echo "- Subject: $SUBJECT"
+              echo "- Exact SHA: [$SHA]($SERVER_URL/$REPOSITORY/commit/$SHA)"
+              echo "- Report: `$REPORT` (also attached as a workflow artifact)"
+              echo "- Review status: handoff created; semantic review and final CI results pending."
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            BODY="$(cat "$REPORT")"
+            gh api "repos/$REPOSITORY/issues/31/comments" -f body="$BODY" >/dev/null
+          done
+
+      - name: Upload per-commit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: master-commit-reports-${{ github.sha }}
+          path: master-commit-reports/
+          if-no-files-found: warn
+          retention-days: 90
