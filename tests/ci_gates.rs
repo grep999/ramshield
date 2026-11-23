@@ -22,8 +22,9 @@
 //! `BACKLOG.md` and compares the counts with an independent count in
 //! Rust, so the gate cannot report a number the file does not support.
 
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 fn read(rel: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
@@ -71,14 +72,22 @@ fn open_rows(priority: &str) -> usize {
         .count()
 }
 
-fn awk_count(program: &str) -> usize {
-    let out = Command::new("awk")
+fn awk_count_in(program: &str, input: &str) -> usize {
+    let mut child = Command::new("awk")
         .arg("-F|")
         .arg(program)
-        .arg("BACKLOG.md")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .expect("awk must run");
+    child
+        .stdin
+        .take()
+        .expect("awk must accept stdin")
+        .write_all(input.as_bytes())
+        .expect("awk stdin must accept the synthetic backlog");
+    let out = child.wait_with_output().expect("awk must finish");
     assert!(
         out.status.success(),
         "the workflow's awk must run: {}",
@@ -88,6 +97,10 @@ fn awk_count(program: &str) -> usize {
         .trim()
         .parse()
         .unwrap_or_else(|e| panic!("the awk must print a count: {e}"))
+}
+
+fn awk_count(program: &str) -> usize {
+    awk_count_in(program, &read("BACKLOG.md"))
 }
 
 #[test]
@@ -104,15 +117,27 @@ fn the_backlog_gate_counts_the_open_rows_the_file_has() {
 }
 
 #[test]
-fn the_open_rows_are_not_all_zero() {
-    // A parser that matches nothing reports zero for every priority, and
-    // that is exactly the failure this test guards. The backlog has open
-    // P1 rows, so the count must be non-zero.
-    assert!(
-        open_rows("P1") > 0,
-        "BACKLOG.md must have open P1 rows for this guard to mean anything"
+fn the_open_row_parser_counts_known_open_rows() {
+    // The backlog can legitimately have zero OPEN rows after review closes
+    // work. Guard the parser itself against a synthetic table so the gate
+    // cannot silently match nothing and report zero forever.
+    let synthetic = "\
+| ID | Pri | Area | Required work | Status |
+|---|---|---|---|---|
+| I-901 | P0 | test | open p0 | OPEN - synthetic |
+| I-902 | P1 | test | open p1 | OPEN - synthetic |
+| I-903 | P1 | test | closed p1 | CLOSED (`deadbeef`) |
+";
+    assert_eq!(
+        awk_count_in(&workflow_awk("OPEN_P0"), synthetic),
+        1,
+        "the P0 parser must count one OPEN row in a known table"
     );
-    assert_eq!(awk_count(&workflow_awk("OPEN_P1")), open_rows("P1"));
+    assert_eq!(
+        awk_count_in(&workflow_awk("OPEN_P1"), synthetic),
+        1,
+        "the P1 parser must count one OPEN row in a known table"
+    );
 }
 
 #[test]

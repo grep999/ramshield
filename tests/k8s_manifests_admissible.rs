@@ -1,5 +1,6 @@
-//! F-15, F-34, I-027: the shipped Kubernetes manifests must be
-//! admissible and must actually reach the daemon.
+//! F-15, F-34, F-44, I-027: the shipped Kubernetes manifests and the
+//! Ansible-rendered Deployment must be admissible and must actually reach
+//! the daemon.
 //!
 //! - I-027 / F-15: the node-guard DaemonSet set
 //!   `mountPropagation: Bidirectional` on `/sys/fs/bpf` without
@@ -112,4 +113,57 @@ fn the_manifests_bind_the_dashboard_on_loopback() {
             "{path} must bind the dashboard on loopback, which is what the probes now address"
         );
     }
+}
+
+#[test]
+fn ansible_renders_a_full_pinned_server_deployment() {
+    let role = read("ansible/roles/deploy/tasks/main.yml");
+    let template = read("ansible/roles/deploy/templates/k8s-deployment.yaml.j2");
+
+    // 1. role ensures rendered directory before templating
+    let dir_idx = role
+        .find("Ensure rendered manifest directory exists")
+        .expect("role must create the rendered directory before templating");
+    let tmpl_idx = role
+        .find("Render k8s manifests with image tag")
+        .expect("role must render the deployment template");
+    assert!(
+        dir_idx < tmpl_idx,
+        "directory creation must precede template render"
+    );
+
+    // 2. role applies prerequisite static manifests in dependency order
+    for needle in [
+        "kubectl apply",
+        "deploy/k8s/namespace.yaml",
+        "deploy/k8s/configmap.yaml",
+        "deploy/k8s/rbac.yaml",
+        "deploy/k8s/ramshield-wal-pvc.yaml",
+        "deploy/rendered/",
+        "kubectl rollout status deployment/ramshield",
+    ] {
+        assert!(
+            role.contains(needle),
+            "role must contain prerequisite application step: {needle}"
+        );
+    }
+
+    // 3. template has the complete server profile Deployment
+    for needle in [
+        "image: {{ k8s_image | default('ghcr.io/grep999/ramshield') }}:{{ k8s_image_tag | default('0.6.0') }}",
+        "name: ramshield-admin",
+        "claimName: ramshield-wal",
+        "configMap:\n            name: ramshield-config",
+        "readinessProbe:",
+        "startupProbe:",
+        "livenessProbe:",
+    ] {
+        assert!(template.contains(needle), "template must contain {needle}");
+    }
+
+    // 4. no 'latest' tag in template
+    assert!(
+        !template.contains(":latest"),
+        "template must not use the :latest tag"
+    );
 }

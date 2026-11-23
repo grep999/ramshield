@@ -346,7 +346,7 @@ fn lww_merge_order_independent() {
     table.merge(ip, BlockRecord { blocked_until: 100, updated_at: 10, flags: 1 });
     table.merge(ip, BlockRecord { blocked_until: 200, updated_at: 20, flags: 1 });
     assert_eq!(table.get(ip).unwrap().blocked_until, 200);
-    
+
     let mut table2 = LwwBlockTable::new();
     table2.merge(ip, BlockRecord { blocked_until: 200, updated_at: 20, flags: 1 });
     table2.merge(ip, BlockRecord { blocked_until: 100, updated_at: 10, flags: 1 });

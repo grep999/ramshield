@@ -98,9 +98,9 @@ HLC = (physical_time_ms << 14) | logical_counter
 On event:
   physical = current_ntp_ms()
   logical = max(local_logical, (physical - physical) << 14) + 1
-  
+
 On send: include HLC
-On recv: 
+On recv:
   if received_physical > local_physical + 5000:
       // clock drift > 5s — reject or clamp
   local = max(local, received) with physical = max(local_physical, received_physical)
@@ -165,7 +165,7 @@ merge(current, incoming):
   1. if now >= incoming.blocked_until → Drop (already expired)
   2. if IP not present → Insert incoming
   3. if incoming.blocked_until > current.blocked_until → Update
-  4. if incoming.blocked_until == current.blocked_until 
+  4. if incoming.blocked_until == current.blocked_until
          AND incoming.updated_at > current.updated_at → Update
   5. otherwise → Keep current
 ```
@@ -278,15 +278,15 @@ Offset  Size  Field              Description
 fn decode_frame(buf: &[u8; 48]) -> Result<Frame, CodecError> {
     // 1. Verify magic (constant-time)
     ensure!(buf[0] == 0x52 && buf[1] == 0x4D, CodecError::BadMagic);
-    
+
     // 2. Verify version
     ensure!(buf[2] == 0x01, CodecError::BadVersion);
-    
+
     // 3. Verify HMAC (constant-time comparison using subtle crate)
     let expected = compute_hmac(&buf[0..40], &PSK);
-    ensure!(subtle::ConstantTimeEq::ct_eq(&buf[40..48], &expected), 
+    ensure!(subtle::ConstantTimeEq::ct_eq(&buf[40..48], &expected),
             CodecError::BadHmac);
-    
+
     // 4. Decode fields directly from byte slices — ZERO allocations
     let ip_bytes: [u8; 16] = buf[4..20].try_into()?;
     let ip = IpAddr::from(ip_bytes);  // handles IPv4-mapped automatically
@@ -294,7 +294,7 @@ fn decode_frame(buf: &[u8; 48]) -> Result<Frame, CodecError> {
     let flags = buf[21];
     let blocked_until = u64::from_be_bytes(buf[24..32].try_into()?);
     let updated_at = u64::from_be_bytes(buf[32..40].try_into()?);
-    
+
     Ok(Frame { ip, prefix_len, flags, blocked_until, updated_at })
 }
 ```
@@ -535,7 +535,7 @@ fn codec_zero_alloc() {
     let encoded = frame.encode();  // 48 bytes exactly
     let decoded = Frame::decode(&encoded).unwrap();
     assert_eq!(frame, decoded);
-    
+
     // Benchmark: 1,000,000 iterations → assert 0 heap allocations
 }
 ```
@@ -548,11 +548,11 @@ fn lww_merge_confluent() {
     let mut a = LwwBlockTable::new();
     a.merge(ip, BlockRecord { blocked_until: 100, updated_at: 10, flags: 1 });
     a.merge(ip, BlockRecord { blocked_until: 200, updated_at: 20, flags: 1 });
-    
+
     let mut b = LwwBlockTable::new();
     b.merge(ip, BlockRecord { blocked_until: 200, updated_at: 20, flags: 1 });
     b.merge(ip, BlockRecord { blocked_until: 100, updated_at: 10, flags: 1 });
-    
+
     // MUST converge to same state
     assert_eq!(a.get(ip), b.get(ip));
     assert_eq!(a.get(ip).unwrap().blocked_until, 200);

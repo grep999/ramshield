@@ -31,10 +31,10 @@ are the ones used here.
 | F3 | Native ingest drops invisible | P2 | **CLOSED** — `60ce0f1` | no |
 | F4 | XDP LRU eviction residual not stated | P3 (doc) | **CLOSED** — `79f4eac` | no |
 | **F1** | **CGNAT shared-memory lookup semantics** | **P1/P2** | **CLOSED** — `d1f4a81`, see `docs/development/CGNAT_SHM_LOOKUP_FIXES.md` | no — the ABI question dissolved (see below) |
-| **F1a** | **A /0 rule is not representable in the SHM table** | **P2** | **OPEN** — a design decision for the owner, not a defect | yes — retain the representation, change it, or use a separate mechanism |
+| **F1a** | **A /0 rule is not representable in the SHM table** | **P2** | **CLOSED** — owner chose to keep the restriction; `/0` is unsupported in the SHM side channel and covered by the in-repo XDP LPM rule (`d1f4a81`). No owner decision outstanding. | no |
 | **F2** | **Native capture worker lifecycle** | **P2** | **FIXED** — on `master` as `15e0551` (PR #58): the workers are started where their outcome is known, a failed capture is retried a bounded number of times, and a dead capture is visible in the metrics, the dashboard and the health reason | no — the owner decided: degrade, keep serving |
 | F6 | `BACKLOG.md` is not a reliable master ledger | P2 (doc) | CLOSED — the owner lifted the fence and the file was re-pointed at `master` | no — the fence was lifted by the owner on 2026-10-21 |
-| F7 | Performance/RSS claims need workload evidence | P2 (process) | OPEN | yes — the release-claims policy |
+| F7 | Performance/RSS claims need workload evidence | P2 (process) | CLOSED — release-claims policy recorded in this section | no — policy only |
 | **F9** | **Enforcement's block path is a lost update against detection** | **P1** | **FIXED** — `682435a`, merged from PR #43: the store has two block-only mutators under one shard lock, each touching only `block_state`, and the blocked index is updated under that same lock. PR #39 was closed unmerged | no |
 | F8 | The audit was not locally reproduced | n/a (method) | not actionable | no |
 | **F10** | **The IPC server MACs a key-sorted payload, not the client's bytes** | **P1** | **FIXED by the owner's decision** — the server's rule stands: the MAC covers the frame minus its `auth` object, re-serialized compact and key-sorted; the CLI signs exactly that | yes — the fix shape is a canonicalisation decision, and it changes the wire contract |
@@ -61,7 +61,7 @@ are the ones used here.
 | F41 | Two dashboard rows are overwritten with `n/a` by the SSE path | P2 (operator-visible) | **FIXED** — the SSE path no longer overwrites the two rows | no |
 | F42 | The release gate greps for a dependency-audit flag the workflow no longer uses | P2 (CI) | **FIXED** — the gate checks the flags the workflow runs | no |
 | F43 | The installer writes a unit that grants the daemon write access it must never have | P2 (security) | **FIXED** — the installer no longer grants /proc/sys write access | no |
-| F44 | The Ansible deploy role renders into a directory that does not exist and applies a stub template | P2 (deployment) | OPEN — The k8s deploy path cannot work: the rendered Deployment mounts no config, the `ramshield-admin` Secret is absent, and the static manifests in `deploy/k8s/` are never applied. The default `latest` tag also violates the pinned-tag policy `scripts/verify_release.sh:12` enforces. | no |
+| F44 | The Ansible deploy role renders into a directory that does not exist and applies a stub template | P2 (deployment) | CLOSED (`9f7b1721`, `fc6b6fcb`, `15925197`) — the role now creates `deploy/rendered/` before templating, renders a full Deployment with the ConfigMap mount, operator-managed Secret refs, WAL PVC, probes and a pinned `0.6.0` image tag, applies the prerequisite manifests (namespace/configmap/rbac/pvc), verifies the Secret exists, then rolls out. Regression test: `tests/k8s_manifests_admissible.rs`. | no |
 | F45 | Two exported series miss the `ramshield_` namespace | P3 (metrics) | **FIXED** — every exported series carries the namespace | no |
 | F46 | The pipeline stage bars mix units | P3 (display) | **FIXED** — the pipeline stages share their units | no |
 | F47 | The quarantine table fabricates the severity and tier of every row | P3 (display) | **FIXED** — the quarantine table shows the record's reason | no |
@@ -390,7 +390,7 @@ URLs. The standing fence was lifted by the owner on 2026-10-21, and
 
 ## F7 — Performance and memory claims require workload evidence
 
-**Status:** OPEN (P2, process — no code change)
+**Status:** CLOSED (P2, process — no code change); policy recorded below
 **Files:** `config.baseline.toml`, issue `#35`, draft PR `#34`
 
 The baseline config's `ram_limit_mb = 1024` and `pre_aggs_max_size = 1_000_000`
@@ -418,6 +418,20 @@ benchmark supports it on the actual implementation and target machine.
 **Open question, now checkable:** the audit's claim that PR `#34` is a draft describing 50 MB
 as a target was **UNVERIFIED** by the review (a remote-only artifact). The
 reviewer did not contradict it but did not confirm it.
+
+### Release-claims policy (standing)
+
+No public or external performance/RSS figure may be published without a run
+bundle that records: exact commit SHA; build profile and enabled features;
+toolchain version and config hash; machine (CPU, RAM, kernel, NIC/driver);
+workload generator, packet sizes/rates, unique-source cardinality and
+duration; process RSS and peak RSS kept separate from kernel/XDP maps and page
+cache; CPU, latency, drops, detection quality and recovery behaviour; and raw
+output from repeated runs. A number without that bundle is a sizing target or
+a claim, not a measurement. Sub-20ns microbenchmark language stays out of
+public claims unless the same bundle supports it on the target machine.
+
+**Closed by policy** — no code change; enforce at review/publication time.
 
 ---
 
@@ -1624,21 +1638,27 @@ Found by the 2026-10-22 full-codebase audit.
 
 ## F44 — The Ansible deploy role renders into a directory that does not exist and applies a stub template
 
-**Status:** OPEN
-**Files:** `ansible/roles/deploy/tasks/main.yml, ansible/roles/deploy/templates/k8s-deployment.yaml.j2`
+**Status:** CLOSED — fixed on master by `9f7b1721`, `fc6b6fcb` and `15925197`
+**Files:** `ansible/roles/deploy/tasks/main.yml`, `ansible/roles/deploy/templates/k8s-deployment.yaml.j2`
 **Severity:** P2 (deployment)
 
 Found by the 2026-10-22 full-codebase audit.
 
-### What it is
+### What it was
 
-`ansible/roles/deploy/tasks/main.yml:57` renders into `{{ project_dir }}/deploy/rendered/deployment.yaml`; no task creates that directory, and `:61` applies whatever is in it. The template `k8s-deployment.yaml.j2` is 22 lines: a Deployment with an image tag (default `latest`) and `--config /etc/ramshield/config.toml`, and no volumes, ConfigMap mount, WAL PVC, probes, secret reference or env.
+`ansible/roles/deploy/tasks/main.yml:57` rendered into `{{ project_dir }}/deploy/rendered/deployment.yaml`; no task created that directory, and `:61` applied whatever was in it. The template `k8s-deployment.yaml.j2` was 22 lines: a Deployment with an image tag (default `latest`) and `--config /etc/ramshield/config.toml`, and no volumes, ConfigMap mount, WAL PVC, probes, secret reference or env.
 
-**Why it matters.** The k8s deploy path cannot work: the rendered Deployment mounts no config, the `ramshield-admin` Secret is absent, and the static manifests in `deploy/k8s/` are never applied. The default `latest` tag also violates the pinned-tag policy `scripts/verify_release.sh:12` enforces.
+**Why it mattered.** The k8s deploy path could not work: the rendered Deployment mounted no config, the `ramshield-admin` Secret was absent, and the static manifests in `deploy/k8s/` were never applied. The default `latest` tag also violated the pinned-tag policy `scripts/verify_release.sh:12` enforces.
+
+### Fix
+
+The role now ensures `deploy/rendered/` exists before templating, applies the prerequisite static manifests (namespace, configmap, rbac, WAL PVC) in order, verifies the operator-managed Secret exists, renders a full Deployment with the ConfigMap mount, Secret env, WAL PVC, probes and resources, applies the rendered directory, and waits for rollout. The default tag is pinned to `0.6.0`.
 
 ### Closure criterion
 
 The k8s deploy path applies the same manifest set as `deploy/k8s/` with a pinned image tag, and the rendered directory is created by the role.
+
+**Closed by** `9f7b1721` (role/template fix), `fc6b6fcb` (rendered-directory bootstrap), `15925197` (directory task). Regression test: `tests/k8s_manifests_admissible.rs::ansible_renders_a_full_pinned_server_deployment`.
 
 ---
 

@@ -132,7 +132,7 @@ The BGP *protocol* (messages, FSM) is simple. BGP *policy* is where the real wor
 if peer_asn == 174:      # Cogent
     accept all routes
     export my routes
-    
+
 if peer_asn == 3356:     # Lumen
     reject routes with COMMUNITY NO_EXPORT
     accept only specific prefixes
@@ -362,9 +362,9 @@ It only does these 4 things:
 
 ### 8.2 Message Sequence (Normal Operation)
 ```
-TCP 3-way handshake → OPEN (my ASN=65001, your ASN=174, hold=90) 
+TCP 3-way handshake → OPEN (my ASN=65001, your ASN=174, hold=90)
   ↓
-KEEPALIVE (every 30s) 
+KEEPALIVE (every 30s)
   ↓
 [trigger: link RX >= 85% OR UDP reflection detected]
   ↓
@@ -402,7 +402,7 @@ impl BgpController {
     pub fn tick(&mut self, metrics: InterfaceMetrics) -> Option<BgpAction> {
         // 1. Evaluate hysteresis based on link metrics
         let action = self.hysteresis.evaluate(metrics.rx_bps, metrics.ring_drops);
-        
+
         // 2. Convert to BGP action
         match action {
             HysteresisAction::Assert => Some(BgpAction::Announce),
