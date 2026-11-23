@@ -46,6 +46,10 @@ impl BgpHeader {
                 got: buf.len(),
             });
         }
+        // Marker must be all 0xFF (16 octets) per RFC 4271
+        if buf[0..16] != [0xFFu8; 16] {
+            return Err(BgpError::BadMagic([0u8; 2]));
+        }
         let marker = buf[0..16]
             .try_into()
             .map_err(|_| BgpError::BadMagic([0u8; 2]))?;
@@ -57,7 +61,7 @@ impl BgpHeader {
         let msg_type = BgpMsgType::try_from(buf[18])?;
 
         // Length must be at least 19 and at most 4096
-        if length < 19 || length > 4096 || buf.len() < length as usize {
+        if !(19..=4096).contains(&length) || buf.len() < length as usize {
             return Err(BgpError::TooShort {
                 expected: length as usize,
                 got: buf.len(),

@@ -1,6 +1,6 @@
+use crate::Result;
 use crate::config::BgpConfig;
 use crate::rtbh::announce_rtbh;
-use crate::{BgpError, Result};
 
 /// Schmitt trigger controller — debounces rapid state transitions
 ///
@@ -19,6 +19,8 @@ pub struct SchmittTrigger {
     engaged_at: Option<std::time::Instant>,
     /// Timer handle for disengage
     disengage_timer: Option<std::time::Instant>,
+    /// Most recent flap; disengage requires a full quiet window after this
+    last_flap_at: Option<std::time::Instant>,
 }
 
 impl SchmittTrigger {
@@ -29,25 +31,33 @@ impl SchmittTrigger {
             flap_count: 0,
             engaged_at: None,
             disengage_timer: None,
+            last_flap_at: None,
         }
     }
 
     /// Record a BGP session flap
     pub fn record_flap(&mut self) {
-        self.flap_count += 1;
+        // ponytail: saturate; 65k flaps must not wrap to 0 and re-arm
+        self.flap_count = self.flap_count.saturating_add(1);
+        self.last_flap_at = Some(std::time::Instant::now());
     }
 
     /// Check if RTBH should be engaged
     pub fn should_engage(&self) -> bool {
-        self.flap_count >= self.engage_threshold
+        self.engaged_at.is_none() && self.flap_count >= self.engage_threshold
     }
 
     /// Check if RTBH should be disengaged
     pub fn should_disengage(&self) -> bool {
-        self.flap_count < self.disengage_threshold
-            && self.engaged_at.map_or(true, |t| {
-                t.elapsed().as_secs() >= (self.disengage_threshold as u64)
-            })
+        let Some(engaged_at) = self.engaged_at else {
+            return false;
+        };
+        if engaged_at.elapsed().as_secs() < self.disengage_threshold as u64 {
+            return false;
+        }
+        !self
+            .last_flap_at
+            .is_some_and(|t| t.elapsed().as_secs() < self.disengage_threshold as u64)
     }
 
     /// Reset flap counter
@@ -55,6 +65,7 @@ impl SchmittTrigger {
         self.flap_count = 0;
         self.engaged_at = None;
         self.disengage_timer = None;
+        self.last_flap_at = None;
     }
 }
 
@@ -73,15 +84,61 @@ pub fn apply_trigger(
     trigger: &mut SchmittTrigger,
 ) -> Option<Result<Vec<u8>>> {
     if trigger.should_engage() {
-        let peer_ip_str = match config.peer_ip {
-            std::net::IpAddr::V4(v4) => format!("{}.0.0.0", v4.octets()[0]),
-            std::net::IpAddr::V6(_) => "198.51.100.0".to_string(),
+        // Announce RTBH for the actual peer IP (/32), not a synthesized /8.
+        let announce = match config.peer_ip {
+            std::net::IpAddr::V4(v4) => Some(announce_rtbh(&v4.to_string())),
+            std::net::IpAddr::V6(_) => None,
         };
-        Some(announce_rtbh(&peer_ip_str).map(|(bh, _)| bh))
+        if announce.is_some() {
+            trigger.engaged_at = Some(std::time::Instant::now());
+            trigger.disengage_timer = Some(std::time::Instant::now());
+        }
+        announce
     } else if trigger.should_disengage() {
         trigger.reset();
         None
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_schmitt_disengage_blocked_by_recent_flap() {
+        let mut t = SchmittTrigger::new(1, 3);
+        t.record_flap();
+        t.engaged_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(4));
+        assert!(!t.should_disengage(), "recent flap must suppress disengage");
+        t.last_flap_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(4));
+        assert!(t.should_disengage(), "quiet window must allow disengage");
+    }
+
+    #[test]
+    fn test_schmitt_hysteresis() {
+        // engage after 2 flaps, disengage after 3s of engagement
+        let mut t = SchmittTrigger::new(2, 3);
+        t.record_flap();
+        assert!(!t.should_engage(), "one flap must not engage");
+        t.record_flap();
+        assert!(t.should_engage(), "two flaps must engage");
+
+        // not engaged yet → cannot disengage
+        assert!(!t.should_disengage(), "cannot disengage before engaging");
+
+        // simulate successful engage
+        t.engaged_at = Some(std::time::Instant::now());
+        assert!(!t.should_disengage(), "fresh engagement must not disengage");
+        t.engaged_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(4));
+        t.last_flap_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(4));
+        assert!(t.should_disengage(), "past disengage window must disengage");
+
+        // saturating flap count never panics in debug builds
+        let mut u = SchmittTrigger::new(1, 1);
+        u.flap_count = u16::MAX;
+        u.record_flap();
+        assert_eq!(u.flap_count, u16::MAX);
     }
 }

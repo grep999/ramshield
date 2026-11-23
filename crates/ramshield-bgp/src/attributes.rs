@@ -1,5 +1,4 @@
 use crate::{BgpError, Result};
-use ipnet::IpNet;
 use std::net::IpAddr;
 
 /// Path attribute type codes (RFC 4271 Section 5)

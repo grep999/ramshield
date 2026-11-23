@@ -1,10 +1,8 @@
 use crate::{BgpError, Result};
-use std::net::{IpAddr, Ipv4Addr};
-use std::time::Duration;
-use tokio::time;
+use std::net::IpAddr;
 
 /// BGP configuration — runtime knobs for the minimal speaker
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BgpConfig {
     /// Local AS number
     pub local_asn: u16,
@@ -28,6 +26,31 @@ pub struct BgpConfig {
     pub schmitt_engage_secs: u16,
     /// Schmitt trigger disengage threshold (seconds)
     pub schmitt_disengage_secs: u16,
+    /// Optional shared key for TCP-MD5/HMAC authentication
+    pub peer_shared_key: Option<Vec<u8>>,
+}
+
+/// Secret bytes stay out of logs and panic messages.
+impl std::fmt::Debug for BgpConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BgpConfig")
+            .field("local_asn", &self.local_asn)
+            .field("peer_asn", &self.peer_asn)
+            .field("peer_ip", &self.peer_ip)
+            .field("peer_port", &self.peer_port)
+            .field("router_id", &self.router_id)
+            .field("hold_time", &self.hold_time)
+            .field("keepalive_time", &self.keepalive_time)
+            .field("connect_retry_time", &self.connect_retry_time)
+            .field("max_reconnect_attempts", &self.max_reconnect_attempts)
+            .field("schmitt_engage_secs", &self.schmitt_engage_secs)
+            .field("schmitt_disengage_secs", &self.schmitt_disengage_secs)
+            .field(
+                "peer_shared_key",
+                &self.peer_shared_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
 }
 
 impl BgpConfig {
@@ -46,6 +69,7 @@ impl BgpConfig {
             max_reconnect_attempts: 10,
             schmitt_engage_secs: 5,
             schmitt_disengage_secs: 15,
+            peer_shared_key: None,
         }
     }
 
@@ -60,24 +84,30 @@ impl BgpConfig {
             router_id: Option<u32>,
             hold_time: Option<u16>,
             connect_retry_time: Option<u16>,
+            peer_shared_key: Option<String>,
         }
 
         let toml: TomlConfig =
             toml::from_str(s).map_err(|e| BgpError::Session(format!("toml parse error: {e}")))?;
 
-        let peer_ip: IpAddr = toml.peer_ip.parse().map_err(|e| BgpError::AddrParse(e))?;
+        let peer_ip: IpAddr = toml.peer_ip.parse().map_err(BgpError::AddrParse)?;
 
-        let router_id = toml.router_id.unwrap_or(0);
         let mut cfg = Self::new(toml.local_asn, toml.peer_asn, peer_ip);
         if let Some(p) = toml.peer_port {
             cfg.peer_port = p;
         }
-        cfg.router_id = router_id;
+        cfg.router_id = toml.router_id.unwrap_or(0);
         if let Some(h) = toml.hold_time {
             cfg.hold_time = h;
         }
         if let Some(c) = toml.connect_retry_time {
             cfg.connect_retry_time = c;
+        }
+        if let Some(k) = toml.peer_shared_key {
+            cfg.peer_shared_key = Some(
+                hex::decode(k.trim())
+                    .map_err(|e| BgpError::Session(format!("bad peer_shared_key hex: {e}")))?,
+            );
         }
         cfg.keepalive_time = cfg.hold_time / 3;
         Ok(cfg)

@@ -1,6 +1,7 @@
 use crate::Result;
 use crate::attributes::communities::{BLACKHOLE, NO_EXPORT};
 use crate::attributes::encode_community;
+use crate::attributes::{MpReachNlri, PathAttr, PathAttrFlags, PathAttrType};
 
 /// RFC 7999 Blackhole Community
 ///
@@ -24,12 +25,18 @@ pub struct RtbhCommunity {
     pub no_export: (u16, u16),
 }
 
-impl RtbhCommunity {
-    pub fn new() -> Self {
-        RtbhCommunity {
+impl Default for RtbhCommunity {
+    fn default() -> Self {
+        Self {
             blackhole: BLACKHOLE,
             no_export: NO_EXPORT,
         }
+    }
+}
+
+impl RtbhCommunity {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
@@ -60,20 +67,72 @@ pub fn encode_rtbh_communities() -> ([u8; 8], [u8; 8]) {
 ///   - ORIGIN IGP
 ///   - COMMUNITIES BLACKHOLE + NO_EXPORT
 ///   - MP_REACH_NLRI: single /32 prefix
-pub fn announce_rtbh(ip: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+pub fn announce_rtbh(ip: &str) -> Result<Vec<u8>> {
     let ipaddr: std::net::IpAddr = ip.parse()?;
-    match ipaddr {
-        std::net::IpAddr::V4(v4) => {
-            let prefix_bytes = v4.octets().to_vec();
-            let (bh_comm, ne_comm) = encode_rtbh_communities();
+    let v4 = match ipaddr {
+        std::net::IpAddr::V4(v4) => v4,
+        std::net::IpAddr::V6(_) => return Err(crate::BgpError::InvalidPrefixLen(129)),
+    };
+    let bh = encode_community(BLACKHOLE.0, BLACKHOLE.1);
+    let ne = encode_community(NO_EXPORT.0, NO_EXPORT.1);
 
-            // Build MP_REACH_NLRI: AFI=1(IPv4), SAFI=1(?), next hop=0.0.0.0, NLRI=prefix
-            let nlri = prefix_bytes.clone();
-
-            Ok((bh_comm.to_vec(), ne_comm.to_vec()))
-        }
-        std::net::IpAddr::V6(_) => Err(crate::BgpError::InvalidPrefixLen(129)),
+    let origin = PathAttr {
+        flags: PathAttrFlags {
+            optional: false,
+            transitive: true,
+            partial: false,
+            extended_len: false,
+        },
+        attr_type: PathAttrType::Origin,
+        value: vec![0], // ORIGIN IGP
     }
+    .encode();
+    let communities_attr = PathAttr {
+        flags: PathAttrFlags {
+            optional: true,
+            transitive: true,
+            partial: false,
+            extended_len: false,
+        },
+        attr_type: PathAttrType::Community,
+        value: [bh.as_slice(), ne.as_slice()].concat(),
+    }
+    .encode();
+    let mp_reach = MpReachNlri {
+        afi: 1,
+        safi: 1,                    // RFC 7999 RTBH uses IPv4 unicast SAFI, /32 prefix
+        next_hop: vec![0, 0, 0, 0], // discard next-hop
+        nlri: v4.octets().to_vec(),
+    }
+    .encode();
+    let mp_reach_attr = PathAttr {
+        flags: PathAttrFlags {
+            optional: true,
+            transitive: true,
+            partial: false,
+            extended_len: false,
+        },
+        attr_type: PathAttrType::MpReachNlri,
+        value: mp_reach,
+    }
+    .encode();
+
+    let path_attrs = [origin, communities_attr, mp_reach_attr].concat();
+    // marker(16) + length(2) + type(1) + withdrawn_len(2) + attr_len(2) + attrs
+    let length = 23u16 + path_attrs.len() as u16;
+    if length > 4096 {
+        return Err(crate::BgpError::Session(format!(
+            "RTBH UPDATE too large: {length}"
+        )));
+    }
+    let mut buf = Vec::with_capacity(length as usize);
+    buf.extend_from_slice(&[0xFFu8; 16]);
+    buf.extend_from_slice(&length.to_be_bytes());
+    buf.push(2); // UPDATE
+    buf.extend_from_slice(&0u16.to_be_bytes()); // withdrawn routes
+    buf.extend_from_slice(&(path_attrs.len() as u16).to_be_bytes());
+    buf.extend_from_slice(&path_attrs);
+    Ok(buf)
 }
 
 /// RTBH verification: check if UPDATE has BLACKHOLE + NO_EXPORT communities

@@ -153,21 +153,25 @@ impl FlowSpecNLRI {
             value: vec![17],
         });
 
-        // Type 6: Source Port — for multiple ports we'd need multiple components
+        // Type 6: Source Port — concatenated port bytes as one component
+        // (RFC 8955 §4.2.2 allows multiple operands per component; keep one
+        // component per type so encode() ordering is never violated.)
+        let mut value = Vec::with_capacity(ports.len() * 2);
         for port in ports {
-            components.push(FlowComponent {
-                comp_type: FlowComponentType::SourcePort,
-                operator: FlowOperator {
-                    equality: true,
-                    and_mask: false,
-                    operand_len: 0,
-                    not: false,
-                    mask: false,
-                    reserved: false,
-                },
-                value: port.to_be_bytes().to_vec(),
-            });
+            value.extend_from_slice(&port.to_be_bytes());
         }
+        components.push(FlowComponent {
+            comp_type: FlowComponentType::SourcePort,
+            operator: FlowOperator {
+                equality: true,
+                and_mask: false,
+                operand_len: 0,
+                not: false,
+                mask: false,
+                reserved: false,
+            },
+            value,
+        });
 
         Ok(FlowSpecNLRI { components })
     }

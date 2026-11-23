@@ -17,11 +17,6 @@ pub mod messages;
 pub mod rtbh;
 pub mod session;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-}
-
 pub use attributes::PathAttr;
 pub use config::BgpConfig;
 pub use flowspec::{FlowComponent, FlowSpecNLRI};
@@ -29,6 +24,29 @@ pub use fsm::{BgpFsm, BgpState, TransitionAction};
 pub use messages::{BgpMessage, BgpMsgType};
 pub use rtbh::{RtbhCommunity, announce_rtbh};
 pub use session::BgpSession;
+
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+use subtle::ConstantTimeEq;
+
+/// Verify HMAC-SHA256 tag over raw BGP message bytes.
+/// Uses constant-time comparison (`subtle`) to prevent timing side channels.
+///
+/// ponytail: the tag is a 32-byte SHA-256 value appended after the BGP PDU.
+/// This is a WIP framing convention, not TCP-AO/TCP-MD5 (RFC 5925); do not
+/// deploy against a peer expecting standard BGP authentication. Upgrade path:
+/// negotiate TCP-AO in the session layer before production enablement.
+pub fn verify_hmac(message: &[u8], key: &[u8], provided: &[u8]) -> Result<()> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key)
+        .map_err(|_| BgpError::Session("invalid HMAC key".into()))?;
+    mac.update(message);
+    let expected = mac.finalize().into_bytes();
+    if bool::from(expected.as_slice().ct_eq(provided)) {
+        Ok(())
+    } else {
+        Err(BgpError::HmacFailed)
+    }
+}
 
 /// Result type alias for BGP operations.
 pub type Result<T> = std::result::Result<T, BgpError>;

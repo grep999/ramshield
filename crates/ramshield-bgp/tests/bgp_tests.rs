@@ -1,3 +1,4 @@
+use ramshield_bgp::BgpConfig;
 use ramshield_bgp::BgpError;
 use ramshield_bgp::attributes::{communities, encode_community};
 use ramshield_bgp::flowspec::{FlowComponent, FlowComponentType, FlowOperator, FlowSpecNLRI};
@@ -163,9 +164,21 @@ fn test_rtbh_communities_encoding() {
 
 #[test]
 fn test_rtbh_announce() {
-    let (bh, ne) = announce_rtbh("198.51.100.1").unwrap();
-    assert_eq!(bh.len(), 8);
-    assert_eq!(ne.len(), 8);
+    let update = announce_rtbh("198.51.100.1").unwrap();
+    // marker + length + type + withdrawn + attr_len + attrs
+    assert!(update.len() > 23);
+    assert_eq!(&update[0..16], &[0xFFu8; 16]);
+    assert_eq!(update[18], 2, "UPDATE type");
+    let length = u16::from_be_bytes([update[16], update[17]]) as usize;
+    assert_eq!(length, update.len(), "BGP header length matches buffer");
+    let withdrawn = u16::from_be_bytes([update[19], update[20]]);
+    assert_eq!(withdrawn, 0, "no withdrawn routes");
+    let attr_len = u16::from_be_bytes([update[21], update[22]]) as usize;
+    assert_eq!(attr_len, update.len() - 23, "path attr length matches");
+    // /32 prefix present in MP_REACH_NLRI
+    assert!(update.windows(4).any(|w| w == [198, 51, 100, 1]));
+    // IPv6 rejected
+    assert!(announce_rtbh("2001:db8::1").is_err());
 }
 
 #[test]
@@ -209,6 +222,16 @@ fn test_bgp_header_verify() {
     assert_eq!(hdr.msg_type, BgpMsgType::Keepalive);
     assert_eq!(hdr.length, 19);
 
+    // Bad marker (not all 0xFF)
+    let mut bad_marker = [0u8; 19];
+    bad_marker[0..16].copy_from_slice(&[0x00u8; 16]);
+    bad_marker[16..18].copy_from_slice(&19u16.to_be_bytes());
+    bad_marker[18] = 4;
+    assert!(matches!(
+        BgpHeader::verify(&bad_marker),
+        Err(BgpError::BadMagic(_))
+    ));
+
     // Too short
     let short = [0u8; 10];
     assert!(matches!(
@@ -243,10 +266,14 @@ fn test_bgp_keepalive_encode_decode() {
 fn test_flowspec_udp_reflection() {
     // Pass just the IP prefix without CIDR notation
     let nflri = FlowSpecNLRI::udp_reflection("198.51.100.0", &[53, 123]).unwrap();
-    assert!(nflri.components.len() >= 3);
+    assert_eq!(nflri.components.len(), 3);
     assert_eq!(nflri.components[0].comp_type, FlowComponentType::DestPrefix);
     assert_eq!(nflri.components[1].comp_type, FlowComponentType::IpProtocol);
     assert_eq!(nflri.components[2].comp_type, FlowComponentType::SourcePort);
+    // Single SourcePort component with concatenated port bytes (53, 123)
+    assert_eq!(nflri.components[2].value, vec![0u8, 53, 0u8, 123]);
+    // encode() must succeed (no duplicate component type)
+    let _ = nflri.encode().unwrap();
 }
 
 #[test]
@@ -297,4 +324,42 @@ fn test_flowspec_rtbh() {
 
     // IPv6 should fail
     assert!(FlowSpecNLRI::rtbh_flowspec("2001:db8::1").is_err());
+}
+
+#[test]
+fn test_hmac_verify() {
+    let key = b"secret";
+    let msg = b"hello world";
+    // Correct tag
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(key).unwrap();
+    use hmac::Mac;
+    mac.update(msg);
+    let tag = mac.finalize().into_bytes();
+    assert!(ramshield_bgp::verify_hmac(msg, key, &tag).is_ok());
+
+    // Wrong tag → HmacFailed
+    assert!(matches!(
+        ramshield_bgp::verify_hmac(msg, key, &[0u8; 32]),
+        Err(BgpError::HmacFailed)
+    ));
+
+    // Wrong key → HmacFailed
+    assert!(matches!(
+        ramshield_bgp::verify_hmac(msg, b"other", &tag),
+        Err(BgpError::HmacFailed)
+    ));
+}
+
+#[test]
+fn test_config_debug_redacts_peer_key() {
+    let cfg = BgpConfig {
+        peer_shared_key: Some(vec![0xAA, 0xBB]),
+        ..Default::default()
+    };
+    let debug = format!("{cfg:?}");
+    assert!(debug.contains("REDACTED"), "debug output: {debug}");
+    assert!(
+        !debug.contains("170, 187"),
+        "secret bytes leaked in debug output: {debug}"
+    );
 }

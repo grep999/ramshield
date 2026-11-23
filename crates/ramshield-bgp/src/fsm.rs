@@ -178,12 +178,10 @@ impl BgpFsm {
             }
 
             // Any state -> Idle on manual stop
-            (_, BgpEvent::ManualStop) | (_, BgpEvent::AutoStop) => {
-                if state != BgpState::Idle {
-                    actions.push(TransitionAction::SendNotification(6, 0)); // Cease
-                    actions.push(TransitionAction::CloseTcp);
-                    self.attrs.state = BgpState::Idle;
-                }
+            (_, BgpEvent::ManualStop) | (_, BgpEvent::AutoStop) if state != BgpState::Idle => {
+                actions.push(TransitionAction::SendNotification(6, 0)); // Cease
+                actions.push(TransitionAction::CloseTcp);
+                self.attrs.state = BgpState::Idle;
             }
 
             _ => {}
