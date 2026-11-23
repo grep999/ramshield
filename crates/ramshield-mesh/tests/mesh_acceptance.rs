@@ -6,7 +6,7 @@
 
 use ramshield_mesh::{
     aworset::{AworsetBlocklist, ClusterBlockDelta, ClusterDot},
-    transport::{MeshHandle, MeshMessage, MeshPeer},
+    transport::{MeshHandle, MeshMessage, MeshPeer, ReceivedMeshMessage},
 };
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -21,6 +21,21 @@ use tokio::{
 
 const NODE_1_KEY: &[u8] = b"mesh-node-one-auth-key-at-least-32-bytes";
 const NODE_2_KEY: &[u8] = b"mesh-node-two-auth-key-at-least-32-bytes";
+const NODE_3_KEY: &[u8] = b"mesh-node-three-auth-key-at-least-32-bytes";
+
+#[test]
+fn mesh_peer_debug_redacts_auth_key() {
+    let peer = MeshPeer::new(
+        7,
+        "127.0.0.1:7900".parse().expect("peer address"),
+        b"super-secret-peer-key".to_vec(),
+    );
+    let rendered = format!("{peer:?}");
+    assert!(rendered.contains("node_id: 7"));
+    assert!(rendered.contains("127.0.0.1:7900"));
+    assert!(!rendered.contains("super-secret-peer-key"));
+    assert!(rendered.contains("<redacted>"));
+}
 
 async fn free_addr() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -73,6 +88,143 @@ async fn wait_for_one_acked(handle: &MeshHandle) -> Vec<MeshMessage> {
     })
     .await
     .expect("receiver should queue a valid message before timeout")
+}
+
+fn merge_frame(state: &Arc<AworsetBlocklist>, frame: &ReceivedMeshMessage) {
+    match &frame.message {
+        MeshMessage::Block(delta) => {
+            state.merge_delta(delta);
+        }
+        MeshMessage::Unblock(delta) => {
+            state.merge_unblock_delta(delta);
+        }
+        MeshMessage::Sync { blocks, unblocks } => {
+            for delta in blocks {
+                state.merge_delta(delta);
+            }
+            for delta in unblocks {
+                state.merge_unblock_delta(delta);
+            }
+        }
+        MeshMessage::WalBatch { .. } => {}
+    }
+}
+
+async fn drain_and_ack(handle: &MeshHandle, state: &Arc<AworsetBlocklist>) -> usize {
+    let mut count = 0;
+    for frame in handle.drain_with_ack().await {
+        merge_frame(state, &frame);
+        frame.acknowledge(true);
+        count += 1;
+    }
+    count
+}
+
+async fn pump_until_blocked(handle: &MeshHandle, state: &Arc<AworsetBlocklist>, ip: IpAddr) {
+    timeout(Duration::from_secs(3), async {
+        loop {
+            drain_and_ack(handle, state).await;
+            if state.is_blocked(&ip, now_ms()) {
+                return;
+            }
+            sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("peer should converge before timeout")
+}
+
+async fn drain_for(handle: &MeshHandle, state: &Arc<AworsetBlocklist>, duration: Duration) {
+    let deadline = tokio::time::Instant::now() + duration;
+    while tokio::time::Instant::now() < deadline {
+        drain_and_ack(handle, state).await;
+        sleep(Duration::from_millis(2)).await;
+    }
+}
+
+#[tokio::test]
+async fn three_node_duplicate_converges_over_real_tcp() {
+    let addresses = [free_addr().await, free_addr().await, free_addr().await];
+    let keys: [&[u8]; 3] = [NODE_1_KEY, NODE_2_KEY, NODE_3_KEY];
+    let states: Vec<Arc<AworsetBlocklist>> = (1..=3)
+        .map(|node_id| Arc::new(AworsetBlocklist::new(node_id)))
+        .collect();
+    let peers_for = |local: usize| -> Vec<MeshPeer> {
+        (0..3)
+            .filter(|index| *index != local)
+            .map(|index| MeshPeer::new((index + 1) as u32, addresses[index], keys[index].to_vec()))
+            .collect()
+    };
+
+    let mut handles = Vec::new();
+    for index in 0..3 {
+        handles.push(
+            MeshHandle::bind(
+                (index + 1) as u32,
+                states[index].clone(),
+                addresses[index],
+                peers_for(index),
+                keys[index].to_vec(),
+            )
+            .await
+            .expect("bind mesh node"),
+        );
+    }
+
+    let ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 93));
+    let delta = states[0].record_ban(ip, 60_000, 2);
+    let sender = handles[0].clone();
+    let sent_delta = delta.clone();
+    let broadcast =
+        tokio::spawn(async move { sender.broadcast(MeshMessage::Block(sent_delta)).await });
+
+    tokio::join!(
+        pump_until_blocked(&handles[1], &states[1], ip),
+        pump_until_blocked(&handles[2], &states[2], ip)
+    );
+    let report = broadcast.await.expect("broadcast task must not panic");
+    assert_eq!(report.written_count(), 2);
+
+    let duplicate_sender = handles[1].clone();
+    let duplicate_delta = delta.clone();
+    let drain_one = {
+        let handle = handles[0].clone();
+        let state = states[0].clone();
+        tokio::spawn(async move {
+            drain_for(&handle, &state, Duration::from_millis(200)).await;
+        })
+    };
+    let drain_three = {
+        let handle = handles[2].clone();
+        let state = states[2].clone();
+        tokio::spawn(async move {
+            drain_for(&handle, &state, Duration::from_millis(200)).await;
+        })
+    };
+    sleep(Duration::from_millis(10)).await;
+    let duplicate = tokio::spawn(async move {
+        duplicate_sender
+            .broadcast(MeshMessage::Block(duplicate_delta))
+            .await
+    });
+    let duplicate_report = duplicate
+        .await
+        .expect("duplicate broadcast task must not panic");
+    drain_one.await.expect("drain task must not panic");
+    drain_three.await.expect("drain task must not panic");
+    assert_eq!(
+        duplicate_report.written_count(),
+        2,
+        "{:?}",
+        duplicate_report.peers
+    );
+
+    for state in &states {
+        assert!(state.is_blocked(&ip, now_ms()));
+    }
+    for handle in &handles {
+        handle.shutdown();
+    }
 }
 
 #[tokio::test]

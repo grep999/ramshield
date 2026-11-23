@@ -65,7 +65,7 @@ Every row still to be done. The *Required work* column is what done looks like; 
 
 | A-036 | P2 | Core docs and claims | Replace stale code-health notes; document supported core deployment commands and operational assumptions. Add/update README files for analytics and CGNAT; verify enforcement and detection documentation against code. Mesh threat model, deployment, and module docs are tracked in the separate mesh feature plan. | PASS (exact SHA) — `18f76def673d4971f33271eeafdc26e57d3e574d`: local gates in clean detached worktree PASS (`fmt` 0, `check` 0, `clippy -D warnings` 0, `test` 0 / 778 tests, `audit` 0 with 1 allowed `rustix` warning, `deny` 0, `git diff --check origin/master..HEAD` 0). Hosted gates same SHA PASS: CI `45205054130`, Backlog Gate `45205054095`, Review Pipeline `45205053895`, RamShield Advanced Features `45205054358`, XDP netns smoke gate `45205054017`, lint-no-unwrap `45205053939`, Installer Clean-Room Verification `45205053946`. Owner GO sign-off 2026-11-23. Supersedes `42ab8865` whitespace failure. No runtime behavior change. |
 
-| A-037 | P2 | Core benchmarks and regression budgets | Establish reproducible baselines for detection, enforcement, WAL, native ingest, and memory under load. Set only evidence-based regression thresholds. Mesh merge/gossip performance is tracked in the separate mesh feature plan. | OPEN (narrowed) — baselines exist in `docs/development/BENCHMARK_BASELINES.md` at `754f20df`: field-day detection/enforcement/store, WAL Criterion, native synthetic packet path, and one whole-process peak-RSS observation. `scripts/packet_capture_bench.c` is absent and should not be the acceptance criterion. Remaining: privileged kernel capture/TPACKET ring behavior, isolated store memory, and a stable runner class with run-to-run variance; no regression percentage is set until that variance is known. |
+| A-037 | P2 | Core benchmarks and regression budgets | Establish reproducible baselines for detection, enforcement, WAL, native ingest, and memory under load. Set only evidence-based regression thresholds. Mesh merge/gossip performance is tracked in the separate mesh feature plan. | CLOSED (narrowed scope) — baselines in `docs/development/BENCHMARK_BASELINES.md` at `754f20df`: field-day detection/enforcement/store, WAL Criterion, native synthetic packet path, and one whole-process peak-RSS observation. No regression threshold is set: field-day run-to-run variance is too high on the single host. Privileged TPACKET capture, isolated store memory and a stable runner class are explicitly out of scope for this row; `scripts/packet_capture_bench.c` is absent and not an acceptance criterion. |
 
 
 
@@ -92,16 +92,16 @@ Every row still to be done. The *Required work* column is what done looks like; 
 
 ---
 
-## Pending work that is not tracked as a row
+## Audit findings not tracked as backlog rows
 
-These are the open items from the 21 Oct master audit. Full text, closure criteria and the owner decision each needs: [`docs/development/OPEN_FINDINGS.md`](docs/development/OPEN_FINDINGS.md).
+All rows below are closed or not applicable. Full text, closure criteria and owner decisions: [`docs/development/OPEN_FINDINGS.md`](docs/development/OPEN_FINDINGS.md).
 
 | id | item | state |
 |---|---|---|
 | **F1a** | **A /0 rule is unexpressable in the SHM rule table.** | CLOSED — option 1: retain restriction; `/0` unsupported in SHM side channel, covered by XDP LPM in-repo. |
-| **F2** | Native capture worker lifecycle. | OPEN — one owner answer needed: on total capture failure, refuse readiness or mark the service degraded? The detection path's refuse-readiness behaviour is the in-repo precedent. |
-| **F7** | Performance and memory claims need workload evidence. | OPEN — process item. One instance closed by measurement (`5a8a32f`, the SHM lookup cost). |
-| **F8** | The 21 Oct audit was not locally reproduced. | OPEN — not actionable against the code; it caps the confidence of every severity label the audit carries. |
+| **F2** | Native capture worker lifecycle. | FIXED (P2) — on master as `15e0551` (code `80fa333`); owner decision 2026-10-22: degrade, keep serving. Capture loss visible in metrics, dashboard and `/api/healthz`; 11 deterministic tests in `src/engine/tests/native_capture.rs`. |
+| **F7** | Performance and memory claims need workload evidence. | CLOSED (P2, process) — standing release-claims policy in `OPEN_FINDINGS.md` F7; one audit instance measured by `scripts/shm_lookup_bench.c` (`5a8a32f`). No public RSS/throughput figure without a run bundle. |
+| **F8** | The 21 Oct audit was not locally reproduced. | NOT APPLICABLE — audit self-reports no `cargo test`/clippy/live XDP/crash-injection runs; severity labels are hypotheses. Exact-SHA gate rule retained in `OPEN_FINDINGS.md` F8. |
 
 ### F1a — what "unexpressable" means, and what is up with the table
 

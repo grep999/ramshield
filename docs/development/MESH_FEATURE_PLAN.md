@@ -4,6 +4,8 @@
 
 **Status:** In development; not part of the production-essential remediation backlog.
 
+Current production readiness status and DoD: [`MESH_PRODUCTION_READINESS.md`](MESH_PRODUCTION_READINESS.md).
+
 **Target branch:** `audit-branch`
 
 **Current baseline when split:** `808f97b8032230146c0012fb928059a0f77e229a`
@@ -58,7 +60,7 @@ These commits are progress, not a feature acceptance decision. The current isola
 
 Do not pursue keyset/cursor pagination over the live mutable CRDT maps. That approach is dropped. The intended direction is WAL-led incremental catch-up per peer, using the peer's acknowledged source-WAL LSN when history is retained. When retention has created a gap, recover from a fixed recovery generation/boundary using a deterministic bounded snapshot stream, verify receiver completion, then replay WAL after the boundary. Transport framing may split the immutable recovery stream into bounded frames, but do not use a moving live-map cursor as the correctness mechanism. A recovery-completion handshake and fault-injection evidence are required before acceptance.
 
-PR #19 removed the keyset snapshot-cursor and rotating live-map snapshot APIs in its 2026-10-12 implementation pass. It now exports a fixed sorted snapshot under an exclusive CRDT snapshot barrier and sends bounded frames with application ACKs. Enforcement deliberately keeps the WAL cursor pinned after those frame ACKs and pauses WAL replay until receiver-wide completion is proven. The receiver-confirmed completion handshake bound to generation/boundary/digest, multi-process fault-injection acceptance, and memory qualification remain open; do not treat the prototype as production-ready.
+PR #19 removed the keyset snapshot-cursor and rotating live-map snapshot APIs in its 2026-10-12 implementation pass. It now exports a fixed sorted snapshot under an exclusive CRDT snapshot barrier and sends bounded frames with application ACKs. Enforcement deliberately keeps the WAL cursor pinned after those frame ACKs and pauses WAL replay until receiver-wide completion is proven. The receiver-confirmed completion handshake bound to generation/boundary/digest is implemented. Transport-level multi-process fault injection is covered by `mesh_fault_injection.rs`, including crash/ACK and receiver-confirmed recovery. Enforcement-level WAL-cursor fault injection is covered by `wal_cursor_retains_page_when_ack_lsn_does_not_match`. Duplicate/reorder multi-process proof is covered by `duplicate_and_reordered_batches_converge_without_new_ack_lsn`; memory qualification remains open. Do not treat the prototype as production-ready.
 
 ## Mesh backlog
 

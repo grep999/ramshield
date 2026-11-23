@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    fmt,
     future::Future,
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex as StdMutex},
@@ -79,7 +80,7 @@ pub enum MeshMessage {
 /// when the node identity inside the envelope matches a configured peer. A
 /// peer can therefore never speak for the local node or for another
 /// configured peer.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct MeshPeer {
     /// Stable node identity of the peer.
     pub node_id: u32,
@@ -87,6 +88,16 @@ pub struct MeshPeer {
     pub address: SocketAddr,
     /// Per-peer key the peer signs with.
     pub auth_key: Vec<u8>,
+}
+
+impl fmt::Debug for MeshPeer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MeshPeer")
+            .field("node_id", &self.node_id)
+            .field("address", &self.address)
+            .field("auth_key", &"<redacted>")
+            .finish()
+    }
 }
 
 impl MeshPeer {
@@ -968,6 +979,16 @@ impl MeshHandle {
                             }
                             _ => false,
                         };
+                        if recovery.is_some() && !proof_matches {
+                            let expected = recovery
+                                .as_ref()
+                                .map(|ctx| (ctx.generation, ctx.recovery_id, ctx.boundary_lsn));
+                            warn!(
+                                peer = %peer,
+                                expected = ?expected,
+                                "mesh recovery completion proof mismatch; cursor remains gated"
+                            );
+                        }
                         let success = success && proof_matches;
                         state.planner.complete(at, success);
                         state.delivery_failed = !success;
@@ -1366,9 +1387,16 @@ impl MeshHandle {
         let mut q = self.incoming.lock().await;
         let overflow = q.len() >= MAX_INCOMING_QUEUE;
         if overflow {
+            let dropped_sender = q.front().map(|frame| frame.sender_node_id);
             // Dropping the displaced frame's sender explicitly rejects it; its
             // peer will retry instead of advancing a cursor over a lost event.
             q.pop_front();
+            warn!(
+                node_id = env.node_id,
+                dropped_sender = ?dropped_sender,
+                max_entries = MAX_INCOMING_QUEUE,
+                "mesh incoming queue overflow; oldest frame rejected and sync requested"
+            );
         }
         q.push_back(IncomingFrame {
             sender_node_id: env.node_id,

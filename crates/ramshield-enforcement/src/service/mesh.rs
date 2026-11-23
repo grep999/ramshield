@@ -844,7 +844,7 @@ mod wal_batch_integration_tests {
     use ramshield_types::Durability;
     use std::net::SocketAddr;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tokio::net::TcpListener;
 
@@ -978,6 +978,168 @@ mod wal_batch_integration_tests {
         ));
         assert!(!service.mesh_projection_pending.contains(&ip));
 
+        sender.shutdown();
+        receiver.shutdown();
+        drop(service);
+        drop(sender);
+        drop(receiver);
+        drop(wal);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn wal_cursor_retains_page_when_ack_lsn_does_not_match() {
+        let dir =
+            std::env::temp_dir().join(format!("ramshield-mesh-cursor-{}", uuid::Uuid::new_v4()));
+        let lsn = {
+            let wal = Wal::open(
+                dir.to_string_lossy().as_ref(),
+                false,
+                Durability::Fsync,
+                1 << 20,
+                1 << 24,
+            )
+            .unwrap();
+            let lsn = wal
+                .append(
+                    &PendingMeshMutation::Block {
+                        ip: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 112)),
+                        node_id: 1,
+                        incarnation: uuid::Uuid::new_v4(),
+                        counter: 1,
+                        created_at_ms: 1,
+                        expires_at_ms: None,
+                        tier: 2,
+                    }
+                    .to_wal_entry(1),
+                )
+                .unwrap();
+            wal.sync().unwrap();
+            lsn
+        };
+        let wal = Arc::new(
+            Wal::open(
+                dir.to_string_lossy().as_ref(),
+                false,
+                Durability::Fsync,
+                1 << 20,
+                1 << 24,
+            )
+            .unwrap(),
+        );
+
+        let receiver_addr = free_addr().await;
+        let sender_addr = free_addr().await;
+        let receiver = MeshHandle::bind(
+            2,
+            Arc::new(ramshield_mesh::aworset::AworsetBlocklist::new(2)),
+            receiver_addr,
+            vec![MeshPeer::new(1, sender_addr, SENDER_KEY.to_vec())],
+            RECEIVER_KEY.to_vec(),
+        )
+        .await
+        .unwrap();
+        let sender = MeshHandle::bind(
+            1,
+            Arc::new(ramshield_mesh::aworset::AworsetBlocklist::new(1)),
+            sender_addr,
+            vec![MeshPeer::new(2, receiver_addr, RECEIVER_KEY.to_vec())],
+            SENDER_KEY.to_vec(),
+        )
+        .await
+        .unwrap();
+
+        let wrong_ack = Arc::new(AtomicBool::new(true));
+        let frames_seen = Arc::new(AtomicUsize::new(0));
+        let ack_task = tokio::spawn({
+            let receiver = receiver.clone();
+            let wrong_ack = wrong_ack.clone();
+            let frames_seen = frames_seen.clone();
+            async move {
+                loop {
+                    for frame in receiver.drain_with_ack().await {
+                        let end_lsn = match &frame.message {
+                            MeshMessage::WalBatch { end_lsn, .. } => Some(*end_lsn),
+                            _ => None,
+                        };
+                        if end_lsn.is_some() {
+                            frames_seen.fetch_add(1, Ordering::SeqCst);
+                        }
+                        if let Some(end_lsn) = end_lsn {
+                            let reported = if wrong_ack.load(Ordering::SeqCst) {
+                                end_lsn.saturating_add(1)
+                            } else {
+                                end_lsn
+                            };
+                            frame.acknowledge_with_lsn(true, Some(reported));
+                        } else {
+                            frame.acknowledge(true);
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        });
+
+        let mut service = EnforcementService::new(
+            Arc::new(Store::new(16)),
+            Arc::new(Metrics::new()),
+            Box::new(StubXdpApplier),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .with_wal(wal.clone())
+        .with_mesh_blocklist(Arc::new(ramshield_mesh::aworset::AworsetBlocklist::new(1)))
+        .with_mesh_handle(sender.clone());
+
+        service.replicate_mesh_wal().await;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while frames_seen.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("first WAL page must reach the receiver");
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while service
+                .mesh_wal_inflight
+                .lock()
+                .unwrap()
+                .contains(&receiver_addr)
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("first replication attempt must settle");
+        assert_eq!(
+            service
+                .mesh_wal_cursors
+                .lock()
+                .unwrap()
+                .get(&receiver_addr)
+                .copied(),
+            None,
+            "mismatched ACK must not advance the WAL cursor"
+        );
+
+        wrong_ack.store(false, Ordering::SeqCst);
+        service.replicate_mesh_wal().await;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while service
+                .mesh_wal_cursors
+                .lock()
+                .unwrap()
+                .get(&receiver_addr)
+                .copied()
+                != Some(lsn)
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("matching ACK must advance the WAL cursor");
+
+        ack_task.abort();
         sender.shutdown();
         receiver.shutdown();
         drop(service);
