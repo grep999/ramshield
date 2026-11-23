@@ -18,6 +18,8 @@ pub struct BgpSession {
     peer_asn: u16,
     /// Router ID
     router_id: u32,
+    /// Peer's BGP identifier, learned from OPEN (RFC 4271 §4.2)
+    peer_router_id: u32,
     /// Connection state
     connected: bool,
     /// Negotiated hold time (seconds), set by send_open
@@ -35,6 +37,7 @@ impl BgpSession {
             local_asn,
             peer_asn,
             router_id: 0,
+            peer_router_id: 0,
             connected: false,
             hold_time: 0,
             hmac_key: None,
@@ -81,24 +84,41 @@ impl BgpSession {
         Ok(())
     }
 
-    /// Send OPEN message
+    /// Send OPEN message.
+    ///
+    /// RFC 4271 §4.2: the optional parameters field carries capability
+    /// advertisements. A speaker that wants a non-default AFI/SAFI MUST
+    /// advertise the corresponding MP-BGP capability (RFC 4760 §5), because
+    /// a peer receiving NLRI for an unadvertised SAFI MUST treat the UPDATE
+    /// as malformed. Without this, SAFI 133 FlowSpec can never be used.
     pub async fn send_open(&mut self, version: u8, hold_time: u16) -> Result<()> {
         self.hold_time = hold_time;
-        // Build OPEN message: marker(16) + length(19+opt_params) + type(1)
-        // + version(1) + my_asn(2) + hold_time(2) + bgp_id(4) + opt_params_len(1) + opt_params(var)
-        let opt_params_len = 0; // Simplified: no optional params in minimal impl
-        let msg_len = 19 + opt_params_len;
-        let mut buf = Vec::with_capacity(msg_len);
+        // Capability: Multiprotocol Extensions, AFI 1 (IPv4), SAFI 133
+        // (FlowSpec). Encoded as a type-2 optional parameter.
+        let mut cap = Vec::with_capacity(4 + 2);
+        cap.push(1); // capability code: multiprotocol
+        cap.push(4); // capability length
+        cap.extend_from_slice(&1u16.to_be_bytes()); // AFI IPv4
+        cap.push(0); // reserved
+        cap.push(133); // SAFI FlowSpec
 
+        let mut opt_params = Vec::with_capacity(cap.len() + 2);
+        opt_params.push(2); // parameter type: capability
+        opt_params.push(cap.len() as u8);
+        opt_params.extend_from_slice(&cap);
+
+        let msg_len = 19 + opt_params.len();
+        let mut buf = Vec::with_capacity(msg_len);
         buf.extend_from_slice(&[0xFFu8; 16]); // Marker
-        buf.extend_from_slice(&msg_len.to_be_bytes()); // Length
+        buf.extend_from_slice(&(msg_len as u16).to_be_bytes()); // Length
         buf.push(1); // OPEN type
 
         buf.push(version); // BGP version
         buf.extend_from_slice(&self.local_asn.to_be_bytes()); // My ASN
         buf.extend_from_slice(&hold_time.to_be_bytes()); // Hold time
         buf.extend_from_slice(&self.router_id.to_be_bytes()); // BGP identifier
-        buf.push(opt_params_len as u8); // Opt params length
+        buf.push(opt_params.len() as u8); // Opt params length
+        buf.extend_from_slice(&opt_params);
 
         self.send_raw(&buf).await
     }
@@ -294,10 +314,22 @@ impl BgpSession {
             let _ = self.send_notification(2, 2).await; // Bad Peer AS
             return Err(BgpError::Session("peer ASN mismatch".into()));
         }
+        if open.bgp_id == 0 {
+            // RFC 4271 §6.4: a BGP identifier of all zeros is invalid.
+            let _ = self.send_notification(5, 4).await; // Bad BGP Identifier
+            return Err(BgpError::Session("peer sent zero BGP identifier".into()));
+        }
         if open.hold_time != 0 && open.hold_time < 3 {
             let _ = self.send_notification(2, 6).await; // Unacceptable Hold Time
             return Err(BgpError::Session("unacceptable hold time".into()));
         }
+        // RFC 4271 §6.7: collision detection. If both speakers use the same
+        // identifier, the session is torn down with a NOTIFICATION.
+        if open.bgp_id == self.router_id {
+            let _ = self.send_notification(6, 7).await; // Connection Collision
+            return Err(BgpError::Session("BGP identifier collision".into()));
+        }
+        self.peer_router_id = open.bgp_id;
         Ok(())
     }
 

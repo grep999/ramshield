@@ -275,3 +275,51 @@ pub fn decode_keepalive(buf: &[u8]) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod open_tests {
+    use super::*;
+
+    /// An OPEN carrying the MP-BGP SAFI 133 capability must decode to a
+    /// capability list a peer can read back.
+    #[test]
+    fn multiprotocol_flowspec_capability_round_trips() {
+        let cap = [1u8, 4, 0, 1, 0, 133]; // code, len, AFI=1, rsvd, SAFI=133
+        let mut body = Vec::new();
+        body.push(4); // version
+        body.extend_from_slice(&65001u16.to_be_bytes()); // my ASN
+        body.extend_from_slice(&90u16.to_be_bytes()); // hold time
+        body.extend_from_slice(&0x0A00_0001u32.to_be_bytes()); // router id
+        body.push(2 + cap.len() as u8); // optional params length
+        body.push(2); // parameter type: capability
+        body.push(cap.len() as u8);
+        body.extend_from_slice(&cap);
+
+        let open = decode_open(&body).unwrap();
+        assert_eq!(open.version, 4);
+        assert_eq!(open.my_asn, 65001);
+        assert_eq!(open.hold_time, 90);
+        assert_eq!(open.bgp_id, 0x0A00_0001);
+        assert_eq!(open.opt_params.len(), 1, "one capability parsed");
+        let c = &open.opt_params[0];
+        assert_eq!(c.code, 1, "multiprotocol");
+        assert_eq!(c.length, 4);
+        assert_eq!(&c.value, &[0, 1, 0, 133], "AFI IPv4 + SAFI 133");
+    }
+
+    #[test]
+    fn truncated_capability_is_rejected_not_panicked() {
+        let mut body = vec![4, 0xFD, 0xE9, 0, 90, 10, 0, 0, 1];
+        body.push(4); // opt params len claims 4 bytes
+        body.extend_from_slice(&[2, 8, 1, 4]); // only 4 present, param needs 8
+        assert!(decode_open(&body).is_err());
+    }
+
+    #[test]
+    fn open_without_optional_params_still_decodes() {
+        let mut body = vec![4, 0xFD, 0xE9, 0, 90, 10, 0, 0, 1];
+        body.push(0); // no optional parameters
+        let open = decode_open(&body).unwrap();
+        assert!(open.opt_params.is_empty());
+    }
+}
