@@ -16,11 +16,11 @@ pub struct SchmittTrigger {
     /// Flap counter within the current window
     flap_count: u16,
     /// Timer handle (would be tokio::time::Instant in async impl)
-    engaged_at: Option<std::time::Instant>,
+    pub engaged_at: Option<std::time::Instant>,
     /// Timer handle for disengage
-    disengage_timer: Option<std::time::Instant>,
+    pub disengage_timer: Option<std::time::Instant>,
     /// Most recent flap; disengage requires a full quiet window after this
-    last_flap_at: Option<std::time::Instant>,
+    pub last_flap_at: Option<std::time::Instant>,
 }
 
 impl SchmittTrigger {

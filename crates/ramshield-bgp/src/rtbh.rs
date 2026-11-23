@@ -66,7 +66,7 @@ pub fn encode_rtbh_communities() -> ([u8; 8], [u8; 8]) {
 /// Creates an UPDATE message component:
 ///   - ORIGIN IGP
 ///   - COMMUNITIES BLACKHOLE + NO_EXPORT
-///   - MP_REACH_NLRI: single /32 prefix
+///   - MP_REACH_NLRI: single /32 prefix (SAFI 1, RFC 7999)
 pub fn announce_rtbh(ip: &str) -> Result<Vec<u8>> {
     let ipaddr: std::net::IpAddr = ip.parse()?;
     let v4 = match ipaddr {
@@ -98,11 +98,17 @@ pub fn announce_rtbh(ip: &str) -> Result<Vec<u8>> {
         value: [bh.as_slice(), ne.as_slice()].concat(),
     }
     .encode();
+    // RFC 7999: RTBH uses IPv4 unicast SAFI (1) with a /32 prefix.
+    // NLRI encoding: prefix_len(1) | prefix_bytes(ceil(prefix_len/8))
     let mp_reach = MpReachNlri {
-        afi: 1,
-        safi: 1,                    // RFC 7999 RTBH uses IPv4 unicast SAFI, /32 prefix
+        afi: 1,                     // IPv4
+        safi: 1,                    // RFC 7999 RTBH uses IPv4 unicast SAFI
         next_hop: vec![0, 0, 0, 0], // discard next-hop
-        nlri: v4.octets().to_vec(),
+        nlri: {
+            let mut nlri = vec![32u8]; // /32 prefix length
+            nlri.extend_from_slice(&v4.octets());
+            nlri
+        },
     }
     .encode();
     let mp_reach_attr = PathAttr {

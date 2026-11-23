@@ -526,6 +526,45 @@ impl Metrics {
             "counter"
         ));
         out.push_str(&emit!(
+            "ramshield_bgp_session_established",
+            self.bgp_session_established.load(Ordering::Relaxed),
+            "BGP speaker: session established (1) or not (0).",
+            "gauge"
+        ));
+        out.push_str(&emit!(
+            "ramshield_bgp_announce_total",
+            self.bgp_announce_total.load(Ordering::Relaxed),
+            "BGP speaker: RTBH/FlowSpec announcements sent.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_bgp_withdraw_total",
+            self.bgp_withdraw_total.load(Ordering::Relaxed),
+            "BGP speaker: RTBH/FlowSpec withdrawals sent.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_bgp_hmac_failures_total",
+            self.bgp_hmac_failures_total.load(Ordering::Relaxed),
+            "BGP speaker: HMAC verification failures on received messages.",
+            "counter"
+        ));
+        out.push_str(&emit!(
+            "ramshield_bgp_fsm_flaps_total",
+            self.bgp_fsm_flaps_total.load(Ordering::Relaxed),
+            "BGP speaker: FSM session flaps.",
+            "counter"
+        ));
+        let bgp_err = self
+            .bgp_last_error
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "# HELP ramshield_bgp_last_error BGP speaker: last error (1 if set): {bgp_err}\n# TYPE ramshield_bgp_last_error gauge\nramshield_bgp_last_error {}\n",
+            if bgp_err.is_empty() { 0 } else { 1 }
+        ));
+        out.push_str(&emit!(
             "ramshield_auth_login_failures_total",
             self.auth_login_failures_total.load(Ordering::Relaxed),
             "Dashboard login attempts that failed (wrong password or lockout).",

@@ -178,27 +178,57 @@ fn decode_open(buf: &[u8]) -> Result<BgpOpen> {
     let my_asn = u16::from_be_bytes([buf[1], buf[2]]);
     let hold_time = u16::from_be_bytes([buf[3], buf[4]]);
     let bgp_id = u32::from_be_bytes([buf[5], buf[6], buf[7], buf[8]]);
-    let opt_params_len = buf[9];
+    // RFC 4271: opt_params_len is the total byte length of the optional
+    // parameters field, NOT a count of individual parameters.
+    let opt_params_len = buf[9] as usize;
     let mut opt_params = Vec::new();
-    let mut pos = 10;
-    for _ in 0..opt_params_len {
-        if pos + 2 > buf.len() {
-            break;
+    if opt_params_len > 0 {
+        let params_start = 10;
+        let params_end = params_start + opt_params_len;
+        if params_end > buf.len() {
+            return Err(BgpError::TooShort {
+                expected: params_end,
+                got: buf.len(),
+            });
         }
-        let code = buf[pos];
-        let length = buf[pos + 1];
-        if pos + 2 + length as usize > buf.len() {
-            break;
+        let mut pos = params_start;
+        while pos + 2 <= params_end {
+            let param_type = buf[pos];
+            let param_len = buf[pos + 1] as usize;
+            pos += 2;
+            if pos + param_len > params_end {
+                return Err(BgpError::TooShort {
+                    expected: params_end,
+                    got: buf.len(),
+                });
+            }
+            // Only parse capability parameters (type 2)
+            if param_type == 2 {
+                let cap_data = &buf[pos..pos + param_len];
+                let mut cap_pos = 0;
+                while cap_pos + 2 <= cap_data.len() {
+                    let code = cap_data[cap_pos];
+                    let length = cap_data[cap_pos + 1] as usize;
+                    cap_pos += 2;
+                    if cap_pos + length > cap_data.len() {
+                        return Err(BgpError::TooShort {
+                            expected: cap_data.len(),
+                            got: cap_pos + length,
+                        });
+                    }
+                    let mut value = [0u8; 4];
+                    let copy_len = std::cmp::min(4, length);
+                    value[..copy_len].copy_from_slice(&cap_data[cap_pos..cap_pos + copy_len]);
+                    opt_params.push(BgpCapability {
+                        code,
+                        length: length as u8,
+                        value,
+                    });
+                    cap_pos += length;
+                }
+            }
+            pos += param_len;
         }
-        let mut value = [0u8; 4];
-        let copy_len = std::cmp::min(4, length as usize);
-        value[..copy_len].copy_from_slice(&buf[pos + 2..pos + 2 + copy_len]);
-        opt_params.push(BgpCapability {
-            code,
-            length,
-            value,
-        });
-        pos += 2 + length as usize;
     }
     Ok(BgpOpen {
         version,

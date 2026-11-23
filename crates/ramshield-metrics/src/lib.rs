@@ -233,6 +233,18 @@ pub struct Metrics {
     /// Total reconciliation failures.
     pub reconcile_failures_total: Arc<AtomicU64>,
     pub reconcile_successes_total: Arc<AtomicU64>,
+    /// BGP speaker: session established (1) or not (0). Gauge.
+    pub bgp_session_established: Arc<AtomicU64>,
+    /// BGP speaker: RTBH/FlowSpec announcements sent.
+    pub bgp_announce_total: Arc<AtomicU64>,
+    /// BGP speaker: RTBH/FlowSpec withdrawals sent.
+    pub bgp_withdraw_total: Arc<AtomicU64>,
+    /// BGP speaker: HMAC verification failures on received messages.
+    pub bgp_hmac_failures_total: Arc<AtomicU64>,
+    /// BGP speaker: FSM transitions (session flaps).
+    pub bgp_fsm_flaps_total: Arc<AtomicU64>,
+    /// BGP speaker: last error message (truncated to 128 chars), or empty.
+    pub bgp_last_error: Arc<Mutex<String>>,
     pub last_batch: Arc<Mutex<Option<Arc<BatchRecord>>>>,
     pub batch_history: Arc<Mutex<VecDeque<Arc<BatchRecord>>>>,
     pub block_log: Arc<Mutex<VecDeque<BlockRecord>>>,
@@ -353,6 +365,12 @@ impl Metrics {
             reconcile_last_success_unix: Arc::new(AtomicU64::new(0)),
             reconcile_failures_total: Arc::new(AtomicU64::new(0)),
             reconcile_successes_total: Arc::new(AtomicU64::new(0)),
+            bgp_session_established: Arc::new(AtomicU64::new(0)),
+            bgp_announce_total: Arc::new(AtomicU64::new(0)),
+            bgp_withdraw_total: Arc::new(AtomicU64::new(0)),
+            bgp_hmac_failures_total: Arc::new(AtomicU64::new(0)),
+            bgp_fsm_flaps_total: Arc::new(AtomicU64::new(0)),
+            bgp_last_error: Arc::new(Mutex::new(String::new())),
             last_batch: Arc::new(Mutex::new(None)),
             batch_history: Arc::new(Mutex::new(VecDeque::with_capacity(HISTORY))),
             block_log: Arc::new(Mutex::new(VecDeque::with_capacity(block_log_size.max(1)))),

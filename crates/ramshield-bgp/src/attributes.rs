@@ -240,14 +240,17 @@ pub struct MpReachNlri {
 }
 
 impl MpReachNlri {
-    /// Encode MP_REACH_NLRI value
+    /// Encode MP_REACH_NLRI value (RFC 4760)
+    ///
+    /// Layout: AFI(2) | SAFI(1) | NH_Len(1) | NH(var) | Reserved(1) | NLRI(var)
+    /// Reserved is always present and MUST be 0 per RFC 4760 §3.
     pub fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&self.afi.to_be_bytes()); // AFI (2)
         buf.push(self.safi); // SAFI (1)
         buf.push(self.next_hop.len() as u8); // NextHop Length (1)
         buf.extend_from_slice(&self.next_hop); // NextHop (variable)
-        buf.push(0); // Reserved (1)
+        buf.push(0); // Reserved (1) — always present, MUST be 0
         buf.extend_from_slice(&self.nlri); // NLRI (variable)
         buf
     }
