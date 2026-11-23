@@ -20,74 +20,257 @@ pub enum FlowComponentType {
     Fragment = 12,
 }
 
-/// Operator encoding for FlowSpec components (RFC 8955 Section 4.2.2)
+impl FlowComponentType {
+    /// Prefix components (Types 1 and 2) carry `<length, prefix>` with no
+    /// operator octet; every other type carries `{numeric_op, value}` pairs.
+    /// RFC 8955 §4.2.2.1-4.2.2.2.
+    fn is_prefix(self) -> bool {
+        matches!(
+            self,
+            FlowComponentType::DestPrefix | FlowComponentType::SourcePrefix
+        )
+    }
+}
+
+/// Operator encoding for FlowSpec components (RFC 8955 §4.2.1)
+///
+/// Numeric operator (Figure 2):
+/// ```text
+///  0   1   2   3   4   5   6   7
+/// +---+---+---+---+---+---+---+---+
+/// | e | a |  len  | 0 |lt |gt |eq |
+/// +---+---+---+---+---+---+---+---+
+/// ```
+///
+/// Bitmask operator (Figure 3) shares the `e`, `a`, `len` fields and
+/// re-purposes the low nibble as `0 | 0 |not| m`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FlowOperator {
-    /// Bit 0: 1 = equality, 0 = inequality
-    pub equality: bool,
-    /// Bit 1: 1 = AND mask, 0 = OR mask
+    /// Bit 1: 1 = AND mask, 0 = OR mask. MUST be 0 in the first pair of a
+    /// sequence (RFC 8955 §4.2.1.1).
     pub and_mask: bool,
-    /// Bits 2-4: operand length (0-7)
+    /// Number of value octets: 1, 2, 4 or 8. Encoded as `log2(len)`.
     pub operand_len: u8,
-    /// Bit 5: NOT match
+    /// Equality comparison (numeric operator, bit 0).
+    pub equality: bool,
+    /// Less-than comparison (numeric operator, bit 2).
+    pub less_than: bool,
+    /// Greater-than comparison (numeric operator, bit 1).
+    pub greater_than: bool,
+    /// Logical negation (bitmask operator, bit 2).
     pub not: bool,
-    /// Bit 6: mask operation
+    /// Bitwise match `(data AND value) == value` (bitmask operator, bit 0).
     pub mask: bool,
-    /// Bit 7: reserved (must be 0)
-    pub reserved: bool,
+}
+
+impl Default for FlowOperator {
+    fn default() -> Self {
+        FlowOperator {
+            and_mask: false,
+            operand_len: 1,
+            equality: true,
+            less_than: false,
+            greater_than: false,
+            not: false,
+            mask: false,
+        }
+    }
 }
 
 impl FlowOperator {
-    /// Encode operator to single byte
-    pub fn encode(&self) -> u8 {
+    /// Encode operator to a single octet. `end_of_list` is not stored on the
+    /// struct: the encoder sets it on the last pair of a component
+    /// automatically (RFC 8955 §4.2.1.1 requires exactly one `e` bit).
+    pub fn encode(&self, end_of_list: bool) -> u8 {
         let mut b = 0u8;
-        if self.equality {
-            b |= 0x01;
+        if end_of_list {
+            b |= 0x80; // e
         }
         if self.and_mask {
-            b |= 0x02;
+            b |= 0x40; // a
         }
-        b |= self.operand_len << 2; // bits 2-4
-        if self.not {
-            b |= 0x20;
-        } // bit 5
-        if self.mask {
-            b |= 0x40;
-        } // bit 6
-        // bit 7 reserved, must be 0
+        // len is log2(operand_len), encoded in bits 5-4.
+        let len_bits = match self.operand_len {
+            2 => 1u8,
+            4 => 2,
+            8 => 3,
+            _ => 0,
+        };
+        b |= len_bits << 4;
+        if self.mask || self.not {
+            // Bitmask operator: bit 2 = not, bit 0 = match.
+            if self.not {
+                b |= 0x08;
+            }
+            if self.mask {
+                b |= 0x01;
+            }
+        } else {
+            if self.less_than {
+                b |= 0x04;
+            }
+            if self.greater_than {
+                b |= 0x02;
+            }
+            if self.equality {
+                b |= 0x01;
+            }
+        }
         b
     }
 
-    /// Decode operator from single byte
-    pub fn decode(b: u8) -> Self {
-        FlowOperator {
-            equality: (b & 0x01) != 0,
-            and_mask: (b & 0x02) != 0,
-            operand_len: (b >> 2) & 0x07,
-            not: (b & 0x20) != 0,
-            mask: (b & 0x40) != 0,
-            reserved: false,
-        }
+    /// Decode operator from a single octet. Returns `(operator, end_of_list)`.
+    pub fn decode(b: u8) -> (Self, bool) {
+        let end_of_list = b & 0x80 != 0;
+        let len_bits = (b >> 4) & 0x03;
+        let operand_len = 1u8 << len_bits;
+        // Bit 3 is the discriminator: set means bitmask operator (§4.2.1.2).
+        let bitmask = b & 0x08 != 0;
+        let (not, mask, less_than, greater_than, equality) = if bitmask {
+            (b & 0x08 != 0, b & 0x01 != 0, false, false, false)
+        } else {
+            (false, false, b & 0x04 != 0, b & 0x02 != 0, b & 0x01 != 0)
+        };
+        (
+            FlowOperator {
+                and_mask: b & 0x40 != 0,
+                operand_len,
+                equality,
+                less_than,
+                greater_than,
+                not,
+                mask,
+            },
+            end_of_list,
+        )
     }
+}
+
+/// One `{operator, value}` pair inside a component.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlowPair {
+    pub operator: FlowOperator,
+    pub value: Vec<u8>,
 }
 
 /// FlowSpec component encoding
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlowComponent {
     pub comp_type: FlowComponentType,
-    pub operator: FlowOperator,
-    pub value: Vec<u8>,
+    /// Prefix components hold exactly one pair whose `value` is
+    /// `[prefix_len_bits, ...prefix_octets]`; the operator is ignored.
+    pub pairs: Vec<FlowPair>,
 }
 
 impl FlowComponent {
-    /// Encode component to bytes: <type(1), length(1), op(1), value(var)>
+    /// Encode component to bytes.
+    ///
+    /// Prefix types (1, 2): `<type, prefix_len, prefix_octets>` — no operator
+    /// octet and no length octet (RFC 8955 §4.2.2.1).
+    ///
+    /// All other types: `<type, {op, value}+>` where the `e` bit is set on the
+    /// final pair only (RFC 8955 §4.2.1.1).
     pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.push(self.comp_type as u8);
-        buf.push((1 + self.value.len()) as u8); // operator + value
-        buf.push(self.operator.encode());
-        buf.extend_from_slice(&self.value);
+        let mut buf = vec![self.comp_type as u8];
+        if self.comp_type.is_prefix() {
+            let pair = match self.pairs.first() {
+                Some(p) => p,
+                None => return buf,
+            };
+            buf.extend_from_slice(&pair.value);
+            return buf;
+        }
+        let last = self.pairs.len().saturating_sub(1);
+        for (i, pair) in self.pairs.iter().enumerate() {
+            buf.push(pair.operator.encode(i == last));
+            buf.extend_from_slice(&pair.value);
+        }
         buf
+    }
+
+    /// Decode a component from `buf`. Returns `(component, bytes_consumed)`.
+    pub fn decode(buf: &[u8]) -> Result<(Self, usize)> {
+        if buf.is_empty() {
+            return Err(BgpError::TooShort {
+                expected: 1,
+                got: 0,
+            });
+        }
+        let comp_type = match buf[0] {
+            1 => FlowComponentType::DestPrefix,
+            2 => FlowComponentType::SourcePrefix,
+            3 => FlowComponentType::IpProtocol,
+            4 => FlowComponentType::Port,
+            5 => FlowComponentType::DestPort,
+            6 => FlowComponentType::SourcePort,
+            7 => FlowComponentType::IcmpType,
+            8 => FlowComponentType::IcmpCode,
+            9 => FlowComponentType::TcpFlags,
+            10 => FlowComponentType::PacketLength,
+            11 => FlowComponentType::Dscp,
+            12 => FlowComponentType::Fragment,
+            other => return Err(BgpError::BadComponent(other)),
+        };
+
+        if comp_type.is_prefix() {
+            if buf.len() < 2 {
+                return Err(BgpError::TooShort {
+                    expected: 2,
+                    got: buf.len(),
+                });
+            }
+            let prefix_len = buf[1] as usize;
+            if prefix_len > 32 {
+                return Err(BgpError::InvalidPrefixLen(prefix_len as u8));
+            }
+            let octets = prefix_len.div_ceil(8);
+            let end = 2 + octets;
+            if buf.len() < end {
+                return Err(BgpError::TooShort {
+                    expected: end,
+                    got: buf.len(),
+                });
+            }
+            return Ok((
+                FlowComponent {
+                    comp_type,
+                    pairs: vec![FlowPair {
+                        operator: FlowOperator::default(),
+                        value: buf[1..end].to_vec(),
+                    }],
+                },
+                end,
+            ));
+        }
+
+        let mut pairs = Vec::new();
+        let mut offset = 1;
+        loop {
+            if buf.len() < offset + 1 {
+                return Err(BgpError::TooShort {
+                    expected: offset + 1,
+                    got: buf.len(),
+                });
+            }
+            let (operator, end_of_list) = FlowOperator::decode(buf[offset]);
+            offset += 1;
+            let len = operator.operand_len as usize;
+            if buf.len() < offset + len {
+                return Err(BgpError::TooShort {
+                    expected: offset + len,
+                    got: buf.len(),
+                });
+            }
+            pairs.push(FlowPair {
+                operator,
+                value: buf[offset..offset + len].to_vec(),
+            });
+            offset += len;
+            if end_of_list {
+                break;
+            }
+        }
+        Ok((FlowComponent { comp_type, pairs }, offset))
     }
 }
 
@@ -95,6 +278,15 @@ impl FlowComponent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlowSpecNLRI {
     pub components: Vec<FlowComponent>,
+}
+
+/// Split a concave IPv4 prefix into `(prefix_len_bits, octets)`.
+fn v4_prefix(ip: &str) -> Result<(u8, Vec<u8>)> {
+    let addr: std::net::IpAddr = ip.parse()?;
+    match addr {
+        std::net::IpAddr::V4(v4) => Ok((32, v4.octets().to_vec())),
+        std::net::IpAddr::V6(_) => Err(BgpError::InvalidPrefixLen(129)),
+    }
 }
 
 impl FlowSpecNLRI {
@@ -114,119 +306,159 @@ impl FlowSpecNLRI {
         Ok(buf)
     }
 
-    /// Create a UDP reflection filter (DNS/NTP/CLDAP/SSDP source port)
+    /// Decode NLRI from bytes. Returns `(nlri, bytes_consumed)`.
+    pub fn decode(buf: &[u8]) -> Result<(Self, usize)> {
+        let mut components = Vec::new();
+        let mut offset = 0;
+        while offset < buf.len() {
+            let (comp, used) = FlowComponent::decode(&buf[offset..])?;
+            offset += used;
+            components.push(comp);
+        }
+        Ok((FlowSpecNLRI { components }, offset))
+    }
+
+    /// Create a UDP reflection filter (DNS/NTP/CLDAP/SSDP source port).
     pub fn udp_reflection(dest_prefix: &str, ports: &[u16]) -> Result<Self> {
-        let mut components: Vec<FlowComponent> = Vec::new();
+        if ports.is_empty() {
+            return Err(BgpError::InvalidPrefixLen(0));
+        }
+        let (prefix_len, prefix_octets) = v4_prefix(dest_prefix)?;
+        let mut prefix_value = vec![prefix_len];
+        prefix_value.extend_from_slice(&prefix_octets);
 
-        // Type 1: Destination Prefix
-        let ip: std::net::IpAddr = dest_prefix.parse()?;
-        match ip {
-            std::net::IpAddr::V4(v4) => {
-                let prefix_bytes = v4.octets().to_vec();
-                components.push(FlowComponent {
+        let eq1 = FlowOperator {
+            operand_len: 1,
+            ..FlowOperator::default()
+        };
+        // Ports are 2-octet quantities; each gets its own pair so the `e` bit
+        // lands on the last one (RFC 8955 §4.2.2.6).
+        let eq2 = FlowOperator {
+            operand_len: 2,
+            ..FlowOperator::default()
+        };
+        let port_pairs: Vec<FlowPair> = ports
+            .iter()
+            .map(|p| FlowPair {
+                operator: eq2,
+                value: p.to_be_bytes().to_vec(),
+            })
+            .collect();
+
+        Ok(FlowSpecNLRI {
+            components: vec![
+                FlowComponent {
                     comp_type: FlowComponentType::DestPrefix,
-                    operator: FlowOperator {
-                        equality: true,
-                        and_mask: false,
-                        operand_len: 0,
-                        not: false,
-                        mask: false,
-                        reserved: false,
-                    },
-                    value: prefix_bytes,
-                });
-            }
-            std::net::IpAddr::V6(_) => return Err(BgpError::InvalidPrefixLen(129)), // IPv6 Flowspec in RFC 8956
-        }
-
-        // Type 3: IP Protocol = UDP (17)
-        components.push(FlowComponent {
-            comp_type: FlowComponentType::IpProtocol,
-            operator: FlowOperator {
-                equality: true,
-                and_mask: false,
-                operand_len: 0,
-                not: false,
-                mask: false,
-                reserved: false,
-            },
-            value: vec![17],
-        });
-
-        // Type 6: Source Port — concatenated port bytes as one component
-        // (RFC 8955 §4.2.2 allows multiple operands per component; keep one
-        // component per type so encode() ordering is never violated.)
-        let mut value = Vec::with_capacity(ports.len() * 2);
-        for port in ports {
-            value.extend_from_slice(&port.to_be_bytes());
-        }
-        components.push(FlowComponent {
-            comp_type: FlowComponentType::SourcePort,
-            operator: FlowOperator {
-                equality: true,
-                and_mask: false,
-                operand_len: 0,
-                not: false,
-                mask: false,
-                reserved: false,
-            },
-            value,
-        });
-
-        Ok(FlowSpecNLRI { components })
-    }
-
-    /// Create RTBH FlowSpec (dest prefix + protocol equality match-all)
-    pub fn rtbh_flowspec(dest_prefix: &str) -> Result<Self> {
-        let ip: std::net::IpAddr = dest_prefix.parse()?;
-        match ip {
-            std::net::IpAddr::V4(v4) => {
-                let prefix_bytes = v4.octets().to_vec();
-                Ok(FlowSpecNLRI {
-                    components: vec![FlowComponent {
-                        comp_type: FlowComponentType::DestPrefix,
-                        operator: FlowOperator {
-                            equality: true,
-                            and_mask: false,
-                            operand_len: 0,
-                            not: false,
-                            mask: false,
-                            reserved: false,
-                        },
-                        value: prefix_bytes,
+                    pairs: vec![FlowPair {
+                        operator: FlowOperator::default(),
+                        value: prefix_value,
                     }],
-                })
-            }
-            std::net::IpAddr::V6(_) => Err(BgpError::InvalidPrefixLen(129)),
-        }
+                },
+                FlowComponent {
+                    comp_type: FlowComponentType::IpProtocol,
+                    pairs: vec![FlowPair {
+                        operator: eq1,
+                        value: vec![17], // UDP
+                    }],
+                },
+                FlowComponent {
+                    comp_type: FlowComponentType::SourcePort,
+                    pairs: port_pairs,
+                },
+            ],
+        })
+    }
+
+    /// Create RTBH FlowSpec (dest prefix only).
+    pub fn rtbh_flowspec(dest_prefix: &str) -> Result<Self> {
+        let (prefix_len, prefix_octets) = v4_prefix(dest_prefix)?;
+        let mut prefix_value = vec![prefix_len];
+        prefix_value.extend_from_slice(&prefix_octets);
+        Ok(FlowSpecNLRI {
+            components: vec![FlowComponent {
+                comp_type: FlowComponentType::DestPrefix,
+                pairs: vec![FlowPair {
+                    operator: FlowOperator::default(),
+                    value: prefix_value,
+                }],
+            }],
+        })
     }
 }
 
-/// FlowSpec action communities (Transitive Extended Community Type 0x07)
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FlowSpecAction {
-    pub sub_type: u8,   // 0x01-0x09
-    pub value: Vec<u8>, // action-specific value
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl FlowSpecAction {
-    /// traffic-rate action: 8 octets (rate bytes/sec + burst bytes/sec)
-    pub fn traffic_rate(rate: u32, burst: u32) -> Self {
-        FlowSpecAction {
-            sub_type: crate::attributes::flowspec_communities::TRAFFIC_RATE,
-            value: {
-                let mut v = rate.to_be_bytes().to_vec();
-                v.extend_from_slice(&burst.to_be_bytes());
-                v
-            },
-        }
+    #[test]
+    fn numeric_operator_bit_layout_matches_rfc8955_figure2() {
+        // e=1, a=0, len=01 (2 octets), lt=0, gt=1, eq=1  ->  "!= 2 octets"
+        let op = FlowOperator {
+            operand_len: 2,
+            equality: true,
+            greater_than: true,
+            ..FlowOperator::default()
+        };
+        assert_eq!(op.encode(true), 0x80 | 0x10 | 0x02 | 0x01);
+        assert_eq!(op.encode(false), 0x10 | 0x02 | 0x01);
+
+        let (decoded, eol) = FlowOperator::decode(op.encode(true));
+        assert!(eol);
+        assert_eq!(decoded.operand_len, 2);
+        assert!(decoded.equality && decoded.greater_than && !decoded.less_than);
     }
 
-    /// traffic-action: drop = 0x01
-    pub fn traffic_action_drop() -> Self {
-        FlowSpecAction {
-            sub_type: crate::attributes::flowspec_communities::TRAFFIC_ACTION,
-            value: vec![0x01],
-        }
+    #[test]
+    fn bitmask_operator_sets_not_and_match_bits() {
+        let op = FlowOperator {
+            operand_len: 1,
+            not: true,
+            mask: true,
+            ..FlowOperator::default()
+        };
+        let encoded = op.encode(false);
+        assert_eq!(encoded & 0x08, 0x08, "not bit");
+        assert_eq!(encoded & 0x01, 0x01, "match bit");
+        let (decoded, _) = FlowOperator::decode(encoded);
+        assert!(decoded.not && decoded.mask);
+    }
+
+    #[test]
+    fn prefix_component_has_no_operator_octet() {
+        // /24 198.51.100.0 -> 0x18 then 3 octets
+        let fs = FlowSpecNLRI::rtbh_flowspec("198.51.100.1").unwrap();
+        let encoded = fs.encode().unwrap();
+        assert_eq!(encoded[0], 0x01, "type 1 DestPrefix");
+        assert_eq!(encoded[1], 32, "/32 prefix length");
+        assert_eq!(&encoded[2..6], &[198, 51, 100, 1]);
+        assert_eq!(encoded.len(), 6, "no length or operator octet");
+    }
+
+    #[test]
+    fn port_component_emits_one_pair_per_port_with_single_end_bit() {
+        let fs = FlowSpecNLRI::udp_reflection("198.51.100.0", &[53, 123]).unwrap();
+        let src = &fs.components[2];
+        assert_eq!(src.pairs.len(), 2);
+        let encoded = src.encode();
+        // type(1) + [op(1)+val(2)] + [op(1)+val(2)]
+        assert_eq!(encoded.len(), 7);
+        // First pair has e=0, second has e=1.
+        assert_eq!(encoded[1] & 0x80, 0x00);
+        assert_eq!(encoded[4] & 0x80, 0x80);
+    }
+
+    #[test]
+    fn decode_rejects_out_of_order_and_bad_types() {
+        assert!(FlowSpecNLRI::decode(&[0x03, 0x80 | 0x01, 17]).is_ok());
+        assert!(FlowSpecNLRI::decode(&[0x63, 0x80]).is_err());
+    }
+
+    #[test]
+    fn roundtrip_survives_encode_decode() {
+        let fs = FlowSpecNLRI::udp_reflection("198.51.100.0", &[53, 123]).unwrap();
+        let encoded = fs.encode().unwrap();
+        let (decoded, used) = FlowSpecNLRI::decode(&encoded).unwrap();
+        assert_eq!(used, encoded.len());
+        assert_eq!(decoded, fs);
     }
 }

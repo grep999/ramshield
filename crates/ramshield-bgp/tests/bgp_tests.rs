@@ -1,84 +1,66 @@
 use ramshield_bgp::BgpConfig;
 use ramshield_bgp::BgpError;
 use ramshield_bgp::attributes::{communities, encode_community};
-use ramshield_bgp::flowspec::{FlowComponent, FlowComponentType, FlowOperator, FlowSpecNLRI};
+use ramshield_bgp::flowspec::{
+    FlowComponent, FlowComponentType, FlowOperator, FlowPair, FlowSpecNLRI,
+};
 use ramshield_bgp::fsm::{BgpEvent, BgpFsm, BgpState};
 use ramshield_bgp::messages::{BgpHeader, BgpMsgType};
 use ramshield_bgp::rtbh::{announce_rtbh, encode_rtbh_communities, verify_rtbh_communities};
 
-// Helper: default equality operator for tests
+// Helper: default equality operator (1-octet value)
 fn default_op() -> FlowOperator {
-    FlowOperator {
-        equality: true,
-        and_mask: false,
-        operand_len: 0,
-        not: false,
-        mask: false,
-        reserved: false,
-    }
+    FlowOperator::default()
 }
 
 #[test]
 fn test_flow_component_encode_decode_operator() {
-    // Equality operator with length 0: 0x01
-    let op = FlowOperator {
-        equality: true,
-        and_mask: false,
-        operand_len: 0,
-        not: false,
-        mask: false,
-        reserved: false,
-    };
-    assert_eq!(op.encode(), 0x01);
+    // RFC 8955 Figure 2 numeric operator:
+    //   e(0x80) a(0x40) len(bits 5-4) 0(0x08) lt(0x04) gt(0x02) eq(0x01)
+    let eq1 = FlowOperator::default(); // equality, 1 octet
+    assert_eq!(eq1.encode(false), 0x01);
 
-    // Inequality AND mask with operand length 3: bit 0=0, bit1=1, bits2-4=011 => 0x02 | 0x0C = 0x0E
-    let op2 = FlowOperator {
-        equality: false,
-        and_mask: true,
-        operand_len: 3,
-        not: false,
-        mask: false,
-        reserved: false,
+    // equality + 2-octet value, end-of-list set
+    let eq2 = FlowOperator {
+        operand_len: 2,
+        ..FlowOperator::default()
     };
-    assert_eq!(op2.encode(), 0x0E);
+    assert_eq!(eq2.encode(true), 0x80 | 0x10 | 0x01);
+    assert_eq!(eq2.encode(false), 0x10 | 0x01);
 
-    // NOT match: bit 5 set => 0x20
-    let op3 = FlowOperator {
-        equality: true,
-        and_mask: false,
-        operand_len: 0,
+    // bitmask: not(0x08) + match(0x01), 1 octet
+    let bm = FlowOperator {
         not: true,
-        mask: false,
-        reserved: false,
-    };
-    assert_eq!(op3.encode(), 0x21);
-
-    // Mask operation: bit 6 set => 0x40
-    let op4 = FlowOperator {
-        equality: true,
-        and_mask: false,
-        operand_len: 0,
-        not: false,
         mask: true,
-        reserved: false,
+        ..FlowOperator::default()
     };
-    assert_eq!(op4.encode(), 0x41);
+    assert_eq!(bm.encode(false), 0x09);
+
+    // decode recovers both forms
+    let (d, eol) = FlowOperator::decode(eq2.encode(true));
+    assert!(eol);
+    assert_eq!(d.operand_len, 2);
+    assert!(d.equality);
+    let (d2, _) = FlowOperator::decode(bm.encode(false));
+    assert!(d2.not && d2.mask);
 }
 
 #[test]
 fn test_flow_component_roundtrip() {
+    // Type 1 DestPrefix carries <prefix_len, prefix_octets>: no length octet
+    // and no operator octet (RFC 8955 4.2.2.1).
     let comp = FlowComponent {
         comp_type: FlowComponentType::DestPrefix,
-        operator: default_op(),
-        value: vec![10, 0, 0, 0],
+        pairs: vec![FlowPair {
+            operator: FlowOperator::default(),
+            value: vec![24, 10, 0, 0],
+        }],
     };
     let encoded = comp.encode();
-    // Type(1) + Length(1) + Operator(1) + Value(4) = 7 bytes
-    assert_eq!(encoded.len(), 7);
-    assert_eq!(encoded[0], 1);
-    assert_eq!(encoded[1], 5); // operator(1) + value(4) = 5
-    assert_eq!(encoded[2], 0x01); // equality operator
-    assert_eq!(&encoded[3..7], &[10, 0, 0, 0]);
+    assert_eq!(encoded, vec![0x01, 24, 10, 0, 0]);
+    let (decoded, used) = FlowComponent::decode(&encoded).unwrap();
+    assert_eq!(used, encoded.len());
+    assert_eq!(decoded, comp);
 }
 
 #[test]
@@ -88,18 +70,24 @@ fn test_flowspec_nlri_ordering() {
         components: vec![
             FlowComponent {
                 comp_type: FlowComponentType::DestPrefix,
-                operator: default_op(),
-                value: vec![1],
+                pairs: vec![FlowPair {
+                    operator: default_op(),
+                    value: vec![24, 10, 0, 0],
+                }],
             },
             FlowComponent {
                 comp_type: FlowComponentType::IpProtocol,
-                operator: default_op(),
-                value: vec![17],
+                pairs: vec![FlowPair {
+                    operator: default_op(),
+                    value: vec![17],
+                }],
             },
             FlowComponent {
                 comp_type: FlowComponentType::SourcePort,
-                operator: default_op(),
-                value: vec![0, 53],
+                pairs: vec![FlowPair {
+                    operator: default_op(),
+                    value: vec![0, 53],
+                }],
             },
         ],
     };
@@ -110,13 +98,17 @@ fn test_flowspec_nlri_ordering() {
         components: vec![
             FlowComponent {
                 comp_type: FlowComponentType::IpProtocol,
-                operator: default_op(),
-                value: vec![17],
+                pairs: vec![FlowPair {
+                    operator: default_op(),
+                    value: vec![17],
+                }],
             },
             FlowComponent {
                 comp_type: FlowComponentType::DestPrefix,
-                operator: default_op(),
-                value: vec![1],
+                pairs: vec![FlowPair {
+                    operator: default_op(),
+                    value: vec![24, 10, 0, 0],
+                }],
             },
         ],
     };
@@ -130,13 +122,17 @@ fn test_flowspec_nlri_ordering() {
         components: vec![
             FlowComponent {
                 comp_type: FlowComponentType::DestPrefix,
-                operator: default_op(),
-                value: vec![1],
+                pairs: vec![FlowPair {
+                    operator: default_op(),
+                    value: vec![24, 10, 0, 0],
+                }],
             },
             FlowComponent {
                 comp_type: FlowComponentType::DestPrefix,
-                operator: default_op(),
-                value: vec![2],
+                pairs: vec![FlowPair {
+                    operator: default_op(),
+                    value: vec![24, 10, 0, 1],
+                }],
             },
         ],
     };
@@ -271,7 +267,10 @@ fn test_flowspec_udp_reflection() {
     assert_eq!(nflri.components[1].comp_type, FlowComponentType::IpProtocol);
     assert_eq!(nflri.components[2].comp_type, FlowComponentType::SourcePort);
     // Single SourcePort component with concatenated port bytes (53, 123)
-    assert_eq!(nflri.components[2].value, vec![0u8, 53, 0u8, 123]);
+    // Two {op, value} pairs, each 2 octets: 53 and 123
+    assert_eq!(nflri.components[2].pairs.len(), 2);
+    assert_eq!(nflri.components[2].pairs[0].value, vec![0u8, 53]);
+    assert_eq!(nflri.components[2].pairs[1].value, vec![0u8, 123]);
     // encode() must succeed (no duplicate component type)
     let _ = nflri.encode().unwrap();
 }
@@ -320,7 +319,7 @@ fn test_flowspec_rtbh() {
     let fs = FlowSpecNLRI::rtbh_flowspec("198.51.100.1").unwrap();
     assert_eq!(fs.components.len(), 1);
     assert_eq!(fs.components[0].comp_type, FlowComponentType::DestPrefix);
-    assert_eq!(fs.components[0].value, vec![198, 51, 100, 1]);
+    assert_eq!(fs.components[0].pairs[0].value, vec![32, 198, 51, 100, 1]);
 
     // IPv6 should fail
     assert!(FlowSpecNLRI::rtbh_flowspec("2001:db8::1").is_err());

@@ -81,6 +81,10 @@ impl PathAttr {
         buf.push(self.flags.encode());
         buf.push(self.attr_type as u8);
         if self.flags.extended_len || len > 255 {
+            // RFC 4271 §5: the Extended Length flag MUST be set whenever the
+            // attribute is longer than 255 octets. Encoding a 2-byte length
+            // without the flag desynchronises the peer's parser.
+            buf[0] |= 0x10;
             buf.extend_from_slice(&(len as u16).to_be_bytes());
         } else {
             buf.push(len as u8);
@@ -219,15 +223,18 @@ impl ExtendedCommunity {
     }
 }
 
-/// FlowSpec Transitive Extended Community (Type 0x07, RFC 8955 Section 7)
+/// FlowSpec Transitive Extended Community (RFC 8955 §7)
 pub mod flowspec_communities {
-    pub const TRAFFIC_RATE: u8 = 0x01; // rate (4) + burst (4)
-    pub const TRAFFIC_ACTION: u8 = 0x02; // drop=1, sample=2, redirect=3
-    pub const REDIRECT: u8 = 0x03; // IPv4 next-hop (4) or IPv6 (16)
-    pub const TRAFFIC_MARKING: u8 = 0x04; // DSCP value (4)
-    pub const REDIRECT_IP: u8 = 0x05; // Extended next-hop
-    pub const RT_REDIRECT: u8 = 0x08; // AS-specific or IPv4/IPv6
-    pub const TRAFFIC_REMARKING: u8 = 0x09; // DSCP remarking
+    /// Sub-type 0x06: rate as IEEE-754 float32 bytes/second (§7.1).
+    pub const TRAFFIC_RATE_BYTES: u8 = 0x06;
+    /// Sub-type 0x07: terminal/sample bitmask (§7.3).
+    pub const TRAFFIC_ACTION: u8 = 0x07;
+    /// Sub-Type 0x08: redirect to a 2-octet AS + 4-octet value (§7.4).
+    pub const REDIRECT: u8 = 0x08;
+    pub const TRAFFIC_MARKING: u8 = 0x09;
+    pub const REDIRECT_IP: u8 = 0x05;
+    pub const RT_REDIRECT: u8 = 0x08;
+    pub const TRAFFIC_REMARKING: u8 = 0x09;
 }
 
 /// MP_REACH_NLRI attribute (Type 14) — RFC 4760
@@ -261,4 +268,105 @@ pub mod safi {
     pub const FLOW_SPEC_V4: u8 = 133; // IPv4 FlowSpec (RFC 8955)
     pub const FLOW_SPEC_VPN_V4: u8 = 134; // VPNv4 FlowSpec
     pub const FLOW_SPEC_V6: u8 = 133; // IPv6 FlowSpec (RFC 8956) — same SAFI
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extended_length_flag_is_set_when_attribute_exceeds_255_octets() {
+        // RFC 4271 §5: the flag MUST be set whenever a 2-byte length is used.
+        let attr = PathAttr {
+            flags: PathAttrFlags {
+                optional: true,
+                transitive: false,
+                partial: false,
+                extended_len: false,
+            },
+            attr_type: PathAttrType::Community,
+            value: vec![0u8; 300],
+        };
+        let encoded = attr.encode();
+        assert_eq!(&encoded[0..1], &[0x90], "optional | extended length");
+        let len = u16::from_be_bytes([encoded[2], encoded[3]]) as usize;
+        assert_eq!(len, 300);
+        assert_eq!(&encoded[4..], &vec![0u8; 300][..]);
+    }
+
+    #[test]
+    fn short_attribute_keeps_one_byte_length_and_clears_flag() {
+        let attr = PathAttr {
+            flags: PathAttrFlags {
+                optional: true,
+                transitive: false,
+                partial: false,
+                extended_len: false,
+            },
+            attr_type: PathAttrType::Community,
+            value: vec![0u8; 6],
+        };
+        let encoded = attr.encode();
+        assert_eq!(&encoded[0..1], &[0x80], "optional, no extended length");
+        assert_eq!(encoded[2] as usize, 6);
+    }
+}
+
+impl ExtendedCommunity {
+    /// FlowSpec traffic-rate action (RFC 8955 §7.1, sub-type 0x06).
+    ///
+    /// Layout: type 0x80 (transitive, generic two-octet AS), sub-type 0x06,
+    /// 2-octet informational AS id, then the rate as an IEEE-754 float32 in
+    /// bytes/second. Rate 0 means "discard all traffic".
+    pub fn flowspec_traffic_rate(rate_bytes_per_sec: f32) -> Self {
+        let mut value = [0u8; 7];
+        value[0] = flowspec_communities::TRAFFIC_RATE_BYTES;
+        // value[1..3] is the informational AS number; 0 is valid.
+        value[3..7].copy_from_slice(&rate_bytes_per_sec.to_bits().to_be_bytes());
+        ExtendedCommunity {
+            // 0x80 = transitive, generic (non-AS-specific) two-octet type.
+            type_field: 0x80,
+            value,
+        }
+    }
+
+    /// FlowSpec traffic-action "discard" (RFC 8955 §7.3, sub-type 0x07).
+    ///
+    /// Bitmask: terminal (T, bit 47) + sample off. Terminal means evaluation
+    /// stops at this rule, which is what a discard action requires.
+    pub fn flowspec_discard() -> Self {
+        let mut value = [0u8; 7];
+        value[0] = flowspec_communities::TRAFFIC_ACTION;
+        value[6] = 0x01; // T bit = terminal action
+        ExtendedCommunity {
+            type_field: 0x80,
+            value,
+        }
+    }
+}
+
+#[cfg(test)]
+mod action_tests {
+    use super::*;
+
+    #[test]
+    fn traffic_rate_uses_float32_and_subtype_0x06() {
+        // RFC 8955 §7.1: type 0x80, sub-type 0x06, 2-octet AS, float32 rate.
+        let ec = ExtendedCommunity::flowspec_traffic_rate(1_000_000.0);
+        let enc = ec.encode();
+        assert_eq!(enc[0], 0x80, "transitive generic two-octet type");
+        assert_eq!(enc[1], 0x06, "traffic-rate-bytes sub-type");
+        assert_eq!(&enc[2..4], &[0, 0], "informational AS 0");
+        let rate = f32::from_bits(u32::from_be_bytes([enc[4], enc[5], enc[6], enc[7]]));
+        assert!((rate - 1_000_000.0).abs() < 1.0, "rate round-trips");
+    }
+
+    #[test]
+    fn discard_sets_terminal_bit() {
+        // RFC 8955 §7.3: terminal bit is the low bit of the last octet.
+        let enc = ExtendedCommunity::flowspec_discard().encode();
+        assert_eq!(enc[0], 0x80);
+        assert_eq!(enc[1], 0x07, "traffic-action sub-type");
+        assert_eq!(enc[7] & 0x01, 0x01, "terminal action set");
+    }
 }

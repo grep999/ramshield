@@ -49,6 +49,21 @@ impl BgpSession {
             config.peer_ip,
             config.peer_port,
         );
+        // RFC 4271 §6.4: a BGP identifier of 0 is invalid and the peer MUST
+        // respond with a Bad BGP Identifier NOTIFICATION. Derive a stable
+        // non-zero identifier from the peer address rather than failing
+        // startup; operators with more than one speaker set it explicitly.
+        session.router_id = if config.router_id == 0 {
+            match config.peer_ip {
+                IpAddr::V4(v4) => u32::from_be_bytes(v4.octets()).max(1),
+                IpAddr::V6(v6) => {
+                    let o = v6.octets();
+                    u32::from_be_bytes([o[12], o[13], o[14], o[15]]).max(1)
+                }
+            }
+        } else {
+            config.router_id
+        };
         if let Some(key) = &config.peer_shared_key {
             session.set_hmac_key(key.clone());
         }
@@ -88,8 +103,19 @@ impl BgpSession {
         self.send_raw(&buf).await
     }
 
-    /// Send UPDATE message (FlowSpec or RTBH)
-    pub async fn send_update(&mut self, nlri: FlowSpecNLRI) -> Result<()> {
+    /// Send UPDATE message (FlowSpec NLRI with an action community).
+    ///
+    /// Wire layout per RFC 8955 §4.2.2: the FlowSpec NLRI is carried in
+    /// MP_REACH_NLRI with SAFI 133. Components are <type, op/value...> as
+    /// produced by [`FlowSpecNLRI::encode`].
+    ///
+    /// `action` MUST be present: a FlowSpec rule with no traffic-filtering
+    /// action (RFC 8955 §5) is a no-op on every conforming router.
+    pub async fn send_update(
+        &mut self,
+        nlri: FlowSpecNLRI,
+        action: crate::attributes::ExtendedCommunity,
+    ) -> Result<()> {
         let encoded = nlri.encode()?;
         let mp_reach = MpReachNlri {
             afi: 1,    // IPv4
@@ -98,7 +124,7 @@ impl BgpSession {
             nlri: encoded,
         }
         .encode();
-        let attr = PathAttr {
+        let mp_reach_attr = PathAttr {
             flags: PathAttrFlags {
                 optional: true,
                 transitive: true,
@@ -109,8 +135,21 @@ impl BgpSession {
             value: mp_reach,
         }
         .encode();
-        // marker(16) + length(2) + type(1) + withdrawn_len(2) + attr_len(2) + attrs
-        let total_len = 23usize + attr.len();
+        // RFC 8955 §5: the filtering action travels as a transitive
+        // extended community (type 0x07 for generic traffic filtering).
+        let ext_attr = PathAttr {
+            flags: PathAttrFlags {
+                optional: true,
+                transitive: true,
+                partial: false,
+                extended_len: false,
+            },
+            attr_type: PathAttrType::ExtendedCommunities,
+            value: action.encode().to_vec(),
+        }
+        .encode();
+        let attrs = [mp_reach_attr, ext_attr].concat();
+        let total_len = 23usize + attrs.len();
         let length = u16::try_from(total_len)
             .map_err(|_| BgpError::Session(format!("UPDATE too large: {total_len}")))?;
         if length > 4096 {
@@ -121,8 +160,8 @@ impl BgpSession {
         buf.extend_from_slice(&length.to_be_bytes());
         buf.push(2); // UPDATE
         buf.extend_from_slice(&0u16.to_be_bytes()); // withdrawn routes
-        buf.extend_from_slice(&(attr.len() as u16).to_be_bytes());
-        buf.extend_from_slice(&attr);
+        buf.extend_from_slice(&(attrs.len() as u16).to_be_bytes());
+        buf.extend_from_slice(&attrs);
         self.send_raw(&buf).await
     }
 
@@ -130,6 +169,48 @@ impl BgpSession {
     pub async fn send_keepalive(&mut self) -> Result<()> {
         let data = BgpKeepalive::encode();
         self.send_raw(&data).await
+    }
+
+    /// Run the keepalive timer until the stream closes.
+    ///
+    /// RFC 4271 §4.5: the speaker MUST send a KEEPALIVE every
+    /// `keepalive_time` seconds while Established, otherwise the peer's hold
+    /// timer expires and the session is torn down.
+    ///
+    /// ponytail: one interval task per session, no timer wheel. Upgrade path:
+    /// a shared timer wheel once a node runs more than a handful of sessions.
+    pub async fn run_keepalive(
+        &mut self,
+        keepalive_time: u16,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<()> {
+        let period = tokio::time::Duration::from_secs(keepalive_time.max(1) as u64);
+        let mut ticker = tokio::time::interval(period);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Consume the immediate first tick so the first write waits a full
+        // interval after OPEN/KEEPALIVE negotiation.
+        ticker.tick().await;
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {
+                    if let Err(e) = self.send_keepalive().await {
+                        self.connected = false;
+                        return Err(e);
+                    }
+                }
+                _ = shutdown.changed() => {
+                    if *shutdown.borrow() {
+                        self.connected = false;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Negotiated keepalive interval, derived from the accepted hold time.
+    pub fn negotiated_keepalive(&self) -> u16 {
+        (self.hold_time / 3).max(1)
     }
 
     /// Send NOTIFICATION message
