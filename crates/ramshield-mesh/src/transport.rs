@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{Mutex, Semaphore, oneshot, watch},
     task::JoinSet,
@@ -34,8 +34,10 @@ const MAX_RECOVERY_FRAMES: usize = 8_192;
 const MAX_RECOVERY_TOTAL_FRAMES: usize = 8_192;
 const MAX_INCOMING_QUEUE: usize = 2048;
 const MAX_PEER_READERS: usize = 256;
+const MAX_READERS_PER_IP: usize = 4;
 const MAX_CONFIGURED_PEERS: usize = 256;
 const MAX_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60);
 const MAX_PEER_WRITERS: usize = 64;
 const MAX_PEER_WRITE_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_APPLICATION_ACK_WAIT: Duration = Duration::from_secs(2);
@@ -563,6 +565,8 @@ pub struct MeshHandle {
     auth_key: Arc<Vec<u8>>,
     incoming: Arc<Mutex<VecDeque<IncomingFrame>>>,
     readers: Arc<Semaphore>,
+    /// ponytail: one global map, per-IP semaphores if fairness matters.
+    reader_ips: Arc<StdMutex<HashMap<IpAddr, usize>>>,
     writers: Arc<Semaphore>,
     shutdown_tx: watch::Sender<bool>,
     sync_states: Arc<Mutex<HashMap<SocketAddr, PeerSyncState>>>,
@@ -621,6 +625,7 @@ impl MeshHandle {
             auth_key: Arc::new(auth_key),
             incoming: Arc::new(Mutex::new(VecDeque::new())),
             readers: Arc::new(Semaphore::new(MAX_PEER_READERS)),
+            reader_ips: Arc::new(StdMutex::new(HashMap::new())),
             writers: Arc::new(Semaphore::new(MAX_PEER_WRITERS)),
             shutdown_tx,
             sync_states: Arc::new(Mutex::new(sync_states)),
@@ -639,12 +644,20 @@ impl MeshHandle {
                         }
                     }
                     accepted = listener.accept() => match accepted {
-                        Ok((stream, _)) => {
+                        Ok((stream, peer)) => {
                             let h = accept_handle.clone();
-                            let Ok(permit) = h.readers.clone().try_acquire_owned() else { continue; };
+                            let ip = peer.ip();
+                            if !h.try_reserve_reader(ip) {
+                                continue;
+                            }
+                            let Ok(permit) = h.readers.clone().try_acquire_owned() else {
+                                h.release_reader(ip);
+                                continue;
+                            };
                             tokio::spawn(async move {
                                 h.read_stream(stream).await;
                                 drop(permit);
+                                h.release_reader(ip);
                             });
                         }
                         Err(error) => {
@@ -660,9 +673,12 @@ impl MeshHandle {
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_millis(25));
             tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            let mut maintenance_tick = tokio::time::interval(MAINTENANCE_INTERVAL);
+            maintenance_tick.tick().await;
             loop {
                 tokio::select! {
                     _ = tick.tick() => sync_handle.broadcast_sync().await,
+                    _ = maintenance_tick.tick() => sync_handle.blocklist.maintenance(now_ms()),
                     changed = sync_shutdown.changed() => {
                         if changed.is_err() || *sync_shutdown.borrow_and_update() {
                             break;
@@ -677,6 +693,32 @@ impl MeshHandle {
     /// on this signal; outbound sends are bounded by their deadline.
     pub fn shutdown(&self) {
         self.shutdown_tx.send_replace(true);
+    }
+
+    /// Reserve one reader slot for `ip`. Excess connections are dropped
+    /// before they can hold a global reader permit or start a task.
+    fn try_reserve_reader(&self, ip: IpAddr) -> bool {
+        let mut ips = self.reader_ips.lock().unwrap_or_else(|e| e.into_inner());
+        let count = ips.entry(ip).or_insert(0);
+        if *count >= MAX_READERS_PER_IP {
+            return false;
+        }
+        *count += 1;
+        true
+    }
+
+    fn release_reader(&self, ip: IpAddr) {
+        let mut ips = self.reader_ips.lock().unwrap_or_else(|e| e.into_inner());
+        let empty = match ips.get_mut(&ip) {
+            Some(count) => {
+                *count -= 1;
+                *count == 0
+            }
+            None => false,
+        };
+        if empty {
+            ips.remove(&ip);
+        }
     }
 
     /// Local node identity carried by authenticated WAL batches.
@@ -1311,19 +1353,6 @@ impl MeshHandle {
         if env.node_id == self.node_id {
             return;
         }
-        // Replay defence: the timestamp check alone admits a captured frame
-        // for the whole skew window. Remember each accepted nonce per peer.
-        {
-            let mut cache = self.replay_cache.lock().await;
-            if !cache.insert(env.node_id, env.ts_ms, env.nonce, now_ms()) {
-                warn!(
-                    node_id = env.node_id,
-                    nonce = env.nonce,
-                    "mesh frame rejected: replayed nonce"
-                );
-                return;
-            }
-        }
         // Only a configured peer may deliver frames, and every peer is
         // verified with its own key: a peer can never authenticate as the
         // local node or as another configured peer.
@@ -1341,6 +1370,19 @@ impl MeshHandle {
                 "mesh frame rejected: authentication or timestamp invalid"
             );
             return;
+        }
+        // Replay defence: remember each accepted nonce per peer so a captured
+        // frame is rejected on its second copy even inside the skew window.
+        {
+            let mut cache = self.replay_cache.lock().await;
+            if !cache.insert(env.node_id, env.ts_ms, env.nonce, now_ms()) {
+                warn!(
+                    node_id = env.node_id,
+                    nonce = env.nonce,
+                    "mesh frame rejected: replayed nonce"
+                );
+                return;
+            }
         }
         if matches!(
             &env.body,
@@ -1488,9 +1530,7 @@ impl MeshHandle {
             Ok(frame) => frame,
             Err(_) => return,
         };
-        if stream.write_all(&ack_frame).await.is_ok() {
-            let _ = stream.write_all(b"\n").await;
-        }
+        let _ = write_ack_with_timeout(&mut stream, &ack_frame, MAX_PEER_WRITE_TIMEOUT).await;
     }
 }
 /// Validate the public library boundary as well as the higher-level config.
@@ -1740,6 +1780,19 @@ fn chunk_sync(blocks: &[ClusterBlockDelta], unblocks: &[ClusterUnblockDelta]) ->
     messages
 }
 
+/// A peer that never reads its ACK must not pin a reader slot forever.
+async fn write_ack_with_timeout<W: AsyncWrite + Unpin>(
+    stream: &mut W,
+    frame: &[u8],
+    timeout: Duration,
+) -> std::io::Result<()> {
+    with_timeout(timeout, async {
+        stream.write_all(frame).await?;
+        stream.write_all(b"\n").await
+    })
+    .await
+}
+
 async fn with_timeout<F, T>(timeout: Duration, future: F) -> std::io::Result<T>
 where
     F: Future<Output = std::io::Result<T>>,
@@ -1863,13 +1916,12 @@ impl ReplayCache {
         while entries.front().is_some_and(|(ts, _)| *ts < cutoff) {
             entries.pop_front();
         }
-        if entries.iter().any(|(_, n)| *n == nonce) {
+        if entries.iter().any(|(_, n)| *n == nonce) || entries.len() >= MAX_REPLAY_CACHE {
+            // All remaining entries are inside the skew window; dropping one
+            // would let its replay pass the timestamp check.
             return false;
         }
         entries.push_back((ts_ms, nonce));
-        while entries.len() > MAX_REPLAY_CACHE {
-            entries.pop_front();
-        }
         true
     }
 }
@@ -1877,11 +1929,12 @@ impl ReplayCache {
 #[cfg(test)]
 mod frame_tests {
     use super::{
-        AckEnvelope, Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_SYNC_FRAME_ENTRIES, MeshHandle,
-        MeshMessage, MeshMutationKind, MeshPeer, PeerSendOutcome, RecoveryWireMessage,
-        ReplicatedMeshMutation, TombstoneAck, WireMessage, canonical_tombstone_acks, chunk_sync,
-        now_ms, push_frame_bytes, read_bounded_frame, read_bounded_frame_with_timeout, sign,
-        valid_message, valid_tombstone_acks, validate_bind_args, verify, with_timeout,
+        AckEnvelope, Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_PEER_READERS,
+        MAX_READERS_PER_IP, MAX_SYNC_FRAME_ENTRIES, MeshHandle, MeshMessage, MeshMutationKind,
+        MeshPeer, PeerSendOutcome, RecoveryWireMessage, ReplicatedMeshMutation, TombstoneAck,
+        WireMessage, canonical_tombstone_acks, chunk_sync, now_ms, push_frame_bytes,
+        read_bounded_frame, read_bounded_frame_with_timeout, sign, valid_message,
+        valid_tombstone_acks, validate_bind_args, verify, with_timeout, write_ack_with_timeout,
     };
     use crate::aworset::{
         AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta, PeerEpoch,
@@ -1893,7 +1946,7 @@ mod frame_tests {
         sync::Arc,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use tokio::net::{TcpListener, TcpStream};
 
     /// Bind a pair of mesh handles to two distinct local ports.
     ///
@@ -2820,9 +2873,21 @@ mod frame_tests {
             frame_count: 2,
             tombstone_acks: tampered,
         });
+        let tampered_envelope = Envelope {
+            body: tampered_body.clone(),
+            ..envelope.clone()
+        };
+        let wire = serde_json::to_vec(&tampered_envelope).expect("tampered wire frame");
+        let parsed: Envelope = serde_json::from_slice(&wire).expect("parse tampered frame");
         let tampered_payload =
-            serde_json::to_vec(&(envelope.ts_ms, envelope.node_id, &tampered_body))
+            serde_json::to_vec(&(parsed.ts_ms, parsed.nonce, parsed.node_id, &parsed.body))
                 .expect("tampered payload");
+        assert_eq!(
+            serde_json::to_vec(&(parsed.ts_ms, parsed.nonce, parsed.node_id, &tampered_body))
+                .expect("sender-side payload"),
+            tampered_payload,
+            "tampered payload must use the receiver's canonical tuple shape"
+        );
         assert!(
             !verify(NODE_B_KEY, &tampered_payload, &envelope.mac),
             "a modified tombstone acknowledgment must fail MAC verification"
@@ -2947,5 +3012,120 @@ mod frame_tests {
             sign(&[7u8; 16], &b).expect("sign b"),
             "the same body signed twice must not produce the same MAC"
         );
+    }
+
+    #[test]
+    fn per_ip_reader_limit_drops_excess_connection_without_reader_permit() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async {
+            let mut bound = None;
+            for _ in 0..8 {
+                let candidate = reserve_ports(1).await.remove(0);
+                let handle = MeshHandle::bind(
+                    1,
+                    Arc::new(AworsetBlocklist::new(1)),
+                    candidate,
+                    Vec::new(),
+                    NODE_A_KEY.to_vec(),
+                )
+                .await;
+                match handle {
+                    Ok(handle) => {
+                        bound = Some((handle, candidate));
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+                    Err(error) => panic!("bind: {error}"),
+                }
+            }
+            let (h, address) = bound.expect("bind mesh handle");
+            let ip = address.ip();
+            for _ in 0..MAX_READERS_PER_IP {
+                assert!(h.try_reserve_reader(ip), "per-IP slot available");
+            }
+            assert!(
+                !h.try_reserve_reader(ip),
+                "an excess connection from the same IP must be rejected"
+            );
+            assert_eq!(h.readers.available_permits(), MAX_PEER_READERS);
+
+            let mut extra = TcpStream::connect(address).await.expect("connect");
+            let mut buf = [0u8; 8];
+            match tokio::time::timeout(Duration::from_millis(500), extra.read(&mut buf)).await {
+                Ok(Ok(0)) => {}
+                Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+                other => panic!("excess connection was not closed: {other:?}"),
+            }
+            assert_eq!(
+                h.readers.available_permits(),
+                MAX_PEER_READERS,
+                "rejected connection must not take a global reader permit"
+            );
+
+            let other_ip: IpAddr = "127.0.0.2".parse().expect("other IP");
+            assert!(h.try_reserve_reader(other_ip), "other IPs stay independent");
+            h.release_reader(ip);
+            assert!(h.try_reserve_reader(ip), "released slot is reusable");
+            h.shutdown();
+        });
+    }
+
+    #[test]
+    fn stalled_ack_write_times_out_and_writes_delimiter() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("test runtime");
+        runtime.block_on(async {
+            // Buffer full and no reader: the ACK write cannot complete.
+            let (mut writer, _reader) = tokio::io::duplex(1);
+            let write = tokio::time::timeout(
+                Duration::from_millis(500),
+                write_ack_with_timeout(&mut writer, &[b'a'; 64], Duration::from_millis(10)),
+            )
+            .await
+            .expect("stalled ACK write must be bounded");
+            assert_eq!(write.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+
+            let (mut writer, mut reader) = tokio::io::duplex(128);
+            write_ack_with_timeout(&mut writer, b"ack", Duration::from_millis(100))
+                .await
+                .expect("bounded ACK write");
+            drop(writer);
+            let mut frame = Vec::new();
+            reader.read_to_end(&mut frame).await.expect("read ACK");
+            assert_eq!(frame, b"ack\n");
+        });
+    }
+
+    #[test]
+    fn replay_cache_rejects_new_frames_when_full_inside_skew_window() {
+        let mut cache = super::ReplayCache::default();
+        let now = 1_000_000;
+        for nonce in 1..=super::MAX_REPLAY_CACHE as u64 {
+            assert!(cache.insert(7, now, nonce, now));
+        }
+        assert!(
+            !cache.insert(7, now, super::MAX_REPLAY_CACHE as u64 + 1, now),
+            "all entries are still fresh; evicting one would admit its replay"
+        );
+        assert!(
+            !cache.insert(7, now, 1, now),
+            "a cached replay stays rejected at capacity"
+        );
+        let later = now + super::MAX_CLOCK_SKEW_MS + 1;
+        assert!(
+            cache.insert(7, later, super::MAX_REPLAY_CACHE as u64 + 1, later),
+            "entries outside the skew window are evicted"
+        );
+        let bounded: usize = cache
+            .seen
+            .values()
+            .map(std::collections::VecDeque::len)
+            .sum();
+        assert_eq!(bounded, 1);
     }
 }

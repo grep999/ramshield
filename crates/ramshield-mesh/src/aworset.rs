@@ -1,7 +1,6 @@
 //! Add-Wins Observed-Remove Set (AWORSet) CRDT primitives
 //!
-//! Two layers:
-//! - `Aworset`: generic string-keyed CRDT set (add/remove/merge/contains).
+//! One layer:
 //! - `AworsetBlocklist`: IP-keyed blocklist CRDT from the fleet integration
 //!   contract — `record_ban` produces a `ClusterBlockDelta` for gossip,
 //!   `merge_delta` absorbs one, `is_blocked` answers membership.
@@ -51,6 +50,11 @@ pub(crate) type BlockState = (u64, u64, u64, u8);
 pub struct AworsetSnapshot {
     pub blocks: Vec<ClusterBlockDelta>,
     pub unblocks: Vec<ClusterUnblockDelta>,
+    /// Removal-time peer-ack epoch per tombstone key. Not derivable from
+    /// `unblocks`; without it a restart resets the GC safety watermark.
+    /// Missing in legacy checkpoints, where the old behavior is retained.
+    #[serde(default)]
+    pub tombstone_epochs: Vec<((IpAddr, u32, Uuid), u64)>,
 }
 
 impl AworsetSnapshot {
@@ -82,6 +86,16 @@ impl AworsetSnapshot {
             }
             if !unblock_keys.insert((delta.ip, delta.dot.node_id, delta.dot.incarnation)) {
                 return Err("duplicate mesh tombstone key in checkpoint");
+            }
+        }
+        let mut epoch_keys = std::collections::HashSet::new();
+        for (key, _) in &self.tombstone_epochs {
+            let (ip, node_id, incarnation) = *key;
+            if ip.is_unspecified() || node_id == 0 || incarnation.is_nil() {
+                return Err("invalid mesh tombstone epoch in checkpoint");
+            }
+            if !epoch_keys.insert(*key) {
+                return Err("duplicate mesh tombstone epoch key in checkpoint");
             }
         }
         Ok(())
@@ -142,61 +156,6 @@ pub struct ClusterBlockDelta {
 pub struct ClusterUnblockDelta {
     pub ip: IpAddr,
     pub dot: ClusterDot,
-}
-
-/// Thread-safe AWORSet implementation using DashSet for lock-free concurrent access.
-pub struct Aworset {
-    /// Internal storage: element key -> set of dots (add operations)
-    elements: dashmap::DashSet<String>,
-    /// Tombstones: removed elements keyed by element name -> dot
-    tombstones: dashmap::DashSet<String>,
-}
-
-impl Aworset {
-    pub fn new() -> Self {
-        Self {
-            elements: dashmap::DashSet::new(),
-            tombstones: dashmap::DashSet::new(),
-        }
-    }
-
-    pub fn add(&self, key: String) {
-        self.tombstones.remove(&key);
-        self.elements.insert(key);
-    }
-
-    pub fn remove(&self, key: String) {
-        self.elements.remove(&key);
-        self.tombstones.insert(key);
-    }
-
-    pub fn contains(&self, key: &str) -> bool {
-        self.elements.contains(key) && !self.tombstones.contains(key)
-    }
-
-    pub fn len(&self) -> usize {
-        self.elements.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.elements.is_empty()
-    }
-
-    /// Merge another AWORSet into this one (CRDT merge operation)
-    pub fn merge(&self, other: &Aworset) {
-        for key in other.elements.iter() {
-            self.elements.insert(key.clone());
-        }
-        for key in other.tombstones.iter() {
-            self.tombstones.insert(key.clone());
-        }
-    }
-}
-
-impl Default for Aworset {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// IP-keyed blocklist CRDT: operation dots per (ip, node), ordered by the
@@ -469,6 +428,11 @@ impl AworsetBlocklist {
                 },
             })
             .collect();
+        let mut tombstone_epochs: Vec<_> = self
+            .tombstones
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().created_at_epoch))
+            .collect();
         blocks.sort_by_key(|delta| {
             (
                 delta.ip,
@@ -485,13 +449,29 @@ impl AworsetBlocklist {
                 delta.dot.counter,
             )
         });
-        AworsetSnapshot { blocks, unblocks }
+        tombstone_epochs.sort_by_key(|(key, _)| *key);
+        AworsetSnapshot {
+            blocks,
+            unblocks,
+            tombstone_epochs,
+        }
     }
 
     /// Merge a checkpoint payload into a fresh or existing CRDT.
     pub fn restore_snapshot(&self, snapshot: &AworsetSnapshot) {
         for delta in &snapshot.unblocks {
             self.merge_unblock_delta(delta);
+        }
+        // Serialize the watermark repair against concurrent merges.
+        {
+            let _mutation_guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
+            for (key, epoch) in &snapshot.tombstone_epochs {
+                if let Some(mut tombstone) = self.tombstones.get_mut(key) {
+                    // Never lower an existing watermark: restoring an older
+                    // checkpoint must not make a newer removal collectable.
+                    tombstone.created_at_epoch = tombstone.created_at_epoch.max(*epoch);
+                }
+            }
         }
         for delta in &snapshot.blocks {
             self.merge_delta(delta);
@@ -545,6 +525,11 @@ impl AworsetBlocklist {
             .snapshot_barrier
             .read()
             .unwrap_or_else(|e| e.into_inner());
+        // Same mutation lock as the merge paths: purge must not remove an
+        // entry between a merge's tombstone check and its publish, nor must
+        // it pass a live-dot check that a merge is about to make stale.
+        // Lock order matches merge_delta: snapshot_barrier.read() first.
+        let _mutation_guard = self.mutation_lock.lock().unwrap_or_else(|e| e.into_inner());
         const TOMBSTONE_HORIZON_MS: u64 = 86_400_000;
         let expired: Vec<((IpAddr, u32, Uuid), u64)> = self
             .entries
@@ -787,6 +772,13 @@ impl AworsetBlocklist {
             false // remove tombstone
         });
     }
+
+    /// Bounded maintenance: prune expired dots, then collect stable tombstones.
+    /// Called by the mesh sync loop every 60s; see `MAINTENANCE_INTERVAL`.
+    pub fn maintenance(&self, now_ms: u64) {
+        self.purge_expired(now_ms);
+        self.gc_tombstones();
+    }
 }
 
 #[cfg(test)]
@@ -799,26 +791,6 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64
-    }
-
-    #[test]
-    fn basic_operations() {
-        let set = Aworset::new();
-        set.add("peer1".to_string());
-        assert!(set.contains("peer1"));
-        set.remove("peer1".to_string());
-        assert!(!set.contains("peer1"));
-    }
-
-    #[test]
-    fn crdt_merge() {
-        let set_a = Aworset::new();
-        let set_b = Aworset::new();
-        set_a.add("item1".to_string());
-        set_b.add("item2".to_string());
-        set_a.merge(&set_b);
-        assert!(set_a.contains("item1"));
-        assert!(set_a.contains("item2"));
     }
 
     #[test]
@@ -1762,5 +1734,156 @@ mod tests {
         let unblocks = snapshot.unblocks;
         assert_eq!(blocks.len(), 0);
         assert_eq!(unblocks.len(), 0);
+    }
+
+    #[test]
+    fn snapshot_roundtrip_preserves_tombstone_created_at_epoch() {
+        let peer = AworsetBlocklist::new(2);
+        let ban = peer.record_ban(IpAddr::from([192, 0, 2, 90]), 60_000, 1);
+        let node = AworsetBlocklist::new(1);
+        node.set_expected_peers([2]);
+        assert!(node.merge_delta(&ban));
+        let ip = ban.ip;
+        node.peer_acks.insert(
+            2,
+            PeerEpoch {
+                peer_node_id: 2,
+                epoch: 7,
+                ..PeerEpoch::default()
+            },
+        );
+        assert_eq!(node.record_unban(ip).len(), 1);
+        assert_eq!(
+            node.tombstones
+                .get(&(ip, ban.dot.node_id, ban.dot.incarnation))
+                .map(|tombstone| tombstone.created_at_epoch),
+            Some(7),
+        );
+
+        let snapshot = node.export_snapshot();
+        assert_eq!(snapshot.tombstone_epochs.len(), 1);
+        assert_eq!(snapshot.tombstone_epochs[0].1, 7);
+        snapshot.validate().expect("epoch payload must validate");
+
+        // Legacy checkpoints without the new field still load.
+        let mut legacy = serde_json::to_value(&snapshot).expect("serialize snapshot");
+        legacy
+            .as_object_mut()
+            .expect("snapshot is an object")
+            .remove("tombstone_epochs");
+        let legacy: AworsetSnapshot = serde_json::from_value(legacy).expect("legacy snapshot");
+        assert!(legacy.tombstone_epochs.is_empty());
+
+        let restored = AworsetBlocklist::new(3);
+        restored.set_expected_peers([2]);
+        restored.restore_snapshot(&snapshot);
+        assert_eq!(
+            restored
+                .tombstones
+                .get(&(ip, ban.dot.node_id, ban.dot.incarnation))
+                .map(|tombstone| tombstone.created_at_epoch),
+            Some(7),
+            "the removal epoch must survive restart"
+        );
+        assert_eq!(restored.export_snapshot(), snapshot);
+
+        // Restart must not weaken GC safety: an ack that is not past the
+        // removal still holds collection back.
+        restored.peer_acks.insert(
+            2,
+            PeerEpoch {
+                peer_node_id: 2,
+                epoch: 7,
+                ..PeerEpoch::default()
+            },
+        );
+        restored.gc_tombstones();
+        assert_eq!(restored.tombstones.len(), 1);
+        restored.peer_acks.insert(
+            2,
+            PeerEpoch {
+                peer_node_id: 2,
+                epoch: 8,
+                ..PeerEpoch::default()
+            },
+        );
+        restored.gc_tombstones();
+        assert!(restored.tombstones.is_empty());
+    }
+
+    #[test]
+    fn purge_expired_is_serialized_with_merge_paths() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Barrier};
+        use std::time::Duration;
+
+        let mesh = Arc::new(AworsetBlocklist::new(1));
+        // Main thread holds the mutation lock; purge must block on it.
+        let lock = mesh.mutation_lock.lock().unwrap();
+        let receiver = mesh.clone();
+        let barrier = Arc::new(Barrier::new(2));
+        let b2 = barrier.clone();
+        let done = Arc::new(AtomicBool::new(false));
+        let done_w = done.clone();
+        let handle = std::thread::spawn(move || {
+            b2.wait();
+            receiver.purge_expired(u64::MAX);
+            done_w.store(true, Ordering::SeqCst);
+        });
+        barrier.wait();
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(
+            !done.load(Ordering::SeqCst),
+            "purge must block while a mutation holds the merge lock"
+        );
+        drop(lock);
+        handle.join().unwrap();
+        assert!(
+            done.load(Ordering::SeqCst),
+            "purge must complete once the merge lock is released"
+        );
+    }
+
+    #[test]
+    fn maintenance_prunes_expired_entries_and_collects_stable_tombstones() {
+        let node = AworsetBlocklist::new(1);
+        node.set_expected_peers([2]);
+        let expired_ip = IpAddr::from([192, 0, 2, 91]);
+        let removed_ip = IpAddr::from([192, 0, 2, 92]);
+        let expired = node.record_ban(expired_ip, 1, 1);
+        node.record_ban(removed_ip, 60_000, 1);
+        node.peer_acks.insert(
+            2,
+            PeerEpoch {
+                peer_node_id: 2,
+                epoch: 1,
+                ..PeerEpoch::default()
+            },
+        );
+        assert_eq!(node.record_unban(removed_ip).len(), 1);
+        node.peer_acks.insert(
+            2,
+            PeerEpoch {
+                peer_node_id: 2,
+                epoch: 2,
+                ..PeerEpoch::default()
+            },
+        );
+
+        node.maintenance(expired.expires_at_ms + 86_400_000);
+
+        // Purge converted the expired dot; its watermark is not yet stable
+        // (ack epoch 2 == removal epoch 2) so GC retained it.
+        assert!(node.entries.is_empty(), "expired dot must be purged");
+        let key = (expired_ip, node.node_id, expired.dot.incarnation);
+        assert!(
+            node.tombstones.contains_key(&key),
+            "purge must record a high-water mark for the expired dot"
+        );
+        assert_eq!(
+            node.tombstones.len(),
+            1,
+            "the earlier removal is stable and must be collected"
+        );
     }
 }
