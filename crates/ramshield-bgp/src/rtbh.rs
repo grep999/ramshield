@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::attributes::communities::{BLACKHOLE, NO_EXPORT};
 use crate::attributes::encode_community;
-use crate::attributes::{MpReachNlri, PathAttr, PathAttrFlags, PathAttrType};
+use crate::attributes::{MpReachNlri, PathAttr, PathAttrFlags, PathAttrType, encode_attrs};
 
 /// RFC 7999 Blackhole Community
 ///
@@ -40,27 +40,6 @@ impl RtbhCommunity {
     }
 }
 
-/// Encode RTBH communities as BGP Extended Communities (8 octets each)
-///
-/// Returns two extended communities: BLACKHOLE + NO_EXPORT
-pub fn encode_rtbh_communities() -> ([u8; 8], [u8; 8]) {
-    let bh = {
-        let mut arr = [0u8; 8];
-        arr[0] = 0x02; // Type: Transitive 2-octet AS-specific (RFC 4360)
-        arr[1..3].copy_from_slice(&BLACKHOLE.0.to_be_bytes()); // ASN
-        arr[3..5].copy_from_slice(&BLACKHOLE.1.to_be_bytes()); // Value
-        arr
-    };
-    let ne = {
-        let mut arr = [0u8; 8];
-        arr[0] = 0x02;
-        arr[1..3].copy_from_slice(&NO_EXPORT.0.to_be_bytes());
-        arr[3..5].copy_from_slice(&NO_EXPORT.1.to_be_bytes());
-        arr
-    };
-    (bh, ne)
-}
-
 /// Announce RTBH prefix with communities
 ///
 /// Creates an UPDATE message component:
@@ -85,8 +64,7 @@ pub fn announce_rtbh(ip: &str) -> Result<Vec<u8>> {
         },
         attr_type: PathAttrType::Origin,
         value: vec![0], // ORIGIN IGP
-    }
-    .encode();
+    };
     let communities_attr = PathAttr {
         flags: PathAttrFlags {
             optional: true,
@@ -96,8 +74,7 @@ pub fn announce_rtbh(ip: &str) -> Result<Vec<u8>> {
         },
         attr_type: PathAttrType::Community,
         value: [bh.as_slice(), ne.as_slice()].concat(),
-    }
-    .encode();
+    };
     // RFC 7999: RTBH uses IPv4 unicast SAFI (1) with a /32 prefix.
     // NLRI encoding: prefix_len(1) | prefix_bytes(ceil(prefix_len/8))
     let mp_reach = MpReachNlri {
@@ -120,12 +97,13 @@ pub fn announce_rtbh(ip: &str) -> Result<Vec<u8>> {
         },
         attr_type: PathAttrType::MpReachNlri,
         value: mp_reach,
-    }
-    .encode();
+    };
 
-    let path_attrs = [origin, communities_attr, mp_reach_attr].concat();
+    let path_attrs = encode_attrs(&[origin, communities_attr, mp_reach_attr])?;
     // marker(16) + length(2) + type(1) + withdrawn_len(2) + attr_len(2) + attrs
-    let length = 23u16 + path_attrs.len() as u16;
+    let total = 23usize + path_attrs.len();
+    let length = u16::try_from(total)
+        .map_err(|_| crate::BgpError::Session(format!("RTBH UPDATE too large: {total}")))?;
     if length > 4096 {
         return Err(crate::BgpError::Session(format!(
             "RTBH UPDATE too large: {length}"

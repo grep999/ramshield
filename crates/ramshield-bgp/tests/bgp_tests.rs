@@ -1,12 +1,12 @@
 use ramshield_bgp::BgpConfig;
 use ramshield_bgp::BgpError;
-use ramshield_bgp::attributes::{communities, encode_community};
+use ramshield_bgp::attributes::{PathAttr, PathAttrType, communities, encode_community};
 use ramshield_bgp::flowspec::{
     FlowComponent, FlowComponentType, FlowOperator, FlowPair, FlowSpecNLRI,
 };
 use ramshield_bgp::fsm::{BgpEvent, BgpFsm, BgpState};
 use ramshield_bgp::messages::{BgpHeader, BgpMsgType};
-use ramshield_bgp::rtbh::{announce_rtbh, encode_rtbh_communities, verify_rtbh_communities};
+use ramshield_bgp::rtbh::{announce_rtbh, verify_rtbh_communities};
 
 // Helper: default equality operator (1-octet value)
 fn default_op() -> FlowOperator {
@@ -28,20 +28,20 @@ fn test_flow_component_encode_decode_operator() {
     assert_eq!(eq2.encode(true), 0x80 | 0x10 | 0x01);
     assert_eq!(eq2.encode(false), 0x10 | 0x01);
 
-    // bitmask: not(0x08) + match(0x01), 1 octet
+    // bitmask (RFC 8955 Figure 3): not(0x02) + match(0x01), 1 octet
     let bm = FlowOperator {
         not: true,
         mask: true,
         ..FlowOperator::default()
     };
-    assert_eq!(bm.encode(false), 0x09);
+    assert_eq!(bm.encode(false), 0x03);
 
     // decode recovers both forms
-    let (d, eol) = FlowOperator::decode(eq2.encode(true));
+    let (d, eol) = FlowOperator::decode(eq2.encode(true), false);
     assert!(eol);
     assert_eq!(d.operand_len, 2);
     assert!(d.equality);
-    let (d2, _) = FlowOperator::decode(bm.encode(false));
+    let (d2, _) = FlowOperator::decode(bm.encode(false), true);
     assert!(d2.not && d2.mask);
 }
 
@@ -143,19 +143,29 @@ fn test_flowspec_nlri_ordering() {
 }
 
 #[test]
-fn test_rtbh_communities_encoding() {
-    let (bh, ne) = encode_rtbh_communities();
-    // BLACKHOLE: type=0x02, ASN=0xFFFF(65535), Value=0x029A(666)
-    assert_eq!(bh[0], 0x02);
-    assert_eq!(&bh[1..3], &0xFFFFu16.to_be_bytes());
-    assert_eq!(&bh[3..5], &0x029Au16.to_be_bytes());
-    assert_eq!(&bh[5..8], &[0u8; 3]);
+fn test_rtbh_announce_carries_standard_communities() {
+    let bh = encode_community(communities::BLACKHOLE.0, communities::BLACKHOLE.1);
+    let ne = encode_community(communities::NO_EXPORT.0, communities::NO_EXPORT.1);
+    assert_eq!(bh, [0xFF, 0xFF, 0x02, 0x9A]);
+    assert_eq!(ne, [0xFF, 0xFF, 0xFF, 0x01]);
 
-    // NO_EXPORT: type=0x02, ASN=0xFFFF, Value=0xFF01(65281)
-    assert_eq!(ne[0], 0x02);
-    assert_eq!(&ne[1..3], &0xFFFFu16.to_be_bytes());
-    assert_eq!(&ne[3..5], &0xFF01u16.to_be_bytes());
-    assert_eq!(&ne[5..8], &[0u8; 3]);
+    // The announced UPDATE must carry the 4-octet standard communities, not
+    // malformed 8-octet extended communities (RFC 7999).
+    let update = announce_rtbh("198.51.100.1").unwrap();
+    let attr_len = u16::from_be_bytes([update[21], update[22]]) as usize;
+    let mut attrs = &update[23..23 + attr_len];
+    let mut found: Option<Vec<u8>> = None;
+    while !attrs.is_empty() {
+        let (attr, used) = PathAttr::decode(attrs).unwrap();
+        attrs = &attrs[used..];
+        if attr.attr_type == PathAttrType::Community {
+            found = Some(attr.value);
+        }
+    }
+    let value = found.expect("COMMUNITY attribute present in RTBH UPDATE");
+    assert_eq!(value, [bh.as_slice(), ne.as_slice()].concat());
+    let parsed: Vec<Vec<u8>> = value.chunks(4).map(|c| c.to_vec()).collect();
+    assert!(verify_rtbh_communities(&parsed));
 }
 
 #[test]
@@ -235,10 +245,19 @@ fn test_bgp_header_verify() {
         Err(BgpError::TooShort { .. })
     ));
 
-    // Bad length
+    // Header-only buffers may declare a body: verify checks framing fields
+    // only; full-frame presence is enforced at the read site.
+    let mut body_len = [0u8; 19];
+    body_len[0..16].copy_from_slice(&[0xFFu8; 16]);
+    body_len[16..18].copy_from_slice(&100u16.to_be_bytes());
+    body_len[18] = 1; // OPEN
+    let hdr = BgpHeader::verify(&body_len).unwrap();
+    assert_eq!(hdr.length, 100);
+
+    // Length outside 19..=4096 is rejected.
     let mut bad_len = [0u8; 19];
     bad_len[0..16].copy_from_slice(&[0xFFu8; 16]);
-    bad_len[16..18].copy_from_slice(&100u16.to_be_bytes()); // length > actual data
+    bad_len[16..18].copy_from_slice(&4097u16.to_be_bytes());
     bad_len[18] = 4;
     assert!(matches!(
         BgpHeader::verify(&bad_len),

@@ -78,3 +78,22 @@ pub enum BgpError {
     #[error("addr parse error: {0}")]
     AddrParse(#[from] std::net::AddrParseError),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_hmac_accepts_valid_tag_and_rejects_wrong_one() {
+        let key = b"shared-key";
+        let message = b"raw bgp message";
+        let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
+        mac.update(message);
+        let tag = mac.finalize().into_bytes();
+        assert!(verify_hmac(message, key, &tag).is_ok());
+        assert!(matches!(
+            verify_hmac(message, key, b"wrong"),
+            Err(BgpError::HmacFailed)
+        ));
+    }
+}

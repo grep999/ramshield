@@ -5,21 +5,22 @@ use std::net::IpAddr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum PathAttrType {
-    Origin = 1,
-    AsPath = 2,
-    NextHop = 3,
-    MultiExitDisc = 4,
-    LocalPref = 5,
-    AtomicAggregate = 6,
-    Aggregator = 7,
-    Community = 8,
-    OriginatorId = 9,
-    ClusterList = 10,
-    MpReachNlri = 14,
-    MpUnreachNlri = 15,
-    ExtendedCommunities = 16,
-    As4Path = 17,
-    As4Aggregator = 18,
+    Origin,
+    AsPath,
+    NextHop,
+    MultiExitDisc,
+    LocalPref,
+    AtomicAggregate,
+    Aggregator,
+    Community,
+    OriginatorId,
+    ClusterList,
+    MpReachNlri,
+    MpUnreachNlri,
+    ExtendedCommunities,
+    As4Path,
+    As4Aggregator,
+    Unknown(u8),
 }
 
 /// Path attribute flags (RFC 4271 Section 5)
@@ -74,12 +75,20 @@ pub struct PathAttr {
 }
 
 impl PathAttr {
-    /// Encode path attribute to bytes
+    /// Encode path attribute to bytes.
+    ///
+    /// Returns an empty `Vec` if the value exceeds 65535 octets: no 2-octet
+    /// length can represent it, and a wrapped length would desync the peer.
+    /// Message builders must use [`encode_attrs`] to turn that sentinel into
+    /// an error instead of silently omitting the attribute.
     pub fn encode(&self) -> Vec<u8> {
         let len = self.value.len();
+        if len > u16::MAX as usize {
+            return Vec::new();
+        }
         let mut buf = Vec::with_capacity(2 + (if self.flags.extended_len { 2 } else { 1 }) + len);
         buf.push(self.flags.encode());
-        buf.push(self.attr_type as u8);
+        buf.push(self.attr_type.code());
         if self.flags.extended_len || len > 255 {
             // RFC 4271 §5: the Extended Length flag MUST be set whenever the
             // attribute is longer than 255 octets. Encoding a 2-byte length
@@ -139,6 +148,22 @@ impl PathAttr {
     }
 }
 
+/// Encode a list of attributes, rejecting an oversized value instead of
+/// silently emitting an empty sentinel from [`PathAttr::encode`].
+pub(crate) fn encode_attrs(attrs: &[PathAttr]) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    for attr in attrs {
+        let encoded = attr.encode();
+        if encoded.is_empty() {
+            return Err(BgpError::Session(
+                "path attribute value exceeds 65535 octets".into(),
+            ));
+        }
+        out.extend_from_slice(&encoded);
+    }
+    Ok(out)
+}
+
 impl PathAttrType {
     pub fn from(b: u8) -> Self {
         match b {
@@ -157,7 +182,29 @@ impl PathAttrType {
             16 => PathAttrType::ExtendedCommunities,
             17 => PathAttrType::As4Path,
             18 => PathAttrType::As4Aggregator,
-            _ => PathAttrType::Origin, // fallback
+            _ => PathAttrType::Unknown(b),
+        }
+    }
+
+    /// Wire code for this attribute type (unknown codes round-trip unchanged).
+    pub fn code(self) -> u8 {
+        match self {
+            PathAttrType::Origin => 1,
+            PathAttrType::AsPath => 2,
+            PathAttrType::NextHop => 3,
+            PathAttrType::MultiExitDisc => 4,
+            PathAttrType::LocalPref => 5,
+            PathAttrType::AtomicAggregate => 6,
+            PathAttrType::Aggregator => 7,
+            PathAttrType::Community => 8,
+            PathAttrType::OriginatorId => 9,
+            PathAttrType::ClusterList => 10,
+            PathAttrType::MpReachNlri => 14,
+            PathAttrType::MpUnreachNlri => 15,
+            PathAttrType::ExtendedCommunities => 16,
+            PathAttrType::As4Path => 17,
+            PathAttrType::As4Aggregator => 18,
+            PathAttrType::Unknown(b) => b,
         }
     }
 }
@@ -292,6 +339,48 @@ mod tests {
         let len = u16::from_be_bytes([encoded[2], encoded[3]]) as usize;
         assert_eq!(len, 300);
         assert_eq!(&encoded[4..], &vec![0u8; 300][..]);
+    }
+
+    #[test]
+    fn unknown_attr_type_preserves_wire_code() {
+        let unknown = PathAttrType::from(0xFF);
+        assert_eq!(unknown, PathAttrType::Unknown(0xFF));
+        assert_eq!(unknown.code(), 0xFF);
+        assert_eq!(
+            PathAttrType::from(PathAttrType::Community.code()),
+            PathAttrType::Community
+        );
+    }
+
+    #[test]
+    fn decoding_unknown_attr_type_does_not_produce_origin() {
+        let (attr, used) = PathAttr::decode(&[0x80, 0xFF, 0x01, 0xAA]).unwrap();
+        assert_eq!(used, 4);
+        assert_eq!(attr.attr_type, PathAttrType::Unknown(0xFF));
+        assert_eq!(attr.value, vec![0xAA]);
+        assert_eq!(
+            attr.encode()[1],
+            0xFF,
+            "re-encoding preserves the original code"
+        );
+    }
+
+    #[test]
+    fn oversized_attribute_does_not_emit_wrapped_length() {
+        let attr = PathAttr {
+            flags: PathAttrFlags {
+                optional: true,
+                transitive: false,
+                partial: false,
+                extended_len: false,
+            },
+            attr_type: PathAttrType::Community,
+            value: vec![0u8; u16::MAX as usize + 1],
+        };
+        // ponytail: empty Vec is the documented failure sentinel; no 2-octet
+        // length can represent this value without desynchronising the peer.
+        assert!(attr.encode().is_empty());
+        assert!(matches!(encode_attrs(&[attr]), Err(BgpError::Session(_))));
     }
 
     #[test]

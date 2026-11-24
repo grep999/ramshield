@@ -89,9 +89,12 @@ pub fn apply_trigger(
             std::net::IpAddr::V4(v4) => Some(announce_rtbh(&v4.to_string())),
             std::net::IpAddr::V6(_) => None,
         };
-        if announce.is_some() {
-            trigger.engaged_at = Some(std::time::Instant::now());
-            trigger.disengage_timer = Some(std::time::Instant::now());
+        // Latch only a successfully encoded announce: an Err or an IPv6
+        // peer (no RTBH message) must leave the trigger unlatched.
+        if let Some(Ok(_)) = &announce {
+            let now = std::time::Instant::now();
+            trigger.engaged_at = Some(now);
+            trigger.disengage_timer = Some(now);
         }
         announce
     } else if trigger.should_disengage() {
@@ -105,6 +108,7 @@ pub fn apply_trigger(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::BgpConfig;
 
     #[test]
     fn test_schmitt_disengage_blocked_by_recent_flap() {
@@ -140,5 +144,28 @@ mod tests {
         u.flap_count = u16::MAX;
         u.record_flap();
         assert_eq!(u.flap_count, u16::MAX);
+    }
+
+    #[test]
+    fn apply_trigger_does_not_latch_ipv6_peer() {
+        let mut cfg = BgpConfig {
+            peer_ip: "2001:db8::1".parse().unwrap(),
+            ..BgpConfig::default()
+        };
+        let mut t = SchmittTrigger::new(1, 3);
+        t.record_flap();
+        assert!(apply_trigger(&mut cfg, &mut t).is_none());
+        assert!(t.engaged_at.is_none());
+        assert!(t.disengage_timer.is_none());
+    }
+
+    #[test]
+    fn apply_trigger_latches_successful_announce() {
+        let mut cfg = BgpConfig::default();
+        let mut t = SchmittTrigger::new(1, 3);
+        t.record_flap();
+        assert!(matches!(apply_trigger(&mut cfg, &mut t), Some(Ok(_))));
+        assert!(t.engaged_at.is_some());
+        assert!(t.disengage_timer.is_some());
     }
 }

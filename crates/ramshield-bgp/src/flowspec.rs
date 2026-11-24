@@ -30,6 +30,15 @@ impl FlowComponentType {
             FlowComponentType::DestPrefix | FlowComponentType::SourcePrefix
         )
     }
+
+    /// Bitmask operator (Figure 3) is used only by TCP Flags (Type 9) and
+    /// Fragment (Type 12). RFC 8955 §4.2.2.9, §4.2.2.12.
+    fn is_bitmask(self) -> bool {
+        matches!(
+            self,
+            FlowComponentType::TcpFlags | FlowComponentType::Fragment
+        )
+    }
 }
 
 /// Operator encoding for FlowSpec components (RFC 8955 §4.2.1)
@@ -57,7 +66,7 @@ pub struct FlowOperator {
     pub less_than: bool,
     /// Greater-than comparison (numeric operator, bit 1).
     pub greater_than: bool,
-    /// Logical negation (bitmask operator, bit 2).
+    /// Logical negation (bitmask operator, bit 1).
     pub not: bool,
     /// Bitwise match `(data AND value) == value` (bitmask operator, bit 0).
     pub mask: bool,
@@ -98,9 +107,10 @@ impl FlowOperator {
         };
         b |= len_bits << 4;
         if self.mask || self.not {
-            // Bitmask operator: bit 2 = not, bit 0 = match.
+            // Bitmask operator (RFC 8955 Figure 3): bits 3-2 reserved, set to
+            // zero here, bit 1 = not, bit 0 = match.
             if self.not {
-                b |= 0x08;
+                b |= 0x02;
             }
             if self.mask {
                 b |= 0x01;
@@ -119,15 +129,17 @@ impl FlowOperator {
         b
     }
 
-    /// Decode operator from a single octet. Returns `(operator, end_of_list)`.
-    pub fn decode(b: u8) -> (Self, bool) {
+    /// Decode operator from a single octet. `bitmask` selects the Figure 3
+    /// layout for component types 9 and 12; RFC 8955 §4.2.1 says the operator
+    /// is chosen by component type, not by a reserved-bit discriminator.
+    /// Returns `(operator, end_of_list)`.
+    pub fn decode(b: u8, bitmask: bool) -> (Self, bool) {
         let end_of_list = b & 0x80 != 0;
         let len_bits = (b >> 4) & 0x03;
         let operand_len = 1u8 << len_bits;
-        // Bit 3 is the discriminator: set means bitmask operator (§4.2.1.2).
-        let bitmask = b & 0x08 != 0;
+        // Bits 3 and 2 are reserved (MUST be ignored on decode).
         let (not, mask, less_than, greater_than, equality) = if bitmask {
-            (b & 0x08 != 0, b & 0x01 != 0, false, false, false)
+            (b & 0x02 != 0, b & 0x01 != 0, false, false, false)
         } else {
             (false, false, b & 0x04 != 0, b & 0x02 != 0, b & 0x01 != 0)
         };
@@ -252,7 +264,7 @@ impl FlowComponent {
                     got: buf.len(),
                 });
             }
-            let (operator, end_of_list) = FlowOperator::decode(buf[offset]);
+            let (operator, end_of_list) = FlowOperator::decode(buf[offset], comp_type.is_bitmask());
             offset += 1;
             let len = operator.operand_len as usize;
             if buf.len() < offset + len {
@@ -310,9 +322,15 @@ impl FlowSpecNLRI {
     pub fn decode(buf: &[u8]) -> Result<(Self, usize)> {
         let mut components = Vec::new();
         let mut offset = 0;
+        let mut previous = 0u8;
         while offset < buf.len() {
             let (comp, used) = FlowComponent::decode(&buf[offset..])?;
             offset += used;
+            let current = comp.comp_type as u8;
+            if current <= previous {
+                return Err(BgpError::ComponentOrdering);
+            }
+            previous = current;
             components.push(comp);
         }
         Ok((FlowSpecNLRI { components }, offset))
@@ -402,7 +420,7 @@ mod tests {
         assert_eq!(op.encode(true), 0x80 | 0x10 | 0x02 | 0x01);
         assert_eq!(op.encode(false), 0x10 | 0x02 | 0x01);
 
-        let (decoded, eol) = FlowOperator::decode(op.encode(true));
+        let (decoded, eol) = FlowOperator::decode(op.encode(true), false);
         assert!(eol);
         assert_eq!(decoded.operand_len, 2);
         assert!(decoded.equality && decoded.greater_than && !decoded.less_than);
@@ -417,9 +435,9 @@ mod tests {
             ..FlowOperator::default()
         };
         let encoded = op.encode(false);
-        assert_eq!(encoded & 0x08, 0x08, "not bit");
-        assert_eq!(encoded & 0x01, 0x01, "match bit");
-        let (decoded, _) = FlowOperator::decode(encoded);
+        // RFC 8955 Figure 3: not = bit 1, m = bit 0; bits 3-2 reserved zero.
+        assert_eq!(encoded, 0x02 | 0x01);
+        let (decoded, _) = FlowOperator::decode(encoded, true);
         assert!(decoded.not && decoded.mask);
     }
 
@@ -451,6 +469,8 @@ mod tests {
     fn decode_rejects_out_of_order_and_bad_types() {
         assert!(FlowSpecNLRI::decode(&[0x03, 0x80 | 0x01, 17]).is_ok());
         assert!(FlowSpecNLRI::decode(&[0x63, 0x80]).is_err());
+        // Type 5 followed by Type 1 violates RFC 8955 §4.2 strict ordering.
+        assert!(FlowSpecNLRI::decode(&[0x05, 0x81, 0x01, 0x01, 0x00]).is_err());
     }
 
     #[test]

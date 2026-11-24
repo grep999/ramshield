@@ -60,8 +60,10 @@ impl BgpHeader {
         );
         let msg_type = BgpMsgType::try_from(buf[18])?;
 
-        // Length must be at least 19 and at most 4096
-        if !(19..=4096).contains(&length) || buf.len() < length as usize {
+        // Length must be at least 19 and at most 4096. Full-frame presence is
+        // enforced where the body is read (session.rs) — verify() is also
+        // called on a bare 19-octet header before the body is available.
+        if !(19..=4096).contains(&length) {
             return Err(BgpError::TooShort {
                 expected: length as usize,
                 got: buf.len(),

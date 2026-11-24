@@ -3,8 +3,27 @@ use crate::flowspec::FlowSpecNLRI;
 use crate::messages::BgpKeepalive;
 use crate::{BgpError, Result};
 use std::net::{IpAddr, SocketAddr};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Derive a non-zero BGP identifier from the peer address (FNV-1a, low 16 bits).
+/// ponytail: 16 bits can collide; configure router_id explicitly for large
+/// iBGP meshes where a collision matters.
+fn peer_derived_router_id(peer_ip: IpAddr) -> u32 {
+    let bytes = match peer_ip {
+        IpAddr::V4(v4) => v4.octets().to_vec(),
+        IpAddr::V6(v6) => v6.octets().to_vec(),
+    };
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for b in bytes {
+        hash = (hash ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    0xFFFF_0000u32 | (hash as u16) as u32
+}
 
 /// BGP TCP session management (TCP/179)
 pub struct BgpSession {
@@ -24,6 +43,12 @@ pub struct BgpSession {
     connected: bool,
     /// Negotiated hold time (seconds), set by send_open
     hold_time: u16,
+    /// Explicit keepalive override from config; falls back to hold/3
+    keepalive_override: Option<u16>,
+    /// Reconnect attempt ceiling from config (default 10)
+    max_reconnect_attempts: u8,
+    /// Deadline for a single socket write (test-overridable)
+    write_timeout: Duration,
     /// Optional HMAC key for peer authentication
     hmac_key: Option<Vec<u8>>,
 }
@@ -40,6 +65,9 @@ impl BgpSession {
             peer_router_id: 0,
             connected: false,
             hold_time: 0,
+            keepalive_override: None,
+            max_reconnect_attempts: 10,
+            write_timeout: WRITE_TIMEOUT,
             hmac_key: None,
         }
     }
@@ -52,21 +80,22 @@ impl BgpSession {
             config.peer_ip,
             config.peer_port,
         );
-        // RFC 4271 §6.4: a BGP identifier of 0 is invalid and the peer MUST
-        // respond with a Bad BGP Identifier NOTIFICATION. Derive a stable
-        // non-zero identifier from the peer address rather than failing
-        // startup; operators with more than one speaker set it explicitly.
-        session.router_id = if config.router_id == 0 {
-            match config.peer_ip {
-                IpAddr::V4(v4) => u32::from_be_bytes(v4.octets()).max(1),
-                IpAddr::V6(v6) => {
-                    let o = v6.octets();
-                    u32::from_be_bytes([o[12], o[13], o[14], o[15]]).max(1)
-                }
-            }
-        } else {
+        // RFC 4271 §6.4: a BGP identifier of 0 is invalid. High bits 0xFFFF
+        // keep the derived id away from real unicast router-ids (the common
+        // case that the peer uses its own address) and the §6.7 collision
+        // check. In iBGP an ASN-only derivation collides with the peer's own
+        // derived id, so fold in the peer address.
+        session.router_id = if config.router_id != 0 {
             config.router_id
+        } else if config.local_asn == config.peer_asn {
+            peer_derived_router_id(config.peer_ip)
+        } else {
+            0xFFFF_0000u32 | u32::from(config.local_asn)
         };
+        if config.keepalive_time > 0 {
+            session.keepalive_override = Some(config.keepalive_time);
+        }
+        session.max_reconnect_attempts = config.max_reconnect_attempts;
         if let Some(key) = &config.peer_shared_key {
             session.set_hmac_key(key.clone());
         }
@@ -75,8 +104,9 @@ impl BgpSession {
 
     /// Connect to peer via TCP/179
     pub async fn connect(&mut self) -> Result<()> {
-        let stream = TcpStream::connect(self.peer_addr)
+        let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(self.peer_addr))
             .await
+            .map_err(|_| BgpError::Session("connect timeout".into()))?
             .map_err(BgpError::Io)?;
         stream.set_nodelay(true).map_err(BgpError::Io)?;
         self.stream = Some(stream);
@@ -153,8 +183,7 @@ impl BgpSession {
             },
             attr_type: PathAttrType::MpReachNlri,
             value: mp_reach,
-        }
-        .encode();
+        };
         // RFC 8955 §5: the filtering action travels as a transitive
         // extended community (type 0x07 for generic traffic filtering).
         let ext_attr = PathAttr {
@@ -166,9 +195,8 @@ impl BgpSession {
             },
             attr_type: PathAttrType::ExtendedCommunities,
             value: action.encode().to_vec(),
-        }
-        .encode();
-        let attrs = [mp_reach_attr, ext_attr].concat();
+        };
+        let attrs = crate::attributes::encode_attrs(&[mp_reach_attr, ext_attr])?;
         let total_len = 23usize + attrs.len();
         let length = u16::try_from(total_len)
             .map_err(|_| BgpError::Session(format!("UPDATE too large: {total_len}")))?;
@@ -218,8 +246,10 @@ impl BgpSession {
                         return Err(e);
                     }
                 }
-                _ = shutdown.changed() => {
-                    if *shutdown.borrow() {
+                change = shutdown.changed() => {
+                    // Err means every sender was dropped: the task that
+                    // owns shutdown is gone, so stop instead of spinning.
+                    if change.is_err() || *shutdown.borrow() {
                         self.connected = false;
                         return Ok(());
                     }
@@ -230,7 +260,8 @@ impl BgpSession {
 
     /// Negotiated keepalive interval, derived from the accepted hold time.
     pub fn negotiated_keepalive(&self) -> u16 {
-        (self.hold_time / 3).max(1)
+        self.keepalive_override
+            .unwrap_or_else(|| (self.hold_time / 3).max(1))
     }
 
     /// Send NOTIFICATION message
@@ -272,6 +303,7 @@ impl BgpSession {
             .map_err(BgpError::Io)?;
         raw_buf.extend_from_slice(&header_buf);
 
+        // Header verified in isolation; the full PDU must now be present.
         let hdr = crate::messages::BgpHeader::verify(&header_buf)?;
 
         let body_len = hdr.length as usize - 19;
@@ -282,6 +314,14 @@ impl BgpSession {
                 .map_err(|_| BgpError::Session("read timeout".into()))?
                 .map_err(BgpError::Io)?;
             raw_buf.extend_from_slice(&body);
+        }
+        // Reject a truncated PDU: every byte the header announced must be
+        // present before HMAC verification (RFC 4271 §6).
+        if raw_buf.len() != hdr.length as usize {
+            return Err(BgpError::TooShort {
+                expected: hdr.length as usize,
+                got: raw_buf.len(),
+            });
         }
 
         if let Some(key) = self.hmac_key.as_ref() {
@@ -357,29 +397,32 @@ impl BgpSession {
         } else {
             None
         };
+        let write_timeout = self.write_timeout;
         let stream = self
             .stream
             .as_mut()
             .ok_or(BgpError::Session("not connected".into()))?;
-        stream.write_all(buf).await.map_err(BgpError::Io)?;
+        write_all_with_timeout(stream, buf, write_timeout).await?;
         if let Some(tag) = hmac_tag {
-            stream.write_all(&tag).await.map_err(BgpError::Io)?;
+            write_all_with_timeout(stream, &tag, write_timeout).await?;
         }
         Ok(())
     }
 
-    /// Retry with exponential backoff: 1s, 2s, 4s... max 30s, up to 10 attempts
+    /// Retry with exponential backoff: 1s, 2s, 4s... max 30s, up to the
+    /// configured attempt ceiling (default 10).
     pub async fn retry_connect(&mut self) -> Result<()> {
+        let max_attempts = self.max_reconnect_attempts.max(1);
         let mut delay = tokio::time::Duration::from_secs(1);
         let max_delay = tokio::time::Duration::from_secs(30);
         let mut attempts = 0;
 
-        while attempts < 10 {
+        while attempts < max_attempts {
             match self.connect().await {
                 Ok(()) => return Ok(()),
                 Err(_) => {
                     attempts += 1;
-                    if attempts >= 10 {
+                    if attempts >= max_attempts {
                         return Err(BgpError::Session("max reconnect attempts reached".into()));
                     }
                     tokio::time::sleep(delay).await;
@@ -393,8 +436,134 @@ impl BgpSession {
     }
 }
 
+/// Bounded socket write; cancellation on expiry aborts a pending write.
+async fn write_all_with_timeout<W: AsyncWrite + Unpin>(
+    stream: &mut W,
+    buf: &[u8],
+    limit: Duration,
+) -> Result<()> {
+    tokio::time::timeout(limit, stream.write_all(buf))
+        .await
+        .map_err(|_| BgpError::Session("write timeout".into()))?
+        .map_err(BgpError::Io)
+}
+
 impl Default for BgpSession {
     fn default() -> Self {
         BgpSession::new(65001, 174, IpAddr::from([198, 51, 100, 1]), 179)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BgpSession;
+    use crate::config::BgpConfig;
+
+    #[test]
+    fn from_config_preserves_configured_router_id() {
+        let cfg = BgpConfig {
+            router_id: 0x0A00_0001,
+            ..BgpConfig::default()
+        };
+        assert_eq!(BgpSession::from_config(&cfg).router_id, 0x0A00_0001);
+    }
+
+    #[test]
+    fn from_config_derives_router_id_when_unset() {
+        let cfg = BgpConfig::default();
+        assert_eq!(cfg.router_id, 0);
+        let derived = BgpSession::from_config(&cfg).router_id;
+        assert_eq!(derived, 0xFFFF_0000 | u32::from(cfg.local_asn));
+    }
+
+    #[test]
+    fn from_config_carries_keepalive_and_max_attempts() {
+        let cfg = BgpConfig {
+            keepalive_time: 20,
+            max_reconnect_attempts: 3,
+            hold_time: 90,
+            ..BgpConfig::default()
+        };
+        let session = BgpSession::from_config(&cfg);
+        assert_eq!(session.negotiated_keepalive(), 20);
+        assert_eq!(session.max_reconnect_attempts, 3);
+
+        let defaults = BgpSession::default();
+        assert_eq!(defaults.max_reconnect_attempts, 10);
+        assert_eq!(defaults.negotiated_keepalive(), 1);
+    }
+
+    #[test]
+    fn from_config_ibgp_router_id_uses_peer_address() {
+        let base = BgpConfig {
+            local_asn: 65001,
+            peer_asn: 65001,
+            ..BgpConfig::default()
+        };
+        let a = BgpConfig {
+            peer_ip: "10.0.0.1".parse().unwrap(),
+            ..base.clone()
+        };
+        let b = BgpConfig {
+            peer_ip: "10.0.0.2".parse().unwrap(),
+            ..base
+        };
+        let id_a = BgpSession::from_config(&a).router_id;
+        let id_b = BgpSession::from_config(&b).router_id;
+        assert_ne!(id_a, id_b);
+        assert_ne!(id_a, 0);
+        assert_ne!(id_b, 0);
+        assert_eq!(id_a >> 16, 0xFFFF);
+        assert_eq!(id_b >> 16, 0xFFFF);
+
+        let explicit = BgpConfig {
+            router_id: 0x0A00_0001,
+            ..a
+        };
+        assert_eq!(BgpSession::from_config(&explicit).router_id, 0x0A00_0001);
+    }
+
+    #[tokio::test]
+    async fn run_keepalive_stops_when_sender_dropped() {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        drop(tx);
+        let mut session = BgpSession {
+            connected: true,
+            ..BgpSession::default()
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            session.run_keepalive(60, rx),
+        )
+        .await;
+        assert!(matches!(result, Ok(Ok(()))), "dropped sender must end loop");
+        assert!(!session.is_connected());
+    }
+
+    #[tokio::test]
+    async fn run_keepalive_stops_on_true() {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        tx.send(true).unwrap();
+        let mut session = BgpSession::default();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            session.run_keepalive(60, rx),
+        )
+        .await;
+        assert!(matches!(result, Ok(Ok(()))));
+    }
+
+    #[tokio::test]
+    async fn write_timeout_aborts_pending_write() {
+        // Duplex buffer holds 8 bytes; a larger write can never drain.
+        let (mut writer, _reader) = tokio::io::duplex(8);
+        let buf = vec![0u8; 4096];
+        let result =
+            super::write_all_with_timeout(&mut writer, &buf, std::time::Duration::from_millis(50))
+                .await;
+        assert!(
+            matches!(result, Err(crate::BgpError::Session(ref m)) if m == "write timeout"),
+            "{result:?}"
+        );
     }
 }
