@@ -76,3 +76,34 @@ fn the_smoke_scripts_default_config_exists() {
         "the default config {default} must exist in the tree"
     );
 }
+
+#[test]
+fn auth_profiles_are_separate() {
+    let prod = read("config.baseline.toml");
+    let test = read("config.stress.toml");
+    for required in ["require_auth = true", "require_auth_for_mutations = true"] {
+        assert!(prod.contains(required), "prod profile must set {required}");
+    }
+    assert!(
+        prod.contains("require_auth_for_config = true"),
+        "prod profile must protect dashboard config"
+    );
+    for relaxed in [
+        "require_auth = false",
+        "require_auth_for_mutations = false",
+        "require_auth_for_config = false",
+    ] {
+        assert!(test.contains(relaxed), "test profile must set {relaxed}");
+    }
+    // WAL is deliberately off in the stress profile; the smoke enables it in
+    // its generated copy, never in the source config.
+    assert!(
+        test.contains("enabled = false"),
+        "stress profile must keep WAL disabled at source"
+    );
+    let script = read(SCRIPT);
+    assert!(
+        script.contains("in_wal && /^enabled =/"),
+        "the smoke must enable WAL only in its generated config"
+    );
+}

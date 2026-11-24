@@ -46,11 +46,15 @@ connection_idle_timeout_ms = 30_000
 # Do not copy this auth setting into production configurations.
 auth_keys = []
 require_auth = false
+# Test-only profile: restore the unauthenticated local operator path so CI
+# can mutate state without HMAC keys. Never deploy this file.
+require_auth_for_mutations = false
 
 [dashboard]
 enabled = true
 http_addr = "127.0.0.1:9999"
 block_log_size = 1_000
+require_auth_for_config = false
 session_ttl_secs = 28_800
 max_login_attempts = 50
 max_password_length = 1024

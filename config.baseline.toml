@@ -128,9 +128,9 @@ require_auth_for_mutations = true
 enabled = true
 http_addr = "127.0.0.1:9999"
 block_log_size = 1_000
-# Argon2 PHC hash of admin password. Generate with argon2 CLI.
-# Set before exposing beyond loopback.
-admin_password_hash = ""
+# Argon2 PHC hash of admin password. Leave unset; set the plaintext password
+# via RAMSHIELD_DASHBOARD__ADMIN_PASSWORD in /etc/ramshield/dashboard.env.
+# An empty string is NOT unset — it enables auth with no valid hash (401).
 require_auth_for_config = true
 session_ttl_secs = 28_800
 max_login_attempts = 50

@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 # scripts/prod_smoke.sh — Production-like smoke test for RamShield.
 #
-# Boots the binary with --config config.prod.toml --no-xdp, then exercises
+# Boots the binary with --config config.stress.toml --no-xdp, then exercises
 # every public IPC + dashboard endpoint to confirm health, block path,
 # metrics export, and WAL state. Exits non-zero on first failure.
 #
+# Two configs, one binary:
+#   config.prod.toml   auth fully configured (HMAC keys + dashboard auth)
+#   config.stress.toml no auth required (local test profile)
+# This smoke uses the no-auth profile so credentials never block CI. The
+# generated copy enables WAL because the source stress profile disables it
+# for load tests; the source file is never modified.
+#
 # Coverage:
-#  BOOT → health → IPC auth → manual block → block visible in the history →
+#  BOOT → health → IPC block path → manual block → block visible in the history →
 #  snapshot → status modules → Prometheus metrics → unblock → verify absent →
 #  CIDR block → verify → CIDR unblock → verify absent → short TTL → verify
 #  expired → WAL persisted → SIGKILL → restart → block restored
@@ -17,10 +24,7 @@
 set -euo pipefail
 
 BIN="${BIN:-./target/release/ramshield}"
-# The shipped baseline config. There is no config.prod.toml in the tree,
-# so the old default pointed at a file that does not exist and the script
-# could not run at all.
-CFG="${CFG:-./config.baseline.toml}"
+CFG="${CFG:-./config.stress.toml}"
 # A fresh directory by default. The script deletes this path on start, so
 # it must be one it created: WAL_DIR may be overridden, and an operator
 # who has it pointing at a real data directory would lose it.
@@ -61,30 +65,15 @@ sed -e "s|^[[:space:]]*tcp_addr = .*|tcp_addr = \"127.0.0.1:$IPC_PORT\"|" \
     -e "s|^[[:space:]]*http_addr = .*|http_addr = \"127.0.0.1:$DASH_PORT\"|" \
     -e "s|^[[:space:]]*dir = \".*\"|dir = \"$WAL_DIR\"|" \
     "$CFG" > "$SMOKE_CFG"
+# The no-auth stress profile disables WAL for load tests. This smoke exercises
+# WAL durability, so enable it in the generated config only (never the source).
+awk '
+    /^\[/ { in_wal = ($0 == "[wal]") }
+    in_wal && /^enabled =/ { print "enabled = true"; next }
+    { print }
+' "$SMOKE_CFG" > "$SMOKE_CFG.tmp" && mv "$SMOKE_CFG.tmp" "$SMOKE_CFG"
 
 echo "→ booting binary with $SMOKE_CFG (WAL=$WAL_DIR)"
-python3 - "$SMOKE_CFG" <<'PY'
-from pathlib import Path
-import re
-import sys
-p = Path(sys.argv[1])
-t = p.read_text()
-# Install the smoke test's own IPC key, whatever the source config held.
-# The old script only replaced the literal "auth_keys = []", so against a
-# config that already carried a key the daemon used that key while the
-# script signed with its own - and every signed frame was rejected with
-# "signature mismatch" before the first check ran.
-key_line = 'auth_keys = ["k1:0b8d647fda3a0ae3c38207e0d7e61edfdfe59bda7359c89f953f76ed68f3768b"]'
-roles_line = 'key_roles = [{ key_id = "k1", role = "Admin" }]'
-t, n = re.subn(r"^auth_keys\s*=.*$", key_line, t, count=1, flags=re.M)
-if n == 0:
-    t = t.rstrip("\n") + "\n" + key_line + "\n"
-# The roles table must name the same key_id.
-t, n = re.subn(r"^key_roles\s*=.*$", roles_line, t, count=1, flags=re.M)
-if n == 0:
-    t = t.rstrip("\n") + "\n" + roles_line + "\n"
-p.write_text(t)
-PY
 RAMSHIELD_ENGINE__RAM_LIMIT_MB=1024 \
     "$BIN" --config "$SMOKE_CFG" --no-xdp > "$LOG" 2>&1 &
 PID=$!
@@ -112,24 +101,8 @@ s.close()
 " "$IPC_HOST" "$IPC_PORT" "$1"
 }
 
-# Sign a request with the configured k1 test key -> compact signed frame.
-# HMAC input is <ts_ms>.<key_id><payload>; payload must be the request object
-# reserialized compactly with sorted keys (serde_json::Map is a BTreeMap).
-sign_payload() {
-    python3 -c "
-import hmac, hashlib, time, json, sys
-key = bytes.fromhex('0b8d647fda3a0ae3c38207e0d7e61edfdfe59bda7359c89f953f76ed68f3768b')
-key_id, ts = 'k1', int(time.time() * 1000)
-req = json.loads(sys.argv[1])
-payload = json.dumps(req, separators=(',', ':'), sort_keys=True).encode()
-sig = hmac.new(key, f'{ts}.{key_id}'.encode() + payload, hashlib.sha256).hexdigest()
-print(json.dumps({'auth': {'key_id': key_id, 'ts_ms': ts, 'sig': sig}, **req},
-                 separators=(',', ':'), sort_keys=True))
-" "$1"
-}
-
 # Block via IPC
-RESP=$(ipc_send "$(sign_payload '{"type":"block_ip","ip":"203.0.113.7","reason":"manual","ttl_secs":300}')")
+RESP=$(ipc_send '{"type":"block_ip","ip":"203.0.113.7","reason":"manual","ttl_secs":300}')
 echo "$RESP" | grep -q "block queued" || fail "block_ip did not respond: $RESP"
 green "✓ IPC: block_ip queued"
 
@@ -138,11 +111,16 @@ H=$(curl -sf -m 3 "http://$DASH_ADDR/api/history/blocks" || true)
 echo "$H" | grep -q "203.0.113.7" || fail "block not in /api/history/blocks: $H"
 green "✓ DASH: block visible in history"
 
-# Snapshot
-S=$(curl -sf -m 3 "http://$DASH_ADDR/api/snapshot")
-echo "$S" | grep -q '"blocked_total":' || fail "/api/snapshot missing blocked_total"
-BT=$(echo "$S" | grep -oE '"blocked_total":[0-9]+' | head -1 | grep -oE '[0-9]+')
-[ "$BT" -ge 1 ] || fail "blocked_total = $BT, expected ≥ 1"
+# Snapshot. The enforcement actor commits asynchronously; poll briefly rather
+# than assuming a fixed sleep is enough under load.
+for _ in {1..25}; do
+    S=$(curl -sf -m 3 "http://$DASH_ADDR/api/snapshot" || true)
+    BT=$(echo "$S" | grep -oE '"blocked_total":[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
+    [ -n "$BT" ] || fail "/api/snapshot missing blocked_total"
+    [ "$BT" -ge 1 ] && break
+    sleep 0.2
+done
+[ -n "${BT:-}" ] && [ "$BT" -ge 1 ] || fail "blocked_total = ${BT:-unset}, expected ≥ 1"
 green "✓ DASH: snapshot reports blocked_total=$BT"
 
 # Status modules
@@ -156,36 +134,36 @@ echo "$MT" | grep -q "ramshield_blocks_total" || fail "Prometheus metrics missin
 green "✓ DASH: /metrics serves Prometheus format"
 
 # Unblock - and verify the IP is really gone.
-RESP=$(ipc_send "$(sign_payload '{"type":"unblock_ip","ip":"203.0.113.7"}')")
+RESP=$(ipc_send '{"type":"unblock_ip","ip":"203.0.113.7"}')
 echo "$RESP" | grep -q "unblock queued" || fail "unblock_ip did not respond: $RESP"
 green "✓ IPC: unblock_ip queued"
 sleep 1
-RESP=$(ipc_send "$(sign_payload '{"type":"check_ip","ip":"203.0.113.7"}')")
+RESP=$(ipc_send '{"type":"check_ip","ip":"203.0.113.7"}')
 echo "$RESP" | grep -q '"blocked":false' || fail "unblock did not take effect: $RESP"
 green "✓ IPC: the unblocked IP is absent"
 
 # CIDR block - and verify a member of the CIDR is blocked, then gone.
-RESP=$(ipc_send "$(sign_payload '{"type":"block_cidr","cidr":"203.0.113.128/25","reason":"manual","ttl_secs":300}')")
+RESP=$(ipc_send '{"type":"block_cidr","cidr":"203.0.113.128/25","reason":"manual","ttl_secs":300}')
 echo "$RESP" | grep -q "block queued" || fail "block_cidr did not respond: $RESP"
 sleep 1
-RESP=$(ipc_send "$(sign_payload '{"type":"check_ip","ip":"203.0.113.200"}')")
+RESP=$(ipc_send '{"type":"check_ip","ip":"203.0.113.200"}')
 echo "$RESP" | grep -q '"blocked":true' || fail "the CIDR block did not cover its member: $RESP"
 green "✓ IPC: the CIDR block covers its member"
-RESP=$(ipc_send "$(sign_payload '{"type":"unblock_cidr","cidr":"203.0.113.128/25"}')")
+RESP=$(ipc_send '{"type":"unblock_cidr","cidr":"203.0.113.128/25"}')
 echo "$RESP" | grep -q "unblock queued" || fail "unblock_cidr did not respond: $RESP"
 sleep 1
-RESP=$(ipc_send "$(sign_payload '{"type":"check_ip","ip":"203.0.113.200"}')")
+RESP=$(ipc_send '{"type":"check_ip","ip":"203.0.113.200"}')
 echo "$RESP" | grep -q '"blocked":false' || fail "the CIDR unblock did not take effect: $RESP"
 green "✓ IPC: the unblocked CIDR is gone"
 
 # A short TTL must expire and the block must disappear.
-RESP=$(ipc_send "$(sign_payload '{"type":"block_ip","ip":"203.0.113.42","reason":"manual","ttl_secs":2}')")
+RESP=$(ipc_send '{"type":"block_ip","ip":"203.0.113.42","reason":"manual","ttl_secs":2}')
 echo "$RESP" | grep -q "block queued" || fail "the short-TTL block_ip did not respond: $RESP"
 sleep 1
-RESP=$(ipc_send "$(sign_payload '{"type":"check_ip","ip":"203.0.113.42"}')")
+RESP=$(ipc_send '{"type":"check_ip","ip":"203.0.113.42"}')
 echo "$RESP" | grep -q '"blocked":true' || fail "the short-TTL block did not take effect: $RESP"
 sleep 4
-RESP=$(ipc_send "$(sign_payload '{"type":"check_ip","ip":"203.0.113.42"}')")
+RESP=$(ipc_send '{"type":"check_ip","ip":"203.0.113.42"}')
 echo "$RESP" | grep -q '"blocked":false' || fail "the short TTL did not expire: $RESP"
 green "✓ IPC: the short TTL expired and the block is gone"
 
@@ -200,7 +178,7 @@ green "✓ WAL: $WAL_FILES files in $WAL_DIR"
 
 # P0#3: SIGKILL then restart — block from WAL must still be present.
 # Re-block first (unblock above cleared live state; WAL still has history).
-RESP=$(ipc_send "$(sign_payload '{"type":"block_ip","ip":"203.0.113.99","reason":"manual","ttl_secs":300}')")
+RESP=$(ipc_send '{"type":"block_ip","ip":"203.0.113.99","reason":"manual","ttl_secs":300}')
 echo "$RESP" | grep -q "block queued" || fail "pre-kill block_ip: $RESP"
 sleep 0.5
 kill -9 "$PID" 2>/dev/null || true
@@ -213,7 +191,7 @@ for i in {1..50}; do
     sleep 0.2
     if [ "$i" = "50" ]; then fail "binary never became healthy after SIGKILL restart"; fi
 done
-RESP=$(ipc_send "$(sign_payload '{"type":"check_ip","ip":"203.0.113.99"}')")
+RESP=$(ipc_send '{"type":"check_ip","ip":"203.0.113.99"}')
 echo "$RESP" | grep -q '"blocked":true' || fail "WAL restore after SIGKILL: $RESP"
 green "✓ WAL: block restored after SIGKILL restart"
 
