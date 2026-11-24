@@ -9,7 +9,10 @@ use std::{
     fmt,
     future::Future,
     net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex as StdMutex},
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -235,6 +238,13 @@ impl BroadcastReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Envelope {
     ts_ms: u64,
+    /// Unique per frame. Replays of a captured frame are otherwise accepted
+    /// for the whole MAX_CLOCK_SKEW_MS window, because the timestamp is the
+    /// only freshness signal and the MAC does not cover a counter.
+    /// ponytail: 64 random bits; a per-peer seen-set holds the last
+    /// MAX_REPLAY_CACHE entries. Widen to a sequence counter if a peer ever
+    /// sends more than MAX_REPLAY_CACHE frames inside the skew window.
+    nonce: u64,
     node_id: u32,
     body: WireMessage,
     mac: String,
@@ -393,6 +403,10 @@ impl ReceivedMeshMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AckEnvelope {
     ts_ms: u64,
+    /// Echo of the request nonce, so a captured ACK cannot be replayed to
+    /// satisfy an application acknowledgement either.
+    #[serde(default)]
+    nonce: u64,
     node_id: u32,
     accepted: bool,
     ack_lsn: Option<u64>,
@@ -553,6 +567,9 @@ pub struct MeshHandle {
     shutdown_tx: watch::Sender<bool>,
     sync_states: Arc<Mutex<HashMap<SocketAddr, PeerSyncState>>>,
     receiver_recovery: Arc<StdMutex<HashMap<u32, RecoveryAssembly>>>,
+    /// Nonces already accepted from each peer, so a captured frame cannot be
+    /// replayed inside the clock-skew window.
+    replay_cache: Arc<Mutex<ReplayCache>>,
     sync_epoch: Instant,
 }
 
@@ -565,6 +582,7 @@ impl MeshHandle {
         auth_key: Vec<u8>,
     ) -> std::io::Result<Self> {
         validate_bind_args(node_id, &peers, &auth_key)?;
+        let replay_cache: Arc<Mutex<ReplayCache>> = Arc::new(Mutex::new(ReplayCache::default()));
         let trusted_keys: HashMap<u32, Vec<u8>> = peers
             .iter()
             .map(|peer| (peer.node_id, peer.auth_key.clone()))
@@ -607,6 +625,7 @@ impl MeshHandle {
             shutdown_tx,
             sync_states: Arc::new(Mutex::new(sync_states)),
             receiver_recovery: Arc::new(StdMutex::new(HashMap::new())),
+            replay_cache,
             sync_epoch: Instant::now(),
         };
         let accept_handle = handle.clone();
@@ -1187,11 +1206,14 @@ impl MeshHandle {
             })?;
         let body = body.into();
         let ts_ms = now_ms();
-        let payload =
-            serde_json::to_vec(&(ts_ms, self.node_id, &body)).map_err(std::io::Error::other)?;
+        let nonce = next_nonce();
+        let request_nonce = nonce;
+        let payload = serde_json::to_vec(&(ts_ms, nonce, self.node_id, &body))
+            .map_err(std::io::Error::other)?;
         let mac = sign(&self.auth_key, &payload)?;
         let frame = serde_json::to_vec(&Envelope {
             ts_ms,
+            nonce,
             node_id: self.node_id,
             body,
             mac,
@@ -1220,6 +1242,7 @@ impl MeshHandle {
         let ack: AckEnvelope = serde_json::from_slice(ack_line).map_err(std::io::Error::other)?;
         let ack_payload = serde_json::to_vec(&(
             ack.ts_ms,
+            ack.nonce,
             ack.node_id,
             ack.accepted,
             ack.ack_lsn,
@@ -1240,6 +1263,7 @@ impl MeshHandle {
                 )
             })?;
         if ack.node_id != peer_node_id
+            || ack.nonce != request_nonce
             || now_ms().abs_diff(ack.ts_ms) > MAX_CLOCK_SKEW_MS
             || !verify(peer_key, &ack_payload, &ack.mac)
         {
@@ -1280,12 +1304,25 @@ impl MeshHandle {
             Ok(v) => v,
             Err(_) => return,
         };
-        let payload = match serde_json::to_vec(&(env.ts_ms, env.node_id, &env.body)) {
+        let payload = match serde_json::to_vec(&(env.ts_ms, env.nonce, env.node_id, &env.body)) {
             Ok(v) => v,
             Err(_) => return,
         };
         if env.node_id == self.node_id {
             return;
+        }
+        // Replay defence: the timestamp check alone admits a captured frame
+        // for the whole skew window. Remember each accepted nonce per peer.
+        {
+            let mut cache = self.replay_cache.lock().await;
+            if !cache.insert(env.node_id, env.ts_ms, env.nonce, now_ms()) {
+                warn!(
+                    node_id = env.node_id,
+                    nonce = env.nonce,
+                    "mesh frame rejected: replayed nonce"
+                );
+                return;
+            }
         }
         // Only a configured peer may deliver frames, and every peer is
         // verified with its own key: a peer can never authenticate as the
@@ -1383,6 +1420,7 @@ impl MeshHandle {
                 )
             }
         };
+        let request_nonce = env.nonce;
         let (ack_tx, ack_rx) = oneshot::channel();
         let mut q = self.incoming.lock().await;
         let overflow = q.len() >= MAX_INCOMING_QUEUE;
@@ -1425,6 +1463,7 @@ impl MeshHandle {
         let ts_ms = now_ms();
         let ack_payload = match serde_json::to_vec(&(
             ts_ms,
+            request_nonce,
             self.node_id,
             ack_response.accepted,
             ack_response.ack_lsn,
@@ -1439,6 +1478,7 @@ impl MeshHandle {
         };
         let ack_frame = match serde_json::to_vec(&AckEnvelope {
             ts_ms,
+            nonce: request_nonce,
             node_id: self.node_id,
             accepted: ack_response.accepted,
             ack_lsn: ack_response.ack_lsn,
@@ -1788,6 +1828,52 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// Number of recent frame nonces remembered per peer. A replay cache only
+/// has to outlive the acceptance window: a nonce older than
+/// MAX_CLOCK_SKEW_MS can never pass the timestamp check anyway.
+const MAX_REPLAY_CACHE: usize = 4096;
+
+static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Unique-per-process nonce. Combined with the millisecond timestamp and the
+/// HMAC over (ts, nonce, node_id, body), a captured frame is distinguishable
+/// from a fresh one for as long as the timestamp window is open.
+fn next_nonce() -> u64 {
+    let count = NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or_default();
+    // Mix so two processes started in the same nanosecond still differ.
+    (nanos.rotate_left(17) ^ count.wrapping_mul(0x9E37_79B9_7F4A_7C15)) | 1
+}
+
+/// Bounded per-peer nonce replay cache.
+#[derive(Default)]
+struct ReplayCache {
+    seen: HashMap<u32, VecDeque<(u64, u64)>>,
+}
+
+impl ReplayCache {
+    /// `ts_ms` is the frame timestamp: entries older than the skew window are
+    /// evicted on insert, so the cache cannot grow without bound.
+    fn insert(&mut self, node_id: u32, ts_ms: u64, nonce: u64, now: u64) -> bool {
+        let entries = self.seen.entry(node_id).or_default();
+        let cutoff = now.saturating_sub(MAX_CLOCK_SKEW_MS);
+        while entries.front().is_some_and(|(ts, _)| *ts < cutoff) {
+            entries.pop_front();
+        }
+        if entries.iter().any(|(_, n)| *n == nonce) {
+            return false;
+        }
+        entries.push_back((ts_ms, nonce));
+        while entries.len() > MAX_REPLAY_CACHE {
+            entries.pop_front();
+        }
+        true
+    }
+}
+
 #[cfg(test)]
 mod frame_tests {
     use super::{
@@ -1939,8 +2025,14 @@ mod frame_tests {
                     }
                     request.extend_from_slice(&chunk[..read]);
                 }
+                // Echo the request nonce: a real peer cannot know it, so the
+                // ACK is bound to the frame it answers.
+                let request_nonce = serde_json::from_slice::<Envelope>(&request)
+                    .map(|env| env.nonce)
+                    .unwrap_or(0);
                 let ack = AckEnvelope {
                     ts_ms: now_ms(),
+                    nonce: request_nonce,
                     node_id: claimed_node_id,
                     accepted: true,
                     ack_lsn: Some(7),
@@ -1949,6 +2041,7 @@ mod frame_tests {
                 };
                 let payload = serde_json::to_vec(&(
                     ack.ts_ms,
+                    ack.nonce,
                     ack.node_id,
                     ack.accepted,
                     ack.ack_lsn,
@@ -2518,6 +2611,7 @@ mod frame_tests {
         };
         let envelope = Envelope {
             ts_ms: u64::MAX,
+            nonce: u64::MAX,
             node_id: u32::MAX,
             body: WireMessage::Standard(message),
             mac: "0".repeat(64),
@@ -2679,10 +2773,13 @@ mod frame_tests {
         let ts_ms = now_ms();
         let node_id = 2u32;
         // The sender signs the canonical serialization of the body.
-        let payload = serde_json::to_vec(&(ts_ms, node_id, &body)).expect("canonical payload");
+        let nonce = 0x0BAD_C0DE_0BAD_C0DEu64;
+        let payload =
+            serde_json::to_vec(&(ts_ms, nonce, node_id, &body)).expect("canonical payload");
         let mac = sign(NODE_B_KEY, &payload).expect("sign");
         let frame = serde_json::to_vec(&Envelope {
             ts_ms,
+            nonce,
             node_id,
             body: body.clone(),
             mac,
@@ -2692,9 +2789,13 @@ mod frame_tests {
         // The receiver parses the frame into fresh instances and re-serializes
         // the body for verification: the MAC must still verify.
         let envelope: Envelope = serde_json::from_slice(&frame).expect("parse envelope");
-        let receiver_payload =
-            serde_json::to_vec(&(envelope.ts_ms, envelope.node_id, &envelope.body))
-                .expect("receiver payload");
+        let receiver_payload = serde_json::to_vec(&(
+            envelope.ts_ms,
+            envelope.nonce,
+            envelope.node_id,
+            &envelope.body,
+        ))
+        .expect("receiver payload");
         assert_eq!(
             receiver_payload, payload,
             "completion body must serialize identically on both sides"
@@ -2779,6 +2880,72 @@ mod frame_tests {
             serde_json::to_vec(&completion(canonical_first)).expect("body a"),
             serde_json::to_vec(&completion(canonical_second)).expect("body b"),
             "canonical ordering must make the MAC-covered bytes identical"
+        );
+    }
+    /// A captured frame must not be accepted twice inside the skew window.
+    /// The timestamp check alone admits it: the MAC is valid and the clock
+    /// has not moved. This is the regression test for the replay defence.
+    #[test]
+    fn replay_cache_rejects_a_duplicated_nonce() {
+        let mut cache = super::ReplayCache::default();
+        let now = 1_000_000;
+        assert!(
+            cache.insert(7, now, 42, now),
+            "first delivery of a nonce is accepted"
+        );
+        assert!(
+            !cache.insert(7, now, 42, now),
+            "the same frame replayed inside the skew window is rejected"
+        );
+        assert!(
+            cache.insert(7, now, 43, now),
+            "a different nonce from the same peer is accepted"
+        );
+        assert!(
+            cache.insert(8, now, 42, now),
+            "the same nonce from another peer is independent"
+        );
+    }
+
+    /// The cache is bounded by the skew window: once a frame's timestamp
+    /// leaves the window it can never pass verification, so it is evicted
+    /// rather than remembered forever.
+    #[test]
+    fn replay_cache_evicts_entries_outside_the_skew_window() {
+        let mut cache = super::ReplayCache::default();
+        let now = 10_000_000;
+        assert!(cache.insert(7, now, 1, now));
+        let later = now + super::MAX_CLOCK_SKEW_MS + 1;
+        assert!(
+            cache.insert(7, later, 1, later),
+            "an entry older than the skew window is evicted, not replayed"
+        );
+        let bounded: usize = cache
+            .seen
+            .values()
+            .map(std::collections::VecDeque::len)
+            .sum();
+        assert!(
+            bounded <= super::MAX_REPLAY_CACHE,
+            "cache stayed bounded at {bounded}"
+        );
+    }
+
+    /// Two frames signed by the same node must differ in their MAC-covered
+    /// bytes, so a replay is detectable at all.
+    #[test]
+    fn nonce_changes_the_signed_payload() {
+        let body = MeshMessage::Sync {
+            blocks: Vec::new(),
+            unblocks: Vec::new(),
+        };
+        let a = serde_json::to_vec(&(1u64, 1u64, 2u32, &body)).expect("payload a");
+        let b = serde_json::to_vec(&(1u64, 2u64, 2u32, &body)).expect("payload b");
+        assert_ne!(a, b, "nonce must be inside the MAC input");
+        assert_ne!(
+            sign(&[7u8; 16], &a).expect("sign a"),
+            sign(&[7u8; 16], &b).expect("sign b"),
+            "the same body signed twice must not produce the same MAC"
         );
     }
 }
