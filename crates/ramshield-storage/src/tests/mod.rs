@@ -825,6 +825,36 @@ fn update_block_state_preserves_stat_fields() {
     assert_eq!(store.len(), 1);
 }
 
+#[test]
+fn update_block_state_maintains_blocked_index() {
+    use std::net::Ipv4Addr;
+    let store = Store::new(16);
+    let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(10, 96, 0, 9));
+    let ram_lim = 64 * 1024 * 1024;
+    let blocked = || BlockState::Blocked {
+        reason: ramshield_types::BlockReason::HighRps,
+        since_ns: 1,
+    };
+
+    // Vacant path: a new block must enter both the counter and the index.
+    assert!(store.update_block_state(ip, blocked(), ram_lim));
+    assert_eq!(store.get_stats().blocked, 1);
+    assert!(store.get_all_blocked_ips().contains(&ip));
+
+    // Occupied live path: unblock must remove it again.
+    assert!(store.update_block_state(ip, BlockState::Clean, ram_lim));
+    assert_eq!(store.get_stats().blocked, 0);
+    assert!(!store.get_all_blocked_ips().contains(&ip));
+
+    // Occupied live path: re-block must re-add it.
+    store
+        .insert(ip, Value::IpRecord(blank_record(ip)), None, ram_lim)
+        .unwrap();
+    assert!(store.update_block_state(ip, blocked(), ram_lim));
+    assert_eq!(store.get_stats().blocked, 1);
+    assert!(store.get_all_blocked_ips().contains(&ip));
+}
+
 /// Vacant path: creates the record, bumps accounting; capacity-exceeded
 /// path must refuse (stored=false) and leave ram_bytes untouched.
 #[test]

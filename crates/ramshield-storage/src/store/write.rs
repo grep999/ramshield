@@ -471,9 +471,11 @@ impl Store {
         new_state: BlockState,
         ram_limit_bytes: usize,
     ) -> bool {
+        let new_blocked = new_state != BlockState::Clean;
         match self.inner.entry(key) {
             dashmap::Entry::Occupied(mut o) => {
                 let e = o.get_mut();
+                let was_blocked = e.value.is_blocked();
                 // Live IpRecord: mutate only block_state in place.
                 // `if let` can't be hoisted into the condition (no let chains in Rust 2015),
                 // so the nesting is intentional.
@@ -481,18 +483,17 @@ impl Store {
                 if !e.is_expired() {
                     if let Value::IpRecord(rec) = &mut e.value {
                         rec.block_state = new_state;
+                        self.sync_blocked_index(key, was_blocked, new_blocked);
                         return true;
                     }
                 }
                 // Occupied but expired / wrong variant: replace in place,
                 // preserving bookkeeping (TTL counter, blocked index, size).
-                let (was_blocked, old_size) = {
+                let old_size = {
                     let old_value = std::mem::replace(&mut e.value, Value::Counter(0));
-                    let wb = old_value.is_blocked();
-                    let os = std::mem::size_of::<Entry>()
+                    std::mem::size_of::<Entry>()
                         + old_value.heap_bytes()
-                        + std::mem::size_of::<IpAddr>();
-                    (wb, os)
+                        + std::mem::size_of::<IpAddr>()
                 };
                 let rec = IpRecord {
                     ip: key,
@@ -525,10 +526,7 @@ impl Store {
                 if old_had_ttl {
                     self.ttl_entries.fetch_sub(1, Ordering::Relaxed);
                 }
-                if was_blocked {
-                    self.blocked_count.fetch_sub(1, Ordering::Relaxed);
-                    self.blocked_set.remove(&key);
-                }
+                self.sync_blocked_index(key, was_blocked, new_blocked);
                 let new_size = std::mem::size_of::<Entry>() + std::mem::size_of::<IpAddr>();
                 drop(o);
                 self.apply_growth_size_only(old_size, new_size);
@@ -580,10 +578,11 @@ impl Store {
                         Err(observed) => current = observed,
                     }
                 }
-                v.insert(Entry {
+                let _entry = v.insert(Entry {
                     value: Value::IpRecord(rec),
                     expires_at: None,
                 });
+                self.sync_blocked_index(key, false, new_blocked);
                 self.traffic
                     .used_bytes
                     .fetch_add(entry_size as u64, Ordering::Relaxed);
