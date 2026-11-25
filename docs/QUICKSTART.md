@@ -27,6 +27,8 @@ curl -fsS http://127.0.0.1:9999/healthz
 # 1. Same build as above
 # 2. Start with XDP enabled (requires host kernel, interface, driver qualification)
 cp config.baseline.toml config.toml
+# Pre-flight: check privileges, kernel/BTF, interface, bpffs, detectors, peers
+sudo ./target/release/ramshield doctor --config config.toml
 ./target/release/ramshield --config config.toml
 
 # 3. Verify health
