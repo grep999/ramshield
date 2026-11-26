@@ -237,7 +237,9 @@ mod retry_transition_tests {
     fn connect_retry_expiry_retries_without_entering_active() {
         let mut fsm = fsm();
         fsm.process_event(BgpEvent::ManualStart).unwrap();
-        let actions = fsm.process_event(BgpEvent::ConnectRetryTimerExpired).unwrap();
+        let actions = fsm
+            .process_event(BgpEvent::ConnectRetryTimerExpired)
+            .unwrap();
         assert_eq!(fsm.state(), BgpState::Connect);
         assert!(actions.contains(&TransitionAction::EstablishTcp));
         assert!(actions.contains(&TransitionAction::StartConnectRetryTimer));
@@ -247,7 +249,9 @@ mod retry_transition_tests {
     fn active_retry_expiry_returns_to_connect() {
         let mut fsm = fsm();
         fsm.attrs.state = BgpState::Active;
-        let actions = fsm.process_event(BgpEvent::ConnectRetryTimerExpired).unwrap();
+        let actions = fsm
+            .process_event(BgpEvent::ConnectRetryTimerExpired)
+            .unwrap();
         assert_eq!(fsm.state(), BgpState::Connect);
         assert!(actions.contains(&TransitionAction::EstablishTcp));
     }
