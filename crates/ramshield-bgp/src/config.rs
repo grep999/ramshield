@@ -1,5 +1,5 @@
 use crate::{BgpError, Result};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 
 /// BGP configuration — runtime knobs for the standalone speaker
 #[derive(Clone)]
@@ -117,9 +117,10 @@ impl BgpConfig {
         // RFC 4271 §4.2: the BGP Identifier is the identity of this local
         // speaker, not a value that can be synthesized from its peer or ASN.
         // It must be explicitly configured for both eBGP and iBGP.
-        if self.router_id == 0 {
+        let router_id = Ipv4Addr::from(self.router_id);
+        if router_id.is_unspecified() || router_id.is_multicast() || router_id.is_broadcast() {
             return Err(BgpError::Session(
-                "BGP requires an explicit non-zero, locally assigned router_id (RFC 4271 §4.2)"
+                "BGP requires an explicit locally assigned unicast IPv4 router_id (RFC 4271 §4.2)"
                     .into(),
             ));
         }
@@ -282,6 +283,20 @@ mod tests {
                     local_asn: 65001,
                     peer_asn: 174,
                     router_id: 0,
+                    ..base.clone()
+                },
+            ),
+            (
+                "multicast router-id",
+                BgpConfig {
+                    router_id: 0xE000_0001,
+                    ..base.clone()
+                },
+            ),
+            (
+                "limited broadcast router-id",
+                BgpConfig {
+                    router_id: u32::MAX,
                     ..base.clone()
                 },
             ),
