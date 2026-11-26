@@ -303,7 +303,10 @@ mod retry_transition_tests {
         fsm.process_event(BgpEvent::ManualStart).unwrap();
         let actions = fsm.process_event(BgpEvent::TcpConnectFail).unwrap();
         assert_eq!(fsm.state(), BgpState::Idle);
-        assert_eq!(fsm.attrs.connect_retry_counter, 0, "Connect TCP failure must not increment retry counter when DelayOpen is disabled");
+        assert_eq!(
+            fsm.attrs.connect_retry_counter, 0,
+            "Connect TCP failure must not increment retry counter when DelayOpen is disabled"
+        );
         assert_eq!(
             actions,
             vec![
@@ -338,6 +341,7 @@ mod retry_transition_tests {
         assert_eq!(
             actions,
             vec![
+                TransitionAction::ClearHoldTimer,
                 TransitionAction::CloseTcp,
                 TransitionAction::StartConnectRetryTimer,
             ]
@@ -355,6 +359,8 @@ mod retry_transition_tests {
                 actions,
                 vec![
                     TransitionAction::ClearConnectRetryTimer,
+                    TransitionAction::ClearHoldTimer,
+                    TransitionAction::ClearKeepaliveTimer,
                     TransitionAction::CloseTcp,
                     TransitionAction::IncrementRetry,
                 ]
