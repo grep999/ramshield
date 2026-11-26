@@ -65,7 +65,7 @@ jobs:
           EOF
           {
             echo "### Agent-flow contract"
-            echo "- Candidate SHA: `$CANDIDATE_SHA`"
+            echo "- Candidate SHA: $CANDIDATE_SHA"
             echo "- Validation result: **$JOB_RESULT**"
             echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             echo "- This validates the handoff schema only; it does not certify Rust or recovery correctness."

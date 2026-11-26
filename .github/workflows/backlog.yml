@@ -62,11 +62,13 @@ jobs:
           set -euo pipefail
           HEAD_SHA=$(git rev-parse HEAD)
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
-          echo "### Backlog gate metadata" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Candidate SHA: \`$HEAD_SHA\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Ref: \`${{ github.ref }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Event: \`${{ github.event_name }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Task filter: \`${TASK_FILTER:-full}\`" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### Backlog gate metadata"
+            echo "- Candidate SHA: \`$HEAD_SHA\`"
+            echo "- Ref: \`${{ github.ref }}\`"
+            echo "- Event: \`${{ github.event_name }}\`"
+            echo "- Task filter: \`${TASK_FILTER:-full}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
           test -f BACKLOG.md
 
       - name: Parse OPEN tasks from BACKLOG.md
@@ -298,9 +300,11 @@ jobs:
         run: |
           set +e
           mkdir -p evidence/failure-research
-          echo "# Failed-job research" > evidence/failure-research/research.md
-          echo "- Candidate SHA: ${{ needs.inventory.outputs.head_sha }}" >> evidence/failure-research/research.md
-          echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> evidence/failure-research/research.md
+          {
+            echo "# Failed-job research"
+            echo "- Candidate SHA: ${{ needs.inventory.outputs.head_sha }}"
+            echo "- Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } > evidence/failure-research/research.md
           gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
             --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | [.name, .conclusion, .url] | @tsv' \
             > evidence/failure-research/failed-jobs.tsv 2> evidence/failure-research/jobs-query-error.txt

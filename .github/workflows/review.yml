@@ -32,7 +32,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 90); do
+          for _ in $(seq 1 90); do
             runs=$(gh run list --repo "$GITHUB_REPOSITORY" --commit "$CANDIDATE_SHA" \
               --json name,status,conclusion,databaseId --limit 100)
             ci=$(jq -c '[.[] | select(.name == "CI")] | sort_by(.databaseId) | last // {}' <<< "$runs")
@@ -55,7 +55,7 @@ jobs:
                && "$backlog_status" == completed && "$backlog_result" == success ]]; then
               {
                 echo "## Required exact-SHA gates passed"
-                echo "- Candidate: `$CANDIDATE_SHA`"
+                echo "- Candidate: $CANDIDATE_SHA"
                 echo "- CI: passed"
                 echo "- Backlog Gate: passed"
               } >> "$GITHUB_STEP_SUMMARY"

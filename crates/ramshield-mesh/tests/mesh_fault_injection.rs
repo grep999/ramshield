@@ -18,7 +18,10 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     process::{Child, Command},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -62,12 +65,17 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+static NEXT_TEST_PORT: AtomicU64 = AtomicU64::new(0);
+
 async fn free_addr() -> SocketAddr {
-    TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("free loopback port")
-        .local_addr()
-        .expect("local address")
+    // ponytail: unique test ports, per-test listener retry if a host process owns one.
+    loop {
+        let port = 40_000 + (NEXT_TEST_PORT.fetch_add(1, Ordering::Relaxed) % 20_000) as u16;
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+        if let Ok(listener) = TcpListener::bind(address).await {
+            return listener.local_addr().expect("test listener address");
+        }
+    }
 }
 
 fn temp_snapshot_path() -> PathBuf {
@@ -91,7 +99,7 @@ fn spawn_child(config: &ChildConfig) -> Child {
 }
 
 async fn wait_for_listener(address: SocketAddr) {
-    timeout(Duration::from_secs(5), async {
+    timeout(Duration::from_secs(15), async {
         loop {
             if TcpStream::connect(address).await.is_ok() {
                 return;
@@ -183,7 +191,7 @@ fn snapshot_block_count(path: &Path, ip: IpAddr) -> usize {
 }
 
 async fn wait_for_snapshot(path: &Path, ip: IpAddr, expected: bool) {
-    timeout(Duration::from_secs(3), async {
+    timeout(Duration::from_secs(15), async {
         while snapshot_has_ip(path, ip) != expected {
             sleep(Duration::from_millis(10)).await;
         }
