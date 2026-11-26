@@ -243,7 +243,7 @@ impl FlowComponent {
                     got: buf.len(),
                 });
             }
-            if prefix_len % 8 != 0 && octets > 0 {
+            if !prefix_len.is_multiple_of(8) && octets > 0 {
                 let host_mask = (1u8 << (8 - (prefix_len % 8))) - 1;
                 if buf[end - 1] & host_mask != 0 {
                     return Err(BgpError::Session(
@@ -709,8 +709,8 @@ mod prefix_validation_tests {
 
     #[test]
     fn decode_rejects_noncanonical_host_bits() {
-        assert!(FlowSpecNLRI::decode(&[5, 1, 25, 192, 0, 128]).is_ok());
-        assert!(FlowSpecNLRI::decode(&[5, 1, 25, 192, 0, 129]).is_err());
+        assert!(FlowSpecNLRI::decode(&[6, 1, 25, 192, 0, 2, 128]).is_ok());
+        assert!(FlowSpecNLRI::decode(&[6, 1, 25, 192, 0, 2, 129]).is_err());
     }
 
     #[test]
