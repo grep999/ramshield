@@ -334,6 +334,12 @@ mod tests {
     }
 
     #[test]
+    fn from_toml_rejects_missing_router_id() {
+        let config = "local_asn = 65001\npeer_asn = 65002\npeer_ip = \"10.0.0.1\"\n";
+        assert!(BgpConfig::from_toml(config).is_err());
+    }
+
+    #[test]
     fn from_toml_parses_optional_runtime_knobs() {
         let cfg = BgpConfig::from_toml(
             "local_asn = 65001\npeer_asn = 65002\npeer_ip = \"10.0.0.1\"\nrouter_id = 3221225985\n\
