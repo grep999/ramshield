@@ -344,10 +344,11 @@ impl MpReachNlri {
         Ok(buf)
     }
 
-    /// Compatibility wrapper. Wire-building code should use try_encode so
-    /// invalid next-hop lengths are propagated as errors.
-    pub fn encode(&self) -> Vec<u8> {
-        self.try_encode().unwrap_or_default()
+    /// Encode MP_REACH_NLRI, returning an error if a field cannot be
+    /// represented on the wire. Callers must not silently emit an empty
+    /// attribute when the next-hop length exceeds its one-octet field.
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        self.try_encode()
     }
 }
 
@@ -515,7 +516,7 @@ mod mp_reach_bounds_tests {
             nlri: vec![24, 192, 0, 2],
         };
         assert!(value.try_encode().is_err());
-        assert!(value.encode().is_empty());
+        assert!(value.encode().is_err());
     }
 
     #[test]
@@ -526,7 +527,7 @@ mod mp_reach_bounds_tests {
             next_hop: Vec::new(),
             nlri: vec![1, 1],
         };
-        let encoded = value.try_encode().unwrap();
+        let encoded = value.encode().unwrap();
         assert_eq!(encoded[3], 0);
         assert_eq!(encoded[4], 0);
     }
