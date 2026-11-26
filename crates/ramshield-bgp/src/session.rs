@@ -613,31 +613,19 @@ mod tests {
     }
 
     #[test]
-    fn from_config_ibgp_router_id_uses_peer_address() {
-        let base = BgpConfig {
+    fn ibgp_requires_explicit_stable_router_id() {
+        let cfg = BgpConfig {
             local_asn: 65001,
             peer_asn: 65001,
+            router_id: 0,
             ..BgpConfig::default()
         };
-        let a = BgpConfig {
-            peer_ip: "10.0.0.1".parse().unwrap(),
-            ..base.clone()
-        };
-        let b = BgpConfig {
-            peer_ip: "10.0.0.2".parse().unwrap(),
-            ..base
-        };
-        let id_a = BgpSession::from_config(&a).router_id;
-        let id_b = BgpSession::from_config(&b).router_id;
-        assert_ne!(id_a, id_b);
-        assert_ne!(id_a, 0);
-        assert_ne!(id_b, 0);
-        assert_eq!(id_a >> 16, 0x0AFF);
-        assert_eq!(id_b >> 16, 0x0AFF);
+        assert!(cfg.validate().is_err());
+        assert_eq!(BgpSession::from_config(&cfg).router_id, 0);
 
         let explicit = BgpConfig {
             router_id: 0x0A00_0001,
-            ..a
+            ..cfg
         };
         assert_eq!(BgpSession::from_config(&explicit).router_id, 0x0A00_0001);
     }
