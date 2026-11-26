@@ -700,8 +700,8 @@ mod prefix_validation_tests {
 
     #[test]
     fn decode_rejects_noncanonical_host_bits() {
-        assert!(FlowSpecNLRI::decode(&[5, 1, 25, 192, 0, 2]).is_ok());
-        assert!(FlowSpecNLRI::decode(&[5, 1, 25, 192, 0, 3]).is_err());
+        assert!(FlowSpecNLRI::decode(&[5, 1, 25, 192, 0, 128]).is_ok());
+        assert!(FlowSpecNLRI::decode(&[5, 1, 25, 192, 0, 129]).is_err());
     }
 
     #[test]
