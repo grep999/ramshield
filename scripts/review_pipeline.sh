@@ -57,7 +57,7 @@ if [[ -f scripts/validate_config_contract.py ]]; then
 else
   printf '[SKIP] config-contract: no validate_config_contract.py\n' | tee -a "$REPORT"
 fi
-run release-metadata bash -c 'cd "$ROOT" && fgrep -q "version = " Cargo.toml && echo "version defined"' | tee -a "$REPORT"
+run release-metadata grep -Eq '^version[[:space:]]*=[[:space:]]*"[^"]+"' Cargo.toml
 
 if [[ "${REVIEW_LIVE:-0}" == 1 ]]; then
   run metrics-smoke python3 scripts/metrics_smoke.py
