@@ -340,7 +340,7 @@ impl ReceivedMeshMessage {
         // Recovery assembly and completion proofs represent state the receiver
         // must retain across restart. Without a durable local LSN there is no
         // evidence that the state survived, so the ACK must be negative.
-        let recovery_durable = ack_lsn.is_some();
+        let recovery_durable = ack_lsn.is_some_and(|lsn| lsn > 0);
         let mut accepted = accepted && (self.recovery.is_none() || recovery_durable);
         let mut recovery_proof = None;
         match self.recovery.as_ref() {
