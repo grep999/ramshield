@@ -70,22 +70,10 @@ impl BgpSession {
             config.peer_ip,
             config.peer_port,
         );
-        // RFC 4271 §6.4: a BGP identifier of 0 is invalid. High bits 0xFFFF
-        // keep the derived id away from real unicast router-ids (the common
-        // case that the peer uses its own address) and the §6.7 collision
-        // check. In iBGP an ASN-only derivation collides with the peer's own
-        // derived id, so fold in the peer address.
-        // Router ID is local-speaker identity and must not vary by peer.
-        // iBGP requires an explicitly configured ID (BgpConfig::validate).
-        // The eBGP fallback is stable per local ASN for simple deployments;
-        // multi-router production deployments should configure it explicitly.
-        session.router_id = if config.router_id != 0 {
-            config.router_id
-        } else if config.local_asn == config.peer_asn {
-            0
-        } else {
-            0x0AFF_0000u32 | u32::from(config.local_asn)
-        };
+        // RFC 4271 §4.2: the BGP Identifier belongs to the local speaker
+        // and must be explicitly configured as a locally assigned address.
+        // Never synthesize it from an ASN or a peer-specific address.
+        session.router_id = config.router_id;
         if config.keepalive_time > 0 {
             session.keepalive_override = Some(config.keepalive_time);
         }
@@ -514,11 +502,10 @@ mod tests {
     }
 
     #[test]
-    fn from_config_derives_router_id_when_unset() {
+    fn from_config_does_not_synthesize_router_id_when_unset() {
         let cfg = BgpConfig::default();
         assert_eq!(cfg.router_id, 0);
-        let derived = BgpSession::from_config(&cfg).router_id;
-        assert_eq!(derived, 0x0AFF_0000 | u32::from(cfg.local_asn));
+        assert_eq!(BgpSession::from_config(&cfg).router_id, 0);
     }
 
     #[test]
