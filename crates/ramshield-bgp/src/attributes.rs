@@ -508,14 +508,24 @@ mod mp_reach_bounds_tests {
 
     #[test]
     fn mp_reach_rejects_next_hop_length_over_255() {
-        let value = MpReachNlri { afi: 1, safi: 1, next_hop: vec![0; 256], nlri: vec![24, 192, 0, 2] };
+        let value = MpReachNlri {
+            afi: 1,
+            safi: 1,
+            next_hop: vec![0; 256],
+            nlri: vec![24, 192, 0, 2],
+        };
         assert!(value.try_encode().is_err());
         assert!(value.encode().is_empty());
     }
 
     #[test]
     fn mp_reach_encodes_valid_empty_flowspec_next_hop() {
-        let value = MpReachNlri { afi: 1, safi: 133, next_hop: Vec::new(), nlri: vec![1, 1] };
+        let value = MpReachNlri {
+            afi: 1,
+            safi: 133,
+            next_hop: Vec::new(),
+            nlri: vec![1, 1],
+        };
         let encoded = value.try_encode().unwrap();
         assert_eq!(encoded[3], 0);
         assert_eq!(encoded[4], 0);
