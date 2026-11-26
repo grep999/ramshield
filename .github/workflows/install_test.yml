@@ -13,7 +13,7 @@ jobs:
         run: apt-get update && apt-get install -y curl procps python3
       - name: Run Installer in Pipe Mode (dry-run)
         run: |
-          cat scripts/install_simple.sh | bash -s -- --dry-run || exit 1
+          bash -s -- --dry-run < scripts/install_simple.sh || exit 1
       - name: Run Installer from Checkout (dry-run)
         run: |
           bash scripts/install_simple.sh --dry-run || exit 1

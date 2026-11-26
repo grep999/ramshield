@@ -309,17 +309,21 @@ jobs:
             --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | [.name, .conclusion, .url] | @tsv' \
             > evidence/failure-research/failed-jobs.tsv 2> evidence/failure-research/jobs-query-error.txt
           if [ -s evidence/failure-research/failed-jobs.tsv ]; then
-            echo "" >> evidence/failure-research/research.md
-            echo "## Jobs needing investigation" >> evidence/failure-research/research.md
-            cat evidence/failure-research/failed-jobs.tsv >> evidence/failure-research/research.md
+            {
+              echo ""
+              echo "## Jobs needing investigation"
+              cat evidence/failure-research/failed-jobs.tsv
+            } >> evidence/failure-research/research.md
             gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed \
               > evidence/failure-research/failed-logs.txt 2>&1
             rc=$?
             if [ "$rc" -ne 0 ]; then
               echo "Log retrieval unavailable (exit $rc); inspect job URLs above." >> evidence/failure-research/research.md
             else
-              echo "" >> evidence/failure-research/research.md
-              echo "## Error signatures (triage clues, not root-cause proof)" >> evidence/failure-research/research.md
+              {
+                echo ""
+                echo "## Error signatures (triage clues, not root-cause proof)"
+              } >> evidence/failure-research/research.md
               grep -Ein -m 80 'error\[E[0-9]+\]|error:|FAILED|panicked at|timed out|timeout|No space left|permission denied|429|502|503|connection reset|download failed|cancelled|canceled' evidence/failure-research/failed-logs.txt \
                 > evidence/failure-research/error-signatures.txt
               if [ -s evidence/failure-research/error-signatures.txt ]; then
