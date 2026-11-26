@@ -268,8 +268,14 @@ mod retry_transition_tests {
             .process_event(BgpEvent::ConnectRetryTimerExpired)
             .unwrap();
         assert_eq!(fsm.state(), BgpState::Connect);
-        assert!(actions.contains(&TransitionAction::EstablishTcp));
-        assert!(actions.contains(&TransitionAction::StartConnectRetryTimer));
+        assert_eq!(
+            actions,
+            vec![
+                TransitionAction::CloseTcp,
+                TransitionAction::StartConnectRetryTimer,
+                TransitionAction::EstablishTcp,
+            ]
+        );
     }
 
     #[test]
@@ -280,7 +286,13 @@ mod retry_transition_tests {
             .process_event(BgpEvent::ConnectRetryTimerExpired)
             .unwrap();
         assert_eq!(fsm.state(), BgpState::Connect);
-        assert!(actions.contains(&TransitionAction::EstablishTcp));
+        assert_eq!(
+            actions,
+            vec![
+                TransitionAction::StartConnectRetryTimer,
+                TransitionAction::EstablishTcp,
+            ]
+        );
     }
 
     #[test]
@@ -289,9 +301,14 @@ mod retry_transition_tests {
         fsm.process_event(BgpEvent::ManualStart).unwrap();
         let actions = fsm.process_event(BgpEvent::TcpConnectFail).unwrap();
         assert_eq!(fsm.state(), BgpState::Idle);
-        assert!(actions.contains(&TransitionAction::IncrementRetry));
-        assert!(actions.contains(&TransitionAction::ClearConnectRetryTimer));
-        assert!(actions.contains(&TransitionAction::CloseTcp));
+        assert_eq!(
+            actions,
+            vec![
+                TransitionAction::ClearConnectRetryTimer,
+                TransitionAction::CloseTcp,
+                TransitionAction::IncrementRetry,
+            ]
+        );
     }
 
     #[test]
@@ -300,9 +317,14 @@ mod retry_transition_tests {
         fsm.attrs.state = BgpState::Active;
         let actions = fsm.process_event(BgpEvent::TcpConnectFail).unwrap();
         assert_eq!(fsm.state(), BgpState::Idle);
-        assert!(actions.contains(&TransitionAction::IncrementRetry));
-        assert!(actions.contains(&TransitionAction::StartConnectRetryTimer));
-        assert!(actions.contains(&TransitionAction::CloseTcp));
+        assert_eq!(
+            actions,
+            vec![
+                TransitionAction::StartConnectRetryTimer,
+                TransitionAction::CloseTcp,
+                TransitionAction::IncrementRetry,
+            ]
+        );
     }
 
     #[test]
@@ -311,8 +333,13 @@ mod retry_transition_tests {
         fsm.attrs.state = BgpState::OpenSent;
         let actions = fsm.process_event(BgpEvent::TcpConnectFail).unwrap();
         assert_eq!(fsm.state(), BgpState::Active);
-        assert!(actions.contains(&TransitionAction::StartConnectRetryTimer));
-        assert!(actions.contains(&TransitionAction::CloseTcp));
+        assert_eq!(
+            actions,
+            vec![
+                TransitionAction::CloseTcp,
+                TransitionAction::StartConnectRetryTimer,
+            ]
+        );
     }
 
     #[test]
@@ -322,9 +349,14 @@ mod retry_transition_tests {
             fsm.attrs.state = state;
             let actions = fsm.process_event(BgpEvent::TcpConnectFail).unwrap();
             assert_eq!(fsm.state(), BgpState::Idle);
-            assert!(actions.contains(&TransitionAction::IncrementRetry));
-            assert!(actions.contains(&TransitionAction::ClearConnectRetryTimer));
-            assert!(actions.contains(&TransitionAction::CloseTcp));
+            assert_eq!(
+                actions,
+                vec![
+                    TransitionAction::ClearConnectRetryTimer,
+                    TransitionAction::CloseTcp,
+                    TransitionAction::IncrementRetry,
+                ]
+            );
         }
     }
 }
