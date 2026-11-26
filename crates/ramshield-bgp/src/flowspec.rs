@@ -711,7 +711,8 @@ mod prefix_validation_tests {
     #[test]
     fn prefix_component_requires_exactly_one_prefix() {
         let mut nlri = prefix_component(vec![24, 192, 0, 2]);
-        nlri.components[0].pairs.push(nlri.components[0].pairs[0].clone());
+        let duplicate = nlri.components[0].pairs[0].clone();
+        nlri.components[0].pairs.push(duplicate);
         assert!(nlri.encode().is_err());
     }
 }
