@@ -126,7 +126,6 @@ impl BgpFsm {
                 self.attrs.state = BgpState::Idle;
                 actions.push(TransitionAction::ClearConnectRetryTimer);
                 actions.push(TransitionAction::CloseTcp);
-                actions.push(TransitionAction::IncrementRetry);
             }
             (BgpState::Connect, BgpEvent::ConnectRetryTimerExpired) => {
                 // RFC 4271 §8.2.2: retry from Connect initiates another TCP
@@ -162,6 +161,7 @@ impl BgpFsm {
                 // RFC 4271 §8.2.2: a failed connection in OpenSent returns
                 // the FSM to Active and resumes listening/retry timing.
                 self.attrs.state = BgpState::Active;
+                actions.push(TransitionAction::ClearHoldTimer);
                 actions.push(TransitionAction::CloseTcp);
                 actions.push(TransitionAction::StartConnectRetryTimer);
             }
@@ -172,6 +172,8 @@ impl BgpFsm {
                 // tears down the session and returns it to Idle.
                 self.attrs.state = BgpState::Idle;
                 actions.push(TransitionAction::ClearConnectRetryTimer);
+                actions.push(TransitionAction::ClearHoldTimer);
+                actions.push(TransitionAction::ClearKeepaliveTimer);
                 actions.push(TransitionAction::CloseTcp);
                 actions.push(TransitionAction::IncrementRetry);
             }
@@ -301,12 +303,12 @@ mod retry_transition_tests {
         fsm.process_event(BgpEvent::ManualStart).unwrap();
         let actions = fsm.process_event(BgpEvent::TcpConnectFail).unwrap();
         assert_eq!(fsm.state(), BgpState::Idle);
+        assert_eq!(fsm.attrs.connect_retry_counter, 0, "Connect TCP failure must not increment retry counter when DelayOpen is disabled");
         assert_eq!(
             actions,
             vec![
                 TransitionAction::ClearConnectRetryTimer,
                 TransitionAction::CloseTcp,
-                TransitionAction::IncrementRetry,
             ]
         );
     }
