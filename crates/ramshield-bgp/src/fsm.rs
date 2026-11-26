@@ -121,8 +121,12 @@ impl BgpFsm {
                 actions.push(TransitionAction::StartHoldTimer);
             }
             (BgpState::Connect, BgpEvent::TcpConnectFail) => {
+                // RFC 4271 §8.2.2: a failed TCP attempt releases the
+                // connection resources and returns the peer FSM to Idle.
+                self.attrs.state = BgpState::Idle;
                 actions.push(TransitionAction::IncrementRetry);
-                actions.push(TransitionAction::StartConnectRetryTimer);
+                actions.push(TransitionAction::ClearConnectRetryTimer);
+                actions.push(TransitionAction::CloseTcp);
             }
             (BgpState::Connect, BgpEvent::ConnectRetryTimerExpired) => {
                 // RFC 4271 §8.2.2: retry from Connect initiates another TCP
@@ -139,8 +143,12 @@ impl BgpFsm {
                 actions.push(TransitionAction::StartHoldTimer);
             }
             (BgpState::Active, BgpEvent::TcpConnectFail) => {
+                // RFC 4271 §8.2.2: restart retry timing, release resources,
+                // and return to Idle after the TCP connection fails.
+                self.attrs.state = BgpState::Idle;
                 actions.push(TransitionAction::IncrementRetry);
                 actions.push(TransitionAction::StartConnectRetryTimer);
+                actions.push(TransitionAction::CloseTcp);
             }
             (BgpState::Active, BgpEvent::ConnectRetryTimerExpired) => {
                 // RFC 4271 §8.2.2: retry from Active returns to Connect and
@@ -149,6 +157,23 @@ impl BgpFsm {
                 actions.push(TransitionAction::EstablishTcp);
                 actions.push(TransitionAction::StartConnectRetryTimer);
             }
+            (BgpState::OpenSent, BgpEvent::TcpConnectFail) => {
+                // RFC 4271 §8.2.2: a failed connection in OpenSent returns
+                // the FSM to Active and resumes listening/retry timing.
+                self.attrs.state = BgpState::Active;
+                actions.push(TransitionAction::StartConnectRetryTimer);
+                actions.push(TransitionAction::CloseTcp);
+            }
+
+            (BgpState::OpenConfirm, BgpEvent::TcpConnectFail)
+            | (BgpState::Established, BgpEvent::TcpConnectFail) => {
+                // RFC 4271 §8.2.2: a transport failure after OPEN confirmation
+                // tears down the session and returns it to Idle.
+                self.attrs.state = BgpState::Idle;
+                actions.push(TransitionAction::ClearConnectRetryTimer);
+                actions.push(TransitionAction::CloseTcp);
+            }
+
             (BgpState::Active, BgpEvent::NotificationReceived) => {
                 self.attrs.state = BgpState::Idle;
                 actions.push(TransitionAction::CloseTcp);
@@ -257,12 +282,46 @@ mod retry_transition_tests {
     }
 
     #[test]
-    fn active_tcp_failure_stays_active_until_retry_timer() {
+    fn connect_tcp_failure_returns_to_idle_and_clears_retry_timer() {
+        let mut fsm = fsm();
+        fsm.process_event(BgpEvent::ManualStart).unwrap();
+        let actions = fsm.process_event(BgpEvent::TcpConnectFail).unwrap();
+        assert_eq!(fsm.state(), BgpState::Idle);
+        assert!(actions.contains(&TransitionAction::IncrementRetry));
+        assert!(actions.contains(&TransitionAction::ClearConnectRetryTimer));
+        assert!(actions.contains(&TransitionAction::CloseTcp));
+    }
+
+    #[test]
+    fn active_tcp_failure_returns_to_idle_and_restarts_retry_timer() {
         let mut fsm = fsm();
         fsm.attrs.state = BgpState::Active;
         let actions = fsm.process_event(BgpEvent::TcpConnectFail).unwrap();
-        assert_eq!(fsm.state(), BgpState::Active);
-        assert!(!actions.contains(&TransitionAction::EstablishTcp));
+        assert_eq!(fsm.state(), BgpState::Idle);
+        assert!(actions.contains(&TransitionAction::IncrementRetry));
         assert!(actions.contains(&TransitionAction::StartConnectRetryTimer));
+        assert!(actions.contains(&TransitionAction::CloseTcp));
+    }
+
+    #[test]
+    fn tcp_failure_after_open_returns_to_active() {
+        let mut fsm = fsm();
+        fsm.attrs.state = BgpState::OpenSent;
+        let actions = fsm.process_event(BgpEvent::TcpConnectFail).unwrap();
+        assert_eq!(fsm.state(), BgpState::Active);
+        assert!(actions.contains(&TransitionAction::StartConnectRetryTimer));
+        assert!(actions.contains(&TransitionAction::CloseTcp));
+    }
+
+    #[test]
+    fn tcp_failure_after_open_confirmation_returns_to_idle() {
+        for state in [BgpState::OpenConfirm, BgpState::Established] {
+            let mut fsm = fsm();
+            fsm.attrs.state = state;
+            let actions = fsm.process_event(BgpEvent::TcpConnectFail).unwrap();
+            assert_eq!(fsm.state(), BgpState::Idle);
+            assert!(actions.contains(&TransitionAction::ClearConnectRetryTimer));
+            assert!(actions.contains(&TransitionAction::CloseTcp));
+        }
     }
 }
