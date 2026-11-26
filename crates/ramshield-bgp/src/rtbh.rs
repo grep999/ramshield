@@ -82,7 +82,7 @@ pub fn announce_rtbh(ip: &str, local_asn: u16, peer_asn: u16) -> Result<Vec<u8>>
             nlri
         },
     }
-    .encode();
+    .try_encode()?;
     let mp_reach_attr = PathAttr {
         flags: PathAttrFlags {
             optional: true,
