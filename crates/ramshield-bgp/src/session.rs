@@ -125,7 +125,9 @@ impl BgpSession {
             ));
         }
         if hold_time == 1 || hold_time == 2 {
-            return Err(BgpError::Session("OPEN hold time 1 or 2 is unacceptable".into()));
+            return Err(BgpError::Session(
+                "OPEN hold time 1 or 2 is unacceptable".into(),
+            ));
         }
         self.hold_time = hold_time;
         // Capability: Multiprotocol Extensions, AFI 1 (IPv4), SAFI 133
@@ -682,7 +684,11 @@ mod remediation_tests {
 
     #[test]
     fn explicit_keepalive_is_bounded_by_negotiated_hold_time() {
-        let cfg = BgpConfig { hold_time: 90, keepalive_time: 20, ..BgpConfig::default() };
+        let cfg = BgpConfig {
+            hold_time: 90,
+            keepalive_time: 20,
+            ..BgpConfig::default()
+        };
         let mut session = BgpSession::from_config(&cfg);
         session.hold_time = 9;
         assert_eq!(session.negotiated_keepalive(), 3);
@@ -690,7 +696,11 @@ mod remediation_tests {
 
     #[test]
     fn zero_negotiated_hold_time_disables_override() {
-        let cfg = BgpConfig { hold_time: 90, keepalive_time: 20, ..BgpConfig::default() };
+        let cfg = BgpConfig {
+            hold_time: 90,
+            keepalive_time: 20,
+            ..BgpConfig::default()
+        };
         let mut session = BgpSession::from_config(&cfg);
         session.hold_time = 0;
         assert_eq!(session.negotiated_keepalive(), 0);
@@ -698,7 +708,12 @@ mod remediation_tests {
 
     #[test]
     fn ibgp_without_explicit_router_id_does_not_invent_peer_identity() {
-        let cfg = BgpConfig { local_asn: 65001, peer_asn: 65001, router_id: 0, ..BgpConfig::default() };
+        let cfg = BgpConfig {
+            local_asn: 65001,
+            peer_asn: 65001,
+            router_id: 0,
+            ..BgpConfig::default()
+        };
         assert_eq!(BgpSession::from_config(&cfg).router_id, 0);
     }
 }
