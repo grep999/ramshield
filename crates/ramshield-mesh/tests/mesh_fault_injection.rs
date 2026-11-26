@@ -252,7 +252,9 @@ async fn run_child(config: ChildConfig) -> ! {
             if changed {
                 persist_snapshot(&config.snapshot, &state);
             }
-            frame.acknowledge_with_lsn(true, end_lsn.or(Some(1)));
+            // Only WAL batches carry a genuine durable LSN. Never synthesize
+            // a cursor for snapshot-only or control frames.
+            frame.acknowledge_with_lsn(true, end_lsn);
         }
         sleep(Duration::from_millis(5)).await;
     }
