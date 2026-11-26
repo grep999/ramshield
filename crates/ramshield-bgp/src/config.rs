@@ -12,7 +12,7 @@ pub struct BgpConfig {
     pub peer_ip: IpAddr,
     /// Peer port (179 by default)
     pub peer_port: u16,
-    /// Local router ID
+    /// Local speaker's assigned unicast IPv4 BGP Identifier (required).
     pub router_id: u32,
     /// Hold time in seconds (default 90)
     pub hold_time: u16,
