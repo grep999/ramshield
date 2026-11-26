@@ -345,12 +345,7 @@ impl ReceivedMeshMessage {
         self.acknowledge_inner(accepted, None, recovery_durable);
     }
 
-    fn acknowledge_inner(
-        mut self,
-        accepted: bool,
-        ack_lsn: Option<u64>,
-        recovery_durable: bool,
-    ) {
+    fn acknowledge_inner(mut self, accepted: bool, ack_lsn: Option<u64>, recovery_durable: bool) {
         // Recovery assembly and completion proofs represent state the receiver
         // must retain across restart. A WAL LSN or an explicit durable-snapshot
         // acknowledgement is required before the sender may accept the proof.
