@@ -77,7 +77,7 @@ Optional fields and defaults:
 
 `validate()` rejects ASN 0, port 0, hold time 1 or 2, keepalive above hold
 time, zero connect-retry or engage interval, disengage interval not greater
-than engage, iBGP with zero `router_id`, and an empty shared key.
+than engage, a zero or non-unicast `router_id` for either eBGP or iBGP, and an empty shared key.
 `BgpConfig`'s `Debug` prints `peer_shared_key` as `[REDACTED]`.
 
 ## Schmitt trigger
