@@ -170,6 +170,7 @@ impl BgpFsm {
                 // RFC 4271 §8.2.2: a transport failure after OPEN confirmation
                 // tears down the session and returns it to Idle.
                 self.attrs.state = BgpState::Idle;
+                actions.push(TransitionAction::IncrementRetry);
                 actions.push(TransitionAction::ClearConnectRetryTimer);
                 actions.push(TransitionAction::CloseTcp);
             }
