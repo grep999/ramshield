@@ -6,8 +6,13 @@ use tokio::io::AsyncReadExt;
 async fn open_header_length_matches_bytes() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let mut sess = BgpSession::new(65001, 65002, addr.ip(), addr.port());
-    sess.router_id = 0xC000_0201; // Explicit local speaker ID required by RFC 4271.
+    let mut sess = BgpSession::new_with_router_id(
+        65001,
+        65002,
+        addr.ip(),
+        addr.port(),
+        "192.0.2.1".parse().unwrap(),
+    );
     sess.connect().await.unwrap();
     sess.send_open(4, 90).await.unwrap();
     let (mut sock, _) = listener.accept().await.unwrap();
