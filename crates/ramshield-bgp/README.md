@@ -10,7 +10,7 @@ BIRD/FRR FIFO when `upstream.bgp_mode != "none"`.
 
 ## Known gaps (2026-11-26)
 
-Local worktree fixes cover P0 wire defects and applied P1/PhD findings: OPEN length, FlowSpec NLRI length and zero next-hop, FlowSpec first-pair AND bit/operand widths on encode and AND-bit normalization on decode, ORIGIN/AS_PATH, MP_REACH flags, zero-ID NOTIFICATION, KEEPALIVE length, discard T-bit, ASN-aware RTBH and RFC 7999 discard next-hop, peer SAFI 133 capability gating, RFC 4271 hold-time negotiation and zero-hold config validation, zero-hold keepalive disablement, FSM Active/hold-expiry transitions, receive-side UPDATE framing/bounds validation, well-known path-attribute flag enforcement, CIDR FlowSpec prefix encoding, and capability decode without silent truncation. Remaining gaps: no full RFC 7606 treat-as-withdraw/RIB, no session driver wired to FSM, non-standard HMAC framing, no RPKI/OTC/GTSM, no live BGP metrics, no real-peer interop evidence. Research: `../../docs/development/BGP_ENTERPRISE_RESEARCH_2026-11-26.md`; earlier probe evidence: `../../docs/development/BGP_IMPLEMENTATION_RESEARCH_2026-11-26.md`.
+Local worktree fixes cover P0 wire defects and applied P1/PhD findings: OPEN length, FlowSpec NLRI length and zero next-hop, FlowSpec first-pair AND bit/operand widths on encode and AND-bit normalization on decode, ORIGIN/AS_PATH, MP_REACH flags, zero-ID NOTIFICATION, KEEPALIVE length, discard T-bit, ASN-aware RTBH and RFC 7999 discard next-hop, peer SAFI 133 capability gating, RFC 4271 hold-time negotiation and zero-hold config validation, zero-hold keepalive disablement, FSM retry-timer, TCP-failure and hold-expiry transitions, receive-side UPDATE framing/bounds validation, well-known path-attribute flag enforcement, CIDR FlowSpec prefix encoding, and capability decode without silent truncation. Remaining gaps: no full RFC 7606 treat-as-withdraw/RIB, no session driver wired to FSM, non-standard HMAC framing, no RPKI/OTC/GTSM, no live BGP metrics, no real-peer interop evidence. Research: `../../docs/development/BGP_ENTERPRISE_RESEARCH_2026-11-26.md`; earlier probe evidence: `../../docs/development/BGP_IMPLEMENTATION_RESEARCH_2026-11-26.md`.
 
 ## Layout
 
@@ -59,14 +59,14 @@ Components must be in strictly increasing type order. Prefix components
 
 ## Configuration
 
-Required TOML fields: `local_asn`, `peer_asn`, `peer_ip` (string).
+Required TOML fields: `local_asn`, `peer_asn`, `peer_ip` (string), and `router_id` (the local speaker's assigned IPv4 address as a 32-bit integer).
 
 Optional fields and defaults:
 
 | Field | Default |
 | --- | --- |
 | `peer_port` | `179` |
-| `router_id` | derived from ASN / peer address |
+| `router_id` | required: locally assigned unicast IPv4 address (no synthetic default) |
 | `hold_time` | `90` |
 | `keepalive_time` | `hold_time / 3` |
 | `connect_retry_time` | `120` |
