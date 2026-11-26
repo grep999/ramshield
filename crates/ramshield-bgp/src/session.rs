@@ -510,6 +510,19 @@ mod tests {
         assert_eq!(BgpSession::from_config(&cfg).router_id, 0);
     }
 
+    #[tokio::test]
+    async fn send_open_rejects_non_unicast_router_id_before_socket_io() {
+        let mut session = BgpSession::new(
+            65001,
+            65002,
+            "192.0.2.2".parse().unwrap(),
+            179,
+        );
+        session.router_id = 0xE000_0001;
+        let error = session.send_open(4, 90).await.unwrap_err();
+        assert!(error.to_string().contains("unicast"));
+    }
+
     #[test]
     fn from_config_carries_keepalive_and_max_attempts() {
         let cfg = BgpConfig {
