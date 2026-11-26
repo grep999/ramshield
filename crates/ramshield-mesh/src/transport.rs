@@ -327,20 +327,33 @@ impl ReceivedMeshMessage {
         self.acknowledge_with_lsn(accepted, None);
     }
 
-    /// Acknowledge a received message, optionally reporting the WAL LSN that
-    /// makes the accepted state durable.
-    ///
-    /// Durability contract: the caller must have persisted the message's
-    /// deltas (WAL append) and merged them into the CRDT before acking.
-    /// A recovery completion proof is derived from this acknowledgement, so
-    /// acking before the state is durable would let the sender advance its
-    /// per-peer replication cursor while the receiver can still lose the
-    /// acknowledged state on restart.
-    pub fn acknowledge_with_lsn(mut self, accepted: bool, ack_lsn: Option<u64>) {
-        // Recovery assembly and completion proofs represent state the receiver
-        // must retain across restart. Without a durable local LSN there is no
-        // evidence that the state survived, so the ACK must be negative.
+    /// Acknowledge after the accepted state has been durably appended to the
+    /// receiver's WAL. The returned LSN is the actual local durable cursor.
+    pub fn acknowledge_with_lsn(self, accepted: bool, ack_lsn: Option<u64>) {
         let recovery_durable = ack_lsn.is_some();
+        self.acknowledge_inner(accepted, ack_lsn, recovery_durable);
+    }
+
+    /// Acknowledge after a full snapshot has been durably persisted and
+    /// applied. Snapshot recovery has no per-frame local WAL LSN, so it must
+    /// not fabricate one merely to authorize a receiver-confirmed proof.
+    ///
+    /// Call only after the snapshot file/store and its publication metadata
+    /// have reached the application's durability boundary.
+    pub fn acknowledge_snapshot_durable(self, accepted: bool) {
+        let recovery_durable = self.recovery.is_some();
+        self.acknowledge_inner(accepted, None, recovery_durable);
+    }
+
+    fn acknowledge_inner(
+        mut self,
+        accepted: bool,
+        ack_lsn: Option<u64>,
+        recovery_durable: bool,
+    ) {
+        // Recovery assembly and completion proofs represent state the receiver
+        // must retain across restart. A WAL LSN or an explicit durable-snapshot
+        // acknowledgement is required before the sender may accept the proof.
         let mut accepted = accepted && (self.recovery.is_none() || recovery_durable);
         let mut recovery_proof = None;
         match self.recovery.as_ref() {
@@ -2765,7 +2778,9 @@ mod frame_tests {
                             }
                             _ => {}
                         }
-                        received.acknowledge_with_lsn(true, Some(1));
+                        // The test applies the full snapshot before this acknowledgement;
+                        // it has no receiver WAL cursor to report.
+                        received.acknowledge_snapshot_durable(true);
                     }
                     if let Some(done) = sender.completed_recovery(receiver_addr).await {
                         break done;
