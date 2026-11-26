@@ -135,31 +135,40 @@ pub fn diagnose(config_path: Option<&Path>, subsystem: Option<&str>) -> DoctorRe
         ),
     };
     let effective = config.clone().unwrap_or_default();
-    let mut all = Vec::new();
-    all.push(config_result);
-    all.extend(check_privileges_and_kernel(&effective));
-    all.extend(check_config_and_schema(config_path, config.as_ref()));
-    all.extend(check_xdp_and_interface(&effective));
-    all.extend(check_ebpf_maps(&effective));
-    all.extend(check_statistical_brains(&effective));
-    all.extend(check_federation_mesh(&effective));
+    if let Some(requested) = subsystem {
+        let Some(selected) = normalize_subsystem(requested) else {
+            return DoctorReport {
+                checks: vec![CheckResult::fail(
+                    "core",
+                    "Subsystem selector",
+                    format!("unknown subsystem '{requested}'"),
+                    "Choose one of: core, config, xdp, maps, stats, mesh.",
+                )],
+            };
+        };
+        let checks = match selected {
+            "core" => check_privileges_and_kernel(&effective),
+            "config" => {
+                let mut checks = vec![config_result];
+                checks.extend(check_config_and_schema(config_path, config.as_ref()));
+                checks
+            }
+            "xdp" => check_xdp_and_interface(&effective),
+            "maps" => check_ebpf_maps(&effective),
+            "stats" => check_statistical_brains(&effective),
+            "mesh" => check_federation_mesh(&effective),
+            _ => unreachable!("normalize_subsystem returns only supported selectors"),
+        };
+        return DoctorReport { checks };
+    }
 
-    let checks = if let Some(filter) = subsystem {
-        match normalize_subsystem(filter) {
-            Some(filter) => all
-                .into_iter()
-                .filter(|check| check.subsystem == filter)
-                .collect(),
-            None => vec![CheckResult::fail(
-                "core",
-                "Subsystem selector",
-                format!("unknown subsystem '{filter}'"),
-                "Choose one of: core, config, xdp, maps, stats, mesh.",
-            )],
-        }
-    } else {
-        all
-    };
+    let mut checks = vec![config_result];
+    checks.extend(check_privileges_and_kernel(&effective));
+    checks.extend(check_config_and_schema(config_path, config.as_ref()));
+    checks.extend(check_xdp_and_interface(&effective));
+    checks.extend(check_ebpf_maps(&effective));
+    checks.extend(check_statistical_brains(&effective));
+    checks.extend(check_federation_mesh(&effective));
     DoctorReport { checks }
 }
 
@@ -613,4 +622,23 @@ fn kernel_release() -> Option<(u32, u32, String)> {
         .parse()
         .ok()?;
     Some((major, minor, release))
+}
+
+#[cfg(test)]
+mod subsystem_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn subsystem_aliases_normalize_to_single_dispatch_targets() {
+        assert_eq!(normalize_subsystem("kernel"), Some("core"));
+        assert_eq!(normalize_subsystem("interface"), Some("xdp"));
+        assert_eq!(normalize_subsystem("ebpf"), Some("maps"));
+        assert_eq!(normalize_subsystem("statistics"), Some("stats"));
+        assert_eq!(normalize_subsystem("federation"), Some("mesh"));
+    }
+
+    #[test]
+    fn unknown_subsystem_is_rejected() {
+        assert_eq!(normalize_subsystem("everything"), None);
+    }
 }
