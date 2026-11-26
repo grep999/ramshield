@@ -267,7 +267,7 @@ async fn run_child(config: ChildConfig) -> ! {
             if let Some(lsn) = end_lsn {
                 frame.acknowledge_with_lsn(true, Some(lsn));
             } else {
-                frame.acknowledge_snapshot_durable(true);
+                frame.acknowledge_durable(true);
             }
         }
         sleep(Duration::from_millis(5)).await;
