@@ -327,15 +327,27 @@ impl MpReachNlri {
     ///
     /// Layout: AFI(2) | SAFI(1) | NH_Len(1) | NH(var) | Reserved(1) | NLRI(var)
     /// Reserved is always present and MUST be 0 per RFC 4760 §3.
+    pub fn try_encode(&self) -> Result<Vec<u8>> {
+        let next_hop_len = u8::try_from(self.next_hop.len()).map_err(|_| {
+            BgpError::Session(format!(
+                "MP_REACH next-hop length {} exceeds the one-octet field",
+                self.next_hop.len()
+            ))
+        })?;
+        let mut buf = Vec::with_capacity(5 + self.next_hop.len() + self.nlri.len());
+        buf.extend_from_slice(&self.afi.to_be_bytes());
+        buf.push(self.safi);
+        buf.push(next_hop_len);
+        buf.extend_from_slice(&self.next_hop);
+        buf.push(0);
+        buf.extend_from_slice(&self.nlri);
+        Ok(buf)
+    }
+
+    /// Compatibility wrapper. Wire-building code should use try_encode so
+    /// invalid next-hop lengths are propagated as errors.
     pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&self.afi.to_be_bytes()); // AFI (2)
-        buf.push(self.safi); // SAFI (1)
-        buf.push(self.next_hop.len() as u8); // NextHop Length (1)
-        buf.extend_from_slice(&self.next_hop); // NextHop (variable)
-        buf.push(0); // Reserved (1) — always present, MUST be 0
-        buf.extend_from_slice(&self.nlri); // NLRI (variable)
-        buf
+        self.try_encode().unwrap_or_default()
     }
 }
 
@@ -487,5 +499,25 @@ mod action_tests {
         assert_eq!(enc[0], 0x80);
         assert_eq!(enc[1], 0x07, "traffic-action sub-type");
         assert_eq!(enc[7] & 0x01, 0x00, "T=0 stops evaluation");
+    }
+}
+
+#[cfg(test)]
+mod mp_reach_bounds_tests {
+    use super::*;
+
+    #[test]
+    fn mp_reach_rejects_next_hop_length_over_255() {
+        let value = MpReachNlri { afi: 1, safi: 1, next_hop: vec![0; 256], nlri: vec![24, 192, 0, 2] };
+        assert!(value.try_encode().is_err());
+        assert!(value.encode().is_empty());
+    }
+
+    #[test]
+    fn mp_reach_encodes_valid_empty_flowspec_next_hop() {
+        let value = MpReachNlri { afi: 1, safi: 133, next_hop: Vec::new(), nlri: vec![1, 1] };
+        let encoded = value.try_encode().unwrap();
+        assert_eq!(encoded[3], 0);
+        assert_eq!(encoded[4], 0);
     }
 }
