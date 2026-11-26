@@ -12,21 +12,6 @@ use tokio::net::TcpStream;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Derive a non-zero BGP identifier from the peer address (FNV-1a, low 16 bits).
-/// ponytail: 16 bits can collide; configure router_id explicitly for large
-/// iBGP meshes where a collision matters.
-fn peer_derived_router_id(peer_ip: IpAddr) -> u32 {
-    let bytes = match peer_ip {
-        IpAddr::V4(v4) => v4.octets().to_vec(),
-        IpAddr::V6(v6) => v6.octets().to_vec(),
-    };
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for b in bytes {
-        hash = (hash ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
-    }
-    0xFFFF_0000u32 | (hash as u16) as u32
-}
-
 /// BGP TCP session management (TCP/179)
 pub struct BgpSession {
     /// TCP stream to peer
