@@ -66,7 +66,6 @@ Optional fields and defaults:
 | Field | Default |
 | --- | --- |
 | `peer_port` | `179` |
-| `router_id` | required: locally assigned unicast IPv4 address (no synthetic default) |
 | `hold_time` | `90` |
 | `keepalive_time` | `hold_time / 3` |
 | `connect_retry_time` | `120` |
