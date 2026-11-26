@@ -62,6 +62,21 @@ impl BgpSession {
         }
     }
 
+    /// Construct a session with an explicitly configured local BGP Identifier.
+    ///
+    /// The identifier is validated before an OPEN message is transmitted.
+    pub fn new_with_router_id(
+        local_asn: u16,
+        peer_asn: u16,
+        peer_ip: IpAddr,
+        peer_port: u16,
+        router_id: std::net::Ipv4Addr,
+    ) -> Self {
+        let mut session = Self::new(local_asn, peer_asn, peer_ip, peer_port);
+        session.router_id = u32::from(router_id);
+        session
+    }
+
     /// Build a session from config, carrying the optional HMAC key.
     pub fn from_config(config: &crate::config::BgpConfig) -> Self {
         let mut session = Self::new(
@@ -110,8 +125,7 @@ impl BgpSession {
         let router_id = std::net::Ipv4Addr::from(self.router_id);
         if router_id.is_unspecified() || router_id.is_multicast() || router_id.is_broadcast() {
             return Err(BgpError::Session(
-                "a locally assigned unicast IPv4 router_id is required before sending OPEN"
-                    .into(),
+                "a locally assigned unicast IPv4 router_id is required before sending OPEN".into(),
             ));
         }
         if hold_time == 1 || hold_time == 2 {
@@ -513,12 +527,7 @@ mod tests {
     #[tokio::test]
     async fn send_open_rejects_invalid_router_ids_before_socket_io() {
         for router_id in [0, 0xE000_0001, u32::MAX] {
-            let mut session = BgpSession::new(
-                65001,
-                65002,
-                "192.0.2.2".parse().unwrap(),
-                179,
-            );
+            let mut session = BgpSession::new(65001, 65002, "192.0.2.2".parse().unwrap(), 179);
             session.router_id = router_id;
             let error = session.send_open(4, 90).await.unwrap_err();
             assert!(
