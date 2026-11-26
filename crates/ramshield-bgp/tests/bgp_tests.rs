@@ -354,13 +354,15 @@ fn test_bgp_fsm_active_and_hold_notification() {
     let peer_ip = std::net::IpAddr::from([198, 51, 100, 1]);
     let mut fsm = BgpFsm::new(65001, 174, peer_ip, 0x0A0B0C0D);
 
-    // Idle -> Connect; connect retry enters Active (RFC 4271 §8.2.2).
+    // Idle -> Connect; a retry timeout initiates another TCP attempt
+    // while remaining in Connect (RFC 4271 §8.2.2).
     fsm.process_event(BgpEvent::ManualStart).unwrap();
     fsm.process_event(BgpEvent::ConnectRetryTimerExpired)
         .unwrap();
-    assert_eq!(fsm.state(), BgpState::Active);
+    assert_eq!(fsm.state(), BgpState::Connect);
 
-    // Active + TCP confirmed -> OpenSent.
+    // Exercise the Active-side confirmation path independently.
+    fsm.attrs.state = BgpState::Active;
     fsm.process_event(BgpEvent::TcpConnectionConfirmed).unwrap();
     assert_eq!(fsm.state(), BgpState::OpenSent);
 
