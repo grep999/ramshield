@@ -362,7 +362,9 @@ impl FlowSpecNLRI {
                 }
                 let value = &comp.pairs[0].value;
                 if value.is_empty() {
-                    return Err(BgpError::Session("FlowSpec prefix is missing prefix length".into()));
+                    return Err(BgpError::Session(
+                        "FlowSpec prefix is missing prefix length".into(),
+                    ));
                 }
                 let prefix_len = value[0] as usize;
                 if prefix_len > 32 {
@@ -681,7 +683,10 @@ mod prefix_validation_tests {
         FlowSpecNLRI {
             components: vec![FlowComponent {
                 comp_type: FlowComponentType::DestPrefix,
-                pairs: vec![FlowPair { operator: FlowOperator::default(), value }],
+                pairs: vec![FlowPair {
+                    operator: FlowOperator::default(),
+                    value,
+                }],
             }],
         }
     }
