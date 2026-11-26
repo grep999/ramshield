@@ -2,7 +2,7 @@
 
 Scope: **self-hosted / sovereign DDoS defense for a single operator's own service**, where you deploy the tool on your own box in front of your reverse proxy. Cloud-any edge scrubbing (Cloudflare, AWS Shield, Imperva) is listed for reference but is a different product class — it cannot be deployed on your hardware and doesn't compete on this axis.
 
-Standard this is measured against: **RFC 9411** (Benchmarking Methodology for Network Security Devices). Full KPI mapping and attack-suite results: `docs/BENCHMARKS.md` and `ramshield-benchmark-suite/references/rfc9411-compliance.md`.
+Standard this is measured against: **RFC 9411** (Benchmarking Methodology for Network Security Devices). Full KPI mapping and attack-suite results: `docs/BENCHMARKS.md`. The older suite reference is not in this checkout; no matrix result is claimed.
 
 ---
 
@@ -52,7 +52,7 @@ Standard this is measured against: **RFC 9411** (Benchmarking Methodology for Ne
 | **Measured performance** | | | | | |
 | Node throughput (eps) | 154,731 | ~85K | not throughput-scored | ~85K | ~320K |
 | Idle RAM footprint | 266 KB | ~10 MB | ~50 MB | <1 MB | <1 MB |
-| False-positive rate (measured) | 0.0000% | N/A | N/A | N/A | N/A |
+| False-positive result (one run) | 0 of 200 good IPs blocked; upper bound 1.5% | N/A | N/A | N/A | N/A |
 
 Legend: ✅ supported · ⚠️ partial / indirect · ❌ not supported
 
@@ -74,7 +74,7 @@ Legend: ✅ supported · ⚠️ partial / indirect · ❌ not supported
 
 ## Where RamShield wins
 
-- **Measured, not claimed.** 154,731 eps single-attacker, 115,278 eps across 50 attackers, 0.0000% false-positive rate over 21.3M events, 52 ms recovery, 266 KB idle RAM — all measured on this repo, methodology and raw output in `docs/BENCHMARKS.md`.
+- **Measured, not claimed.** 154,731 eps single-attacker, 115,278 eps across 50 attackers, 0 of 200 good IPs blocked in one run (rule-of-three upper bound 1.5%; 21.3M is corpus size, not a zero-rate sample), 52 ms recovery, 266 KB idle RAM — all measured on this repo, methodology and raw output in `docs/BENCHMARKS.md`.
 - **Zero external dependency.** No feed, no subscription, no cloud account, no phone-home. Air-gapped deployment is the default, not an enterprise-tier feature.
 - **WAL-durable decisions.** Every block decision survives a crash. A tool that forgets its blocks on restart re-blocks the same attacker on every restart, and can't prove to an auditor what it blocked and when.
 - **Operator-owned.** Sovereign infra operators keep the logs, the blocklist, the telemetry, and the audit trail.

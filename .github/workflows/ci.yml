@@ -141,6 +141,19 @@ jobs:
         run: cargo test -p ramshield-mesh --locked
       - name: Test all features (including mesh integration)
         run: cargo test --workspace --locked --all-features
+      # FAIL_SAFE_BEHAVIOR.md's claims are pinned to source by
+      # tests/fail_safe_claims.rs (F26, docs/development/OPEN_FINDINGS.md).
+      # The output belongs in the job summary, not only in a log tail.
+      - name: Fail-safe claim checks in CI summary
+        run: |
+          set -o pipefail
+          cargo test --locked --test fail_safe_claims 2>&1 | tee fail_safe_claims.log
+          {
+            echo "### Fail-safe claims (tests/fail_safe_claims.rs)"
+            echo '```'
+            cat fail_safe_claims.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Verify C SHM ABI and reader/writer stress
         run: RAMSHIELD_SHM_TSAN=1 scripts/verify_shm_header.sh
 
@@ -196,4 +209,4 @@ jobs:
           tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
           /tmp/actionlint --version
       - name: Lint all workflow files
-        run: /tmp/actionlint .github/workflows/mesh-acceptance-watch.yml .github/workflows/ci.yml
+        run: /tmp/actionlint .github/workflows/*.yml

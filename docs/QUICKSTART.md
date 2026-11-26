@@ -1,6 +1,6 @@
 # RamShield QUICKSTART
 
-Build and run RamShield in 30 seconds.
+Build and run RamShield in 30 seconds. Run `ramshield doctor` first for read-only host/config/XDP diagnostics.
 
 ## First Run (No XDP)
 

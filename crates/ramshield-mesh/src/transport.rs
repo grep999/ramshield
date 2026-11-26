@@ -337,7 +337,11 @@ impl ReceivedMeshMessage {
     /// per-peer replication cursor while the receiver can still lose the
     /// acknowledged state on restart.
     pub fn acknowledge_with_lsn(mut self, accepted: bool, ack_lsn: Option<u64>) {
-        let mut accepted = accepted;
+        // Recovery assembly and completion proofs represent state the receiver
+        // must retain across restart. Without a durable local LSN there is no
+        // evidence that the state survived, so the ACK must be negative.
+        let recovery_durable = ack_lsn.is_some();
+        let mut accepted = accepted && (self.recovery.is_none() || recovery_durable);
         let mut recovery_proof = None;
         match self.recovery.as_ref() {
             Some(ReceivedRecovery::Frame {
@@ -1931,10 +1935,11 @@ mod frame_tests {
     use super::{
         AckEnvelope, Envelope, MAX_CONFIGURED_PEERS, MAX_FRAME, MAX_PEER_READERS,
         MAX_READERS_PER_IP, MAX_SYNC_FRAME_ENTRIES, MeshHandle, MeshMessage, MeshMutationKind,
-        MeshPeer, PeerSendOutcome, RecoveryWireMessage, ReplicatedMeshMutation, TombstoneAck,
-        WireMessage, canonical_tombstone_acks, chunk_sync, now_ms, push_frame_bytes,
-        read_bounded_frame, read_bounded_frame_with_timeout, sign, valid_message,
-        valid_tombstone_acks, validate_bind_args, verify, with_timeout, write_ack_with_timeout,
+        MeshPeer, PeerSendOutcome, ReceivedMeshMessage, ReceivedRecovery, RecoveryAssembly,
+        RecoveryProof, RecoveryWireMessage, ReplicatedMeshMutation, TombstoneAck, WireMessage,
+        canonical_tombstone_acks, chunk_sync, now_ms, push_frame_bytes, read_bounded_frame,
+        read_bounded_frame_with_timeout, sign, valid_message, valid_tombstone_acks,
+        validate_bind_args, verify, with_timeout, write_ack_with_timeout,
     };
     use crate::aworset::{
         AworsetBlocklist, ClusterBlockDelta, ClusterDot, ClusterUnblockDelta, PeerEpoch,
@@ -2760,7 +2765,7 @@ mod frame_tests {
                             }
                             _ => {}
                         }
-                        received.acknowledge(true);
+                        received.acknowledge_with_lsn(true, Some(1));
                     }
                     if let Some(done) = sender.completed_recovery(receiver_addr).await {
                         break done;
@@ -3127,5 +3132,62 @@ mod frame_tests {
             .map(std::collections::VecDeque::len)
             .sum();
         assert_eq!(bounded, 1);
+    }
+
+    /// A recovery completion proof is only valid if the receiver can show a
+    /// durable local LSN. Without it the sender could advance its WAL cursor
+    /// while the receiver loses the acknowledged state on restart.
+    #[test]
+    fn recovery_completion_proof_requires_a_durable_ack_lsn() {
+        let generation = 7;
+        let recovery_id = uuid::Uuid::from_u128(99);
+        let boundary_lsn = 128;
+        let snapshot_digest = "a".repeat(64);
+        let proof = RecoveryProof {
+            generation,
+            recovery_id,
+            boundary_lsn,
+            snapshot_digest: snapshot_digest.clone(),
+            frame_count: 1,
+        };
+        let sessions = std::sync::Arc::new(std::sync::Mutex::new(HashMap::from([(
+            2u32,
+            RecoveryAssembly {
+                generation,
+                recovery_id,
+                boundary_lsn,
+                snapshot_digest: snapshot_digest.clone(),
+                frame_count: 1,
+                frames: vec![None],
+                entry_count: 0,
+                completed_proof: Some(proof),
+            },
+        )])));
+        let (ack_tx, mut ack_rx) = tokio::sync::oneshot::channel();
+        ReceivedMeshMessage {
+            message: MeshMessage::Sync {
+                blocks: vec![],
+                unblocks: vec![],
+            },
+            sender_node_id: 2,
+            recovery: Some(ReceivedRecovery::Complete {
+                generation,
+                recovery_id,
+                boundary_lsn,
+                snapshot_digest,
+                frame_count: 1,
+            }),
+            blocklist: Arc::new(AworsetBlocklist::new(1)),
+            receiver_recovery: sessions,
+            ack: Some(ack_tx),
+        }
+        .acknowledge_with_lsn(true, None);
+
+        let ack = ack_rx.try_recv().expect("receiver answered");
+        assert!(!ack.accepted, "non-durable recovery must not be accepted");
+        assert!(
+            ack.recovery_proof.is_none(),
+            "no completion proof without a durable local LSN"
+        );
     }
 }

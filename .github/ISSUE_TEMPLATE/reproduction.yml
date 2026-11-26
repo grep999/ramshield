@@ -1,0 +1,39 @@
+name: Reproduction
+description: Report a reproducible command or benchmark result
+title: "[REPRO] <title>"
+labels: ["triage"]
+body:
+  - type: textarea
+    id: claim
+    attributes:
+      label: Claim under test
+      description: One sentence only.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Commit SHA, kernel, CPU, cores, rustc.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Raw output
+      description: Paste unedited stdout/stderr or attach the file.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: variance
+    attributes:
+      label: Variance vs published result
+      description: What changed and what did not.

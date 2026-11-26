@@ -1,0 +1,39 @@
+name: Benchmark
+description: Submit a benchmark with raw data and environment
+title: "[BENCH] <title>"
+labels: ["triage"]
+body:
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Commit SHA, kernel, CPU, cores, rustc, RAM.
+    validations:
+      required: true
+  - type: textarea
+    id: raw
+    attributes:
+      label: Raw data
+      description: CSV/JSON/text. Do not summarize only.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: sessions
+    attributes:
+      label: Sessions
+      description: How many runs, warmup, and variance.
+    validations:
+      required: true
+  - type: textarea
+    id: failures
+    attributes:
+      label: Failures / caveats
+      description: What failed or was not measured.

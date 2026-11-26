@@ -1,5 +1,7 @@
 # RamShield — Self-Hosted Linux Ingress Defense
 
+Rust + XDP/eBPF L3/L4 defense for one Linux host. Single binary, local WAL durability, no cloud account, no feed dependency. Not a WAF; see [Boundaries](docs/BOUNDARIES.md).
+
 Detects and blocks abusive traffic at the kernel (XDP/eBPF) level.
 For self-hosted/sovereign infra operators who can't afford enterprise DDoS mitigation.
 Run it locally or behind your reverse proxy. No cloud dependency. No subscription. Just Rust.
@@ -184,6 +186,9 @@ Dashboard and API are available from the same local service.
 - **WAL Recovery Time:** `<60 ms` to restore state across restarts
 
 ### Reproducing benchmarks
+
+See [docs/REPRODUCE.md](docs/REPRODUCE.md) for the exact command, environment capture, and evidence rules. The figures above are historical single-run E1 results; raw data is not in-tree.
+
 ```bash
 cargo bench --bench hot_paths
 cargo bench --bench field_day
@@ -210,7 +215,7 @@ cargo bench --bench field_day
 
 ## Documentation
 
-[Quickstart](docs/QUICKSTART.md) · [Operations](docs/OPERATIONS.md) · [Configuration](docs/CONFIGURATION.md) · [Dashboard access](docs/DASHBOARD_AUTH.md) · [Architecture](docs/ARCHITECTURE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Development](docs/DEVELOPMENT.md)
+[Quickstart](docs/QUICKSTART.md) · [Doctor](docs/DOCTOR.md) · [Demo transcript](docs/DEMO_TRANSCRIPT.md) · [Operations](docs/OPERATIONS.md) · [Configuration](docs/CONFIGURATION.md) · [Dashboard access](docs/DASHBOARD_AUTH.md) · [Architecture](docs/ARCHITECTURE.md) · [Engine comparison](docs/ENGINE_COMPARISON.md) · [Boundaries](docs/BOUNDARIES.md) · [Reproduce](docs/REPRODUCE.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Development](docs/DEVELOPMENT.md)
 
 ## Development
 

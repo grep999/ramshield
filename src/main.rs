@@ -8,10 +8,12 @@ use tracing_subscriber::EnvFilter;
 /// the config file. Unknown flags and missing values are FATAL — the old
 /// parser silently dropped unrecognized arguments, so `./ramshield config.toml`
 /// (positional) booted on compiled-in defaults with the file ignored.
-fn parse_args(args: &[String]) -> Result<(Option<String>, bool, bool, bool)> {
+#[allow(clippy::type_complexity)]
+fn parse_args(args: &[String]) -> Result<(Option<String>, bool, bool, bool, Option<String>)> {
     let mut config_path: Option<String> = None;
     let mut no_xdp = false;
     let mut doctor = false;
+    let mut subsystem: Option<String> = None;
     let mut validate = false;
     let mut i = 1;
     while i < args.len() {
@@ -34,6 +36,16 @@ fn parse_args(args: &[String]) -> Result<(Option<String>, bool, bool, bool)> {
                 doctor = true;
                 i += 1;
             }
+            "--subsystem" => {
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| anyhow::anyhow!("--subsystem requires a name"))?;
+                if subsystem.is_some() {
+                    anyhow::bail!("multiple doctor subsystems given");
+                }
+                subsystem = Some(v.clone());
+                i += 2;
+            }
             "--validate" => {
                 validate = true;
                 i += 1;
@@ -50,7 +62,10 @@ fn parse_args(args: &[String]) -> Result<(Option<String>, bool, bool, bool)> {
             }
         }
     }
-    Ok((config_path, no_xdp, doctor, validate))
+    if subsystem.is_some() && !doctor {
+        anyhow::bail!("--subsystem requires the doctor command");
+    }
+    Ok((config_path, no_xdp, doctor, validate, subsystem))
 }
 
 /// Doctor defaults to the canonical baseline profile. An explicit CLI config
@@ -78,8 +93,13 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
-    let (config_path, no_xdp, doctor, validate) = parse_args(&args)?;
+    let (config_path, no_xdp, doctor, validate, subsystem) = parse_args(&args)?;
     let config_path = doctor_config_path(config_path, doctor);
+
+    if doctor {
+        let path = config_path.as_deref().map(std::path::Path::new);
+        std::process::exit(ramshield::doctor::run(path, subsystem.as_deref()));
+    }
 
     // --validate: pre-flight hook for systemd `ExecStartPre`. Load + validate
     // the service config, print the verdict, exit 0/1. Does not start the engine.
@@ -156,11 +176,6 @@ async fn main() -> Result<()> {
     // P1-7: no TLS in the stack — surface any public-bind exposure at boot.
     for w in config.exposure_warnings() {
         tracing::warn!("{w}");
-    }
-
-    if doctor {
-        run_doctor(&config);
-        return Ok(());
     }
 
     // Start RamShield normally
@@ -267,63 +282,9 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn command_succeeded(command: &mut std::process::Command) -> bool {
     command.output().is_ok_and(|output| output.status.success())
-}
-
-/// Check host readiness against the already resolved, validated config.
-/// Exit 0 if all gates pass.
-fn run_doctor(config: &Config) {
-    let mut problems: Vec<String> = Vec::new();
-    // kernel
-    let krn = std::process::Command::new("uname")
-        .arg("-r")
-        .output()
-        .map(|o| String::from_utf8(o.stdout).unwrap_or_else(|_| "unknown".into()))
-        .unwrap_or("unknown".into());
-    info!("doctor: kernel {krn}");
-    // Use the exact effective config loaded by main; do not reload a second path.
-    let wal_dir = &config.wal.dir;
-    if std::path::Path::new(wal_dir).exists() {
-        info!("doctor: WAL dir {wal_dir} exists");
-    } else {
-        problems.push(format!("WAL dir {wal_dir}: not found"));
-    }
-    if !config.ipc.auth_keys.is_empty() {
-        info!("doctor: IPC auth configured");
-    } else {
-        problems.push("IPC auth_keys empty".into());
-    }
-    let iface = &config.xdp.interface;
-    let mut iface_check = std::process::Command::new("ip");
-    iface_check.args(["link", "show"]).arg(iface);
-    let iface_ok = command_succeeded(&mut iface_check);
-    if iface_ok {
-        info!("doctor: XDP interface {iface} exists");
-    } else {
-        problems.push(format!("XDP interface {iface}: not found"));
-    }
-    // caps
-    let bin = std::env::args().next().unwrap_or("ramshield".into());
-    let caps = std::process::Command::new("getcap")
-        .arg(bin)
-        .output()
-        .map(|o| String::from_utf8(o.stdout).unwrap_or_default())
-        .unwrap_or("".into());
-    if caps.contains("cap_bpf") || caps.contains("cap_net_admin") {
-        info!("doctor: capabilities present");
-    } else {
-        problems.push("cap_bpf/cap_net_admin not set (needed for XDP)".into());
-    }
-    if problems.is_empty() {
-        info!("doctor: all checks passed");
-        std::process::exit(0);
-    } else {
-        for p in problems {
-            tracing::error!("doctor: {p}");
-        }
-        std::process::exit(1);
-    }
 }
 
 #[cfg(test)]
@@ -388,7 +349,7 @@ mod cli_tests {
     #[test]
     fn no_xdp_flag_is_recognized() {
         // prod_smoke.sh boots with --no-xdp; the parser must not reject it.
-        let (path, no_xdp, _doctor, _something) =
+        let (path, no_xdp, _doctor, _validate, _subsystem) =
             parse_args(&args(&["--no-xdp", "--config", "a.toml"])).unwrap();
         assert!(no_xdp);
         assert_eq!(path, Some("a.toml".into()));
@@ -416,5 +377,31 @@ mod cli_tests {
     #[test]
     fn empty_is_none() {
         assert_eq!(parse_args(&args(&[])).unwrap().0, None);
+    }
+
+    #[test]
+    fn doctor_subsystem_is_routed() {
+        let parsed = parse_args(&args(&["doctor", "--subsystem", "xdp"])).unwrap();
+        assert!(parsed.2);
+        assert_eq!(parsed.4.as_deref(), Some("xdp"));
+    }
+
+    #[test]
+    fn subsystem_requires_doctor() {
+        assert!(parse_args(&args(&["--subsystem", "xdp"])).is_err());
+    }
+
+    #[test]
+    fn duplicate_subsystem_is_fatal() {
+        assert!(
+            parse_args(&args(&[
+                "doctor",
+                "--subsystem",
+                "xdp",
+                "--subsystem",
+                "maps"
+            ]))
+            .is_err()
+        );
     }
 }

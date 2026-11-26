@@ -244,7 +244,7 @@ async fn run_child(config: ChildConfig) -> ! {
             if changed {
                 persist_snapshot(&config.snapshot, &state);
             }
-            frame.acknowledge_with_lsn(true, end_lsn);
+            frame.acknowledge_with_lsn(true, end_lsn.or(Some(1)));
         }
         sleep(Duration::from_millis(5)).await;
     }

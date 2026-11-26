@@ -1,6 +1,6 @@
 # Benchmarks — RamShield v0.3.4
 
-All numbers below were measured on 2026-10-05, on the machine running this repo, with the pinned nightly toolchain. They are **measured**, not estimated: raw output is in `/tmp/ramshield_bench_hot.txt` and `/tmp/ramshield_bench_field.txt`.
+All numbers below were measured on 2026-10-05, on the machine running this repo, with the pinned nightly toolchain. They are **measured**, not estimated. The original raw files (`/tmp/ramshield_bench_hot.txt`, `/tmp/ramshield_bench_field.txt`) were not retained in this checkout; every figure below cites its in-tree source and the single-run caveat at the end of this document applies.
 
 Two benches exist in the repo:
 
@@ -11,7 +11,7 @@ cargo bench --bench field_day --features full   # full detection pipeline + enfo
 
 Both use the `harness = false` manual harness (no criterion). Each bench warms up 1000 iterations, then times `n` steady-state iterations and divides. Per-flush granularity: one iteration = one full flush, not one event.
 
-The test suite is **RFC 9411** (Benchmarking Methodology for Network Security Devices, March 2023). That's the standard for DDoS / security-device performance claims — not a generic "run it and see" harness. The mapping from RamShield's suite to the RFC's mandatory KPIs, and the attack-effectiveness matrix (DDactic, 213 vectors × 6 architectures), is in `ramshield-benchmark-suite/references/rfc9411-compliance.md`.
+The test suite is **RFC 9411** (Benchmarking Methodology for Network Security Devices, March 2023). That's the standard for DDoS / security-device performance claims — not a generic "run it and see" harness. The KPI mapping is in the table below. An older suite scaffold claimed a "DDactic, 213 vectors × 6 architectures" matrix; that scaffold is not in this checkout, so no matrix result is claimed here.
 
 ---
 
@@ -160,7 +160,7 @@ The RFC-mapped suite runs 21 tests (12 from the v2 suite, 9 from the v3 suite) c
 | Raw IPC throughput (HMAC-signed) | 126,087 eps | ✅ |
 | Probe oracle (T18) — availability under attack | 100% baseline / 100% under attack (0% degradation) | ✅ |
 | Heavy impact (T19 background + attack) | 79,260 → 5,191 eps (93.5% BG degradation) | ❌ IPC backpressure |
-| False positive rate (T14) | 0.0000% — 0 of 200 good IPs blocked | ✅ |
+| False positive result (T14) | 0 of 200 good IPs blocked in one run (upper bound 1.5%) | ✅ |
 | Sub-threshold hold (T17) | 0 blocks at 1 IP × 10 eps × 30s | ✅ |
 | Subnet aggregation (T16) | 2 blocks for a 51-IP /24 flood at 82K eps | ✅ |
 | Reporting accuracy (T15 recovery) | 52 ms unblock → snapshot reflect | ✅ (<1s) |
@@ -194,14 +194,14 @@ The RFC-mapped suite runs 21 tests (12 from the v2 suite, 9 from the v3 suite) c
 | GoRateLimit (golang.org/x/time/rate tier) | ~250 Gbps simulated | Single-node token bucket | ~320K | Token bucket only |
 | **RamShield** | ~1.2 Gbps simulated | Single-node EWMA + batch + XDP | **154,731 (measured)** | EWMA + CUSUM + pulse + Bayesian forecast + subnet aggregation |
 
-The comparison is apples-to-apples only on the bottom four rows: those are all single-node, operator-deployed systems that sit in front of your own service. The top three are anycast networks — they are not comparable on any single-node axis and shouldn't be presented as if they were. RamShield's claim is not "faster than Cloudflare"; it's that a sovereign operator with no cloud budget gets EWMA + CUSUM + pulse + Bayesian forecasting + /24 swarm detection + XDP kernel enforcement + WAL-durable blocks on one box, with a measured 154K eps and a 0.0000% false-positive rate.
+The comparison is apples-to-apples only on the bottom four rows: those are all single-node, operator-deployed systems that sit in front of your own service. The top three are anycast networks — they are not comparable on any single-node axis and shouldn't be presented as if they were. RamShield's claim is not "faster than Cloudflare"; it's that a sovereign operator with no cloud budget gets EWMA + CUSUM + pulse + Bayesian forecasting + /24 swarm detection + XDP kernel enforcement + WAL-durable blocks on one box, with a measured 154K eps and 0 of 200 good IPs blocked in one run (upper bound 1.5%).
 
 **Where RamShield loses, stated plainly:**
 - Against fail2ban / CrowdSec: those have mature community blocklists and a decade of log-parsing coverage. RamShield is detection-from-first-principles, not a ruleset you inherit.
 - Against nginx `limit_req` / GoRateLimit: simpler tools, simpler to reason about, and at small scale the performance difference doesn't matter.
 - Against Cloudflare / AWS / Imperva: anycast scrubbing at the edge. RamShield cannot absorb a multi-Tbps volumetric attack — it operates at the last mile, in front of one service. That is the design point, not a bug.
 
-|**Where RamShield wins:** zero-FPR (measured, not claimed), 266 KB idle RAM footprint, WAL-durable blocks with 52 ms recovery, XDP kernel-level drop, and no external feed, subscription, or cloud dependency.
+|**Where RamShield wins:** 0 of 200 good IPs blocked in one run (rule-of-three upper bound 1.5%, not a measured zero rate), 266 KB idle RAM footprint, WAL-durable blocks with 52 ms recovery, XDP kernel-level drop, and no external feed, subscription, or cloud dependency.
 
 |**Regression budgets (evidence-based)**|
 
@@ -231,6 +231,6 @@ cargo bench --bench hot_paths --features full
 cargo bench --bench field_day --features full
 ```
 
-The attack suite (21 phases, RFC-mapped) runs against a live daemon — see `ramshield-benchmark-suite/references/live-testing-harness.md`. It requires the daemon on `127.0.0.1:7890` (IPC) and `:9999` (dashboard), and injects synthetic IPC events; no packets leave the host.
+The 21-phase suite ran against a live daemon over synthetic IPC events — no packets leave the host — on IPC `127.0.0.1:7890` and dashboard `:9999`. Its script and reference doc were removed from this checkout; no runnable suite is claimed here, and the figures above are historical single-run results from 2026-10-05 (prior suite run @ `61b9a78`, 2026-09-05).
 
-**Methodology caveats:** both benches are single-run, single-machine, no statistical repetition — treat them as an order-of-magnitude characterization, not a publication-grade measurement. The pipeline benches measure in-process paths only; IPC serialization, HMAC verification, and the daemon's own tokio scheduling are outside the measured region and are what make the end-to-end eps (126K–154K) lower than the primitive ops/s figures above. Any number here that isn't in the two raw files above is a claim I did not measure myself, and is labeled as such by its citation.
+**Methodology caveats:** both benches are single-run, single-machine, no statistical repetition — treat them as an order-of-magnitude characterization, not a publication-grade measurement. The pipeline benches measure in-process paths only; IPC serialization, HMAC verification, and the daemon's own tokio scheduling are outside the measured region and are what make the end-to-end eps (126K–154K) lower than the primitive ops/s figures above. Any number here that is not reproducible from `benches/hot_paths.rs` or `benches/field_day.rs` is a historical claim I did not re-measure in this checkout, and is labeled as such by its citation.

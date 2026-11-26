@@ -35,7 +35,7 @@ const TP_STATUS_KERNEL: u32 = 0;
 #[cfg(target_os = "linux")]
 const TP_STATUS_USER: u32 = 1;
 #[cfg(target_os = "linux")]
-const TPACKET_ALIGNMENT: usize = 16;
+const TPACKET_V3_ALIGNMENT: usize = 8;
 
 #[cfg(target_os = "linux")]
 #[repr(C)]
@@ -874,7 +874,7 @@ fn checked_tpacket_header_offset(
     let header_size = std::mem::size_of::<Tpacket3Hdr>();
     if !valid_tpacket_block_len(blk_len, block_size)
         || off < std::mem::size_of::<TpacketBlockDesc>()
-        || !off.is_multiple_of(std::mem::align_of::<Tpacket3Hdr>())
+        || !off.is_multiple_of(TPACKET_V3_ALIGNMENT)
     {
         return None;
     }
@@ -925,7 +925,7 @@ fn checked_next_tpacket_offset(
         };
     }
     #[allow(clippy::manual_is_multiple_of)]
-    if next % TPACKET_ALIGNMENT != 0 {
+    if next % TPACKET_V3_ALIGNMENT != 0 {
         return Err("tp_next_offset is misaligned");
     }
     let aligned = next;
@@ -1410,6 +1410,8 @@ mod tpacket_tests {
         assert!(checked_tpacket_header_offset(0, 128, 128, 128, 128).is_none());
         assert!(checked_tpacket_header_offset(0, 128, 128, 128, 128 - hdr + 1).is_none());
         assert!(checked_tpacket_header_offset(0, 128, 128, 128, desc + 1).is_none());
+        // 4-byte alignment is not enough for TPACKET_V3 descriptors.
+        assert!(checked_tpacket_header_offset(0, 128, 128, 128, desc + 4).is_none());
         assert!(checked_tpacket_header_offset(0, 128, 128, 128, desc).is_some());
     }
 
@@ -1448,6 +1450,11 @@ mod tpacket_tests {
         assert_eq!(
             checked_next_tpacket_offset(48, 48, false, 192, 192),
             Ok(Some(96))
+        );
+        // V3 strides are 8-byte aligned; 56 is not 16-byte aligned.
+        assert_eq!(
+            checked_next_tpacket_offset(48, 56, false, 192, 192),
+            Ok(Some(104))
         );
     }
 
@@ -1597,7 +1604,7 @@ mod tpacket_tests {
 
         // next whose *aligned* stride is still shorter than a header.
         for next in 1..hdr {
-            let aligned = (next + TPACKET_ALIGNMENT - 1) & !(TPACKET_ALIGNMENT - 1);
+            let aligned = (next + TPACKET_V3_ALIGNMENT - 1) & !(TPACKET_V3_ALIGNMENT - 1);
             if aligned < hdr {
                 assert!(
                     checked_next_tpacket_offset(off, next, false, blk_len, block_size).is_err(),
@@ -1607,7 +1614,7 @@ mod tpacket_tests {
         }
 
         // Aligned step that lands a full header inside the block.
-        let step = hdr.div_ceil(TPACKET_ALIGNMENT) * TPACKET_ALIGNMENT;
+        let step = hdr.div_ceil(TPACKET_V3_ALIGNMENT) * TPACKET_V3_ALIGNMENT;
         assert!(step >= hdr);
         let next_off = checked_next_tpacket_offset(off, step, false, blk_len, block_size)
             .expect("aligned step");

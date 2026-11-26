@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Start with the symptom, then check the component that owns it.
+Start with the symptom, then check the component that owns it. Run `ramshield doctor` first for a read-only report.
 
 ## RamShield will not start
 

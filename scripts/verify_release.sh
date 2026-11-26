@@ -6,6 +6,10 @@ PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf 'PASS %s\n' "$*"; }
 bad(){ FAIL=$((FAIL+1)); printf 'FAIL %s\n' "$*"; }
 V="$(scripts/release_version.sh)"; [[ -n "$V" ]] && ok "version $V" || bad version
+# Dependency pinning: lockfile present, tracked, and free of unpinned git sources.
+[[ -f Cargo.lock ]] && ok 'Cargo.lock present' || bad 'Cargo.lock missing'
+git ls-files --error-unmatch Cargo.lock >/dev/null 2>&1 && ok 'Cargo.lock tracked' || bad 'Cargo.lock untracked'
+! grep -q 'source = "git' Cargo.lock && ok 'no unpinned git dependencies' || bad 'git dependency in Cargo.lock'
 # Version identity (Part 1 #4): debian/control and the installer fallback tag
 # must match Cargo.toml — Cargo.toml is the single source of truth.
 grep -q "^Version: $V$" debian/control && ok 'debian/control version matches Cargo' || bad 'debian/control version drift'
