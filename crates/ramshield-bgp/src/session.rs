@@ -204,7 +204,7 @@ impl BgpSession {
             next_hop: Vec::new(), // RFC 8955 section 4: length MUST be 0
             nlri: encoded,
         }
-        .encode();
+        .try_encode()?;
         let mp_reach_attr = PathAttr {
             flags: PathAttrFlags {
                 optional: true,
