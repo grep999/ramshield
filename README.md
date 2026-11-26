@@ -128,9 +128,12 @@ RamShield exposes the XDP state so you can see whether the kernel dataplane is a
 | [ramshield-config](crates/ramshield-config/README.md) | TOML config, validation, env overrides |
 | [ramshield-types](crates/ramshield-types/README.md) | IP networks, ConnectionEvent, IpRecord, CGNAT tiers |
 | [ramshield-detection](crates/ramshield-detection/README.md) | EWMA + CUSUM + Pulse + Subnet/swarm detection |
+| [ramshield-forecasting](crates/ramshield-forecasting/README.md) | Holt-Winters, EWMA/CUSUM, Bayesian forecasting |
 | [ramshield-enforcement](crates/ramshield-enforcement/README.md) | XDP projection, reconcile, block-state transition |
+| [ramshield-metrics](crates/ramshield-metrics/README.md) | Dashboard snapshot and Prometheus text metrics |
 | [ramshield-storage](crates/ramshield-storage/README.md) | WAL, checkpoint, snapshots, recovery |
-| [ramshield-mesh](crates/ramshield-mesh/README.md) | CRDT Aworset sync (disabled in production) |
+| [ramshield-mesh](crates/ramshield-mesh) | CRDT Aworset sync (disabled in production) |
+| [ramshield-bgp](crates/ramshield-bgp/README.md) | Minimal eBGP speaker: RTBH + Flowspec signaling (HMAC framing WIP) |
 | [ramshield-xdp](crates/ramshield-xdp/README.md) | eBPF XDP engine (kernel dataplane) |
 | [ramshield-protocol](crates/ramshield-protocol/README.md) | IPC JSON framing, HMAC auth, replay store |
 | [ramshield-cgnat](crates/ramshield-cgnat/README.md) | CGNAT deployment with shm tables and classification |
