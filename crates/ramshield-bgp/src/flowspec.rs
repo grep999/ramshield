@@ -290,9 +290,12 @@ impl FlowComponent {
                 break;
             }
         }
-        // RFC 8955 §4.2.1.1: the AND bit is always unset on the first pair.
-        if let Some(first) = pairs.first_mut() {
-            first.operator.and_mask = false;
+        // RFC 8955 §4.2.1.1: a set AND bit on the first pair is
+        // malformed NLRI; reject it rather than silently normalizing input.
+        if pairs.first().is_some_and(|first| first.operator.and_mask) {
+            return Err(BgpError::Session(
+                "FlowSpec first pair must have AND bit 0".into(),
+            ));
         }
         Ok((FlowComponent { comp_type, pairs }, offset))
     }
@@ -645,8 +648,9 @@ mod tests {
     }
 
     #[test]
-    fn decode_clears_and_bit_on_first_pair() {
-        let (nlri, _) = FlowSpecNLRI::decode(&[0x03, 0x03, 0xC1, 17]).unwrap();
+    fn decode_rejects_and_bit_on_first_pair() {
+        assert!(FlowSpecNLRI::decode(&[0x03, 0x03, 0xC1, 17]).is_err());
+        let (nlri, _) = FlowSpecNLRI::decode(&[0x03, 0x03, 0x81, 17]).unwrap();
         assert!(!nlri.components[0].pairs[0].operator.and_mask);
     }
 
