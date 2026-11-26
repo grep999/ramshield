@@ -511,16 +511,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_open_rejects_non_unicast_router_id_before_socket_io() {
-        let mut session = BgpSession::new(
-            65001,
-            65002,
-            "192.0.2.2".parse().unwrap(),
-            179,
-        );
-        session.router_id = 0xE000_0001;
-        let error = session.send_open(4, 90).await.unwrap_err();
-        assert!(error.to_string().contains("unicast"));
+    async fn send_open_rejects_invalid_router_ids_before_socket_io() {
+        for router_id in [0, 0xE000_0001, u32::MAX] {
+            let mut session = BgpSession::new(
+                65001,
+                65002,
+                "192.0.2.2".parse().unwrap(),
+                179,
+            );
+            session.router_id = router_id;
+            let error = session.send_open(4, 90).await.unwrap_err();
+            assert!(
+                error.to_string().contains("unicast"),
+                "router_id {router_id:#010x} should be rejected: {error}"
+            );
+        }
     }
 
     #[test]
