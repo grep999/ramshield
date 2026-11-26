@@ -114,9 +114,13 @@ impl BgpConfig {
                 "schmitt_disengage_secs must exceed schmitt_engage_secs".into(),
             ));
         }
-        if self.local_asn == self.peer_asn && self.router_id == 0 {
+        // RFC 4271 §4.2: the BGP Identifier is the identity of this local
+        // speaker, not a value that can be synthesized from its peer or ASN.
+        // It must be explicitly configured for both eBGP and iBGP.
+        if self.router_id == 0 {
             return Err(BgpError::Session(
-                "iBGP requires an explicit non-zero router_id (RFC 4271 §6.4)".into(),
+                "BGP requires an explicit non-zero, locally assigned router_id (RFC 4271 §4.2)"
+                    .into(),
             ));
         }
         if self.peer_shared_key.as_ref().is_some_and(|k| k.is_empty()) {
@@ -273,6 +277,15 @@ mod tests {
                 },
             ),
             (
+                "eBGP zero router-id",
+                BgpConfig {
+                    local_asn: 65001,
+                    peer_asn: 174,
+                    router_id: 0,
+                    ..base.clone()
+                },
+            ),
+            (
                 "empty key",
                 BgpConfig {
                     peer_shared_key: Some(Vec::new()),
@@ -286,22 +299,29 @@ mod tests {
     }
 
     #[test]
-    fn validate_accepts_defaults() {
-        assert!(BgpConfig::default().validate().is_ok());
-        // eBGP needs no explicit router-id.
-        let cfg = BgpConfig {
-            local_asn: 65001,
-            peer_asn: 174,
-            router_id: 0,
-            ..BgpConfig::default()
+    fn validate_requires_explicit_local_router_id_for_ebgp_and_ibgp() {
+        let defaults = BgpConfig::default();
+        assert!(defaults.validate().is_err());
+
+        let configured = BgpConfig {
+            router_id: 0xC000_0201,
+            ..defaults
         };
-        assert!(cfg.validate().is_ok());
+        assert!(configured.validate().is_ok());
+
+        let ibgp = BgpConfig {
+            local_asn: 65001,
+            peer_asn: 65001,
+            router_id: 0xC000_0201,
+            ..configured
+        };
+        assert!(ibgp.validate().is_ok());
     }
 
     #[test]
     fn from_toml_parses_optional_runtime_knobs() {
         let cfg = BgpConfig::from_toml(
-            "local_asn = 65001\npeer_asn = 65002\npeer_ip = \"10.0.0.1\"\n\
+            "local_asn = 65001\npeer_asn = 65002\npeer_ip = \"10.0.0.1\"\nrouter_id = 3221225985\n\
              hold_time = 90\nkeepalive_time = 20\nmax_reconnect_attempts = 3\n\
              schmitt_engage_secs = 7\nschmitt_disengage_secs = 21\n",
         )
@@ -315,14 +335,14 @@ mod tests {
     #[test]
     fn from_toml_derives_keepalive_and_validates() {
         let cfg = BgpConfig::from_toml(
-            "local_asn = 65001\npeer_asn = 65002\npeer_ip = \"10.0.0.1\"\nhold_time = 60\n",
+            "local_asn = 65001\npeer_asn = 65002\npeer_ip = \"10.0.0.1\"\nrouter_id = 3221225985\nhold_time = 60\n",
         )
         .unwrap();
         assert_eq!(cfg.keepalive_time, 20);
 
         assert!(
             BgpConfig::from_toml(
-                "local_asn = 65001\npeer_asn = 65002\npeer_ip = \"10.0.0.1\"\nhold_time = 1\n",
+                "local_asn = 65001\npeer_asn = 65002\npeer_ip = \"10.0.0.1\"\nrouter_id = 3221225985\nhold_time = 1\n",
             )
             .is_err()
         );
