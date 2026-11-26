@@ -243,6 +243,14 @@ impl FlowComponent {
                     got: buf.len(),
                 });
             }
+            if prefix_len % 8 != 0 && octets > 0 {
+                let host_mask = (1u8 << (8 - (prefix_len % 8))) - 1;
+                if buf[end - 1] & host_mask != 0 {
+                    return Err(BgpError::Session(
+                        "FlowSpec prefix contains non-zero host bits".into(),
+                    ));
+                }
+            }
             return Ok((
                 FlowComponent {
                     comp_type,
@@ -343,7 +351,41 @@ impl FlowSpecNLRI {
         for comp in &self.components {
             // RFC 8955 §4.2.1.1: the AND bit must be 0 on the first pair of
             // a sequence. §4.2.1: operand length must match the value length.
-            if !comp.comp_type.is_prefix() {
+            if comp.comp_type.is_prefix() {
+                if comp.pairs.len() != 1 {
+                    return Err(BgpError::Session(
+                        "FlowSpec prefix component must contain exactly one prefix".into(),
+                    ));
+                }
+                let value = &comp.pairs[0].value;
+                if value.is_empty() {
+                    return Err(BgpError::Session("FlowSpec prefix is missing prefix length".into()));
+                }
+                let prefix_len = value[0] as usize;
+                if prefix_len > 32 {
+                    return Err(BgpError::InvalidPrefixLen(value[0]));
+                }
+                let octets = prefix_len.div_ceil(8);
+                if value.len() != octets + 1 {
+                    return Err(BgpError::Session(format!(
+                        "FlowSpec /{prefix_len} prefix requires {octets} octets, got {}",
+                        value.len().saturating_sub(1)
+                    )));
+                }
+                if prefix_len % 8 != 0 && octets > 0 {
+                    let host_mask = (1u8 << (8 - (prefix_len % 8))) - 1;
+                    if value[octets] & host_mask != 0 {
+                        return Err(BgpError::Session(
+                            "FlowSpec prefix contains non-zero host bits".into(),
+                        ));
+                    }
+                }
+            } else {
+                if comp.pairs.is_empty() {
+                    return Err(BgpError::Session(
+                        "FlowSpec numeric component must contain at least one pair".into(),
+                    ));
+                }
                 for (i, pair) in comp.pairs.iter().enumerate() {
                     if pair.operator.and_mask && i == 0 {
                         return Err(BgpError::Session(
@@ -624,5 +666,48 @@ mod tests {
         let (decoded, used) = FlowSpecNLRI::decode(&encoded).unwrap();
         assert_eq!(used, encoded.len());
         assert_eq!(decoded, fs);
+    }
+}
+
+#[cfg(test)]
+mod prefix_validation_tests {
+    use super::*;
+
+    fn prefix_component(value: Vec<u8>) -> FlowSpecNLRI {
+        FlowSpecNLRI {
+            components: vec![FlowComponent {
+                comp_type: FlowComponentType::DestPrefix,
+                pairs: vec![FlowPair { operator: FlowOperator::default(), value }],
+            }],
+        }
+    }
+
+    #[test]
+    fn encode_rejects_prefix_length_over_32() {
+        assert!(prefix_component(vec![33, 192, 0, 2, 0]).encode().is_err());
+    }
+
+    #[test]
+    fn encode_requires_exact_prefix_octet_count() {
+        assert!(prefix_component(vec![24, 192, 0]).encode().is_err());
+        assert!(prefix_component(vec![24, 192, 0, 2, 0]).encode().is_err());
+    }
+
+    #[test]
+    fn encode_rejects_noncanonical_host_bits() {
+        assert!(prefix_component(vec![25, 192, 0, 2, 1]).encode().is_err());
+    }
+
+    #[test]
+    fn decode_rejects_noncanonical_host_bits() {
+        assert!(FlowSpecNLRI::decode(&[5, 1, 25, 192, 0, 2]).is_ok());
+        assert!(FlowSpecNLRI::decode(&[5, 1, 25, 192, 0, 3]).is_err());
+    }
+
+    #[test]
+    fn prefix_component_requires_exactly_one_prefix() {
+        let mut nlri = prefix_component(vec![24, 192, 0, 2]);
+        nlri.components[0].pairs.push(nlri.components[0].pairs[0].clone());
+        assert!(nlri.encode().is_err());
     }
 }
