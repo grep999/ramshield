@@ -124,15 +124,16 @@ impl BgpFsm {
                 // RFC 4271 §8.2.2: a failed TCP attempt releases the
                 // connection resources and returns the peer FSM to Idle.
                 self.attrs.state = BgpState::Idle;
-                actions.push(TransitionAction::IncrementRetry);
                 actions.push(TransitionAction::ClearConnectRetryTimer);
                 actions.push(TransitionAction::CloseTcp);
+                actions.push(TransitionAction::IncrementRetry);
             }
             (BgpState::Connect, BgpEvent::ConnectRetryTimerExpired) => {
                 // RFC 4271 §8.2.2: retry from Connect initiates another TCP
                 // attempt while remaining in Connect.
-                actions.push(TransitionAction::EstablishTcp);
+                actions.push(TransitionAction::CloseTcp);
                 actions.push(TransitionAction::StartConnectRetryTimer);
+                actions.push(TransitionAction::EstablishTcp);
             }
 
             // Active state
@@ -146,23 +147,23 @@ impl BgpFsm {
                 // RFC 4271 §8.2.2: restart retry timing, release resources,
                 // and return to Idle after the TCP connection fails.
                 self.attrs.state = BgpState::Idle;
-                actions.push(TransitionAction::IncrementRetry);
                 actions.push(TransitionAction::StartConnectRetryTimer);
                 actions.push(TransitionAction::CloseTcp);
+                actions.push(TransitionAction::IncrementRetry);
             }
             (BgpState::Active, BgpEvent::ConnectRetryTimerExpired) => {
                 // RFC 4271 §8.2.2: retry from Active returns to Connect and
                 // initiates a new outbound TCP connection.
                 self.attrs.state = BgpState::Connect;
-                actions.push(TransitionAction::EstablishTcp);
                 actions.push(TransitionAction::StartConnectRetryTimer);
+                actions.push(TransitionAction::EstablishTcp);
             }
             (BgpState::OpenSent, BgpEvent::TcpConnectFail) => {
                 // RFC 4271 §8.2.2: a failed connection in OpenSent returns
                 // the FSM to Active and resumes listening/retry timing.
                 self.attrs.state = BgpState::Active;
-                actions.push(TransitionAction::StartConnectRetryTimer);
                 actions.push(TransitionAction::CloseTcp);
+                actions.push(TransitionAction::StartConnectRetryTimer);
             }
 
             (BgpState::OpenConfirm, BgpEvent::TcpConnectFail)
@@ -170,9 +171,9 @@ impl BgpFsm {
                 // RFC 4271 §8.2.2: a transport failure after OPEN confirmation
                 // tears down the session and returns it to Idle.
                 self.attrs.state = BgpState::Idle;
-                actions.push(TransitionAction::IncrementRetry);
                 actions.push(TransitionAction::ClearConnectRetryTimer);
                 actions.push(TransitionAction::CloseTcp);
+                actions.push(TransitionAction::IncrementRetry);
             }
 
             (BgpState::Active, BgpEvent::NotificationReceived) => {
