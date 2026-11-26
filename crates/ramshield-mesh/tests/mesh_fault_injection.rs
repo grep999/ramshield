@@ -15,6 +15,7 @@ use ramshield_mesh::{
 };
 use std::{
     env, fs,
+    io::Write,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     process::{Child, Command},
@@ -168,8 +169,16 @@ fn apply_mutation(state: &AworsetBlocklist, mutation: &ReplicatedMeshMutation) {
 fn persist_snapshot(path: &Path, state: &AworsetBlocklist) {
     let bytes = serde_json::to_vec(&state.export_snapshot()).expect("serialize snapshot");
     let temporary = path.with_extension("tmp");
-    fs::write(&temporary, bytes).expect("write snapshot temp file");
+    let mut file = fs::File::create(&temporary).expect("create snapshot temp file");
+    file.write_all(&bytes).expect("write snapshot temp file");
+    file.sync_all().expect("sync snapshot contents");
+    drop(file);
     fs::rename(&temporary, path).expect("publish snapshot");
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .expect("sync snapshot directory entry");
+    }
 }
 
 fn snapshot_has_ip(path: &Path, ip: IpAddr) -> bool {
@@ -252,7 +261,14 @@ async fn run_child(config: ChildConfig) -> ! {
             if changed {
                 persist_snapshot(&config.snapshot, &state);
             }
-            frame.acknowledge_with_lsn(true, end_lsn.or(Some(1)));
+            // WAL batches report their actual durable end LSN. Snapshot and
+            // recovery frames are acknowledged only after the fsynced snapshot
+            // has been published; they do not invent a WAL cursor.
+            if let Some(lsn) = end_lsn {
+                frame.acknowledge_with_lsn(true, Some(lsn));
+            } else {
+                frame.acknowledge_durable(true);
+            }
         }
         sleep(Duration::from_millis(5)).await;
     }

@@ -12,21 +12,6 @@ use tokio::net::TcpStream;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Derive a non-zero BGP identifier from the peer address (FNV-1a, low 16 bits).
-/// ponytail: 16 bits can collide; configure router_id explicitly for large
-/// iBGP meshes where a collision matters.
-fn peer_derived_router_id(peer_ip: IpAddr) -> u32 {
-    let bytes = match peer_ip {
-        IpAddr::V4(v4) => v4.octets().to_vec(),
-        IpAddr::V6(v6) => v6.octets().to_vec(),
-    };
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for b in bytes {
-        hash = (hash ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
-    }
-    0xFFFF_0000u32 | (hash as u16) as u32
-}
-
 /// BGP TCP session management (TCP/179)
 pub struct BgpSession {
     /// TCP stream to peer
@@ -77,6 +62,21 @@ impl BgpSession {
         }
     }
 
+    /// Construct a session with an explicitly configured local BGP Identifier.
+    ///
+    /// The identifier is validated before an OPEN message is transmitted.
+    pub fn new_with_router_id(
+        local_asn: u16,
+        peer_asn: u16,
+        peer_ip: IpAddr,
+        peer_port: u16,
+        router_id: std::net::Ipv4Addr,
+    ) -> Self {
+        let mut session = Self::new(local_asn, peer_asn, peer_ip, peer_port);
+        session.router_id = u32::from(router_id);
+        session
+    }
+
     /// Build a session from config, carrying the optional HMAC key.
     pub fn from_config(config: &crate::config::BgpConfig) -> Self {
         let mut session = Self::new(
@@ -85,18 +85,10 @@ impl BgpSession {
             config.peer_ip,
             config.peer_port,
         );
-        // RFC 4271 §6.4: a BGP identifier of 0 is invalid. High bits 0xFFFF
-        // keep the derived id away from real unicast router-ids (the common
-        // case that the peer uses its own address) and the §6.7 collision
-        // check. In iBGP an ASN-only derivation collides with the peer's own
-        // derived id, so fold in the peer address.
-        session.router_id = if config.router_id != 0 {
-            config.router_id
-        } else if config.local_asn == config.peer_asn {
-            peer_derived_router_id(config.peer_ip)
-        } else {
-            0xFFFF_0000u32 | u32::from(config.local_asn)
-        };
+        // RFC 4271 §4.2: the BGP Identifier belongs to the local speaker
+        // and must be explicitly configured as a locally assigned address.
+        // Never synthesize it from an ASN or a peer-specific address.
+        session.router_id = config.router_id;
         if config.keepalive_time > 0 {
             session.keepalive_override = Some(config.keepalive_time);
         }
@@ -130,6 +122,17 @@ impl BgpSession {
     /// a peer receiving NLRI for an unadvertised SAFI MUST treat the UPDATE
     /// as malformed. Without this, SAFI 133 FlowSpec can never be used.
     pub async fn send_open(&mut self, version: u8, hold_time: u16) -> Result<()> {
+        let router_id = std::net::Ipv4Addr::from(self.router_id);
+        if router_id.is_unspecified() || router_id.is_multicast() || router_id.is_broadcast() {
+            return Err(BgpError::Session(
+                "a locally assigned unicast IPv4 router_id is required before sending OPEN".into(),
+            ));
+        }
+        if hold_time == 1 || hold_time == 2 {
+            return Err(BgpError::Session(
+                "OPEN hold time 1 or 2 is unacceptable".into(),
+            ));
+        }
         self.hold_time = hold_time;
         // Capability: Multiprotocol Extensions, AFI 1 (IPv4), SAFI 133
         // (FlowSpec). Encoded as a type-2 optional parameter.
@@ -192,7 +195,7 @@ impl BgpSession {
             next_hop: Vec::new(), // RFC 8955 section 4: length MUST be 0
             nlri: encoded,
         }
-        .encode();
+        .try_encode()?;
         let mp_reach_attr = PathAttr {
             flags: PathAttrFlags {
                 optional: true,
@@ -289,14 +292,13 @@ impl BgpSession {
     /// Negotiated keepalive interval, derived from the accepted hold time.
     /// RFC 4271 §6.2: zero negotiated hold time means no keepalives.
     pub fn negotiated_keepalive(&self) -> u16 {
-        if let Some(override_secs) = self.keepalive_override {
-            return override_secs;
-        }
         if self.hold_time == 0 {
-            0
-        } else {
-            (self.hold_time / 3).max(1)
+            return 0;
         }
+        let safe_default = (self.hold_time / 3).max(1);
+        self.keepalive_override
+            .map(|override_secs| override_secs.min(safe_default))
+            .unwrap_or(safe_default)
     }
 
     /// Send NOTIFICATION message
@@ -516,11 +518,23 @@ mod tests {
     }
 
     #[test]
-    fn from_config_derives_router_id_when_unset() {
+    fn from_config_does_not_synthesize_router_id_when_unset() {
         let cfg = BgpConfig::default();
         assert_eq!(cfg.router_id, 0);
-        let derived = BgpSession::from_config(&cfg).router_id;
-        assert_eq!(derived, 0xFFFF_0000 | u32::from(cfg.local_asn));
+        assert_eq!(BgpSession::from_config(&cfg).router_id, 0);
+    }
+
+    #[tokio::test]
+    async fn send_open_rejects_invalid_router_ids_before_socket_io() {
+        for router_id in [0, 0xE000_0001, u32::MAX] {
+            let mut session = BgpSession::new(65001, 65002, "192.0.2.2".parse().unwrap(), 179);
+            session.router_id = router_id;
+            let error = session.send_open(4, 90).await.unwrap_err();
+            assert!(
+                error.to_string().contains("unicast"),
+                "router_id {router_id:#010x} should be rejected: {error}"
+            );
+        }
     }
 
     #[test]
@@ -617,31 +631,19 @@ mod tests {
     }
 
     #[test]
-    fn from_config_ibgp_router_id_uses_peer_address() {
-        let base = BgpConfig {
+    fn ibgp_requires_explicit_stable_router_id() {
+        let cfg = BgpConfig {
             local_asn: 65001,
             peer_asn: 65001,
+            router_id: 0,
             ..BgpConfig::default()
         };
-        let a = BgpConfig {
-            peer_ip: "10.0.0.1".parse().unwrap(),
-            ..base.clone()
-        };
-        let b = BgpConfig {
-            peer_ip: "10.0.0.2".parse().unwrap(),
-            ..base
-        };
-        let id_a = BgpSession::from_config(&a).router_id;
-        let id_b = BgpSession::from_config(&b).router_id;
-        assert_ne!(id_a, id_b);
-        assert_ne!(id_a, 0);
-        assert_ne!(id_b, 0);
-        assert_eq!(id_a >> 16, 0xFFFF);
-        assert_eq!(id_b >> 16, 0xFFFF);
+        assert!(cfg.validate().is_err());
+        assert_eq!(BgpSession::from_config(&cfg).router_id, 0);
 
         let explicit = BgpConfig {
             router_id: 0x0A00_0001,
-            ..a
+            ..cfg
         };
         assert_eq!(BgpSession::from_config(&explicit).router_id, 0x0A00_0001);
     }
@@ -688,5 +690,46 @@ mod tests {
             matches!(result, Err(crate::BgpError::Session(ref m)) if m == "write timeout"),
             "{result:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod remediation_tests {
+    use super::BgpSession;
+    use crate::config::BgpConfig;
+
+    #[test]
+    fn explicit_keepalive_is_bounded_by_negotiated_hold_time() {
+        let cfg = BgpConfig {
+            hold_time: 90,
+            keepalive_time: 20,
+            ..BgpConfig::default()
+        };
+        let mut session = BgpSession::from_config(&cfg);
+        session.hold_time = 9;
+        assert_eq!(session.negotiated_keepalive(), 3);
+    }
+
+    #[test]
+    fn zero_negotiated_hold_time_disables_override() {
+        let cfg = BgpConfig {
+            hold_time: 90,
+            keepalive_time: 20,
+            ..BgpConfig::default()
+        };
+        let mut session = BgpSession::from_config(&cfg);
+        session.hold_time = 0;
+        assert_eq!(session.negotiated_keepalive(), 0);
+    }
+
+    #[test]
+    fn ibgp_without_explicit_router_id_does_not_invent_peer_identity() {
+        let cfg = BgpConfig {
+            local_asn: 65001,
+            peer_asn: 65001,
+            router_id: 0,
+            ..BgpConfig::default()
+        };
+        assert_eq!(BgpSession::from_config(&cfg).router_id, 0);
     }
 }

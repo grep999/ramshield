@@ -191,6 +191,7 @@ fn config_from_toml_parses_optional_fields() {
         local_asn = 65001
         peer_asn = 174
         peer_ip = "192.0.2.1"
+        router_id = 3221225985
         peer_port = 179
         hold_time = 90
         connect_retry_time = 120
@@ -211,6 +212,7 @@ fn config_from_toml_parses_hmac_key() {
         local_asn = 65001
         peer_asn = 174
         peer_ip = "192.0.2.1"
+        router_id = 3221225985
         peer_shared_key = "aabbccdd"
     "#;
     let cfg = BgpConfig::from_toml(toml_str).unwrap();

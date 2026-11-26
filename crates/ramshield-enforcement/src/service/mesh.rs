@@ -449,6 +449,7 @@ impl EnforcementService {
             .unwrap_or_default()
             .as_millis() as u64;
         for received in messages {
+            let is_sync_frame = matches!(&received.message, MeshMessage::Sync { .. });
             let mut ack_accepted = true;
             let mut ack_lsn = None;
             match received.message.clone() {
@@ -545,7 +546,15 @@ impl EnforcementService {
                     }
                 }
             }
-            received.acknowledge_with_lsn(ack_accepted, ack_lsn);
+            if is_sync_frame {
+                // Sync/recovery frames are durable through the enforcement WAL
+                // or the configured snapshot path, but do not expose a local
+                // per-frame WAL cursor here. Do not reject recovery proof merely
+                // because this path has no LSN to return.
+                received.acknowledge_durable(ack_accepted);
+            } else {
+                received.acknowledge_with_lsn(ack_accepted, ack_lsn);
+            }
         }
         // Notify only after processing a batch that changed the CRDT. A merge
         // still needs propagation if its later enforcement/XDP projection fails.
