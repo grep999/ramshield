@@ -377,7 +377,7 @@ impl FlowSpecNLRI {
                         value.len().saturating_sub(1)
                     )));
                 }
-                if prefix_len % 8 != 0 && octets > 0 {
+                if !prefix_len.is_multiple_of(8) && octets > 0 {
                     let host_mask = (1u8 << (8 - (prefix_len % 8))) - 1;
                     if value[octets] & host_mask != 0 {
                         return Err(BgpError::Session(
