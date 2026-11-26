@@ -107,9 +107,11 @@ impl BgpSession {
     /// a peer receiving NLRI for an unadvertised SAFI MUST treat the UPDATE
     /// as malformed. Without this, SAFI 133 FlowSpec can never be used.
     pub async fn send_open(&mut self, version: u8, hold_time: u16) -> Result<()> {
-        if self.router_id == 0 {
+        let router_id = std::net::Ipv4Addr::from(self.router_id);
+        if router_id.is_unspecified() || router_id.is_multicast() || router_id.is_broadcast() {
             return Err(BgpError::Session(
-                "a non-zero, locally assigned router_id is required before sending OPEN".into(),
+                "a locally assigned unicast IPv4 router_id is required before sending OPEN"
+                    .into(),
             ));
         }
         if hold_time == 1 || hold_time == 2 {
