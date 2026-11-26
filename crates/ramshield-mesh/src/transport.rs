@@ -334,13 +334,13 @@ impl ReceivedMeshMessage {
         self.acknowledge_inner(accepted, ack_lsn, recovery_durable);
     }
 
-    /// Acknowledge after a full snapshot has been durably persisted and
-    /// applied. Snapshot recovery has no per-frame local WAL LSN, so it must
-    /// not fabricate one merely to authorize a receiver-confirmed proof.
+    /// Acknowledge after the accepted state has been durably persisted and
+    /// applied when no local WAL LSN is available to report. This covers
+    /// receiver-side WAL commits whose local cursor is not exposed here and
+    /// fsynced snapshot recovery; it never invents an LSN.
     ///
-    /// Call only after the snapshot file/store and its publication metadata
-    /// have reached the application's durability boundary.
-    pub fn acknowledge_snapshot_durable(self, accepted: bool) {
+    /// Call only after the application's durability boundary has been crossed.
+    pub fn acknowledge_durable(self, accepted: bool) {
         let recovery_durable = self.recovery.is_some();
         self.acknowledge_inner(accepted, None, recovery_durable);
     }
@@ -2775,7 +2775,7 @@ mod frame_tests {
                         }
                         // The test applies the full snapshot before this acknowledgement;
                         // it has no receiver WAL cursor to report.
-                        received.acknowledge_snapshot_durable(true);
+                        received.acknowledge_durable(true);
                     }
                     if let Some(done) = sender.completed_recovery(receiver_addr).await {
                         break done;
