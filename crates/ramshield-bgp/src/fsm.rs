@@ -321,6 +321,7 @@ mod retry_transition_tests {
             fsm.attrs.state = state;
             let actions = fsm.process_event(BgpEvent::TcpConnectFail).unwrap();
             assert_eq!(fsm.state(), BgpState::Idle);
+            assert!(actions.contains(&TransitionAction::IncrementRetry));
             assert!(actions.contains(&TransitionAction::ClearConnectRetryTimer));
             assert!(actions.contains(&TransitionAction::CloseTcp));
         }
