@@ -1,4 +1,6 @@
-use crate::attributes::{MpReachNlri, PathAttr, PathAttrFlags, PathAttrType};
+use crate::attributes::{
+    MpReachNlri, PathAttr, PathAttrFlags, PathAttrType, as_path_attr, origin_attr,
+};
 use crate::flowspec::FlowSpecNLRI;
 use crate::messages::BgpKeepalive;
 use crate::{BgpError, Result};
@@ -51,6 +53,8 @@ pub struct BgpSession {
     write_timeout: Duration,
     /// Optional HMAC key for peer authentication
     hmac_key: Option<Vec<u8>>,
+    /// Whether the peer advertised MP-BGP SAFI 133 (RFC 4760 §5).
+    peer_flowspec: bool,
 }
 
 impl BgpSession {
@@ -69,6 +73,7 @@ impl BgpSession {
             max_reconnect_attempts: 10,
             write_timeout: WRITE_TIMEOUT,
             hmac_key: None,
+            peer_flowspec: false,
         }
     }
 
@@ -96,6 +101,9 @@ impl BgpSession {
             session.keepalive_override = Some(config.keepalive_time);
         }
         session.max_reconnect_attempts = config.max_reconnect_attempts;
+        // RFC 4271 §6.2: hold time must be known before OPEN is received so
+        // validate_open can compute the negotiated minimum.
+        session.hold_time = config.hold_time;
         if let Some(key) = &config.peer_shared_key {
             session.set_hmac_key(key.clone());
         }
@@ -137,10 +145,12 @@ impl BgpSession {
         opt_params.push(cap.len() as u8);
         opt_params.extend_from_slice(&cap);
 
-        let msg_len = 19 + opt_params.len();
+        let msg_len = 29usize + opt_params.len();
+        let length =
+            u16::try_from(msg_len).map_err(|_| BgpError::Session("OPEN too large".into()))?;
         let mut buf = Vec::with_capacity(msg_len);
         buf.extend_from_slice(&[0xFFu8; 16]); // Marker
-        buf.extend_from_slice(&(msg_len as u16).to_be_bytes()); // Length
+        buf.extend_from_slice(&length.to_be_bytes()); // Length
         buf.push(1); // OPEN type
 
         buf.push(version); // BGP version
@@ -161,23 +171,32 @@ impl BgpSession {
     ///
     /// `action` MUST be present: a FlowSpec rule with no traffic-filtering
     /// action (RFC 8955 §5) is a no-op on every conforming router.
+    ///
+    /// The peer MUST have advertised MP-BGP AFI 1 / SAFI 133 in OPEN; call
+    /// [`Self::validate_open`] before this method. RFC 4760 §5 requires the
+    /// capability check before any MP_REACH_NLRI is sent.
     pub async fn send_update(
         &mut self,
         nlri: FlowSpecNLRI,
         action: crate::attributes::ExtendedCommunity,
     ) -> Result<()> {
+        if !self.peer_flowspec {
+            return Err(BgpError::Session(
+                "peer did not advertise MP-BGP SAFI 133; call validate_open first".into(),
+            ));
+        }
         let encoded = nlri.encode()?;
         let mp_reach = MpReachNlri {
-            afi: 1,    // IPv4
-            safi: 133, // FlowSpec
-            next_hop: vec![0, 0, 0, 0],
+            afi: 1,               // IPv4
+            safi: 133,            // FlowSpec
+            next_hop: Vec::new(), // RFC 8955 section 4: length MUST be 0
             nlri: encoded,
         }
         .encode();
         let mp_reach_attr = PathAttr {
             flags: PathAttrFlags {
                 optional: true,
-                transitive: true,
+                transitive: false, // RFC 4760 §3: MP_REACH_NLRI is optional non-transitive
                 partial: false,
                 extended_len: false,
             },
@@ -196,7 +215,12 @@ impl BgpSession {
             attr_type: PathAttrType::ExtendedCommunities,
             value: action.encode().to_vec(),
         };
-        let attrs = crate::attributes::encode_attrs(&[mp_reach_attr, ext_attr])?;
+        let attrs = crate::attributes::encode_attrs(&[
+            origin_attr(),
+            as_path_attr(self.local_asn, self.peer_asn),
+            mp_reach_attr,
+            ext_attr,
+        ])?;
         let total_len = 23usize + attrs.len();
         let length = u16::try_from(total_len)
             .map_err(|_| BgpError::Session(format!("UPDATE too large: {total_len}")))?;
@@ -232,6 +256,10 @@ impl BgpSession {
         keepalive_time: u16,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
+        // RFC 4271 §4.2: a negotiated hold time of 0 disables keepalives.
+        if keepalive_time == 0 {
+            return Ok(());
+        }
         let period = tokio::time::Duration::from_secs(keepalive_time.max(1) as u64);
         let mut ticker = tokio::time::interval(period);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -259,9 +287,16 @@ impl BgpSession {
     }
 
     /// Negotiated keepalive interval, derived from the accepted hold time.
+    /// RFC 4271 §6.2: zero negotiated hold time means no keepalives.
     pub fn negotiated_keepalive(&self) -> u16 {
-        self.keepalive_override
-            .unwrap_or_else(|| (self.hold_time / 3).max(1))
+        if let Some(override_secs) = self.keepalive_override {
+            return override_secs;
+        }
+        if self.hold_time == 0 {
+            0
+        } else {
+            (self.hold_time / 3).max(1)
+        }
     }
 
     /// Send NOTIFICATION message
@@ -355,8 +390,8 @@ impl BgpSession {
             return Err(BgpError::Session("peer ASN mismatch".into()));
         }
         if open.bgp_id == 0 {
-            // RFC 4271 §6.4: a BGP identifier of all zeros is invalid.
-            let _ = self.send_notification(5, 4).await; // Bad BGP Identifier
+            // RFC 4271 §8: OPEN Message Error / Bad BGP Identifier.
+            let _ = self.send_notification(2, 3).await;
             return Err(BgpError::Session("peer sent zero BGP identifier".into()));
         }
         if open.hold_time != 0 && open.hold_time < 3 {
@@ -369,6 +404,18 @@ impl BgpSession {
             let _ = self.send_notification(6, 7).await; // Connection Collision
             return Err(BgpError::Session("BGP identifier collision".into()));
         }
+        // RFC 4271 §6.2: negotiated hold time is the lower of the two
+        // non-zero values; zero on either side disables hold/keepalive.
+        self.hold_time = match (self.hold_time, open.hold_time) {
+            (0, _) | (_, 0) => 0,
+            (local, peer) => local.min(peer),
+        };
+        // RFC 4760 §5: sending NLRI for an unadvertised SAFI is a malformed
+        // UPDATE. Remember whether the peer advertised AFI 1 / SAFI 133.
+        self.peer_flowspec = open
+            .opt_params
+            .iter()
+            .any(|cap| cap.code == 1 && cap.length >= 4 && cap.value == [0, 1, 0, 133]);
         self.peer_router_id = open.bgp_id;
         Ok(())
     }
@@ -490,7 +537,83 @@ mod tests {
 
         let defaults = BgpSession::default();
         assert_eq!(defaults.max_reconnect_attempts, 10);
-        assert_eq!(defaults.negotiated_keepalive(), 1);
+        // BgpSession::new starts with hold_time 0 until OPEN is sent.
+        assert_eq!(defaults.negotiated_keepalive(), 0);
+    }
+
+    #[tokio::test]
+    async fn validate_open_negotiates_hold_time() {
+        let cfg = BgpConfig {
+            hold_time: 90,
+            keepalive_time: 0,
+            ..BgpConfig::default()
+        };
+        let mut session = BgpSession::from_config(&cfg);
+        let open = crate::messages::BgpOpen {
+            version: 4,
+            my_asn: cfg.peer_asn,
+            hold_time: 30,
+            bgp_id: 0x0A00_0002,
+            opt_params: Vec::new(),
+        };
+        session.validate_open(&open).await.unwrap();
+        assert_eq!(session.hold_time, 30);
+        assert_eq!(session.negotiated_keepalive(), 10);
+    }
+
+    #[tokio::test]
+    async fn validate_open_zero_hold_time_disables_keepalive() {
+        let cfg = BgpConfig {
+            hold_time: 90,
+            keepalive_time: 0,
+            ..BgpConfig::default()
+        };
+        let mut session = BgpSession::from_config(&cfg);
+        let open = crate::messages::BgpOpen {
+            version: 4,
+            my_asn: cfg.peer_asn,
+            hold_time: 0,
+            bgp_id: 0x0A00_0002,
+            opt_params: Vec::new(),
+        };
+        session.validate_open(&open).await.unwrap();
+        assert_eq!(session.hold_time, 0);
+        assert_eq!(session.negotiated_keepalive(), 0);
+    }
+
+    #[tokio::test]
+    async fn validate_open_remembers_flowspec_capability() {
+        let cfg = BgpConfig::default();
+        let mut session = BgpSession::from_config(&cfg);
+        let open = crate::messages::BgpOpen {
+            version: 4,
+            my_asn: cfg.peer_asn,
+            hold_time: 90,
+            bgp_id: 0x0A00_0002,
+            opt_params: vec![crate::messages::BgpCapability {
+                code: 1,
+                length: 4,
+                value: [0, 1, 0, 133],
+            }],
+        };
+        session.validate_open(&open).await.unwrap();
+        assert!(session.peer_flowspec, "MP-BGP SAFI 133 must be remembered");
+
+        // Without capability, send_update fails before touching the socket.
+        let mut no_cap = BgpSession::from_config(&cfg);
+        no_cap
+            .validate_open(&crate::messages::BgpOpen {
+                opt_params: Vec::new(),
+                ..open.clone()
+            })
+            .await
+            .unwrap();
+        let fs = crate::flowspec::FlowSpecNLRI::rtbh_flowspec("198.51.100.1").unwrap();
+        let err = no_cap
+            .send_update(fs, crate::attributes::ExtendedCommunity::flowspec_discard())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("SAFI 133"), "error: {err}");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-/// RamShield BGP Engine — minimal eBGP speaker for DDoS mitigation signaling.
+/// RamShield BGP Engine — standalone eBGP speaker library for DDoS mitigation signaling.
 ///
 /// Implements only two orthodox BGP primitives that every Tier-1 carrier
 /// supports natively in hardware:

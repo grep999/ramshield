@@ -6,25 +6,22 @@ announce/withdraw integration.
 
 ## Current status
 
-The BGP crate is implemented, tested, and not enabled by default. It speaks
-enough BGP-4 (RFC 4271) to establish a single eBGP session, send RTBH (RFC
-7999) and FlowSpec (RFC 8955) UPDATEs, and process KEEPALIVE/NOTIFICATION.
+The crate is implemented and tested but **not production-ready** and not enabled by default. It is a substantial BGP speaker library. At HEAD `a85a4d0d` it had wire defects preventing interoperability with a standards-compliant peer: OPEN length, FlowSpec NLRI length, FlowSpec next-hop length, ORIGIN/AS_PATH, MP_REACH flags, zero-ID NOTIFICATION, KEEPALIVE length, and discard T-bit. Those defects are fixed in the local worktree; see `BGP_IMPLEMENTATION_RESEARCH_2026-11-26.md` for exact file:line evidence and reproduction.
 
 Implemented on the current tree:
 
 - `ramshield-bgp`: BGP FSM (6 states), OPEN/KEEPALIVE/UPDATE/NOTIFICATION
   framing, HMAC-SHA256 peer authentication, RTBH community encoding,
   FlowSpec NLRI encoding with component ordering, Schmitt trigger controller,
-  and config parsing with key redaction.
+  and config parsing with key redaction. The FSM and controller are library-level helpers, not called by `BgpSession`.
 - `src/engine/upstream.rs`: BGP announce/withdraw via FIFO (BIRD/FRR command
-  pipe), Schmitt trigger hysteresis, and saturation detection.
+  pipe), Schmitt trigger hysteresis, and saturation detection. This is the only live BGP path.
 - `ramshield-metrics`: BGP session state, announce/withdraw counts, HMAC
-  failures, FSM flaps, and last error exposed in Prometheus output.
+  failures, FSM flaps, and last error exposed in Prometheus output. These series are not incremented by current code.
 - Tests: 13 unit/integration tests + 8 fault injection tests (FSM convergence,
   HMAC tamper rejection, header validation, Schmitt trigger, config redaction).
 
-Current implementation is a production candidate, not a production rollout.
-The remaining gaps are operational evidence and explicit owner decisions.
+Current implementation is not a production candidate. The remaining gaps include the P0 wire defects, hold-time negotiation, UPDATE receive handling, live-path metrics, and explicit owner decisions.
 
 ## Boundaries
 
@@ -51,9 +48,9 @@ reconnect attempts to 10 with exponential backoff (max 30s), and hold time
 to 90s default. The Schmitt trigger requires 5 flaps to engage and 15s
 quiet to disengage (configurable).
 
-B6. **Exposure boundary.** BGP listens on TCP/179. Public internet exposure
-is out of scope. Deploy behind a firewall that restricts port 179 to the
-peer's IP address.
+B6. **Exposure boundary.** The library connects to a peer on TCP/179; it does
+not listen. Public internet exposure is out of scope. Deploy behind a firewall
+that restricts outbound port 179 to the peer's IP address.
 
 B7. **Rollout boundary.** No default enablement and no fleet rollout from
 this document. Rollout is staged: single-node proof, two-node canary,
@@ -91,7 +88,7 @@ A BGP change is production-ready only when all of these are true:
    - Config has complete BGP fields and no logged key material
    - BGP session state is visible in metrics/logs
    - Announce/withdraw counts are observable
-   - Fail-closed behavior: no announce without a session
+   - Fail-closed behavior: no announce without a session (library path only; the live FIFO path does not enforce this)
 5. Owner sign-off exists for any change to HMAC→TCP-AO migration, production
    default, or BGP coupling.
 

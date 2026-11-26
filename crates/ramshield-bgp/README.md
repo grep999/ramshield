@@ -1,12 +1,16 @@
 # ramshield-bgp
 
-Minimal eBGP speaker library for DDoS mitigation signaling. It sends RTBH
-(RFC 7999) and FlowSpec (RFC 8955/8956) UPDATEs over one TCP/179 session.
+Standalone eBGP speaker library for DDoS mitigation signaling. It sends RTBH
+(RFC 7999) and FlowSpec (RFC 8955/8956) UPDATEs over a TCP/179 session.
 It does not import routes, compute a routing table, or modify the kernel FIB.
 
 Status: library crate, off by default. The root daemon does not depend on this
 crate; `src/engine/upstream.rs` writes announce/withdraw commands to a
 BIRD/FRR FIFO when `upstream.bgp_mode != "none"`.
+
+## Known gaps (2026-11-26)
+
+Local worktree fixes cover P0 wire defects and applied P1/PhD findings: OPEN length, FlowSpec NLRI length and zero next-hop, FlowSpec first-pair AND bit/operand widths on encode and AND-bit normalization on decode, ORIGIN/AS_PATH, MP_REACH flags, zero-ID NOTIFICATION, KEEPALIVE length, discard T-bit, ASN-aware RTBH and RFC 7999 discard next-hop, peer SAFI 133 capability gating, RFC 4271 hold-time negotiation and zero-hold config validation, zero-hold keepalive disablement, FSM Active/hold-expiry transitions, receive-side UPDATE framing/bounds validation, well-known path-attribute flag enforcement, CIDR FlowSpec prefix encoding, and capability decode without silent truncation. Remaining gaps: no full RFC 7606 treat-as-withdraw/RIB, no session driver wired to FSM, non-standard HMAC framing, no RPKI/OTC/GTSM, no live BGP metrics, no real-peer interop evidence. Research: `../../docs/development/BGP_ENTERPRISE_RESEARCH_2026-11-26.md`; earlier probe evidence: `../../docs/development/BGP_IMPLEMENTATION_RESEARCH_2026-11-26.md`.
 
 ## Layout
 
@@ -29,7 +33,9 @@ BIRD/FRR FIFO when `upstream.bgp_mode != "none"`.
 - Inbound OPEN validation: version 4, configured peer ASN, non-zero BGP ID,
   hold time `0` or `>= 3`, no ID collision. Mismatches send NOTIFICATION.
 - Keepalive interval: explicit `keepalive_time` or negotiated `hold_time / 3`,
-  minimum 1 second.
+  minimum 1 second for a non-zero hold; zero negotiated hold disables keepalives.
+- FlowSpec UPDATEs require the peer to advertise MP-BGP AFI 1 / SAFI 133 in OPEN;
+  `send_update` fails before any socket write otherwise.
 - Reads are bounded by hold time (90s before OPEN); writes by a 10s deadline.
 - Reconnect uses exponential backoff 1s, 2s, 4s ... 30s, capped by
   `max_reconnect_attempts` (default 10).

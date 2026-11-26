@@ -133,7 +133,7 @@ RamShield exposes the XDP state so you can see whether the kernel dataplane is a
 | [ramshield-metrics](crates/ramshield-metrics/README.md) | Dashboard snapshot and Prometheus text metrics |
 | [ramshield-storage](crates/ramshield-storage/README.md) | WAL, checkpoint, snapshots, recovery |
 | [ramshield-mesh](crates/ramshield-mesh) | CRDT Aworset sync (disabled in production) |
-| [ramshield-bgp](crates/ramshield-bgp/README.md) | Minimal eBGP speaker: RTBH + Flowspec signaling (HMAC framing WIP) |
+| [ramshield-bgp](crates/ramshield-bgp/README.md) | BGP speaker library: RTBH + FlowSpec signaling (standalone; live path uses BIRD/FRR FIFO) |
 | [ramshield-xdp](crates/ramshield-xdp/README.md) | eBPF XDP engine (kernel dataplane) |
 | [ramshield-protocol](crates/ramshield-protocol/README.md) | IPC JSON framing, HMAC auth, replay store |
 | [ramshield-cgnat](crates/ramshield-cgnat/README.md) | CGNAT deployment with shm tables and classification |

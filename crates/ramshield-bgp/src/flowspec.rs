@@ -282,6 +282,10 @@ impl FlowComponent {
                 break;
             }
         }
+        // RFC 8955 §4.2.1.1: the AND bit is always unset on the first pair.
+        if let Some(first) = pairs.first_mut() {
+            first.operator.and_mask = false;
+        }
         Ok((FlowComponent { comp_type, pairs }, offset))
     }
 }
@@ -292,17 +296,41 @@ pub struct FlowSpecNLRI {
     pub components: Vec<FlowComponent>,
 }
 
-/// Split a concave IPv4 prefix into `(prefix_len_bits, octets)`.
+/// Split an IPv4 prefix into `(prefix_len_bits, octets)`.
+///
+/// Accepts both `a.b.c.d` (implicit /32) and `a.b.c.d/len`. Host bits are
+/// masked so the encoded NLRI is canonical (RFC 8955 §4.2.2.1).
 fn v4_prefix(ip: &str) -> Result<(u8, Vec<u8>)> {
-    let addr: std::net::IpAddr = ip.parse()?;
+    let (addr, prefix_len) = match ip.split_once('/') {
+        Some((addr, len)) => (
+            addr,
+            len.parse::<u8>()
+                .map_err(|_| BgpError::Session("invalid FlowSpec prefix length".into()))?,
+        ),
+        None => (ip, 32),
+    };
+    if prefix_len > 32 {
+        return Err(BgpError::InvalidPrefixLen(prefix_len));
+    }
+    let addr: std::net::IpAddr = addr.parse()?;
     match addr {
-        std::net::IpAddr::V4(v4) => Ok((32, v4.octets().to_vec())),
+        std::net::IpAddr::V4(v4) => {
+            let mut octets = v4.octets().to_vec();
+            let full = (prefix_len / 8) as usize;
+            let rem = prefix_len % 8;
+            if rem != 0 {
+                octets[full] &= 0xFFu8 << (8 - rem);
+            }
+            octets.truncate(prefix_len.div_ceil(8) as usize);
+            Ok((prefix_len, octets.to_vec()))
+        }
         std::net::IpAddr::V6(_) => Err(BgpError::InvalidPrefixLen(129)),
     }
 }
 
 impl FlowSpecNLRI {
-    /// Encode NLRI to bytes. Components MUST be in strict increasing type order.
+    /// Encode NLRI to bytes: `<length, components>` per RFC 8955 section 4.
+    /// Components MUST be in strict increasing type order.
     pub fn encode(&self) -> Result<Vec<u8>> {
         // Verify strict type ordering
         for i in 1..self.components.len() {
@@ -311,20 +339,83 @@ impl FlowSpecNLRI {
             }
         }
 
-        let mut buf = Vec::new();
+        let mut components = Vec::new();
         for comp in &self.components {
-            buf.extend_from_slice(&comp.encode());
+            // RFC 8955 §4.2.1.1: the AND bit must be 0 on the first pair of
+            // a sequence. §4.2.1: operand length must match the value length.
+            if !comp.comp_type.is_prefix() {
+                for (i, pair) in comp.pairs.iter().enumerate() {
+                    if pair.operator.and_mask && i == 0 {
+                        return Err(BgpError::Session(
+                            "FlowSpec first pair must have AND bit 0".into(),
+                        ));
+                    }
+                    if pair.value.len() != pair.operator.operand_len as usize {
+                        return Err(BgpError::Session(format!(
+                            "FlowSpec pair value len {} != operator {}",
+                            pair.value.len(),
+                            pair.operator.operand_len
+                        )));
+                    }
+                }
+            }
+            components.extend_from_slice(&comp.encode());
         }
+        let len = components.len();
+        if len < 240 {
+            let mut buf = Vec::with_capacity(len + 1);
+            buf.push(len as u8);
+            buf.extend_from_slice(&components);
+            return Ok(buf);
+        }
+        let extended =
+            u16::try_from(len).map_err(|_| BgpError::Session("FlowSpec NLRI too large".into()))?;
+        if extended > 0x0FFF {
+            return Err(BgpError::Session(
+                "FlowSpec NLRI exceeds 4095 octets".into(),
+            ));
+        }
+        let mut buf = Vec::with_capacity(len + 2);
+        buf.extend_from_slice(&(0xF000u16 | extended).to_be_bytes());
+        buf.extend_from_slice(&components);
         Ok(buf)
     }
 
     /// Decode NLRI from bytes. Returns `(nlri, bytes_consumed)`.
     pub fn decode(buf: &[u8]) -> Result<(Self, usize)> {
+        if buf.is_empty() {
+            return Err(BgpError::TooShort {
+                expected: 1,
+                got: 0,
+            });
+        }
+        let (nlri_len, header_len): (usize, usize) = if buf[0] < 0xF0 {
+            (buf[0] as usize, 1)
+        } else {
+            if buf.len() < 2 {
+                return Err(BgpError::TooShort {
+                    expected: 2,
+                    got: buf.len(),
+                });
+            }
+            ((((buf[0] & 0x0F) as usize) << 8) | buf[1] as usize, 2)
+        };
+        let end = header_len
+            .checked_add(nlri_len)
+            .ok_or_else(|| BgpError::Session("FlowSpec NLRI length overflow".into()))?;
+        if buf.len() < end {
+            return Err(BgpError::TooShort {
+                expected: end,
+                got: buf.len(),
+            });
+        }
+        let value = &buf[header_len..end];
+
         let mut components = Vec::new();
         let mut offset = 0;
         let mut previous = 0u8;
-        while offset < buf.len() {
-            let (comp, used) = FlowComponent::decode(&buf[offset..])?;
+        while offset < value.len() {
+            let (comp, used) = FlowComponent::decode(&value[offset..])?;
             offset += used;
             let current = comp.comp_type as u8;
             if current <= previous {
@@ -333,7 +424,7 @@ impl FlowSpecNLRI {
             previous = current;
             components.push(comp);
         }
-        Ok((FlowSpecNLRI { components }, offset))
+        Ok((FlowSpecNLRI { components }, end))
     }
 
     /// Create a UDP reflection filter (DNS/NTP/CLDAP/SSDP source port).
@@ -442,14 +533,60 @@ mod tests {
     }
 
     #[test]
-    fn prefix_component_has_no_operator_octet() {
-        // /24 198.51.100.0 -> 0x18 then 3 octets
+    fn prefix_nlri_carries_rfc8955_length_tuple() {
+        // /24 198.51.100.0 -> <len=6><type=1, prefix_len=32, 4 octets>
         let fs = FlowSpecNLRI::rtbh_flowspec("198.51.100.1").unwrap();
         let encoded = fs.encode().unwrap();
-        assert_eq!(encoded[0], 0x01, "type 1 DestPrefix");
-        assert_eq!(encoded[1], 32, "/32 prefix length");
-        assert_eq!(&encoded[2..6], &[198, 51, 100, 1]);
-        assert_eq!(encoded.len(), 6, "no length or operator octet");
+        assert_eq!(encoded[0], 6, "NLRI value length");
+        assert_eq!(encoded[1], 0x01, "type 1 DestPrefix");
+        assert_eq!(encoded[2], 32, "/32 prefix length");
+        assert_eq!(&encoded[3..7], &[198, 51, 100, 1]);
+        assert_eq!(encoded.len(), 7, "length octet + component bytes");
+    }
+
+    #[test]
+    fn encode_rejects_invalid_numeric_pair_encoding() {
+        let nlri = |operator: FlowOperator, value: Vec<u8>| FlowSpecNLRI {
+            components: vec![FlowComponent {
+                comp_type: FlowComponentType::IpProtocol,
+                pairs: vec![FlowPair { operator, value }],
+            }],
+        };
+        assert!(nlri(FlowOperator::default(), vec![17]).encode().is_ok());
+        assert!(
+            nlri(
+                FlowOperator {
+                    and_mask: true,
+                    ..FlowOperator::default()
+                },
+                vec![17]
+            )
+            .encode()
+            .is_err()
+        );
+        assert!(
+            nlri(
+                FlowOperator {
+                    operand_len: 2,
+                    ..FlowOperator::default()
+                },
+                vec![17]
+            )
+            .encode()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cidr_prefix_is_encoded_with_length_and_masked() {
+        let nlri = FlowSpecNLRI::udp_reflection("198.51.100.0/24", &[53]).unwrap();
+        assert_eq!(nlri.components[0].pairs[0].value, vec![24, 198, 51, 100]);
+
+        // Host bits are masked to keep the prefix canonical.
+        let host = FlowSpecNLRI::udp_reflection("198.51.100.7/24", &[53]).unwrap();
+        assert_eq!(host.components[0].pairs[0].value, vec![24, 198, 51, 100]);
+
+        assert!(FlowSpecNLRI::udp_reflection("198.51.100.0/33", &[53]).is_err());
     }
 
     #[test]
@@ -466,11 +603,18 @@ mod tests {
     }
 
     #[test]
+    fn decode_clears_and_bit_on_first_pair() {
+        let (nlri, _) = FlowSpecNLRI::decode(&[0x03, 0x03, 0xC1, 17]).unwrap();
+        assert!(!nlri.components[0].pairs[0].operator.and_mask);
+    }
+
+    #[test]
     fn decode_rejects_out_of_order_and_bad_types() {
-        assert!(FlowSpecNLRI::decode(&[0x03, 0x80 | 0x01, 17]).is_ok());
-        assert!(FlowSpecNLRI::decode(&[0x63, 0x80]).is_err());
-        // Type 5 followed by Type 1 violates RFC 8955 §4.2 strict ordering.
-        assert!(FlowSpecNLRI::decode(&[0x05, 0x81, 0x01, 0x01, 0x00]).is_err());
+        // Each input is prefixed with the RFC 8955 NLRI value length.
+        assert!(FlowSpecNLRI::decode(&[0x03, 0x03, 0x80 | 0x01, 17]).is_ok());
+        assert!(FlowSpecNLRI::decode(&[0x01, 0x63, 0x80]).is_err());
+        // Type 5 followed by Type 1 violates RFC 8955 section 4.2 strict ordering.
+        assert!(FlowSpecNLRI::decode(&[0x05, 0x05, 0x81, 0x01, 0x01, 0x00]).is_err());
     }
 
     #[test]

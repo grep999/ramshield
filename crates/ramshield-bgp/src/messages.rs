@@ -151,7 +151,11 @@ impl BgpMessage {
                 let open = decode_open(&body)?;
                 Ok(BgpMessage::Open(open))
             }
-            BgpMsgType::Update => Ok(BgpMessage::Update(body.unwrap_or_default())),
+            BgpMsgType::Update => {
+                let body = body.unwrap_or_default();
+                validate_update_body(&body)?;
+                Ok(BgpMessage::Update(body))
+            }
             BgpMsgType::Notification => {
                 let body = body.ok_or(BgpError::TooShort {
                     expected: 2,
@@ -160,9 +164,122 @@ impl BgpMessage {
                 let notif = decode_notification(&body)?;
                 Ok(BgpMessage::Notification(notif))
             }
-            BgpMsgType::Keepalive => Ok(BgpMessage::Keepalive),
+            BgpMsgType::Keepalive => {
+                if hdr.length != 19 || body.is_some() {
+                    return Err(BgpError::Session(
+                        "KEEPALIVE length must be exactly 19 octets".into(),
+                    ));
+                }
+                Ok(BgpMessage::Keepalive)
+            }
         }
     }
+}
+
+/// Structural validation for a received UPDATE body.
+///
+/// This is deliberately not a full RIB/decision process. It enforces the
+/// framing invariants that prevent malformed lengths from reaching callers:
+/// RFC 4271 §4.3 body length, IPv4 withdrawn-NLRI bounds, and path-attribute
+/// length bounds (including the extended-length flag).
+pub fn validate_update_body(body: &[u8]) -> Result<()> {
+    if body.len() < 4 {
+        return Err(BgpError::TooShort {
+            expected: 4,
+            got: body.len(),
+        });
+    }
+    let withdrawn_len = u16::from_be_bytes([body[0], body[1]]) as usize;
+    let attr_len = u16::from_be_bytes([body[2], body[3]]) as usize;
+    let expected = 4usize
+        .checked_add(withdrawn_len)
+        .and_then(|n| n.checked_add(attr_len))
+        .ok_or_else(|| BgpError::Session("UPDATE length overflow".into()))?;
+    if body.len() != expected {
+        return Err(BgpError::TooShort {
+            expected,
+            got: body.len(),
+        });
+    }
+
+    let withdrawn = &body[4..4 + withdrawn_len];
+    validate_ipv4_nlri(withdrawn)?;
+
+    let attrs = &body[4 + withdrawn_len..];
+    validate_path_attrs(attrs)?;
+    Ok(())
+}
+
+fn validate_ipv4_nlri(buf: &[u8]) -> Result<()> {
+    let mut pos = 0;
+    while pos < buf.len() {
+        let prefix_len = buf[pos] as usize;
+        pos += 1;
+        if prefix_len > 32 {
+            return Err(BgpError::InvalidPrefixLen(prefix_len as u8));
+        }
+        let octets = prefix_len.div_ceil(8);
+        if pos + octets > buf.len() {
+            return Err(BgpError::TooShort {
+                expected: pos + octets,
+                got: buf.len(),
+            });
+        }
+        pos += octets;
+    }
+    Ok(())
+}
+
+fn validate_well_known_flags(attr_type: u8, flags: u8) -> Result<()> {
+    // RFC 4271 §5: well-known attributes have optional=0, transitive=1,
+    // partial=0. Extended length (0x10) is allowed.
+    let well_known = attr_type <= 7;
+    if well_known && flags & 0xE0 != 0x40 {
+        return Err(BgpError::Session(format!(
+            "well-known attribute {attr_type} has invalid flags 0x{flags:02x}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_path_attrs(buf: &[u8]) -> Result<()> {
+    let mut pos = 0;
+    while pos < buf.len() {
+        if buf.len() - pos < 2 {
+            return Err(BgpError::TooShort {
+                expected: pos + 2,
+                got: buf.len(),
+            });
+        }
+        let flags = buf[pos];
+        let attr_type = buf[pos + 1];
+        validate_well_known_flags(attr_type, flags)?;
+        pos += 1;
+        pos += 1; // attribute type
+        let len = if flags & 0x10 != 0 {
+            if buf.len() - pos < 2 {
+                return Err(BgpError::TooShort {
+                    expected: pos + 2,
+                    got: buf.len(),
+                });
+            }
+            let len = u16::from_be_bytes([buf[pos], buf[pos + 1]]) as usize;
+            pos += 2;
+            len
+        } else {
+            let len = buf[pos] as usize;
+            pos += 1;
+            len
+        };
+        if pos + len > buf.len() {
+            return Err(BgpError::TooShort {
+                expected: pos + len,
+                got: buf.len(),
+            });
+        }
+        pos += len;
+    }
+    Ok(())
 }
 
 /// Decode OPEN message body
@@ -204,7 +321,9 @@ fn decode_open(buf: &[u8]) -> Result<BgpOpen> {
                     got: buf.len(),
                 });
             }
-            // Only parse capability parameters (type 2)
+            // Only parse capability parameters (type 2). Unknown capabilities
+            // are skipped, but MP-BGP (code 1) must be exactly 4 octets;
+            // silently truncating it would downgrade the peer's SAFI set.
             if param_type == 2 {
                 let cap_data = &buf[pos..pos + param_len];
                 let mut cap_pos = 0;
@@ -218,15 +337,26 @@ fn decode_open(buf: &[u8]) -> Result<BgpOpen> {
                             got: cap_pos + length,
                         });
                     }
-                    let mut value = [0u8; 4];
-                    let copy_len = std::cmp::min(4, length);
-                    value[..copy_len].copy_from_slice(&cap_data[cap_pos..cap_pos + copy_len]);
-                    opt_params.push(BgpCapability {
-                        code,
-                        length: length as u8,
-                        value,
-                    });
+                    if code == 1 {
+                        if length != 4 {
+                            return Err(BgpError::Session(
+                                "MP-BGP capability must be exactly 4 octets".into(),
+                            ));
+                        }
+                        let mut value = [0u8; 4];
+                        value.copy_from_slice(&cap_data[cap_pos..cap_pos + 4]);
+                        opt_params.push(BgpCapability {
+                            code,
+                            length: 4,
+                            value,
+                        });
+                    }
                     cap_pos += length;
+                }
+                if cap_pos != cap_data.len() {
+                    return Err(BgpError::Session(
+                        "truncated capability parameter list".into(),
+                    ));
                 }
             }
             pos += param_len;
@@ -323,5 +453,95 @@ mod open_tests {
         body.push(0); // no optional parameters
         let open = decode_open(&body).unwrap();
         assert!(open.opt_params.is_empty());
+    }
+
+    #[test]
+    fn unknown_capability_is_skipped_without_truncation() {
+        let mut body = vec![4, 0xFD, 0xE9, 0, 90, 10, 0, 0, 1];
+        body.push(4); // opt params length
+        body.extend_from_slice(&[2, 2, 65, 0]); // cap code 65, len 0
+        let open = decode_open(&body).unwrap();
+        assert!(open.opt_params.is_empty());
+    }
+
+    #[test]
+    fn oversized_mp_capability_is_rejected() {
+        let mut body = vec![4, 0xFD, 0xE9, 0, 90, 10, 0, 0, 1];
+        body.push(5); // opt params length
+        body.extend_from_slice(&[2, 3, 1, 5, 0]); // MP cap len 5
+        assert!(decode_open(&body).is_err());
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+
+    fn update_body(withdrawn: &[u8], attrs: &[u8]) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&(withdrawn.len() as u16).to_be_bytes());
+        body.extend_from_slice(&(attrs.len() as u16).to_be_bytes());
+        body.extend_from_slice(withdrawn);
+        body.extend_from_slice(attrs);
+        body
+    }
+
+    #[test]
+    fn valid_update_with_withdrawn_and_origin_passes() {
+        let body = update_body(&[24, 10, 0, 0], &[0x40, 1, 1, 0]);
+        assert!(validate_update_body(&body).is_ok());
+
+        let hdr = BgpHeader {
+            marker: [0xFF; 16],
+            length: (19 + body.len()) as u16,
+            msg_type: BgpMsgType::Update,
+        };
+        assert!(matches!(
+            BgpMessage::from_parts(hdr, Some(body)).unwrap(),
+            BgpMessage::Update(_)
+        ));
+    }
+
+    #[test]
+    fn update_body_length_mismatch_is_rejected() {
+        let mut body = update_body(&[24, 10, 0, 0], &[0x40, 1, 1, 0]);
+        body.push(0);
+        assert!(validate_update_body(&body).is_err());
+    }
+
+    #[test]
+    fn invalid_withdrawn_prefix_length_is_rejected() {
+        let body = update_body(&[33], &[]);
+        assert!(matches!(
+            validate_update_body(&body),
+            Err(BgpError::InvalidPrefixLen(33))
+        ));
+    }
+
+    #[test]
+    fn truncated_path_attribute_is_rejected() {
+        // attr flags/type say length 5, but only one value octet follows.
+        let body = update_body(&[], &[0x40, 1, 5, 0]);
+        assert!(validate_update_body(&body).is_err());
+    }
+
+    #[test]
+    fn extended_length_attribute_bounds_are_enforced() {
+        let attr = [0x50, 14, 0, 1, 0];
+        let body = update_body(&[], &attr);
+        assert!(validate_update_body(&body).is_ok());
+
+        let bad = update_body(&[], &[0x50, 14, 0, 2, 0]);
+        assert!(validate_update_body(&bad).is_err());
+    }
+
+    #[test]
+    fn well_known_attribute_flags_are_enforced() {
+        // ORIGIN (type 1) with well-known transitive flags 0x40.
+        assert!(validate_update_body(&update_body(&[], &[0x40, 1, 1, 0])).is_ok());
+        // Same attribute marked optional (0x80) must be rejected.
+        assert!(validate_update_body(&update_body(&[], &[0x80, 1, 1, 0])).is_err());
+        // Optional transitive COMMUNITIES (type 8) is allowed.
+        assert!(validate_update_body(&update_body(&[], &[0xC0, 8, 1, 0])).is_ok());
     }
 }

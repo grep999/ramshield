@@ -86,7 +86,11 @@ pub fn apply_trigger(
     if trigger.should_engage() {
         // Announce RTBH for the actual peer IP (/32), not a synthesized /8.
         let announce = match config.peer_ip {
-            std::net::IpAddr::V4(v4) => Some(announce_rtbh(&v4.to_string())),
+            std::net::IpAddr::V4(v4) => Some(announce_rtbh(
+                &v4.to_string(),
+                config.local_asn,
+                config.peer_asn,
+            )),
             std::net::IpAddr::V6(_) => None,
         };
         // Latch only a successfully encoded announce: an Err or an IPv6

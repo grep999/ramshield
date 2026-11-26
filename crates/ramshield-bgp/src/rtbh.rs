@@ -1,7 +1,9 @@
 use crate::Result;
 use crate::attributes::communities::{BLACKHOLE, NO_EXPORT};
 use crate::attributes::encode_community;
-use crate::attributes::{MpReachNlri, PathAttr, PathAttrFlags, PathAttrType, encode_attrs};
+use crate::attributes::{
+    MpReachNlri, PathAttr, PathAttrFlags, PathAttrType, as_path_attr, encode_attrs, origin_attr,
+};
 
 /// RFC 7999 Blackhole Community
 ///
@@ -44,9 +46,10 @@ impl RtbhCommunity {
 ///
 /// Creates an UPDATE message component:
 ///   - ORIGIN IGP
+///   - AS_PATH (local ASN for eBGP, empty for iBGP)
 ///   - COMMUNITIES BLACKHOLE + NO_EXPORT
 ///   - MP_REACH_NLRI: single /32 prefix (SAFI 1, RFC 7999)
-pub fn announce_rtbh(ip: &str) -> Result<Vec<u8>> {
+pub fn announce_rtbh(ip: &str, local_asn: u16, peer_asn: u16) -> Result<Vec<u8>> {
     let ipaddr: std::net::IpAddr = ip.parse()?;
     let v4 = match ipaddr {
         std::net::IpAddr::V4(v4) => v4,
@@ -55,16 +58,8 @@ pub fn announce_rtbh(ip: &str) -> Result<Vec<u8>> {
     let bh = encode_community(BLACKHOLE.0, BLACKHOLE.1);
     let ne = encode_community(NO_EXPORT.0, NO_EXPORT.1);
 
-    let origin = PathAttr {
-        flags: PathAttrFlags {
-            optional: false,
-            transitive: true,
-            partial: false,
-            extended_len: false,
-        },
-        attr_type: PathAttrType::Origin,
-        value: vec![0], // ORIGIN IGP
-    };
+    let origin = origin_attr();
+    let as_path = as_path_attr(local_asn, peer_asn);
     let communities_attr = PathAttr {
         flags: PathAttrFlags {
             optional: true,
@@ -78,9 +73,9 @@ pub fn announce_rtbh(ip: &str) -> Result<Vec<u8>> {
     // RFC 7999: RTBH uses IPv4 unicast SAFI (1) with a /32 prefix.
     // NLRI encoding: prefix_len(1) | prefix_bytes(ceil(prefix_len/8))
     let mp_reach = MpReachNlri {
-        afi: 1,                     // IPv4
-        safi: 1,                    // RFC 7999 RTBH uses IPv4 unicast SAFI
-        next_hop: vec![0, 0, 0, 0], // discard next-hop
+        afi: 1,                       // IPv4
+        safi: 1,                      // RFC 7999 RTBH uses IPv4 unicast SAFI
+        next_hop: vec![192, 0, 2, 1], // RFC 7999 §3 discard next-hop
         nlri: {
             let mut nlri = vec![32u8]; // /32 prefix length
             nlri.extend_from_slice(&v4.octets());
@@ -91,7 +86,7 @@ pub fn announce_rtbh(ip: &str) -> Result<Vec<u8>> {
     let mp_reach_attr = PathAttr {
         flags: PathAttrFlags {
             optional: true,
-            transitive: true,
+            transitive: false, // RFC 4760 §3: MP_REACH_NLRI is optional non-transitive
             partial: false,
             extended_len: false,
         },
@@ -99,7 +94,7 @@ pub fn announce_rtbh(ip: &str) -> Result<Vec<u8>> {
         value: mp_reach,
     };
 
-    let path_attrs = encode_attrs(&[origin, communities_attr, mp_reach_attr])?;
+    let path_attrs = encode_attrs(&[origin, as_path, communities_attr, mp_reach_attr])?;
     // marker(16) + length(2) + type(1) + withdrawn_len(2) + attr_len(2) + attrs
     let total = 23usize + path_attrs.len();
     let length = u16::try_from(total)

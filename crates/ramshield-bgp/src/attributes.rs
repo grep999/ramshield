@@ -164,6 +164,35 @@ pub(crate) fn encode_attrs(attrs: &[PathAttr]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+fn well_known(attr_type: PathAttrType, value: Vec<u8>) -> PathAttr {
+    PathAttr {
+        flags: PathAttrFlags {
+            optional: false,
+            transitive: true,
+            partial: false,
+            extended_len: false,
+        },
+        attr_type,
+        value,
+    }
+}
+
+/// ORIGIN IGP — well-known mandatory on every MP_REACH UPDATE (RFC 4760 §3).
+pub fn origin_attr() -> PathAttr {
+    well_known(PathAttrType::Origin, vec![0])
+}
+
+/// AS_PATH — well-known mandatory on every MP_REACH UPDATE (RFC 4760 §3).
+/// eBGP uses one AS_SEQUENCE with `local_asn`; iBGP sends an empty sequence.
+pub fn as_path_attr(local_asn: u16, peer_asn: u16) -> PathAttr {
+    let value = if local_asn == peer_asn {
+        vec![2, 0]
+    } else {
+        vec![2, 1, (local_asn >> 8) as u8, local_asn as u8]
+    };
+    well_known(PathAttrType::AsPath, value)
+}
+
 impl PathAttrType {
     pub fn from(b: u8) -> Self {
         match b {
@@ -421,12 +450,13 @@ impl ExtendedCommunity {
 
     /// FlowSpec traffic-action "discard" (RFC 8955 §7.3, sub-type 0x07).
     ///
-    /// Bitmask: terminal (T, bit 47) + sample off. Terminal means evaluation
-    /// stops at this rule, which is what a discard action requires.
+    /// Bitmask: sample off, Terminal (T) clear. RFC 8955 §7.3 says T=1 makes
+    /// the engine evaluate later matching FlowSpecifications; T=0 stops
+    /// evaluation, which is what a discard action requires.
     pub fn flowspec_discard() -> Self {
         let mut value = [0u8; 7];
         value[0] = flowspec_communities::TRAFFIC_ACTION;
-        value[6] = 0x01; // T bit = terminal action
+        value[6] = 0x00; // T=0: stop evaluation (RFC 8955 §7.3)
         ExtendedCommunity {
             type_field: 0x80,
             value,
@@ -451,11 +481,11 @@ mod action_tests {
     }
 
     #[test]
-    fn discard_sets_terminal_bit() {
-        // RFC 8955 §7.3: terminal bit is the low bit of the last octet.
+    fn discard_clears_terminal_bit() {
+        // RFC 8955 §7.3: T=1 evaluates later rules; T=0 stops evaluation.
         let enc = ExtendedCommunity::flowspec_discard().encode();
         assert_eq!(enc[0], 0x80);
         assert_eq!(enc[1], 0x07, "traffic-action sub-type");
-        assert_eq!(enc[7] & 0x01, 0x01, "terminal action set");
+        assert_eq!(enc[7] & 0x01, 0x00, "T=0 stops evaluation");
     }
 }

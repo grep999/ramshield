@@ -1,7 +1,7 @@
 use crate::{BgpError, Result};
 use std::net::IpAddr;
 
-/// BGP configuration — runtime knobs for the minimal speaker
+/// BGP configuration — runtime knobs for the standalone speaker
 #[derive(Clone)]
 pub struct BgpConfig {
     /// Local AS number
@@ -92,6 +92,12 @@ impl BgpConfig {
         }
         if self.hold_time > 0 && self.keepalive_time > self.hold_time {
             return Err(BgpError::Session("keepalive_time exceeds hold_time".into()));
+        }
+        // RFC 4271 §4.2/§4.4: hold time 0 disables periodic KEEPALIVEs.
+        if self.hold_time == 0 && self.keepalive_time > 0 {
+            return Err(BgpError::Session(
+                "keepalive_time must be 0 when hold_time is 0 (RFC 4271)".into(),
+            ));
         }
         if self.connect_retry_time == 0 {
             return Err(BgpError::Session(
@@ -224,6 +230,14 @@ mod tests {
                 BgpConfig {
                     hold_time: 30,
                     keepalive_time: 31,
+                    ..base.clone()
+                },
+            ),
+            (
+                "zero hold with keepalive",
+                BgpConfig {
+                    hold_time: 0,
+                    keepalive_time: 10,
                     ..base.clone()
                 },
             ),

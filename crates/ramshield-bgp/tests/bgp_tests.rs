@@ -4,7 +4,7 @@ use ramshield_bgp::attributes::{PathAttr, PathAttrType, communities, encode_comm
 use ramshield_bgp::flowspec::{
     FlowComponent, FlowComponentType, FlowOperator, FlowPair, FlowSpecNLRI,
 };
-use ramshield_bgp::fsm::{BgpEvent, BgpFsm, BgpState};
+use ramshield_bgp::fsm::{BgpEvent, BgpFsm, BgpState, TransitionAction};
 use ramshield_bgp::messages::{BgpHeader, BgpMsgType};
 use ramshield_bgp::rtbh::{announce_rtbh, verify_rtbh_communities};
 
@@ -85,7 +85,10 @@ fn test_flowspec_nlri_ordering() {
             FlowComponent {
                 comp_type: FlowComponentType::SourcePort,
                 pairs: vec![FlowPair {
-                    operator: default_op(),
+                    operator: FlowOperator {
+                        operand_len: 2,
+                        ..FlowOperator::default()
+                    },
                     value: vec![0, 53],
                 }],
             },
@@ -151,7 +154,7 @@ fn test_rtbh_announce_carries_standard_communities() {
 
     // The announced UPDATE must carry the 4-octet standard communities, not
     // malformed 8-octet extended communities (RFC 7999).
-    let update = announce_rtbh("198.51.100.1").unwrap();
+    let update = announce_rtbh("198.51.100.1", 65001, 65002).unwrap();
     let attr_len = u16::from_be_bytes([update[21], update[22]]) as usize;
     let mut attrs = &update[23..23 + attr_len];
     let mut found: Option<Vec<u8>> = None;
@@ -170,7 +173,7 @@ fn test_rtbh_announce_carries_standard_communities() {
 
 #[test]
 fn test_rtbh_announce() {
-    let update = announce_rtbh("198.51.100.1").unwrap();
+    let update = announce_rtbh("198.51.100.1", 65001, 65002).unwrap();
     // marker + length + type + withdrawn + attr_len + attrs
     assert!(update.len() > 23);
     assert_eq!(&update[0..16], &[0xFFu8; 16]);
@@ -181,10 +184,23 @@ fn test_rtbh_announce() {
     assert_eq!(withdrawn, 0, "no withdrawn routes");
     let attr_len = u16::from_be_bytes([update[21], update[22]]) as usize;
     assert_eq!(attr_len, update.len() - 23, "path attr length matches");
+    let mut offset = 23;
+    let end = 23 + attr_len;
+    let mut codes = Vec::new();
+    while offset < end {
+        let (attr, used) = PathAttr::decode(&update[offset..end]).unwrap();
+        offset += used;
+        codes.push(attr.attr_type.code());
+    }
+    assert_eq!(offset, end, "attributes end exactly at total length");
+    assert!(codes.contains(&1), "ORIGIN is well-known mandatory");
+    assert!(codes.contains(&2), "AS_PATH is well-known mandatory");
     // /32 prefix present in MP_REACH_NLRI
     assert!(update.windows(4).any(|w| w == [198, 51, 100, 1]));
+    // RFC 7999 discard next-hop, not the unspecified 0.0.0.0.
+    assert!(update.windows(4).any(|w| w == [192, 0, 2, 1]));
     // IPv6 rejected
-    assert!(announce_rtbh("2001:db8::1").is_err());
+    assert!(announce_rtbh("2001:db8::1", 65001, 65002).is_err());
 }
 
 #[test]
@@ -331,6 +347,27 @@ fn test_bgp_fsm_transitions() {
     assert!(fsm.is_established());
     fsm.process_event(BgpEvent::HoldTimerExpired).unwrap();
     assert_eq!(fsm.state(), BgpState::Idle);
+}
+
+#[test]
+fn test_bgp_fsm_active_and_hold_notification() {
+    let peer_ip = std::net::IpAddr::from([198, 51, 100, 1]);
+    let mut fsm = BgpFsm::new(65001, 174, peer_ip, 0x0A0B0C0D);
+
+    // Idle -> Connect; connect retry enters Active (RFC 4271 §8.2.2).
+    fsm.process_event(BgpEvent::ManualStart).unwrap();
+    fsm.process_event(BgpEvent::ConnectRetryTimerExpired)
+        .unwrap();
+    assert_eq!(fsm.state(), BgpState::Active);
+
+    // Active + TCP confirmed -> OpenSent.
+    fsm.process_event(BgpEvent::TcpConnectionConfirmed).unwrap();
+    assert_eq!(fsm.state(), BgpState::OpenSent);
+
+    // Hold expiry before OPEN is confirmed must send NOTIFICATION(4,0).
+    let actions = fsm.process_event(BgpEvent::HoldTimerExpired).unwrap();
+    assert_eq!(fsm.state(), BgpState::Idle);
+    assert!(actions.contains(&TransitionAction::SendNotification(4, 0)));
 }
 
 #[test]

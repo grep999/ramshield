@@ -125,8 +125,27 @@ impl BgpFsm {
                 actions.push(TransitionAction::StartConnectRetryTimer);
             }
             (BgpState::Connect, BgpEvent::ConnectRetryTimerExpired) => {
+                // RFC 4271 §8.2.2: a retry initiated from Connect enters Active.
+                self.attrs.state = BgpState::Active;
                 actions.push(TransitionAction::EstablishTcp);
                 actions.push(TransitionAction::StartConnectRetryTimer);
+            }
+
+            // Active state
+            (BgpState::Active, BgpEvent::TcpConnectionConfirmed) => {
+                self.attrs.state = BgpState::OpenSent;
+                actions.push(TransitionAction::SendOpen);
+                actions.push(TransitionAction::ClearConnectRetryTimer);
+                actions.push(TransitionAction::StartHoldTimer);
+            }
+            (BgpState::Active, BgpEvent::TcpConnectFail)
+            | (BgpState::Active, BgpEvent::ConnectRetryTimerExpired) => {
+                actions.push(TransitionAction::EstablishTcp);
+                actions.push(TransitionAction::StartConnectRetryTimer);
+            }
+            (BgpState::Active, BgpEvent::NotificationReceived) => {
+                self.attrs.state = BgpState::Idle;
+                actions.push(TransitionAction::CloseTcp);
             }
 
             // OpenSent state
@@ -134,17 +153,15 @@ impl BgpFsm {
                 self.attrs.state = BgpState::OpenConfirm;
                 actions.push(TransitionAction::SendKeepalive);
             }
-            (BgpState::OpenSent, BgpEvent::OpenConfirmReceived) => {
-                self.attrs.state = BgpState::Established;
-                actions.push(TransitionAction::SendKeepalive);
-                actions.push(TransitionAction::StartKeepaliveTimer);
-            }
             (BgpState::OpenSent, BgpEvent::NotificationReceived) => {
                 self.attrs.state = BgpState::Idle;
                 actions.push(TransitionAction::CloseTcp);
             }
             (BgpState::OpenSent, BgpEvent::HoldTimerExpired) => {
+                // RFC 4271 §8.2.3: hold expiry before OPEN is confirmed is
+                // reported with Hold Timer Expired, then the TCP session closes.
                 self.attrs.state = BgpState::Idle;
+                actions.push(TransitionAction::SendNotification(4, 0));
                 actions.push(TransitionAction::CloseTcp);
             }
 
@@ -159,6 +176,7 @@ impl BgpFsm {
             }
             (BgpState::OpenConfirm, BgpEvent::HoldTimerExpired) => {
                 self.attrs.state = BgpState::Idle;
+                actions.push(TransitionAction::SendNotification(4, 0));
                 actions.push(TransitionAction::CloseTcp);
             }
 
