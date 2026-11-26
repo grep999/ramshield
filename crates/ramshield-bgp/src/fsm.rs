@@ -125,8 +125,8 @@ impl BgpFsm {
                 actions.push(TransitionAction::StartConnectRetryTimer);
             }
             (BgpState::Connect, BgpEvent::ConnectRetryTimerExpired) => {
-                // RFC 4271 §8.2.2: a retry initiated from Connect enters Active.
-                self.attrs.state = BgpState::Active;
+                // RFC 4271 §8.2.2: retry from Connect initiates another TCP
+                // attempt while remaining in Connect.
                 actions.push(TransitionAction::EstablishTcp);
                 actions.push(TransitionAction::StartConnectRetryTimer);
             }
@@ -138,8 +138,14 @@ impl BgpFsm {
                 actions.push(TransitionAction::ClearConnectRetryTimer);
                 actions.push(TransitionAction::StartHoldTimer);
             }
-            (BgpState::Active, BgpEvent::TcpConnectFail)
-            | (BgpState::Active, BgpEvent::ConnectRetryTimerExpired) => {
+            (BgpState::Active, BgpEvent::TcpConnectFail) => {
+                actions.push(TransitionAction::IncrementRetry);
+                actions.push(TransitionAction::StartConnectRetryTimer);
+            }
+            (BgpState::Active, BgpEvent::ConnectRetryTimerExpired) => {
+                // RFC 4271 §8.2.2: retry from Active returns to Connect and
+                // initiates a new outbound TCP connection.
+                self.attrs.state = BgpState::Connect;
                 actions.push(TransitionAction::EstablishTcp);
                 actions.push(TransitionAction::StartConnectRetryTimer);
             }
@@ -216,5 +222,43 @@ impl BgpFsm {
     /// Check if session is established
     pub fn is_established(&self) -> bool {
         self.attrs.state == BgpState::Established
+    }
+}
+
+#[cfg(test)]
+mod retry_transition_tests {
+    use super::*;
+
+    fn fsm() -> BgpFsm {
+        BgpFsm::new(65001, 65002, "192.0.2.2".parse().unwrap(), 0x0A00_0001)
+    }
+
+    #[test]
+    fn connect_retry_expiry_retries_without_entering_active() {
+        let mut fsm = fsm();
+        fsm.process_event(BgpEvent::ManualStart).unwrap();
+        let actions = fsm.process_event(BgpEvent::ConnectRetryTimerExpired).unwrap();
+        assert_eq!(fsm.state(), BgpState::Connect);
+        assert!(actions.contains(&TransitionAction::EstablishTcp));
+        assert!(actions.contains(&TransitionAction::StartConnectRetryTimer));
+    }
+
+    #[test]
+    fn active_retry_expiry_returns_to_connect() {
+        let mut fsm = fsm();
+        fsm.attrs.state = BgpState::Active;
+        let actions = fsm.process_event(BgpEvent::ConnectRetryTimerExpired).unwrap();
+        assert_eq!(fsm.state(), BgpState::Connect);
+        assert!(actions.contains(&TransitionAction::EstablishTcp));
+    }
+
+    #[test]
+    fn active_tcp_failure_stays_active_until_retry_timer() {
+        let mut fsm = fsm();
+        fsm.attrs.state = BgpState::Active;
+        let actions = fsm.process_event(BgpEvent::TcpConnectFail).unwrap();
+        assert_eq!(fsm.state(), BgpState::Active);
+        assert!(!actions.contains(&TransitionAction::EstablishTcp));
+        assert!(actions.contains(&TransitionAction::StartConnectRetryTimer));
     }
 }
